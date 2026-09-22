@@ -33,7 +33,7 @@ Dos **perfiles de ejecución** sobre la misma base de código. Cambian los **ada
 
 - El perfil se elige con una sola variable (`TECHCAMP_PROFILE=seminar|production`) y un perfil de Docker Compose.
 - Los endpoints `/dev/*` **solo existen** en el perfil `seminar`; en `production` no se registran.
-- Los ADRs 0004 (LoRaWAN), 0014 (Supabase Auth), 0016 (proveedor de SMS) y 0017 (VPS) siguen vigentes **para producción futura**. No se implementan en el seminario salvo que sobre tiempo.
+- Los ADRs 0004 (LoRaWAN), 0014 (Supabase Auth), 0016 (proveedor de SMS), 0017 (VPS) y 0018 (almacenamiento de objetos S3) siguen vigentes **para producción futura**. No se implementan en el seminario salvo que sobre tiempo.
 
 ### Simulador de escenarios
 
@@ -68,4 +68,4 @@ Es la pieza central de la demo. Detalle en [06 §10](../06-diseno-detallado.md#1
 
 ## Relacionado
 
-[02-estimaciones](../02-estimaciones.md#perfil-seminario), [05-arquitectura](../05-arquitectura.md#perfiles-de-ejecución), [06 §10](../06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario), [10-dag](../10-dag.md)
+[02-estimaciones](../02-estimaciones.md#perfil-seminario), [05-arquitectura](../05-arquitectura.md#perfiles-de-ejecución), [06 §10](../06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario), [10-dag](../10-dag.md), [ADR-0018](0018-almacenamiento-de-objetos.md)

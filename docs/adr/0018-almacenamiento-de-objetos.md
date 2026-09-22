@@ -2,6 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
+- **Alcance:** la URL prefirmada y el uso de `object_key` aplican en ambos perfiles. Los proveedores S3 pagos son de producción futura; en el perfil `seminar` se usa MinIO en Docker ([ADR-0021](0021-perfil-seminario-local.md)).
 
 ## Contexto
 
@@ -27,7 +28,7 @@ Almacenamiento de objetos compatible con S3 (proveedor a elegir por costo: Cloud
 
 **Negativas / costos aceptados**
 
-- Un servicio externo más y un costo de salida de datos según el proveedor.
+- Un servicio externo más y un costo de salida de datos según el proveedor (solo en producción).
 - Hay que limpiar objetos huérfanos (job periódico).
 
 ## Relacionado

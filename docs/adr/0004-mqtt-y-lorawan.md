@@ -2,6 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
+- **Alcance:** el broker MQTT y el contrato se usan en ambos perfiles. LoRaWAN/ChirpStack y los nodos físicos son de producción futura; en el perfil `seminar` las lecturas las publica el simulador de escenarios por MQTT con el contrato real ([ADR-0021](0021-perfil-seminario-local.md)).
 
 ## Contexto
 
@@ -34,7 +35,7 @@ Los nodos IoT envían lecturas cada 15 min con energía solar y, a veces, sin co
 **Negativas / costos aceptados**
 
 - Operar un broker y, con LoRa, ChirpStack (que requiere Redis).
-- Las bandas LoRaWAN en Colombia deben confirmarse antes de comprar hardware.
+- Las bandas LoRaWAN en Colombia deben confirmarse antes de comprar hardware (solo en producción).
 - La calibración de sensores baratos es obligatoria y consume tiempo del técnico.
 
 ## Relacionado

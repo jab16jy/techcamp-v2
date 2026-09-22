@@ -26,6 +26,8 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0020](0020-protocolo-de-experimentacion-ml.md) | Protocolo de experimentación de ML con harness fijo, escalera de líneas base y tuning sistemático | Aceptada |
 | [0021](0021-perfil-seminario-local.md) | Perfil de seminario: ejecución local con emuladores | Aceptada |
 
+Los ADRs 0004, 0007 (en parte), 0014, 0016, 0017 y 0018 describen el perfil `production` (futuro). Cada uno lleva una nota de **Alcance** que remite al [ADR-0021](0021-perfil-seminario-local.md), donde se definen los adaptadores del perfil `seminar`. Esa nota no cambia la decisión.
+
 ## Plantilla
 
 ```markdown
