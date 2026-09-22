@@ -40,6 +40,7 @@ flowchart LR
 | 10 | [DAGs](10-dag.md) | ¿En qué orden se construye y cómo fluyen los datos y los jobs? |
 | 11 | [Métricas](11-metricas.md) | ¿Cómo se demuestra que el campo se tecnificó? |
 | — | [ADRs](adr/README.md) | ¿Por qué se decidió cada cosa? |
+| — | [Investigación: tecnificación del campo](investigacion/tecnificacion-campo.md) | ¿El diseño está apegado a la realidad del productor del Caribe? Evidencia de los cambios de diseño |
 
 **Si solo tienes 10 minutos:** lee 01, 05, 11 y los ADRs 0001, 0002, 0009, 0019 y 0021.
 
