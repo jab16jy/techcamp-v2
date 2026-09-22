@@ -40,6 +40,7 @@ TechCamp v1 (AgroCaribe AI) was built piece by piece without a design system or 
 - T4: 06-diseno-detallado, 07-frontend-design-system, 08-ml, 09-cuellos-de-botella, 10-dag written.
 - T5: 18 ADRs (0001-0018) + adr/README.md index generated.
 - T6: docs/README.md index. Link/anchor check: 0 broken. Mermaid: 23 blocks parsed with mermaid 12.0.0 (jsdom) → 0 failures; parser confirmed to reject an invalid sample. Full visual render (headless browser) not run: no Chromium available.
+- Review assessment (base b142709, committed-only): risk=passive (non_executable_only), review_due=false. No review needed.
 
 ## Next step
 User review of the design. Then start implementation with E0 (see docs/10-dag.md), as a new ODD feature document.
