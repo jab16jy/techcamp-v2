@@ -24,7 +24,7 @@ TechCamp v1 (AgroCaribe AI) was built piece by piece without a design system or 
 - [x] T1 Repo init + root README + ODD doc
 - [x] T2 Requirements, glossary, metrics, estimations
 - [x] T3 Data model, API, high-level architecture
-- [ ] T4 Detailed design, frontend/design system, ML, bottlenecks, DAG
+- [x] T4 Detailed design, frontend/design system, ML, bottlenecks, DAG
 - [ ] T5 ADRs
 - [ ] T6 Mermaid validation + index
 
@@ -37,6 +37,7 @@ TechCamp v1 (AgroCaribe AI) was built piece by piece without a design system or 
 - T1: repository created at `~/proyectos/techcamp-v2`.
 - T2: 00-glosario, 01-requisitos, 02-estimaciones, 11-metricas written.
 - T3: 03-modelo-datos, 04-api, 05-arquitectura written.
+- T4: 06-diseno-detallado, 07-frontend-design-system, 08-ml, 09-cuellos-de-botella, 10-dag written.
 
 ## Next step
-T4.
+T5.
