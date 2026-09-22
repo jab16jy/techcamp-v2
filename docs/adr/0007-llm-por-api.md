@@ -2,6 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
+- **Alcance:** ambos perfiles. En el perfil `seminar` se usa la API real con un tope total de USD 5 y un modo sin LLM; el límite diario por usuario y el tope mensual son el presupuesto del perfil `production` (futuro) ([ADR-0021](0021-perfil-seminario-local.md)).
 
 ## Contexto
 
@@ -22,6 +23,7 @@ La v1 corría Ollama local (`gemma2:2b`, 4 GB de RAM reservados en el Compose). 
 | Mantener Ollama local | Costo fijo de RAM/CPU, calidad insuficiente, operación extra |
 | Modelo grande premium | Costo por pregunta alto para el valor que agrega explicar datos ya calculados |
 | Sin asistente | Es un canal útil para productores con poca alfabetización digital; se mantiene como módulo acotado |
+| LangGraph u otro framework de agentes (la v1 usaba LangGraph) | El grafo de la v1 (`backend/app/agent/graph.py`) era lineal (START → orchestrator → generate → END), sin ciclos, bucle de herramientas, checkpoints ni intervención humana, y la intención se elegía por palabras clave: agregaba una dependencia sin comportamiento. En la v2 el flujo es determinista (reunir hechos → recuperar fragmentos → una llamada al LLM). Si más adelante el LLM debe elegir qué datos consultar, basta el tool use nativo del proveedor detrás del puerto `LLMClient`; un framework de orquestación se reconsidera solo para agentes de varios pasos con estado durable |
 
 ## Consecuencias
 

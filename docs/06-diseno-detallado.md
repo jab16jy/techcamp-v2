@@ -262,7 +262,7 @@ sequenceDiagram
   autonumber
   actor U as Usuario
   participant API as api / assistant
-  participant F as Fachadas (farms, irrigation, alerts, risk)
+  participant F as Fachadas (farms, telemetry, irrigation, alerts, risk)
   participant DB as pgvector
   participant L as LLM (puerto)
 
@@ -271,7 +271,7 @@ sequenceDiagram
   alt límite o presupuesto agotado
     API-->>U: respuesta sin LLM: datos de la parcela + documentos relevantes
   else
-    API->>F: estado estructurado de la parcela
+    API->>F: hechos de la parcela (sensores, alertas, riego, riesgo)
     API->>DB: embedding de la pregunta → top 5 fragmentos (similitud ≥ 0,75)
     API->>L: sistema + hechos de la parcela + fragmentos + pregunta (stream)
     L-->>API: tokens
@@ -279,6 +279,15 @@ sequenceDiagram
     API->>API: guardar mensaje, tokens y costo
   end
 ```
+
+**Hechos que recibe el LLM.** El `assistant` los arma de forma determinista desde las fachadas, antes de la única llamada al LLM, y el LLM debe citarlos:
+
+- **Sensores** (`telemetry`): última lectura calibrada por variable de la parcela con su `received_at`, y agregados de `reading_daily` de los últimos días. Se marcan las lecturas con `quality` distinto de 0, la versión de calibración vigente del sensor y si el dato no está fresco.
+- **Alertas** (`alerts`): alertas abiertas o reconocidas de la parcela con su `severity`, `opened_at` y `evidence`.
+- **Riego** (`irrigation`): la `irrigation_recommendation` del día (`depth_mm`, `duration_min`) con su `rationale`.
+- **Riesgo climático** (`risk`): la `risk_prediction` vigente de la celda de la parcela con `probability`, `severity` y `top_factors`, más el modelo que la produjo: `model_version.version` y su métrica de validación de `model_version.metrics`. Si la predicción viene de la heurística de línea base, se indica.
+
+En la respuesta sin LLM se devuelven estos mismos hechos junto con los documentos relevantes.
 
 **Reglas del prompt:**
 

@@ -117,6 +117,7 @@ flowchart TB
   metrics --> alerts
   metrics --> irrigation
   assistant --> farms
+  assistant --> telemetry
   assistant --> irrigation
   assistant --> alerts
   assistant --> risk
