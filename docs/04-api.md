@@ -146,6 +146,8 @@ GET /readyz    → 200 si la base y el broker responden
 GET /metrics   → Prometheus (solo en la red interna)
 ```
 
+`/metrics` puede existir en ambos perfiles; Prometheus y Grafana, que lo consumen, solo se despliegan en el perfil `production` (futuro) ([ADR-0021](adr/0021-perfil-seminario-local.md)).
+
 ### Solo perfil seminario (`/dev`)
 
 Estos endpoints no se registran en el perfil `production` ([ADR-0021](adr/0021-perfil-seminario-local.md)).

@@ -66,7 +66,7 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 
 ## Requisitos extendidos
 
-- Métricas técnicas y de producto con tablero interno (Grafana).
+- Métricas técnicas y de producto con tablero interno (Grafana) *(prod)*.
 - Seguimiento de errores del cliente y del servidor.
 - Modo técnico: registrar varias fincas en una sola visita sin conexión.
 - Notas de voz en la bitácora (transcripción posterior).
