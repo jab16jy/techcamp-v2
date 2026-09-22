@@ -8,7 +8,7 @@
 
 El ADR-0010 proponía rescatar el modelo de inundación de la v1 como candidato. Después se confirmaron dos hechos:
 
-1. **Los datos y artefactos de la v1 se perdieron.** El dataset procesado (CHIRPS, ERA5, UNGRD, HDX, DesInventar) y los `.joblib` entrenados estaban en otra máquina (`CLIMATE_DATA_DIR=/home/jabyn/Downloads/...`) a la que ya no hay acceso. Las métricas de `model_metrics.json` no se pueden reproducir.
+1. **Los datos y artefactos de la v1 se perdieron.** El dataset procesado (CHIRPS, ERA5, UNGRD, HDX, DesInventar) y los `.joblib` entrenados estaban en otra máquina (`CLIMATE_DATA_DIR` apuntaba a una carpeta local de ese equipo) a la que ya no hay acceso. Las métricas de `model_metrics.json` no se pueden reproducir.
 2. **La auditoría del código encontró fallas de método** en los tres modelos: fuga de datos por los negativos difíciles y por duplicar filas antes de partir, métricas medidas con una frecuencia artificial de positivos, hiperparámetros sin búsqueda y un LSTM sin línea base. Detalle en [08-ml](../08-ml.md#auditoría-de-la-v1).
 
 ## Decisión
