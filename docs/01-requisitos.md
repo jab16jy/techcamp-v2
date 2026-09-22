@@ -57,7 +57,7 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 | RNF-08 | **Privacidad** | Cumplimiento de la Ley 1581 de 2012 (habeas data): consentimiento explícito y exportación y borrado de los datos personales. |
 | RNF-09 | **Costo** | Piloto operable con un solo VPS y costo de LLM acotado por presupuesto mensual ([02-estimaciones](02-estimaciones.md)). |
 | RNF-10 | **Mantenibilidad** | Monolito modular con límites explícitos ([ADR-0002](adr/0002-monolito-modular.md)). Design system único ([ADR-0006](adr/0006-design-system.md)). |
-| RNF-11 | **Trazabilidad de modelos** | Toda predicción guarda la versión del modelo. Ningún modelo pasa a producción sin superar su línea base ([ADR-0010](adr/0010-rescate-y-gobierno-de-modelos.md)). |
+| RNF-11 | **Trazabilidad de modelos** | Toda predicción guarda la versión del modelo. Ningún modelo pasa a producción sin superar su línea base ([ADR-0019](adr/0019-reconstruccion-de-modelos.md), [ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)). |
 | RNF-12 | **Idioma** | Interfaz en español. Código e identificadores en inglés. |
 
 ## Requisitos extendidos

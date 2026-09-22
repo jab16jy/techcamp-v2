@@ -18,7 +18,7 @@ flowchart LR
   E7[E7 Alertas +<br/>notificaciones]
   E8[E8 Bitácora offline]
   E9[E9 Pantalla de inicio<br/>estado de parcela]
-  E10[E10 Riesgo climático<br/>migración + reentreno]
+  E10[E10 Riesgo climático<br/>reconstrucción con protocolo]
   E11[E11 Métricas e<br/>índice de tecnificación]
   E12[E12 Asistente]
   E13[E13 LoRaWAN<br/>ChirpStack]
@@ -63,13 +63,13 @@ flowchart LR
 | E7 | El escenario A dispara una alerta y llega un push; reintentos y escalamiento probados. Las reglas `flood_risk`/`drought_risk` se activan cuando termina E10 | E4, E5 |
 | E8 | El escenario D (cosecha en modo avión) sincroniza sin duplicar | E1, E3 |
 | E9 | Pantalla de inicio completa con datos reales del simulador | E1, E6, E7 |
-| E10 | El pipeline de `ml/` reproduce las métricas de la v1 y reentrena con features de Open-Meteo; compuerta sin `force_promote` | E5 |
+| E10 | Model card, dataset reproducible, harness y escalera de líneas base de M2 (inundación); en producción queda el modelo que pase la compuerta o, si ninguno pasa, la línea base ([ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)) | E5 |
 | E11 | Índice de tecnificación mensual y resumen por ciclo | E6, E7, E8 |
 | E12 | Asistente con fuentes citadas, límites y degradación | E6, E7, E10 |
 | E13 | Un nodo LoRa real o simulado llega por ChirpStack con el mismo mensaje interno | E4 |
 | E14 | Backup y restauración ensayados; tableros de SLO | E0 |
 
-**Paralelismo:** después de E3 se pueden trabajar en paralelo E4, E5 y E8. E1 corre en paralelo a E2 y E3 desde el inicio. E10 (reentreno) no bloquea la ruta crítica: el piloto puede arrancar con alertas de umbral y pronóstico, y sumar las de riesgo después.
+**Paralelismo:** después de E3 se pueden trabajar en paralelo E4, E5 y E8. E1 corre en paralelo a E2 y E3 desde el inicio. E10 (reconstrucción del modelo) no bloquea la ruta crítica: el piloto puede arrancar con alertas de umbral y pronóstico, y sumar las de riesgo después.
 
 ## 2. DAG de datos en ejecución
 

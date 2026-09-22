@@ -33,13 +33,13 @@ flowchart LR
 | 05 | [Arquitectura](05-arquitectura.md) | ¿Qué componentes hay y cómo se despliegan? |
 | 06 | [Diseño detallado](06-diseno-detallado.md) | ¿Cómo funcionan la ingesta, las alertas, el riego, la sincronización y el asistente? |
 | 07 | [Frontend y design system](07-frontend-design-system.md) | ¿Cómo se construye la PWA sin repetir los errores de la v1? |
-| 08 | [ML](08-ml.md) | ¿Qué se rescata de la v1 y cómo se gobiernan los modelos? |
+| 08 | [ML](08-ml.md) | ¿Qué modelos necesita la tecnificación y cómo se construyen y gobiernan? |
 | 09 | [Cuellos de botella](09-cuellos-de-botella.md) | ¿Qué falla, qué no escala y cómo se protege? |
 | 10 | [DAGs](10-dag.md) | ¿En qué orden se construye y cómo fluyen los datos y los jobs? |
 | 11 | [Métricas](11-metricas.md) | ¿Cómo se demuestra que el campo se tecnificó? |
 | — | [ADRs](adr/README.md) | ¿Por qué se decidió cada cosa? |
 
-**Si solo tienes 10 minutos:** lee 01, 05, 11 y los ADRs 0001, 0002, 0009 y 0010.
+**Si solo tienes 10 minutos:** lee 01, 05, 11 y los ADRs 0001, 0002, 0009 y 0019.
 
 ## Decisiones clave
 
@@ -53,7 +53,7 @@ flowchart LR
 | UI | Design system primero (Tailwind v4 + shadcn/ui) | [0006](adr/0006-design-system.md) |
 | IA | LLM por API barata; explica, no decide. Sin Ollama | [0007](adr/0007-llm-por-api.md) |
 | Riego | FAO-56 corregido por sensor | [0009](adr/0009-riego-fao56.md) |
-| ML | Sin `force_promote`; solo se promueve lo que supera su línea base | [0010](adr/0010-rescate-y-gobierno-de-modelos.md) |
+| ML | Modelos reconstruidos desde cero con protocolo fijo; solo se promueve lo que supera su mejor línea base | [0019](adr/0019-reconstruccion-de-modelos.md), [0020](adr/0020-protocolo-de-experimentacion-ml.md) |
 
 ## Decisiones pendientes para implementación
 
@@ -62,6 +62,7 @@ flowchart LR
 | Proveedor de LLM y de embeddings (evaluación con 30 preguntas) | E12 |
 | Proveedor S3 y de SMS/WhatsApp | E0 / E7 |
 | Plan de frecuencias LoRaWAN en Colombia y hardware de nodos | Antes de comprar hardware (E13) |
+| Licencia (uso comercial) y límites de tamaño de TabPFN | E10 |
 | Validación agronómica de umbrales de alertas y Kc de variedades locales | Antes del piloto |
 | Paleta y escalas concretas del design system (probadas a pleno sol) | E1 |
 | Términos de uso de Open-Meteo si el proyecto se comercializa | Antes del lanzamiento |

@@ -13,7 +13,7 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0007](0007-llm-por-api.md) | LLM por API externa de bajo costo, detrás de un puerto; el LLM explica, no decide | Aceptada |
 | [0008](0008-rag-pgvector.md) | RAG con embeddings en pgvector (reemplaza TF-IDF) | Aceptada |
 | [0009](0009-riego-fao56.md) | Riego con balance hídrico FAO-56 corregido por humedad de suelo medida | Aceptada |
-| [0010](0010-rescate-y-gobierno-de-modelos.md) | Rescate selectivo de modelos de la v1 y compuerta de promoción sin excepciones | Aceptada |
+| [0010](0010-rescate-y-gobierno-de-modelos.md) | Rescate selectivo de modelos de la v1 y compuerta de promoción sin excepciones | Reemplazada por 0019 |
 | [0011](0011-aptitud-de-cultivo.md) | Recomendación de cultivo reformulada como aptitud y diferida a v2.x | Aceptada (implementación diferida) |
 | [0012](0012-jobs-en-postgres.md) | Cola de trabajos y tareas periódicas en PostgreSQL (procrastinate) | Aceptada |
 | [0013](0013-sincronizacion-offline.md) | Sincronización offline con UUIDv7 del cliente, cursor de servidor y última escritura gana | Aceptada |
@@ -22,6 +22,8 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0016](0016-notificaciones-outbox.md) | Notificaciones con outbox transaccional, reintentos y canal alterno | Aceptada |
 | [0017](0017-despliegue-compose-caddy.md) | Despliegue en un VPS con Docker Compose y Caddy | Aceptada |
 | [0018](0018-almacenamiento-de-objetos.md) | Fotos y artefactos en almacenamiento de objetos S3 con URL prefirmada | Aceptada |
+| [0019](0019-reconstruccion-de-modelos.md) | Reconstruir los modelos de ML desde cero; de la v1 solo se reutiliza código revisado | Aceptada |
+| [0020](0020-protocolo-de-experimentacion-ml.md) | Protocolo de experimentación de ML con harness fijo, escalera de líneas base y tuning sistemático | Aceptada |
 
 ## Plantilla
 

@@ -27,6 +27,7 @@ TechCamp v1 (AgroCaribe AI) was built piece by piece without a design system or 
 - [x] T4 Detailed design, frontend/design system, ML, bottlenecks, DAG
 - [x] T5 ADRs
 - [x] T6 Mermaid validation + index
+- [x] T7 ML rebuild: v1 data/artifacts lost + code audit → ADR-0010 superseded by ADR-0019, protocol ADR-0020, 08-ml rewritten, README differentiators
 
 ## Acceptance criteria
 - Every step of the method has its own document.
@@ -41,6 +42,8 @@ TechCamp v1 (AgroCaribe AI) was built piece by piece without a design system or 
 - T5: 18 ADRs (0001-0018) + adr/README.md index generated.
 - T6: docs/README.md index. Link/anchor check: 0 broken. Mermaid: 23 blocks parsed with mermaid 12.0.0 (jsdom) → 0 failures; parser confirmed to reject an invalid sample. Full visual render (headless browser) not run: no Chromium available.
 - Review assessment (base b142709, committed-only): risk=passive (non_executable_only), review_due=false. No review needed.
+
+- T7: user confirmed v1 ML datasets/artifacts are unrecoverable (other machine). Code audit (delegated explore) found leakage (hard negatives cross split, rows duplicated before split), artificial prevalence, no tuning, no trivial baselines. Links: 0 broken; Mermaid: 23 blocks, 0 failures.
 
 ## Next step
 User review of the design. Then start implementation with E0 (see docs/10-dag.md), as a new ODD feature document.

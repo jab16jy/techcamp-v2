@@ -169,7 +169,7 @@ techcamp-v2/
 └── odd/                  # tareas de desarrollo
 ```
 
-`ml/` está separado de `server/`: el entrenamiento necesita dependencias pesadas (xarray, cdsapi y otras) que la imagen del servidor no debe cargar. El servidor solo carga los artefactos `joblib` promovidos ([ADR-0010](adr/0010-rescate-y-gobierno-de-modelos.md)).
+`ml/` está separado de `server/`: el entrenamiento necesita dependencias pesadas (xarray, cdsapi y otras) que la imagen del servidor no debe cargar. El servidor solo carga los artefactos `joblib` promovidos ([ADR-0019](adr/0019-reconstruccion-de-modelos.md)).
 
 ## Stack
 

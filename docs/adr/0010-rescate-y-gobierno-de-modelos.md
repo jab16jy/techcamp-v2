@@ -1,7 +1,9 @@
 # ADR-0010: Rescate selectivo de modelos de la v1 y compuerta de promoción sin excepciones
 
-- **Estado:** Aceptada
+- **Estado:** Reemplazada por [ADR-0019](0019-reconstruccion-de-modelos.md)
 - **Fecha:** 2026-09-22
+
+> Reemplazada el 2026-09-22: los datasets y artefactos de la v1 se perdieron y la auditoría del código encontró fuga de datos. Ver ADR-0019.
 
 ## Contexto
 

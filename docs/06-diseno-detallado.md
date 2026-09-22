@@ -11,7 +11,7 @@ Aquí se detallan los flujos que concentran el riesgo del sistema. Cada sección
 | 5 | [Riego FAO-56](#5-riego-balance-hídrico-fao-56) | Es la recomendación principal del producto |
 | 6 | [Clima](#6-clima) | Es una dependencia externa con límites de uso |
 | 7 | [Sincronización offline](#7-sincronización-offline-de-la-bitácora) | Es la promesa de que nada se pierde en el campo |
-| 8 | [Riesgo climático](#8-inferencia-de-riesgo-climático) | Es el modelo rescatado de la v1 |
+| 8 | [Riesgo climático](#8-inferencia-de-riesgo-climático) | Es el primer modelo propio de la v2 y el más expuesto a fuga de datos |
 | 9 | [Asistente](#9-asistente-agronómico) | Controla el costo y evita respuestas inventadas |
 
 ## 1. Ingesta de telemetría
@@ -251,7 +251,7 @@ flowchart LR
   r --> al[Evaluar reglas flood_risk / drought_risk]
 ```
 
-- **Paridad entre entrenamiento y producción:** las features se calculan **con las mismas fuentes** en los dos lados. La v1 entrenó con ERA5/CHIRPS, que llegan con días de retraso; en la v2 el entrenamiento usa el archivo histórico de Open-Meteo (derivado de ERA5), la misma fuente de la inferencia diaria. Detalle en [08-ml](08-ml.md).
+- **Paridad entre entrenamiento y producción:** las features se calculan con el mismo módulo y **la misma fuente** en los dos lados (archivo histórico de Open-Meteo para entrenar, pronóstico y observados recientes de Open-Meteo para inferir). El modelo se construye con el protocolo del [ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md); detalle en [08-ml](08-ml.md#m2-riesgo-de-inundación).
 - Cada predicción guarda `model_version_id`: toda alerta se puede rastrear hasta el modelo exacto.
 
 ## 9. Asistente agronómico
