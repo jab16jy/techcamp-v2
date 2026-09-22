@@ -19,7 +19,7 @@ Make every design document consistent with ADR-0021 (seminar profile by default,
 
 ## Route and checks
 - TDD: off (docs only, no test runner; source: previous feature doc convention).
-- Route: delegated direct. Writer trigger fired (10+ files); one Sonnet writer (user request: research/worker agents on Sonnet).
+- Route: delegated direct. Writer trigger fired (10+ files); one writer (user changed it to Opus 5.5; audit agents ran on Sonnet).
 - Checks: internal link/anchor check (0 broken); Mermaid parse of changed blocks; `git diff --stat` readback.
 - Delivery strategy: single-pr. Forecast ~150 authored changed lines. Branch `docs/seminar-alignment` stacked on `docs/system-design` (PR #1 not merged).
 
@@ -41,6 +41,7 @@ Make every design document consistent with ADR-0021 (seminar profile by default,
 - T2 done: `80d6331` (11-metricas §4 note + dashed Prometheus→Grafana edge marked "solo producción"; 04-api `/metrics` note; 01-requisitos Grafana `*(prod)*`). SLO decision: not monitored in seminar (consistent with 09 and ADR-0021); only the USD 5 LLM cap applies.
 - T3 done: `8d72ef7` (`assistant --> telemetry` in 05, graph acyclic via topological sort; 06 §9 facts list using existing fields `received_at`, `quality`, `reading_daily`, `rationale`, `probability`, `top_factors`, `model_version.version`, `model_version.metrics`; ADR-0007 scope note + LangGraph row, v1 graph verified linear).
 - Checks: link/anchor checker over README, docs, odd → 0 broken (control file with a bad anchor and a missing file flagged 2). Mermaid parse (mermaid 11 + jsdom) of 05 module graph, 06 §9 sequence, 11 diagram → all OK (control block FAIL as expected).
+- Review assessment (base a71cfc0, committed-only, untracked `.atl/` excluded): risk=passive (non_executable_only), 15 paths / 94 lines, review_due=false. Parent spot check: link checker rerun → 0 broken.
 
 ## Next step
 User review; push/PR is the user's decision.
