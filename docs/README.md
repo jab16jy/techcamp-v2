@@ -1,0 +1,67 @@
+# Diseño del sistema — TechCamp v2
+
+TechCamp v2 tecnifica parcelas del Caribe colombiano:
+
+- **Mide** con sensores IoT y bitácora offline.
+- **Decide** con riego FAO-56, alertas y riesgo climático.
+- **Demuestra impacto** con indicadores de tecnificación.
+
+Este directorio es el diseño completo, previo a la implementación. Sigue el método de [karanpratapsingh/system-design](https://github.com/karanpratapsingh/system-design#system-design-interviews): requisitos → estimaciones → modelo de datos → API → alto nivel → detalle → cuellos de botella.
+
+## Resumen en un diagrama
+
+```mermaid
+flowchart LR
+  n[Nodos IoT<br/>MQTT / LoRaWAN] --> ing[ingestor]
+  pwa[PWA offline-first] <--> api[api FastAPI]
+  ing --> db[(PostgreSQL<br/>PostGIS + Timescale + pgvector)]
+  api <--> db
+  wrk[worker<br/>clima, riego, riesgo, avisos] <--> db
+  wrk --> ext[Open-Meteo · LLM · Push/SMS]
+  api --> ext
+```
+
+## Orden de lectura
+
+| # | Documento | Responde |
+|---|---|---|
+| 00 | [Glosario](00-glosario.md) | ¿Qué significa cada término (y cómo se llama en el código)? |
+| 01 | [Requisitos](01-requisitos.md) | ¿Qué debe hacer el sistema y con qué calidad? |
+| 02 | [Estimaciones](02-estimaciones.md) | ¿Cuánta carga, almacenamiento y costo? |
+| 03 | [Modelo de datos](03-modelo-datos.md) | ¿Qué entidades y cómo se guardan? |
+| 04 | [API](04-api.md) | ¿Qué contratos exponen el servidor y los nodos? |
+| 05 | [Arquitectura](05-arquitectura.md) | ¿Qué componentes hay y cómo se despliegan? |
+| 06 | [Diseño detallado](06-diseno-detallado.md) | ¿Cómo funcionan la ingesta, las alertas, el riego, la sincronización y el asistente? |
+| 07 | [Frontend y design system](07-frontend-design-system.md) | ¿Cómo se construye la PWA sin repetir los errores de la v1? |
+| 08 | [ML](08-ml.md) | ¿Qué se rescata de la v1 y cómo se gobiernan los modelos? |
+| 09 | [Cuellos de botella](09-cuellos-de-botella.md) | ¿Qué falla, qué no escala y cómo se protege? |
+| 10 | [DAGs](10-dag.md) | ¿En qué orden se construye y cómo fluyen los datos y los jobs? |
+| 11 | [Métricas](11-metricas.md) | ¿Cómo se demuestra que el campo se tecnificó? |
+| — | [ADRs](adr/README.md) | ¿Por qué se decidió cada cosa? |
+
+**Si solo tienes 10 minutos:** lee 01, 05, 11 y los ADRs 0001, 0002, 0009 y 0010.
+
+## Decisiones clave
+
+| Tema | Decisión | ADR |
+|---|---|---|
+| Estrategia | Repositorio nuevo, rescate selectivo de la v1 | [0001](adr/0001-nuevo-repositorio-v2.md) |
+| Backend | Monolito modular hexagonal (FastAPI) | [0002](adr/0002-monolito-modular.md) |
+| Datos | Un solo PostgreSQL con PostGIS + TimescaleDB + pgvector | [0003](adr/0003-postgres-unico.md) |
+| IoT | MQTT + LoRaWAN (ChirpStack) | [0004](adr/0004-mqtt-y-lorawan.md) |
+| Cliente | PWA offline-first | [0005](adr/0005-pwa-offline-first.md) |
+| UI | Design system primero (Tailwind v4 + shadcn/ui) | [0006](adr/0006-design-system.md) |
+| IA | LLM por API barata; explica, no decide. Sin Ollama | [0007](adr/0007-llm-por-api.md) |
+| Riego | FAO-56 corregido por sensor | [0009](adr/0009-riego-fao56.md) |
+| ML | Sin `force_promote`; solo se promueve lo que supera su línea base | [0010](adr/0010-rescate-y-gobierno-de-modelos.md) |
+
+## Decisiones pendientes para implementación
+
+| Pendiente | Cuándo |
+|---|---|
+| Proveedor de LLM y de embeddings (evaluación con 30 preguntas) | E12 |
+| Proveedor S3 y de SMS/WhatsApp | E0 / E7 |
+| Plan de frecuencias LoRaWAN en Colombia y hardware de nodos | Antes de comprar hardware (E13) |
+| Validación agronómica de umbrales de alertas y Kc de variedades locales | Antes del piloto |
+| Paleta y escalas concretas del design system (probadas a pleno sol) | E1 |
+| Términos de uso de Open-Meteo si el proyecto se comercializa | Antes del lanzamiento |

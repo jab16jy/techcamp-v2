@@ -25,8 +25,8 @@ TechCamp v1 (AgroCaribe AI) was built piece by piece without a design system or 
 - [x] T2 Requirements, glossary, metrics, estimations
 - [x] T3 Data model, API, high-level architecture
 - [x] T4 Detailed design, frontend/design system, ML, bottlenecks, DAG
-- [ ] T5 ADRs
-- [ ] T6 Mermaid validation + index
+- [x] T5 ADRs
+- [x] T6 Mermaid validation + index
 
 ## Acceptance criteria
 - Every step of the method has its own document.
@@ -38,6 +38,8 @@ TechCamp v1 (AgroCaribe AI) was built piece by piece without a design system or 
 - T2: 00-glosario, 01-requisitos, 02-estimaciones, 11-metricas written.
 - T3: 03-modelo-datos, 04-api, 05-arquitectura written.
 - T4: 06-diseno-detallado, 07-frontend-design-system, 08-ml, 09-cuellos-de-botella, 10-dag written.
+- T5: 18 ADRs (0001-0018) + adr/README.md index generated.
+- T6: docs/README.md index. Link/anchor check: 0 broken. Mermaid: 23 blocks parsed with mermaid 12.0.0 (jsdom) → 0 failures; parser confirmed to reject an invalid sample. Full visual render (headless browser) not run: no Chromium available.
 
 ## Next step
-T5.
+User review of the design. Then start implementation with E0 (see docs/10-dag.md), as a new ODD feature document.
