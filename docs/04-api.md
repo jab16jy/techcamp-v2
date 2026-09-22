@@ -146,6 +146,17 @@ GET /readyz    → 200 si la base y el broker responden
 GET /metrics   → Prometheus (solo en la red interna)
 ```
 
+### Solo perfil seminario (`/dev`)
+
+Estos endpoints no se registran en el perfil `production` ([ADR-0021](adr/0021-perfil-seminario-local.md)).
+
+```
+POST /dev/auth/otp            { phone } → 204     # el código se imprime en la consola del api
+POST /dev/jobs/{name}:run     { day? } → { job_id }   # weather, water-balance, irrigation, risk, metrics
+GET  /dev/outbox              → Notification[]    # SMS/WhatsApp simulados
+POST /dev/scenarios/{name}:load → 202             # lo usa el simulador para crear datos base y fixtures
+```
+
 ## Stream (SSE)
 
 ```

@@ -13,6 +13,7 @@ Aquí se detallan los flujos que concentran el riesgo del sistema. Cada sección
 | 7 | [Sincronización offline](#7-sincronización-offline-de-la-bitácora) | Es la promesa de que nada se pierde en el campo |
 | 8 | [Riesgo climático](#8-inferencia-de-riesgo-climático) | Es el primer modelo propio de la v2 y el más expuesto a fuga de datos |
 | 9 | [Asistente](#9-asistente-agronómico) | Controla el costo y evita respuestas inventadas |
+| 10 | [Simulador de escenarios](#10-simulador-de-escenarios-perfil-seminario) | Es la fuente de datos del seminario y la base de la demo |
 
 ## 1. Ingesta de telemetría
 
@@ -286,3 +287,66 @@ sequenceDiagram
 - Si no hay información suficiente, decirlo.
 - **Nunca inventar dosis de agroquímicos:** remitir a la etiqueta del producto registrado ante el ICA y al técnico.
 - El asistente **explica** recomendaciones y alertas que calcula el sistema; no calcula riego ni riesgo por su cuenta.
+
+## 10. Simulador de escenarios (perfil seminario)
+
+El simulador reemplaza a los nodos físicos en el perfil `seminar` ([ADR-0021](adr/0021-perfil-seminario-local.md)). Publica por MQTT con **el mismo contrato** que un nodo real ([04-api](04-api.md#contrato-mqtt)), así que el ingestor, las alertas y el riego no distinguen entre simulado y real.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor D as Presentador
+  participant S as Simulador (CLI)
+  participant API as api (/dev)
+  participant B as Mosquitto
+  participant I as ingestor
+  participant W as worker
+
+  D->>S: sim run --scenario el-nino --backfill 14d --live
+  S->>API: crear org, finca, parcela, ciclo y nodos (claim) si no existen
+  S->>API: cargar fixtures de clima del escenario en weather_daily
+  S->>B: backfill: 14 días de lecturas con ts en el pasado
+  B->>I: ingesta normal (dedupe, calibración, reglas)
+  S->>API: POST /dev/jobs/water-balance:run y /dev/jobs/irrigation:run
+  API->>W: encolar jobs con la fecha del escenario
+  loop en vivo cada 5 s
+    S->>B: lectura siguiente de la trayectoria
+  end
+  Note over D,W: la PWA muestra la recomendación, las alertas y los gráficos en tiempo real
+```
+
+**Formato de un escenario** (`firmware/simulator/scenarios/<nombre>.yaml`):
+
+```yaml
+name: el-nino
+description: Estrés hídrico por El Niño en maíz (escenario A)
+plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, system: drip }
+nodes: 2
+interval_s: 900            # intervalo simulado entre lecturas del backfill
+weather_fixture: el-nino-caribe.json
+trajectories:
+  soil_moisture_10cm: { start: 28, end: 14, noise: 0.8 }   # % volumétrico
+  air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }
+  air_rh: { daily_min: 38, daily_max: 70 }
+faults:
+  - { at_day: 10, node: 2, type: offline, hours: 8 }       # dispara el escenario C
+expected:
+  alerts: [water_stress, heat_stress, node_offline]
+  irrigation: irrigate
+```
+
+| Escenario | Qué demuestra |
+|---|---|
+| `el-nino` (A) | Estrés hídrico, alerta crítica, recomendación "regar X mm" |
+| `rainy-season` (B) | Humedad relativa alta sostenida, alerta `fungal_risk`, "no regar: va a llover" |
+| `node-failure` (C) | Nodo caído, alerta al técnico, hueco en la completitud |
+| `offline-farmer` (D) | Se ejecuta en la PWA (modo avión): bitácora offline y sincronización sin duplicados |
+| `normal` | Operación estable, para contrastar |
+
+**Reglas:**
+
+- El simulador envía lecturas en **ADC crudo** y cada nodo simulado tiene su calibración, así que también se demuestra la calibración.
+- `expected` convierte cada escenario en una **prueba end-to-end**: CI corre el escenario y verifica las alertas y la recomendación esperadas.
+- El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con `quality = 2`, huecos de `seq`).
+- Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather`) y quedan versionados: la demo funciona sin internet, salvo el asistente.
+

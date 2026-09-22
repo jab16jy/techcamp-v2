@@ -36,4 +36,4 @@ El piloto necesita un costo bajo y una operación simple. La v1 usaba Docker Com
 
 ## Relacionado
 
-[05-arquitectura](../05-arquitectura.md#despliegue)
+[05-arquitectura](../05-arquitectura.md#despliegue-perfil-production-futuro)

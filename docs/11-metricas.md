@@ -2,6 +2,8 @@
 
 Tecnificar significa que la parcela **produce más con menos agua y menos riesgo**, y que el productor **decide con datos**. Estas métricas lo demuestran. Cada una tiene fórmula, fuente y frecuencia, y se calcula con datos que el sistema ya captura: sensores, bitácora y alertas.
 
+> **En el seminario** las métricas se calculan sobre datos del simulador: demuestran que el cálculo y el tablero funcionan, no el impacto real. La línea base y la comparación con EVA quedan listas para un piloto con productores.
+
 Hay cinco grupos:
 
 | Grupo | Pregunta que responde | Audiencia |

@@ -22,7 +22,9 @@ Sucesor de TechCamp v1 (AgroCaribe AI). Ver [ADR-0001](docs/adr/0001-nuevo-repos
 
 ## Estado
 
-Fase de diseño. Todavía no hay código.
+**Proyecto de seminario.** Se ejecuta en local (`docker compose --profile seminar up`) con un simulador de nodos IoT y escenarios reproducibles (sequía de El Niño, lluvias con riesgo de hongos, nodo caído, productor sin señal). La arquitectura queda lista para pasar a producción si el proyecto crece, cambiando adaptadores y no el dominio ([ADR-0021](docs/adr/0021-perfil-seminario-local.md)).
+
+Fase actual: diseño. Todavía no hay código.
 
 ## Empezar por aquí
 

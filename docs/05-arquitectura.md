@@ -186,7 +186,44 @@ techcamp-v2/
 
 Las versiones exactas se fijan al crear cada paquete, con la documentación vigente.
 
-## Despliegue
+## Perfiles de ejecución
+
+La misma base de código corre con dos perfiles ([ADR-0021](adr/0021-perfil-seminario-local.md)). Solo cambian los adaptadores de los puertos; el dominio y los casos de uso son idénticos.
+
+```mermaid
+flowchart LR
+  subgraph dominio [Dominio + casos de uso - iguales en ambos perfiles]
+    uc[irrigation, alerts, logbook, risk, ...]
+  end
+  subgraph seminar [Perfil seminar - localhost]
+    sim[Simulador de escenarios] --> mq1[Mosquitto]
+    jwt[Emisor local de JWT]
+    log[Notificaciones al log y a /dev/outbox]
+    minio[(MinIO)]
+    fx[Open-Meteo + fixtures grabados]
+  end
+  subgraph production [Perfil production - futuro]
+    esp[Nodos ESP32 / LoRaWAN] --> mq2[Mosquitto + ChirpStack]
+    supa[Supabase Auth]
+    sms[Push + SMS / WhatsApp]
+    s3[(S3)]
+    om[Open-Meteo comercial]
+  end
+  seminar --> uc
+  production --> uc
+```
+
+**Levantar el perfil seminario:**
+
+```bash
+cp .env.example .env                  # TECHCAMP_PROFILE=seminar, clave del LLM opcional
+docker compose --profile seminar up   # postgres, mosquitto, minio, api, ingestor, worker, web
+sim run --scenario el-nino --backfill 14d --live
+```
+
+La PWA queda en `http://localhost:5173`. Para abrirla en un teléfono se usa un túnel HTTPS (cloudflared o ngrok), porque el Service Worker y el push exigen HTTPS fuera de `localhost`.
+
+## Despliegue (perfil production, futuro)
 
 ```mermaid
 flowchart TB

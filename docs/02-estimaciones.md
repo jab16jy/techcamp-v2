@@ -1,6 +1,24 @@
 # 02 — Estimaciones y restricciones
 
-**Conclusión:** el sistema escribe mucho más de lo que lee. La telemetría genera unas 11 escrituras por segundo sostenidas en el año 3, frente a ~1 lectura por segundo de la API. Un solo PostgreSQL con TimescaleDB alcanza con amplio margen: no hace falta sharding, colas externas ni microservicios. Lo que más crece son las **fotos de la bitácora**, por eso van a almacenamiento de objetos y no a la base de datos.
+> **Contexto:** TechCamp v2 es un proyecto de seminario y corre en local con emuladores ([ADR-0021](adr/0021-perfil-seminario-local.md)). La sección [Perfil seminario](#perfil-seminario) es la que aplica hoy. El resto del documento dimensiona el sistema **si pasa a producción**, para demostrar que la arquitectura escala sin rediseño.
+
+## Perfil seminario
+
+| Recurso | Estimación |
+|---|---|
+| Máquina | Portátil con 8 GB de RAM y 4 núcleos; Docker Compose usa ~2–3 GB (Postgres, Mosquitto, MinIO, api, ingestor, worker, servidor de desarrollo de la PWA) |
+| Disco | ~5–10 GB (imágenes Docker, datos de referencia de la v1, datasets de ML desde el histórico de Open-Meteo) |
+| Nodos | 5–20 nodos simulados por escenario; carga despreciable |
+| Internet | Solo para el asistente (LLM), grabar fixtures de clima y descargar datasets de entrenamiento |
+
+| Concepto | Costo |
+|---|---|
+| Infraestructura, auth, notificaciones, almacenamiento | **USD 0** (todo local) |
+| Clima (Open-Meteo, uso no comercial) | USD 0 |
+| LLM (Claude Haiku 4.5: USD 1 / 5 por millón de tokens de entrada / salida; ~USD 0,0055 por pregunta) | **~USD 1–5 en todo el seminario**, con tope de USD 5 |
+| Nodo físico opcional para la demo (ESP32 + sensor capacitivo + SHT31 + batería) | ~USD 25–30, una sola vez |
+
+**Conclusión (producción futura):** el sistema escribe mucho más de lo que lee. La telemetría genera unas 11 escrituras por segundo sostenidas en el año 3, frente a ~1 lectura por segundo de la API. Un solo PostgreSQL con TimescaleDB alcanza con amplio margen: no hace falta sharding, colas externas ni microservicios. Lo que más crece son las **fotos de la bitácora**, por eso van a almacenamiento de objetos y no a la base de datos.
 
 Todas las cifras son órdenes de magnitud para dimensionar. Se recalculan con datos reales al terminar el piloto.
 
@@ -57,7 +75,7 @@ Todas las cifras son órdenes de magnitud para dimensionar. Se recalculan con da
 | Tokens de entrada (sistema + contexto de parcela + fragmentos RAG + historial) | ~3.500 | 6,3 M |
 | Tokens de salida | ~400 | 0,72 M |
 
-`costo_diario = 6,3 M × precio_entrada + 0,72 M × precio_salida`. Los precios por millón de tokens se toman de la página del proveedor al implementar. El caché de prompts reduce el costo del contexto fijo. Controles obligatorios: límite por usuario (10 preguntas/día) y tope de presupuesto mensual con degradación a respuestas sin LLM ([ADR-0007](adr/0007-llm-por-api.md)).
+`costo_diario = 6,3 M × precio_entrada + 0,72 M × precio_salida`. Con Claude Haiku 4.5 (USD 1 / 5 por millón) son ≈ USD 10/día sin caché; los precios se reconfirman al implementar. El caché de prompts reduce el costo del contexto fijo. Controles obligatorios: límite por usuario (10 preguntas/día) y tope de presupuesto mensual con degradación a respuestas sin LLM ([ADR-0007](adr/0007-llm-por-api.md)).
 
 ## Almacenamiento
 

@@ -24,6 +24,7 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0018](0018-almacenamiento-de-objetos.md) | Fotos y artefactos en almacenamiento de objetos S3 con URL prefirmada | Aceptada |
 | [0019](0019-reconstruccion-de-modelos.md) | Reconstruir los modelos de ML desde cero; de la v1 solo se reutiliza código revisado | Aceptada |
 | [0020](0020-protocolo-de-experimentacion-ml.md) | Protocolo de experimentación de ML con harness fijo, escalera de líneas base y tuning sistemático | Aceptada |
+| [0021](0021-perfil-seminario-local.md) | Perfil de seminario: ejecución local con emuladores | Aceptada |
 
 ## Plantilla
 

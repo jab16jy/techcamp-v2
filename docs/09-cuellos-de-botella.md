@@ -1,5 +1,7 @@
 # 09 — Cuellos de botella, confiabilidad y seguridad
 
+> **Aplica al perfil `production` (futuro).** En el perfil seminario ([ADR-0021](adr/0021-perfil-seminario-local.md)) solo aplican la sección de [seguridad](#seguridad) (credenciales por nodo, aislamiento entre organizaciones, validación de entradas) y el manejo de fallas del simulador. Backups, DR y monitoreo no aplican.
+
 **Conclusión:** en el piloto el mayor riesgo es un **punto único de falla (el VPS)**, no la carga. Se acepta, con backups continuos y una restauración ensayada. El campo tolera caídas cortas del servidor porque los nodos guardan 72 h de lecturas y la PWA funciona offline. Cada mejora de escala tiene un **disparador medible**: no se construye antes de necesitarla.
 
 ## Puntos únicos de falla

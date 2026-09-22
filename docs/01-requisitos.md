@@ -2,6 +2,8 @@
 
 TechCamp v2 ayuda a productores y técnicos del Caribe colombiano a **medir** lo que pasa en su parcela, **decidir** con esos datos (regar, proteger, cosechar) y **demostrar** el impacto de tecnificarse.
 
+**Alcance actual:** es un proyecto de seminario. Se ejecuta en local con un simulador de nodos y escenarios ([ADR-0021](adr/0021-perfil-seminario-local.md)). Los requisitos funcionales se cumplen completos en ese perfil. Los no funcionales marcados con *(prod)* aplican solo si el sistema pasa a producción.
+
 La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos sintéticos. La v2 cambia el centro: el dato principal lo produce el campo (sensores y bitácora); los datos públicos y los modelos lo complementan.
 
 ## Usuarios
@@ -50,15 +52,17 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 | RNF-01 | **Offline** | Consultar el último estado de las parcelas y usar la bitácora completa sin conexión. Nada de lo registrado offline se pierde. |
 | RNF-02 | **Dispositivos** | Usable en Android de gama baja (2 GB de RAM) en 3G. Bundle inicial ≤ 200 KB gzip. LCP ≤ 2,5 s en 3G rápido. |
 | RNF-03 | **Accesibilidad en campo** | Contraste WCAG AA o mejor (uso a pleno sol), áreas táctiles ≥ 48 px, texto base ≥ 16 px, iconos con etiqueta. |
-| RNF-04 | **Disponibilidad** | API: 99,5 % mensual. Ingesta: el broker acepta lecturas 99,5 % del tiempo; los nodos guardan ≥ 72 h de lecturas si no hay conexión. |
-| RNF-05 | **Latencia** | API p95 < 300 ms en lecturas. Alerta crítica: p95 < 2 min desde la lectura hasta el envío de la notificación. |
+| RNF-04 | **Disponibilidad** *(prod)* | API: 99,5 % mensual. Ingesta: el broker acepta lecturas 99,5 % del tiempo; los nodos guardan ≥ 72 h de lecturas si no hay conexión. |
+| RNF-05 | **Latencia** | API p95 < 300 ms en lecturas. Alerta crítica: p95 < 2 min desde la lectura hasta el envío de la notificación (en el seminario, hasta la bandeja `/dev/outbox` o el push). |
 | RNF-06 | **Integridad de datos** | Ingesta idempotente: una lectura repetida no se duplica. Se guarda el valor crudo y el calibrado. |
 | RNF-07 | **Seguridad** | TLS en todo el tráfico. Credenciales únicas por nodo. Autorización por organización en cada consulta. |
-| RNF-08 | **Privacidad** | Cumplimiento de la Ley 1581 de 2012 (habeas data): consentimiento explícito y exportación y borrado de los datos personales. |
-| RNF-09 | **Costo** | Piloto operable con un solo VPS y costo de LLM acotado por presupuesto mensual ([02-estimaciones](02-estimaciones.md)). |
+| RNF-08 | **Privacidad** *(prod; en el seminario solo hay datos simulados)* | Cumplimiento de la Ley 1581 de 2012 (habeas data): consentimiento explícito y exportación y borrado de los datos personales. |
+| RNF-09 | **Costo** | Seminario: USD 0 de infraestructura y ≤ USD 5 de LLM. Producción: un solo VPS y LLM con tope mensual ([02-estimaciones](02-estimaciones.md)). |
 | RNF-10 | **Mantenibilidad** | Monolito modular con límites explícitos ([ADR-0002](adr/0002-monolito-modular.md)). Design system único ([ADR-0006](adr/0006-design-system.md)). |
 | RNF-11 | **Trazabilidad de modelos** | Toda predicción guarda la versión del modelo. Ningún modelo pasa a producción sin superar su línea base ([ADR-0019](adr/0019-reconstruccion-de-modelos.md), [ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)). |
 | RNF-12 | **Idioma** | Interfaz en español. Código e identificadores en inglés. |
+| RNF-13 | **Ejecución local** | El perfil seminario levanta con `docker compose --profile seminar up` en un portátil de 8 GB, sin cuentas pagas. |
+| RNF-14 | **Demo reproducible** | Cada escenario (A–D) produce siempre las mismas alertas y recomendaciones, y funciona sin internet salvo el asistente. |
 
 ## Requisitos extendidos
 
