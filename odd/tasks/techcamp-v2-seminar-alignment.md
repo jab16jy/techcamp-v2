@@ -24,9 +24,9 @@ Make every design document consistent with ADR-0021 (seminar profile by default,
 - Delivery strategy: single-pr. Forecast ~150 authored changed lines. Branch `docs/seminar-alignment` stacked on `docs/system-design` (PR #1 not merged).
 
 ## Tasks
-- [ ] T1 ADR scope notes (0004, 0007, 0014, 0015, 0016, 0017, 0018), ADR index, ADR-0021 lists 0018 — route: delegated (writer trigger: 9 files)
-- [ ] T2 Metrics/API/requirements scoping (11-metricas §4 + diagram, 04-api `/metrics`, 01-requisitos Grafana) — route: delegated (same writer)
-- [ ] T3 Assistant grounded on sensors and ML: `assistant --> telemetry` in 05, facts in 06 §9 (latest readings/daily aggregates, active alerts, risk probability + `model_version` + validation metric), ADR-0007 LangGraph alternative row — route: delegated (same writer)
+- [x] T1 ADR scope notes (0004, 0007, 0014, 0015, 0016, 0017, 0018), ADR index, ADR-0021 lists 0018 — route: delegated (writer trigger: 9 files)
+- [x] T2 Metrics/API/requirements scoping (11-metricas §4 + diagram, 04-api `/metrics`, 01-requisitos Grafana) — route: delegated (same writer)
+- [x] T3 Assistant grounded on sensors and ML: `assistant --> telemetry` in 05, facts in 06 §9 (latest readings/daily aggregates, active alerts, risk probability + `model_version` + validation metric), ADR-0007 LangGraph alternative row — route: delegated (same writer)
 
 ## Acceptance criteria
 - No ADR or doc presents a production-only piece as the seminar default without a scope note.
@@ -37,5 +37,10 @@ Make every design document consistent with ADR-0021 (seminar profile by default,
 ## Progress / evidence
 - Audit (2 Sonnet explore agents) + parent spot check of 0014/0016/0004/0017/0018, 11-metricas §4 and line 107, ADR index.
 
+- T1 done: `5913786` (ADR scope notes 0004, 0014–0018; ADR index note; ADR-0021 lists 0018). 0007 note landed with T3.
+- T2 done: `80d6331` (11-metricas §4 note + dashed Prometheus→Grafana edge marked "solo producción"; 04-api `/metrics` note; 01-requisitos Grafana `*(prod)*`). SLO decision: not monitored in seminar (consistent with 09 and ADR-0021); only the USD 5 LLM cap applies.
+- T3 done: `8d72ef7` (`assistant --> telemetry` in 05, graph acyclic via topological sort; 06 §9 facts list using existing fields `received_at`, `quality`, `reading_daily`, `rationale`, `probability`, `top_factors`, `model_version.version`, `model_version.metrics`; ADR-0007 scope note + LangGraph row, v1 graph verified linear).
+- Checks: link/anchor checker over README, docs, odd → 0 broken (control file with a bad anchor and a missing file flagged 2). Mermaid parse (mermaid 11 + jsdom) of 05 module graph, 06 §9 sequence, 11 diagram → all OK (control block FAIL as expected).
+
 ## Next step
-T1–T3 via one writer.
+User review; push/PR is the user's decision.
