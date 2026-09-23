@@ -41,7 +41,7 @@ No push, no PR opened by this worker; the parent opens PRs per slice.
 - [x] T5 Patterns + router + AppShell with bottom tab bar — route: delegated (commit 20b7bc9)
 - [x] T6 `/dev/ui` catalog, every component in all states (dev only) — route: delegated (commit 5b099c5)
 - [x] T7 PWA: manifest, icons, Workbox precache, offline open; size-limit in CI — route: delegated (commit 53d5d28)
-- [ ] T8 Finish review (impeccable-finish-reviewer), fixes, `DESIGN.md` + `.impeccable/design.json` (impeccable-documenter) — route: delegated
+- [x] T8 Finish review (impeccable-finish-reviewer), fixes, `DESIGN.md` + `.impeccable/design.json` (impeccable-documenter) — route: delegated
 
 ## Acceptance criteria
 - [ ] No color, space, radius or type value outside tokens (lint enforced).
@@ -142,3 +142,20 @@ Delivery evidence for this batch (`git show --shortstat 9382ca7`): 11 files chan
 
 ## Next step
 `DESIGN.md` + `.impeccable/design.json` via `impeccable-documenter` — the remaining half of T8, out of this worker's authorized scope (this batch was fixes only); hand to the parent to delegate.
+
+- T8: finish review (impeccable-finish-reviewer) disposition **fix** (5 material fixes) → batch `9382ca7` → verdict pass **ship** (all 5 resolved, no regressions; scope: those 5 fixes). Documenter wrote `DESIGN.md` + `.impeccable/design.json` (`2fc587f`). Documenter-reported drift (dead `--space-*` tokens) fixed in `abbf0f1` (`--spacing: 0.25rem` in `@theme`). Parent spot-check: lint, typecheck, 26 tests, build 107.98 kB gzip, size-limit pass.
+
+## Review (RDD)
+- Assessed per slice. Owner decision (2026-09-23): review only the high-risk slice; the medium slices (1–4, 6, 7) were explicitly left unreviewed. The design itself passed the impeccable finish review (ship).
+- Slice 5 (`20b7bc9..87f1bab`: `/dev/ui`, PWA, CI): risk high (`ci.yml`). Owner granted consent. Lineage `review-24565c320ee15fac`, 4 lenses → **approved**, acknowledged, authority burned.
+- 0 blocking findings; 6 informational, kept as follow-ups: PWA `autoUpdate` reloads the page without a prompt (can drop an in-progress form), the size-limit entry measures all JS rather than only the initial bundle, manifest colors hard-coded instead of linked to tokens, duplicated icon source with an undocumented PNG generation step, no automated PWA/offline assertion, and an over-claiming route test title.
+
+## PR plan (stacked-to-main)
+Authored lines exclude `package-lock.json` and PNG icons.
+- PR 1: T1 + T2 `877b865`..`6cbdd77` — 289.
+- PR 2: T3 primitives `f1cc675`, `2a60223` — 561 (shadcn/ui code copied into the repo; over budget).
+- PR 3: T4 domain components `cddf783` — 427.
+- PR 4: T5 patterns + router `20b7bc9` — 300.
+- PR 5: T6 + T7 catalog, PWA, CI `5b099c5`..`87f1bab` — ~390 (RDD reviewed).
+- PR 6: finish-review fixes `9382ca7`..`abbf0f1` — 328.
+- PR 7: `DESIGN.md`, design sidecar and ODD close — ~430.
