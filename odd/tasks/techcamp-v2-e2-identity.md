@@ -41,7 +41,7 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
 ## Tasks
 - [x] T1 DB wiring: settings, async engine/session, Alembic, migration for `app_user`, `organization`, `membership`; tests run against real Postgres (compose locally, service in CI) — route: delegated
 - [x] T2 Identity domain + application: roles, membership rules, `get_me` use case, org-scoped access check (pure domain tests) — route: delegated
-- [ ] T3 Local JWT issuer (seminar) + JWKS validation dependency; `POST /dev/auth/otp` prints code, verify returns JWT — route: delegated
+- [x] T3 Local JWT issuer (seminar) + JWKS validation dependency; `POST /dev/auth/otp` prints code, verify returns JWT — route: delegated
 - [ ] T4 `GET /me` with memberships; auth dependency resolving user, org and role per request; problem+json errors — route: delegated
 - [ ] T5 Org isolation test: user of org A gets 404 for org B resources; CI Postgres service — route: delegated
 
@@ -66,5 +66,10 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
   - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `67 files already formatted`; `uv run mypy` → `Success: no issues found in 60 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
   - Commit: T2 landed in `077ce31` on `feat/e2-identity`.
 
+- T3 done. RSA-backed local JWT issuer (`identity/adapters/security/token_issuer.py`), in-memory OTP store, `POST /dev/auth/otp` (204, prints the code), `POST /dev/auth/otp/verify` (returns `{access_token, token_type}`), and the `get_current_user_id` JWKS-style validation dependency (`identity/adapters/api/deps.py`). `/dev/*` only registered when `is_seminar_profile()` (default), wired in `main.py`.
+  - RED: `uv run pytest tests/identity/test_token_issuer.py tests/identity/test_otp_store.py tests/identity/test_dev_auth.py -q` before the adapters existed → `ModuleNotFoundError`. GREEN after implementing: `uv run pytest -q` → `23 passed`.
+  - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `76 files already formatted`; `uv run mypy` → `Success: no issues found in 64 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
+  - Commit: T3 landed in `<pending>` on `feat/e2-identity`.
+
 ## Next step
-T3.
+T4.
