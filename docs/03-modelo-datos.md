@@ -142,6 +142,8 @@ erDiagram
     text claim_code UK
     text credential_hash
     text firmware
+    int interval_s "intervalo de envío esperado; base de las lecturas esperadas"
+    timestamptz claimed_at "alta del nodo en una parcela"
     timestamptz last_seen_at
     text status "provisioned|online|offline|retired"
   }
@@ -229,6 +231,7 @@ erDiagram
     uuid alert_id FK "opcional: alerta que motivó la entrada"
     text notes
     uuid created_by FK
+    bool created_offline "el cliente la creó sin conexión"
     timestamptz client_updated_at
     bigint server_version "secuencia global"
     timestamptz deleted_at
@@ -290,6 +293,7 @@ erDiagram
     timestamptz opened_at
     timestamptz acknowledged_at
     timestamptz resolved_at
+    text outcome "confirmed|false_alarm; null hasta que el productor o el técnico lo registre"
   }
   notification {
     uuid id PK
@@ -365,7 +369,7 @@ erDiagram
   }
 ```
 
-**Tablas derivadas** (sin relaciones propias): `reading_hourly` y `reading_daily` son agregados continuos de TimescaleDB sobre `reading`, con mín, máx, promedio y conteo. `plot_metric_monthly` guarda el índice de adopción digital y sus componentes. `crop_cycle_summary` guarda rendimiento, rendimiento relativo municipal, cambio frente a la encuesta de inscripción, agua, costos, jornales y margen por ciclo. `field_record` contiene los datos EVA/AGROSAVIA de la v1 para entrenamiento. Las tablas de la cola de trabajos las administra la librería de jobs ([ADR-0012](adr/0012-jobs-en-postgres.md)).
+**Tablas derivadas** (sin relaciones propias): `reading_hourly` y `reading_daily` son agregados continuos de TimescaleDB sobre `reading`, con mín, máx, promedio y conteo. `plot_metric_monthly` guarda el índice de adopción digital y sus componentes. `crop_cycle_summary` guarda rendimiento, rendimiento relativo municipal, cambio frente a la encuesta de inscripción, agua, costos, jornales y margen por ciclo. `field_record` contiene los datos EVA/AGROSAVIA de la v1 para entrenamiento y la referencia del rendimiento relativo municipal: `crop_id`, `municipality_code` (DANE), `year`, `period`, `area_sown_ha`, `area_harvested_ha`, `production_t`, `yield_t_ha` y `source` (`eva` o `agrosavia`). Las tablas de la cola de trabajos las administra la librería de jobs ([ADR-0012](adr/0012-jobs-en-postgres.md)).
 
 ## Decisiones por tabla
 

@@ -174,7 +174,7 @@ ENTIC Hogares 2024 (DANE, 1 de agosto de 2025) [S6]:
   - El diseño usa un `crop.stress_threshold_pct` volumétrico fijo por cultivo (`03-modelo-datos.md:108`, `06-diseno-detallado.md:118`), y el ejemplo de `06-diseno-detallado.md:93` usa 20 %.
   - Ejemplo con valores de FAO-56 (Tabla 19): un franco arenoso tiene θFC ≈ 0,23 y θWP ≈ 0,09. Para maíz (p = 0,55), el umbral de estrés es θ ≈ 0,23 − 0,55 × 0,14 ≈ **0,153**.
   - Con la regla de 20 %, la alerta del escenario A (`06-diseno-detallado.md:332-343`, trayectoria de 28 a 14 %) se abre cerca de θ = 0,20, **antes de que haya estrés según FAO-56**.
-  - En una arcilla (θFC ≈ 0,37, θWP ≈ 0,27), el 20 % está **por debajo del punto de marchitez**. La regla nunca avisaría a tiempo.
+  - En una arcilla (FAO-56, Tabla 19: θFC 0,32–0,40, θWP 0,20–0,24), el 20 % está **en el punto de marchitez o por debajo de él**. *(Corregido en la validación: la versión inicial usaba θWP ≈ 0,27, fuera del rango de la tabla; la conclusión no cambia.)* La regla nunca avisaría a tiempo.
   - **Veredicto: contradicho.**
 - **(b) Lluvia efectiva.**
   - FAO-56 usa `(P − RO)` en la ec. 85 y dice que la lluvia diaria menor de ~0,2·ET0 "se evapora completamente y puede ignorarse".

@@ -45,7 +45,7 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 |---|---|---|
 | Nodo | `node` | Dispositivo físico (ESP32 o similar) con uno o más sensores y un transporte (Wi-Fi, celular o LoRaWAN). |
 | Sensor | `sensor` | Canal de medición de un nodo: una variable, a una profundidad, con su calibración. |
-| Variable | `metric` | Magnitud medida: `soil_moisture`, `soil_temp`, `air_temp`, `air_rh`, `rain`, `battery_v`, `rssi`. |
+| Variable | `metric` | Magnitud medida: `soil_moisture`, `soil_temp`, `air_temp`, `air_rh`, `rain`, `water_flow` (caudalímetro, en litros), `battery_v`, `rssi`. |
 | Lectura | `reading` | Valor de un sensor en un instante. Guarda el valor crudo (`raw_value`) y el calibrado (`value`). |
 | Calibración | `calibration` | Función que convierte el valor crudo en unidades físicas (por ejemplo, ADC → % volumétrico). Es propia de cada sensor, tiene versiones y un tipo: `lab` (laboratorio por tipo de suelo) o `field` (en la parcela). |
 | Uplink / downlink | `up` / `down` | Mensaje del nodo al servidor / del servidor al nodo. |

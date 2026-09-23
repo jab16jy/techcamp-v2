@@ -31,6 +31,7 @@ The research (gap matrix G01–G28, validated by the parent) found blockers: fix
 - [x] T3 Impact data and metrics (G04, G05, G09, G10, G11, "línea base" split) + ADR-0024 — route: delegated (writer 2) — `f2280b5`
 - [x] T4 Cheap evidence notes (G07 model card, G08 ENSO/MTA, G12 AU915) — route: delegated (writer 2) — `f89d6b4`
 - [x] T5 Extension visit (G15) — route: delegated (writer 2) — `e41ebad`
+- [x] T6 Parent validation: close remaining metric-field gaps and fix the research clay values — route: inline (mechanical, 3 files)
 
 ## Acceptance criteria
 - No fixed moisture threshold per crop remains; water stress is defined per plot from soil + crop stage, consistent across glossary, 03, 06, 11 and the scenarios.
@@ -62,7 +63,7 @@ The research (gap matrix G01–G28, validated by the parent) found blockers: fix
 - Added `calibration.rmse_pct` (for G10), `kb_document.kind/published_on/department/enso_state` (for G08) and `farm.technician_id` (the design already referred to an "assigned technician" without a field).
 - ADR-0008 left unchanged; the corpus sources are described in 06 §9.
 
-## Remaining gaps (metrics without fields)
+## Remaining gaps (metrics without fields) — closed in T6
 - `relative_yield`: `field_record` (EVA) has no column schema in 03.
 - "Agua aplicada ... o caudalímetro": no flow-meter metric in `sensor.metric`.
 - `monitoring` and "tiempo a primera lectura": no `node.interval_s` or claim timestamp.
@@ -70,5 +71,11 @@ The research (gap matrix G01–G28, validated by the parent) found blockers: fix
 - "Uso offline": no flag for entries created offline.
 - Cost per kg with valued family labour needs a reference wage (not modelled).
 
+## Parent validation (T6)
+- Re-derived scenario A (θ_estrés 15,3 %, TAW 84, RAW 46,2, crossing day ≈ 10,4, Dr_obs 60 > RAW) and scenario E (TAW 140, RAW 77, stress opens day 16, Dr 105 on day 21): correct.
+- Agreed with writer 2's sandy-loam choice for scenario E: the research used clay θWP ≈ 0,27, outside FAO-56 Table 19 (0,20–0,24). Research line corrected with a note; conclusion unchanged.
+- Closed metric gaps in 03/00: `node.interval_s`, `node.claimed_at`, `alert.outcome`, `logbook_entry.created_offline`, `water_flow` metric, `field_record` column list. The "reference wage" gap needs no field: no metric in 11 values family labour.
+- Checks: linkcheck `broken: 0` (40 files); Mermaid 03 1/1 OK; grep `stress_threshold_pct`/`technification_index` 0 outside the research.
+
 ## Next step
-Parent validation; push/PR is the user's decision.
+User review; push/PR is the user's decision. Open owner decisions: MADR 1–4 index alignment, node payer/maintainer, data ownership and foreign providers, sex/age disaggregation, riverine floods.
