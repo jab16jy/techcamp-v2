@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-23T17:05:53Z",
+  "title": "Design System: TechCamp",
+  "extensions": {
+    "colorMeta": {
+      "surface": {
+        "role": "neutral",
+        "displayName": "Paper-Bag Cream",
+        "canonical": "#efe7d6",
+        "tonalRamp": ["#372c15", "#675328", "#937639", "#ba984f", "#cbb27b", "#dbc9a3", "#ebe1cc", "#f8f4ed"]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Raised Cream",
+        "canonical": "#faf6ec",
+        "tonalRamp": ["#3d3010", "#71591e", "#a2802b", "#cca33d", "#d9ba6e", "#e4cf9a", "#f0e4c6", "#faf5eb"]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Deep Field Green Ink",
+        "canonical": "#17301f",
+        "tonalRamp": ["#193421", "#2e613e", "#428a59", "#5ab075", "#83c498", "#a9d6b7", "#cfe8d7", "#eef7f1"]
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Muted Field Green",
+        "canonical": "#4f5f53",
+        "tonalRamp": ["#232a24", "#414e44", "#5d6f61", "#79907f", "#9bac9f", "#b9c5bc", "#d8dfda", "#f1f3f2"]
+      },
+      "brand": {
+        "role": "primary",
+        "displayName": "Brand Green",
+        "canonical": "#1f4a32",
+        "tonalRamp": ["#173624", "#2a6544", "#3c9061", "#52b77f", "#7ec99f", "#a5d9bc", "#cdeada", "#edf7f2"]
+      },
+      "status-ok": {
+        "role": "status",
+        "displayName": "Status Green — Bien",
+        "canonical": "#1f5e33",
+        "tonalRamp": ["#133a1f", "#236b3a", "#339953", "#47c26e", "#75d192", "#9fdfb4", "#c9edd5", "#ecf9f0"]
+      },
+      "status-watch": {
+        "role": "status",
+        "displayName": "Ochre — Vigilar",
+        "canonical": "#654200",
+        "tonalRamp": ["#4c3200", "#8f5d00", "#cc8500", "#ffaa0a", "#ffbf47", "#ffd380", "#ffe6b8", "#fff6e5"]
+      },
+      "status-irrigate": {
+        "role": "status",
+        "displayName": "Water Blue — Regar",
+        "canonical": "#164c68",
+        "tonalRamp": ["#0d2e3f", "#195676", "#247ba8", "#359ed4", "#67b6df", "#96cce9", "#c4e3f3", "#eaf5fb"]
+      },
+      "status-stress": {
+        "role": "status",
+        "displayName": "Clay Red — Estrés",
+        "canonical": "#6b2a1d",
+        "tonalRamp": ["#3c1810", "#702c1e", "#a13f2b", "#cb563e", "#d8806f", "#e4a79b", "#f0cec7", "#faedeb"]
+      },
+      "severity-info": {
+        "role": "severity",
+        "displayName": "Information Blue",
+        "canonical": "#2a4e8a",
+        "tonalRamp": ["#12213b", "#213e6d", "#30589c", "#4374c6", "#7297d4", "#9db7e1", "#c8d7ee", "#ebf1f9"]
+      },
+      "severity-warning": {
+        "role": "severity",
+        "displayName": "Warning Ochre",
+        "canonical": "#8a5a0e",
+        "tonalRamp": ["#452d07", "#82550d", "#b97913", "#e89b21", "#eeb458", "#f3cb8b", "#f8e2be", "#fdf5e8"]
+      },
+      "severity-critical": {
+        "role": "severity",
+        "displayName": "Annatto — critical alerts only",
+        "canonical": "#8a3212",
+        "tonalRamp": ["#441909", "#7e2e10", "#b44118", "#e35926", "#ea825d", "#f0a88e", "#f7cec0", "#fceee8"]
+      },
+      "offline": {
+        "role": "neutral",
+        "displayName": "Offline Clay-Gray",
+        "canonical": "#5f564a",
+        "tonalRamp": ["#2b2721", "#50493f", "#736859", "#948775", "#afa598", "#c7c0b7", "#e0dcd7", "#f4f2f1"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "The one large page title per screen. Serif, never used for section headers." },
+      "headline": { "displayName": "Headline", "purpose": "Section headers within a screen." },
+      "title": { "displayName": "Title", "purpose": "Status band words, alert titles, numeric readouts." },
+      "body": { "displayName": "Body", "purpose": "Messages, labels, list and input text." },
+      "label": { "displayName": "Label", "purpose": "Freshness clauses, muted captions, chip/badge text." }
+    },
+    "shadows": [
+      { "name": "sheet-lift", "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", "purpose": "The bottom sheet only (Tailwind shadow-lg). No other surface carries a shadow." }
+    ],
+    "motion": [
+      { "name": "sheet-slide-in", "value": "translateY(100%) -> translateY(0), 240ms ease-out", "purpose": "Bottom sheet opening; the system's one animated event." },
+      { "name": "sheet-slide-out", "value": "translateY(0) -> translateY(100%), 240ms ease-out", "purpose": "Bottom sheet closing; collapses to 0.01ms under prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "phone-column", "value": "max-w-md (28rem / 448px)" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one call-to-action color in the system.",
+      "html": "<button class=\"ds-btn ds-btn-primary\">Guardar</button>",
+      "css": ".ds-btn { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 8px; border-radius: 14px; padding: 0 16px; font-size: 1rem; font-weight: 500; border: none; cursor: pointer; transition: background-color 0.2s; } .ds-btn-primary { background: #1f4a32; color: #efe7d6; } .ds-btn-primary:hover { background: color-mix(in srgb, #1f4a32 90%, white); } .ds-btn-primary:active { background: color-mix(in srgb, #1f4a32 80%, white); } .ds-btn-primary:focus-visible { outline: 2px solid #1f4a32; outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Hairline-bordered raised-cream button for secondary actions.",
+      "html": "<button class=\"ds-btn ds-btn-secondary\">Cancelar</button>",
+      "css": ".ds-btn-secondary { background: #faf6ec; color: #17301f; border: 1px solid rgb(23 48 31 / 0.2); } .ds-btn-secondary:focus-visible { outline: 2px solid #1f4a32; outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Band",
+      "kind": "custom",
+      "refersTo": "status-band",
+      "description": "Signature component: color + pictogram + plain word + example sentence, full-width. Pressing it opens a bottom sheet with the rationale.",
+      "html": "<button class=\"ds-status-band\" type=\"button\"><svg class=\"ds-status-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3s6.5 7.2 6.5 11.5a6.5 6.5 0 0 1-13 0C5.5 10.2 12 3 12 3Z\"/></svg><span><span class=\"ds-status-label\">Regar</span><span class=\"ds-status-message\">Hoy: regar 12 mm ≈ 40 min.</span></span></button>",
+      "css": ".ds-status-band { display: flex; width: 100%; align-items: flex-start; gap: 12px; border-radius: 16px; padding: 12px 16px; background: #164c68; color: #faf6ec; border: none; text-align: left; cursor: pointer; } .ds-status-icon { width: 24px; height: 24px; flex-shrink: 0; margin-top: 2px; } .ds-status-label { display: block; font-size: 1.125rem; font-weight: 600; } .ds-status-message { display: block; font-size: 1rem; } .ds-status-band:focus-visible { outline: 2px solid #1f4a32; outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "Compact pill form of the status band, for list rows and metric tiles.",
+      "html": "<span class=\"ds-status-badge\"><svg class=\"ds-badge-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"m8.5 12.5 2.5 2.5 4.5-5\"/></svg>Bien</span>",
+      "css": ".ds-status-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; padding: 4px 12px; font-size: 0.875rem; font-weight: 500; background: #1f5e33; color: #faf6ec; } .ds-badge-icon { width: 16px; height: 16px; }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text field with hairline border and error state via aria-invalid.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Nombre del cultivo\" />",
+      "css": ".ds-input { display: flex; height: 48px; width: 100%; border-radius: 14px; border: 1px solid rgb(23 48 31 / 0.2); background: #faf6ec; padding: 0 12px; font-size: 1rem; color: #17301f; } .ds-input::placeholder { color: #4f5f53; } .ds-input:focus-visible { outline: 2px solid #1f4a32; outline-offset: 2px; } .ds-input[aria-invalid] { border-color: #8a3212; outline-color: #8a3212; }"
+    },
+    {
+      "name": "Alert Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Severity-labelled card: badge + title + description, flat with a hairline border.",
+      "html": "<article class=\"ds-alert-card\"><span class=\"ds-severity-badge\">Advertencia</span><h3 class=\"ds-alert-title\">Batería baja</h3><p class=\"ds-alert-desc\">El nodo de la parcela Norte tiene 15 % de batería.</p></article>",
+      "css": ".ds-alert-card { border-radius: 16px; border: 1px solid rgb(23 48 31 / 0.1); background: #faf6ec; padding: 16px; } .ds-severity-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 9999px; padding: 4px 10px; font-size: 0.875rem; font-weight: 500; background: #8a5a0e; color: #faf6ec; } .ds-alert-title { margin-top: 8px; font-size: 1.125rem; font-weight: 600; color: #17301f; } .ds-alert-desc { margin-top: 4px; font-size: 1rem; color: #4f5f53; }"
+    },
+    {
+      "name": "Bottom Tab Bar",
+      "kind": "nav",
+      "refersTo": "nav",
+      "description": "Fixed five-tab bar, raised-cream, active tab in brand green.",
+      "html": "<nav class=\"ds-tabbar\"><a class=\"ds-tab ds-tab-active\">Inicio</a><a class=\"ds-tab\">Alertas</a><a class=\"ds-tab\">Bitácora</a><a class=\"ds-tab\">Parcelas</a><a class=\"ds-tab\">Más</a></nav>",
+      "css": ".ds-tabbar { display: flex; border-top: 1px solid rgb(23 48 31 / 0.1); background: #faf6ec; } .ds-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 48px; padding: 8px 0; font-size: 0.875rem; color: #4f5f53; text-decoration: none; } .ds-tab-active { color: #1f4a32; font-weight: 500; }"
+    },
+    {
+      "name": "Bottom Sheet",
+      "kind": "custom",
+      "refersTo": "sheet",
+      "description": "The one elevated, animated surface: slides up 240ms ease-out, shadow-lg, top-rounded.",
+      "html": "<div class=\"ds-sheet\"><span class=\"ds-sheet-grabber\" aria-hidden=\"true\"></span><h2 class=\"ds-sheet-title\">Por qué: Regar</h2><p class=\"ds-sheet-desc\">El balance hídrico del cultivo muestra un déficit de 12 mm.</p></div>",
+      "css": "@keyframes ds-sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } } .ds-sheet { position: fixed; inset-inline: 0; bottom: 0; border-radius: 16px 16px 0 0; border-top: 1px solid rgb(23 48 31 / 0.15); background: #faf6ec; padding: 24px; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); animation: ds-sheet-in 240ms ease-out; } .ds-sheet-grabber { display: block; margin: 0 auto 12px; height: 4px; width: 40px; border-radius: 9999px; background: rgb(23 48 31 / 0.2); } .ds-sheet-title { font-size: 1.25rem; font-weight: 600; color: #17301f; } .ds-sheet-desc { margin-top: 4px; font-size: 0.875rem; color: #4f5f53; } @media (prefers-reduced-motion: reduce) { .ds-sheet { animation-duration: 0.01ms; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Sack-Label Phone",
+    "overview": "Every plot, alert, and reading is a card that ends in a status band, the way an insumo sack label ends in its colored category band: color, pictogram, and one plain word, readable at arm's length in direct sun. The structure underneath is the owner-pinned iOS idiom — large titles, inset grouped lists, a fixed bottom tab bar, bottom sheets for detail and forms — carrying a Fruit Garden palette (cream ground, deep field green, one warm accent held back for alerts only). The system refuses chart-first KPI tiles and soft gray dashboard chrome: numbers live in ruled, tabular, unit-labelled rows inside grouped lists, not floating hero cards. The build is flat by declared invariant (no shadows except the one sheet surface), has no gradients, no blur, and no 3D. Its one motion event is the bottom sheet sliding up; nothing else animates. Pictograms are load-bearing, not decorative: every status band pairs an icon with its plain word so color never carries meaning alone.",
+    "keyCharacteristics": [
+      "Cream ground, deep green ink, one warm accent (annatto/severity-critical) reserved for alerts, never a general accent.",
+      "Four water-balance status colors (ok / watch / irrigate / stress) and three alert severities (info / warning / critical) are two distinct, non-interchangeable vocabularies.",
+      "Flat by default; the bottom sheet is the only surface allowed a shadow and the only element allowed to move.",
+      "System fonts only: ui-serif for large titles, ui-sans-serif for everything else, tabular numerals on every reading.",
+      "12–16px radii throughout; fully-rounded pills for badges and filter chips only."
+    ],
+    "rules": [
+      { "name": "The Two Vocabularies Rule", "body": "Status (ok green / watch ochre / irrigate water blue / stress clay red) describes a plot's water balance. Severity (info blue / warning ochre / critical annatto) describes an alert. They share no color values and must never be used to represent each other's concept.", "section": "colors" },
+      { "name": "The Annatto Rule", "body": "severity-critical (#8a3212) is the one warm accent in the system, reserved for critical alerts. It never appears as a general-purpose accent, brand color, or decorative highlight.", "section": "colors" },
+      { "name": "The One Serif Rule", "body": "ui-serif appears exactly once per screen, on the large title. Every other piece of text — including section headers — is sans.", "section": "typography" },
+      { "name": "The Tabular Numerals Rule", "body": "Every field reading (metric values, water-gauge percentages) sets tabular-nums so digits don't jitter as they update.", "section": "typography" },
+      { "name": "The Sheet-Only Shadow Rule", "body": "Shadows exist nowhere except the bottom sheet. Every resting surface stays flat; depth there is conveyed by tone and hairline dividers, not by shadow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do pair every status or severity color with its pictogram and plain word.",
+      "Do keep ui-serif to exactly one large title per screen; every other heading is sans.",
+      "Do use 48px as the minimum interactive height for buttons, inputs, tabs, and list rows.",
+      "Do print connection state as a plain text line, never a chrome badge or icon-only indicator."
+    ],
+    "donts": [
+      "Don't apply a shadow to any surface except the bottom sheet.",
+      "Don't use severity-critical (annatto) as a general accent, brand highlight, or decorative color.",
+      "Don't cross the status and severity vocabularies.",
+      "Don't add gradients, blur (backdrop-filter), or 3D treatments; none exist in the shipped build."
+    ]
+  }
+}
