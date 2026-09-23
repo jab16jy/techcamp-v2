@@ -26,7 +26,7 @@ ADR-0006: the design system comes before any feature screen. E8 and E9 depend on
 ## Slices
 Small chained PRs, each targeting `main`, merged in order. Cut on task commit boundaries (each task closes with one clean work-unit commit); boundaries below are planned and adjusted as real sizes land.
 - Slice 1 = T1 + T2 — commits `877b865`, `a5e893e` (+ doc bookkeeping `668e991`, `47bc289`).
-- Slice 2 = T3 — commit TBD.
+- Slice 2 = T3 — commit `f1cc675`.
 - Slice 3 = T4 — commit TBD.
 - Slice 4 = T5 + T6 — commits TBD.
 - Slice 5 = T7 — commit TBD.
@@ -36,7 +36,7 @@ No push, no PR opened by this worker; the parent opens PRs per slice.
 ## Tasks
 - [x] T1 `PRODUCT.md`, surface brief with direction contract, `.gitignore` keeps durable `.impeccable/` files — route: inline
 - [x] T2 Tailwind v4 + `tokens.css` (primitive → semantic), ESLint ban on arbitrary values — route: delegated (commit a5e893e)
-- [ ] T3 Primitives in `design-system/ui/` (Button, Input, Dialog, Sheet, Tabs, Toast, Select) — route: delegated
+- [x] T3 Primitives in `design-system/ui/` (Button, Input, Dialog, Sheet, Tabs, Toast, Select) — route: delegated (commit f1cc675)
 - [ ] T4 Domain components in `design-system/components/` with tests for logic — route: delegated
 - [ ] T5 Patterns + router + AppShell with bottom tab bar — route: delegated
 - [ ] T6 `/dev/ui` catalog, every component in all states (dev only) — route: delegated
@@ -97,6 +97,10 @@ No push, no PR opened by this worker; the parent opens PRs per slice.
 
   - Checks: `npm run lint` — clean (0 errors); `npm run typecheck` — clean; `npm test -- --run` — 1 test file, 1 test, passed; `npm run build` — succeeded, JS `219.62 kB` / gzip `68.58 kB` (well under the 200 KB gzip budget, though that budget is formally verified with `size-limit` in T7).
   - Gaps/uncertain: none. The v4-compatible ESLint plugin existed and worked cleanly, so no hand-rolled rule was necessary (explicitly permitted either way by the task).
+- T3 (commit f1cc675): shadcn/ui primitives on Radix, copied into `web/src/design-system/ui/`, adapted to T2's token utilities only (no arbitrary values). Files: `button.tsx`, `input.tsx`, `dialog.tsx`, `sheet.tsx` (+ `sheet.css` for the slide-up-from-bottom animation, 200–250ms ease-out, respects `prefers-reduced-motion`), `tabs.tsx`, `toast.tsx` (built on `sonner`, the current shadcn-recommended toast path), `select.tsx`, `icons.tsx`, `utils.ts` (shared `cn()` via `clsx` + `tailwind-merge`). Deps added: `@radix-ui/react-dialog`, `@radix-ui/react-select`, `@radix-ui/react-tabs`, `class-variance-authority`, `clsx`, `sonner`, `tailwind-merge`.
+  - Checks (re-run by the parent after a rate-limit interruption cut the writer off mid-report): `npm run lint` — clean; `npm run typecheck` — clean; `npm test -- --run` — 1 file, 1 test, passed; `npm run build` — succeeded, JS `219.62 kB` / gzip `68.58 kB` (unchanged from T2 — primitives aren't imported by any consumer yet, so nothing new is bundled; consumers land in T4/T5).
+  - TDD: not required (no behavioral logic in T3, per Route and checks) — verified through the checks above; visual state coverage deferred to the `/dev/ui` catalog (T6).
+  - Gaps/uncertain: none reported before the interruption. Button/Input/Tabs use plain elements + Radix only where Radix has a primitive (Dialog, Sheet-on-Dialog, Tabs, Select); Toast uses `sonner` rather than a hand-rolled Radix Toast, matching shadcn/ui's current recommended path.
 
 ## Next step
-T3 (primitives in `design-system/ui/`), delegated writer.
+T4 (domain components in `design-system/components/`), delegated writer.
