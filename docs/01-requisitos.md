@@ -30,10 +30,10 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 | RF-07 | **Alertas** por reglas (estrés hídrico, saturación, calor, riesgo fitosanitario, nodo caído, batería baja) y por modelos (riesgo de inundación o sequía). Ciclo: abierta → reconocida → resuelta. |
 | RF-08 | **Notificaciones**: push web; SMS o WhatsApp como respaldo para alertas críticas. |
 | RF-09 | **Decisión hídrica diaria** por parcela, basada en ET0 FAO, Kc del cultivo, lluvia y humedad de suelo medida. Con riego: lámina en mm y tiempo de riego según el caudal del sistema. De secano: déficit hídrico, lluvia pronosticada y consejo de manejo, sin lámina ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)). |
-| RF-10 | **Bitácora de campo offline**: labores, aplicaciones de insumos, riegos, costos, observaciones con foto y cosechas en kg. Sincroniza al recuperar señal. |
+| RF-10 | **Bitácora de campo offline**: labores con jornales, aplicaciones de insumos, riegos, costos, observaciones con foto (vinculables a una alerta) y cosechas en kg con lo vendido y su precio. Sincroniza al recuperar señal. |
 | RF-11 | **Clima**: pronóstico a 7–16 días por parcela y acumulados históricos. |
 | RF-12 | **Riesgo climático**: probabilidad y severidad de inundación y sequía por municipio o celda, con explicación de los factores. |
-| RF-13 | **Tablero** de la parcela y de la organización con los [indicadores de tecnificación](11-metricas.md). |
+| RF-13 | **Tablero** de la parcela y de la organización con los [indicadores de tecnificación](11-metricas.md), medidos contra la encuesta de inscripción de cada parcela. |
 | RF-14 | **Asistente agronómico**: preguntas en lenguaje natural respondidas con el contexto de la parcela y fuentes citadas. |
 
 ### Diferidos (v2.x)

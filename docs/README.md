@@ -57,6 +57,7 @@ flowchart LR
 | IA | LLM por API barata; explica, no decide. Sin Ollama | [0007](adr/0007-llm-por-api.md) |
 | Riego | FAO-56; estrés hídrico por parcela (`Dr > RAW`) y sensor que corrige el balance con un peso según su calibración | [0009](adr/0009-riego-fao56.md), [0022](adr/0022-estres-hidrico-y-asimilacion.md) |
 | Parcelas | Con riego y de secano: el mismo balance hídrico; lámina solo con sistema de riego, consejo de manejo en secano | [0023](adr/0023-parcelas-con-riego-y-secano.md) |
+| Impacto | Impacto contra la encuesta de inscripción de cada parcela; índice de adopción digital que cuenta acciones, no reconocimientos | [0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md) |
 | Ejecución | Perfil seminario local con simulador de escenarios; producción futura cambiando adaptadores | [0021](adr/0021-perfil-seminario-local.md) |
 | ML | Modelos reconstruidos desde cero con protocolo fijo; solo se promueve lo que supera su mejor línea base | [0019](adr/0019-reconstruccion-de-modelos.md), [0020](adr/0020-protocolo-de-experimentacion-ml.md) |
 

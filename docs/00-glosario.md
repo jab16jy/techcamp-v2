@@ -17,7 +17,10 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Etapa fenológica | `growth_stage` | Inicial, desarrollo, media o final (FAO-56). Determina el Kc. |
 | Bitácora | `logbook` | Registro de lo que hizo el productor: labores, insumos, riegos, costos, observaciones y cosechas. |
 | Entrada de bitácora | `logbook_entry` | Un registro individual de la bitácora. |
-| Cosecha | `harvest` | Entrada de bitácora con el rendimiento en kg. Es la fuente del indicador de productividad. |
+| Cosecha | `harvest` | Entrada de bitácora con el rendimiento en kg y, si se vendió, los kg vendidos (`sold_kg`) y el precio (`sale_price_cop_per_kg`). Es la fuente del rendimiento y del margen. |
+| Jornales | `labor_days` | Días de trabajo de una labor, incluida la mano de obra familiar. |
+| Encuesta de inscripción | `plot_baseline` | Cómo producía la parcela antes de usar TechCamp: cultivo y rendimiento del último ciclo, costos aproximados y práctica de riego. Se registra al inscribir la parcela y es la referencia para medir el impacto. |
+| Rendimiento relativo municipal | `relative_yield` | Rendimiento del ciclo dividido por la mediana EVA del cultivo en el municipio (3 años). Da contexto; no mide impacto. |
 
 ## Agua y clima
 
@@ -56,5 +59,5 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Recomendación de secano | `rainfed` | Tipo (`kind`) de la recomendación hídrica diaria de una parcela de secano: déficit frente a RAW, lluvia pronosticada y consejos de manejo (`advice`), sin lámina ni minutos. |
 | Riesgo climático | `risk_prediction` | Probabilidad calibrada de un evento (inundación o sequía) en un horizonte, con severidad. |
 | Versión de modelo | `model_version` | Artefacto entrenado con sus métricas, su línea base y su estado de promoción. |
-| Línea base | `baseline` | Método simple (una heurística) que un modelo debe superar para promoverse. |
-| Índice de tecnificación | `technification_index` | Indicador compuesto de 0 a 100 por parcela ([11-metricas](11-metricas.md)). |
+| Línea base | `baseline` | Método simple (una heurística) que un modelo de ML debe superar para promoverse. Solo se usa en ML; los datos de la parcela antes de TechCamp son la encuesta de inscripción (`plot_baseline`). |
+| Índice de adopción digital | `digital_adoption_index` | Indicador compuesto de 0 a 100 por parcela que mide el uso de la plataforma: monitoreo, registro, decisión y acción ante alertas ([11-metricas](11-metricas.md)). |

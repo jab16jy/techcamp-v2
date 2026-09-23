@@ -45,6 +45,9 @@ erDiagram
   plot ||--o{ irrigation_recommendation : recibe
   plot ||--o{ logbook_entry : registra
   crop_cycle ||--o{ logbook_entry : agrupa
+  alert ||--o{ logbook_entry : motiva
+  plot ||--o| plot_baseline : inscribe
+  crop ||--o{ plot_baseline : cultivaba
   logbook_entry ||--o{ attachment : adjunta
   alert_rule ||--o{ alert : dispara
   plot ||--o{ alert : afecta
@@ -151,6 +154,7 @@ erDiagram
     text method "linear|two_point|polynomial"
     text kind "lab|field"
     jsonb params
+    numeric rmse_pct "error de la calibración, si se midió"
     timestamptz valid_from
   }
   reading {
@@ -212,12 +216,26 @@ erDiagram
     text unit
     numeric cost_cop
     numeric yield_kg
+    numeric sold_kg "harvest"
+    numeric sale_price_cop_per_kg "harvest"
+    numeric labor_days "task: jornales, incluida la mano de obra familiar"
     numeric irrigation_mm
+    uuid alert_id FK "opcional: alerta que motivó la entrada"
     text notes
     uuid created_by FK
     timestamptz client_updated_at
     bigint server_version "secuencia global"
     timestamptz deleted_at
+  }
+  plot_baseline {
+    uuid plot_id PK, FK
+    uuid org_id FK
+    date enrolled_on
+    int crop_id FK "cultivo del último ciclo"
+    numeric last_yield_kg_ha
+    numeric last_cost_cop_ha "aproximado"
+    text irrigation_practice "none|drip|sprinkler|gravity"
+    uuid recorded_by FK
   }
   attachment {
     uuid id PK
@@ -321,7 +339,7 @@ erDiagram
   }
 ```
 
-**Tablas derivadas** (sin relaciones propias): `reading_hourly` y `reading_daily` son agregados continuos de TimescaleDB sobre `reading`, con mín, máx, promedio y conteo. `plot_metric_monthly` guarda el índice de tecnificación y sus componentes. `crop_cycle_summary` guarda rendimiento, agua, costos y margen por ciclo. `field_record` contiene los datos EVA/AGROSAVIA de la v1 para entrenamiento. Las tablas de la cola de trabajos las administra la librería de jobs ([ADR-0012](adr/0012-jobs-en-postgres.md)).
+**Tablas derivadas** (sin relaciones propias): `reading_hourly` y `reading_daily` son agregados continuos de TimescaleDB sobre `reading`, con mín, máx, promedio y conteo. `plot_metric_monthly` guarda el índice de adopción digital y sus componentes. `crop_cycle_summary` guarda rendimiento, rendimiento relativo municipal, cambio frente a la encuesta de inscripción, agua, costos, jornales y margen por ciclo. `field_record` contiene los datos EVA/AGROSAVIA de la v1 para entrenamiento. Las tablas de la cola de trabajos las administra la librería de jobs ([ADR-0012](adr/0012-jobs-en-postgres.md)).
 
 ## Decisiones por tabla
 
@@ -343,7 +361,25 @@ erDiagram
 | ID | UUIDv7 generado en el teléfono: la misma entrada reenviada es idempotente |
 | Cursor de sincronización | `server_version` se toma de una secuencia global en cada escritura; el cliente pide `since=<último server_version>` |
 | Conflictos | Gana la última escritura según `client_updated_at` y se registra el conflicto ([ADR-0013](adr/0013-sincronizacion-offline.md)) |
-| Campos por tipo | Columnas tipadas y un `CHECK` por `kind` (por ejemplo, `harvest ⇒ yield_kg IS NOT NULL`) en vez de un JSON libre, porque las métricas los consultan |
+| Campos por tipo | Columnas tipadas y un `CHECK` por `kind` (por ejemplo, `harvest ⇒ yield_kg IS NOT NULL`) en vez de un JSON libre, porque las métricas los consultan. La tabla siguiente dice qué campo alimenta cada métrica |
+
+**Campos que alimentan las métricas de impacto** ([11-metricas](11-metricas.md); brechas G04 y G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)):
+
+| `kind` | Campos | Métrica |
+|---|---|---|
+| `harvest` | `yield_kg`; si se vendió, `sold_kg` (≤ `yield_kg`) y `sale_price_cop_per_kg` | Rendimiento, margen bruto |
+| `task` | `labor_days`, `cost_cop` | Producción por jornal, costos |
+| `input`, `cost` | `cost_cop` | Costos |
+| `irrigation` | `irrigation_mm` | Agua aplicada, balance hídrico |
+| `observation` con `alert_id` | `quantity` + `unit` (kg perdidos), `cost_cop` (COP perdidos) | Pérdidas por evento |
+| cualquiera con `alert_id` | La entrada es la acción registrada tras la alerta | `risk_management` del índice de adopción digital |
+
+- `alert_id` debe ser una alerta de la misma parcela; si no, la sincronización responde `rejected`.
+- Los `cost_cop` de las observaciones son pérdidas, no costos: no entran en `Σ costos`.
+
+### `plot_baseline`: encuesta de inscripción
+
+Al inscribir una parcela, el técnico registra cómo producía antes de usar TechCamp: cultivo y rendimiento del último ciclo, costos aproximados por hectárea y práctica de riego (con el mismo vocabulario que `plot.irrigation_system`). Hay una por parcela y es la referencia contra la que se mide el impacto ([ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)). No es la "línea base" de ML (`baseline`), que es la heurística que un modelo debe superar.
 
 ### `water_balance_daily`: estrés hídrico por parcela
 

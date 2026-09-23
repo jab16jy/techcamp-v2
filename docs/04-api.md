@@ -47,6 +47,8 @@ POST   /farms/{farm_id}/plots                  { name, boundary: GeoJSON Polygon
 PATCH  /plots/{plot_id}                        { name?, boundary?, irrigation_system?, irrigation_efficiency?, system_flow_lph? } → Plot
 PUT    /plots/{plot_id}/soil                   SoilProfile → SoilProfile
 POST   /plots/{plot_id}/soil:autofill          → SoilProfile   # SoilGrids
+GET    /plots/{plot_id}/baseline               → PlotBaseline
+PUT    /plots/{plot_id}/baseline               { enrolled_on, crop_id, last_yield_kg_ha, last_cost_cop_ha?, irrigation_practice } → PlotBaseline   # encuesta de inscripción
 GET    /crops                                  → Crop[] (con etapas, Kc y kc_source)
 POST   /plots/{plot_id}/cycles                 { crop_id, sown_on } → CropCycle
 PATCH  /cycles/{cycle_id}                      { status?, expected_harvest_on? } → CropCycle
@@ -65,7 +67,7 @@ GET /plots/{plot_id}/status → {
   open_alerts: Alert[],
   weather_next_3d: WeatherDay[],
   nodes: NodeHealth[],
-  technification_index: { value, month }
+  digital_adoption_index: { value, month }
 }
 ```
 
@@ -80,7 +82,7 @@ PATCH  /nodes/{node_id}                       { plot_id?, status? } → Node
 POST   /nodes/{node_id}/credentials:rotate    → { password }
 GET    /nodes/{node_id}/health                → { last_seen_at, battery_v, rssi, completeness_24h }
 GET    /nodes/{node_id}/sensors               → Sensor[]
-POST   /sensors/{sensor_id}/calibrations      { method, kind: lab|field, params, valid_from } → Calibration   # crea una versión nueva
+POST   /sensors/{sensor_id}/calibrations      { method, kind: lab|field, params, rmse_pct?, valid_from } → Calibration   # crea una versión nueva
 ```
 
 ### Lecturas y clima
@@ -126,6 +128,8 @@ GET  /sync/pull?since=<server_version>&limit=500
 
 POST /attachments:presign  { logbook_entry_id, content_type, bytes } → { upload_url, object_key }
 ```
+
+`data` lleva los campos de `logbook_entry` según su `kind`, incluidos `sold_kg`, `sale_price_cop_per_kg`, `labor_days` y `alert_id` ([03](03-modelo-datos.md#logbook_entry-la-tabla-que-se-sincroniza-offline)).
 
 El cliente sube la foto directo al almacenamiento de objetos con la URL prefirmada. La API nunca recibe los bytes ([ADR-0018](adr/0018-almacenamiento-de-objetos.md)).
 

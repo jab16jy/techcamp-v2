@@ -19,7 +19,7 @@ flowchart LR
   E8[E8 Bitácora offline]
   E9[E9 Pantalla de inicio<br/>estado de parcela]
   E10[E10 Riesgo climático<br/>reconstrucción con protocolo]
-  E11[E11 Métricas e<br/>índice de tecnificación]
+  E11[E11 Métricas e<br/>índice de adopción digital]
   E12[E12 Asistente]
   E13[E13 LoRaWAN<br/>ChirpStack]
   E14[E14 Operación<br/>backups, monitoreo, DR]
@@ -71,7 +71,7 @@ flowchart LR
 | E8 | El escenario D (cosecha en modo avión) sincroniza sin duplicar | E1, E3 |
 | E9 | Pantalla de inicio completa con datos reales del simulador | E1, E6, E7 |
 | E10 | Model card, dataset reproducible, harness y escalera de líneas base de M2 (inundación); en producción queda el modelo que pase la compuerta o, si ninguno pasa, la línea base ([ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)) | E5 |
-| E11 | Índice de tecnificación mensual y resumen por ciclo | E6, E7, E8 |
+| E11 | Índice de adopción digital mensual, resumen por ciclo y encuesta de inscripción ([11-metricas](11-metricas.md)) | E6, E7, E8 |
 | E12 | Asistente con fuentes citadas, límites y degradación | E6, E7, E10 |
 | E16 | Los escenarios A–E corren con un comando, con fixtures de clima grabados, y su bloque `expected` pasa como prueba end-to-end en CI ([06 §10](06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario)) | E4, E5, E7 |
 | E13 *(producción futura)* | Un nodo LoRa real llega por ChirpStack con el mismo mensaje interno | E4 |
@@ -88,6 +88,7 @@ flowchart LR
     s2[Open-Meteo]
     s3[SoilGrids / laboratorio]
     s4[Bitácora del productor]
+    s6[Encuesta de inscripción]
     s5[Eventos UNGRD / HDX]
   end
   subgraph almacenados [Datos base]
@@ -96,6 +97,7 @@ flowchart LR
     sp[(soil_profile)]
     lb[(logbook_entry)]
     cc[(crop_cycle)]
+    pb[(plot_baseline)]
   end
   subgraph derivados [Derivados]
     rh[reading_hourly / daily]
@@ -119,6 +121,7 @@ flowchart LR
   s3 --> sp
   s4 --> lb
   s4 --> cc
+  s6 --> pb
   rh --> wb
   w --> wb
   sp --> wb
@@ -131,6 +134,8 @@ flowchart LR
   w --> al
   rp --> al
   lb --> cs
+  pb --> cs
+  lb --> pm
   rh --> cs
   cs --> pm
   al --> pm
@@ -168,6 +173,6 @@ flowchart LR
   end
 
   subgraph mensual [Mensual: día 1, 02:00]
-    o[resumen de ciclos cerrados] --> p[índice de tecnificación]
+    o[resumen de ciclos cerrados] --> p[índice de adopción digital]
   end
 ```

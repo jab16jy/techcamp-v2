@@ -15,7 +15,7 @@ Sucesor de TechCamp v1 (AgroCaribe AI). Ver [ADR-0001](docs/adr/0001-nuevo-repos
 | **Alertas** | Paneles que hay que ir a mirar | **Avisos que llegan**: push, con escalamiento a SMS/WhatsApp si una crítica no se atiende, sin saturar |
 | **Modelos de ML** | Métricas no reproducibles, con fuga de datos; un recomendador con 7 % de acierto real | **Solo se publica un modelo que le gana a la regla simple**, con un protocolo reproducible. El campo tecnificado genera los datos que mejoran los modelos. |
 | **Asistente** | Ollama local (4 GB de RAM), respuestas débiles | LLM barato por API que **explica** los datos de la parcela, cita fuentes y nunca inventa dosis |
-| **Impacto** | Sin medición | **Índice de tecnificación** y KPIs por ciclo: rendimiento, agua por kg, costo por kg, alertas anticipadas, contra una línea base |
+| **Impacto** | Sin medición | KPIs por ciclo (rendimiento, agua por kg, costo por kg, margen, alertas anticipadas) contra la **encuesta de inscripción** de cada parcela, más un **índice de adopción digital** |
 | **Usuarios** | Un usuario analizando ubicaciones | **Organizaciones**: cooperativas y técnicos que gestionan muchas fincas, y productores que entran con su teléfono (OTP) |
 | **Diseño** | Pantallas hechas una por una | **Design system primero**, pensado para sol directo, dedos grandes y teléfonos de gama baja |
 | **Operación** | Compose con un LLM pesado | Un VPS barato, un solo Postgres y backups continuos: operable por un equipo pequeño |

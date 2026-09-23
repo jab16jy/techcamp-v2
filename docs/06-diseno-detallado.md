@@ -283,6 +283,7 @@ sequenceDiagram
 |---|---|
 | El mismo cambio llega dos veces | `duplicate`: sin efecto (mismo `id` y mismo `client_updated_at`) |
 | Dos dispositivos editan la misma entrada | Gana el `client_updated_at` mayor; el perdedor recibe `conflict_overwritten` y la interfaz lo avisa. Se acepta porque las entradas de bitácora casi nunca las editan dos personas a la vez ([ADR-0013](adr/0013-sincronizacion-offline.md)). |
+| Entrada con `alert_id` | El servidor comprueba que la alerta sea de la misma parcela; si no, responde `rejected`. El teléfono toma el `alert_id` de las alertas en caché, así que se puede vincular una acción sin conexión |
 | Reloj del teléfono muy desfasado | El servidor rechaza un `client_updated_at` más de 24 h en el futuro (`rejected`); la interfaz pide corregir la hora. |
 | Token vencido sin conexión | Se sigue escribiendo en local. Al volver la señal se renueva el token antes de sincronizar. |
 | iOS | No hay Background Sync API: la sincronización ocurre con la app en primer plano. |
@@ -440,6 +441,7 @@ expected:
 - El simulador envía lecturas en **ADC crudo** y cada nodo simulado tiene su calibración, así que también se demuestra la calibración.
 - `expected` convierte cada escenario en una **prueba end-to-end**: CI corre el escenario y verifica las alertas y la recomendación esperadas.
 - Un test de dominio verifica, con los parámetros de suelo y cultivo de cada escenario, que `water_stress` abre cuando `Dr > RAW` y no antes.
+- La trayectoria sin ruido de cada escenario es la **verdad de referencia** para medir el error del balance hídrico ([11 §3](11-metricas.md#3-calidad-de-decisión)).
 - El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con `quality = 2`, huecos de `seq`).
 - Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather`) y quedan versionados: la demo funciona sin internet, salvo el asistente.
 
