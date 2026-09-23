@@ -1,6 +1,6 @@
 # ADR-0009: Riego con balance hídrico FAO-56 corregido por humedad de suelo medida
 
-- **Estado:** Aceptada
+- **Estado:** Aceptada. Modificada por [ADR-0022](0022-estres-hidrico-y-asimilacion.md) (estrés hídrico por parcela y asimilación ponderada del sensor)
 - **Fecha:** 2026-09-22
 
 ## Contexto
@@ -11,7 +11,7 @@ En la v1, `irrigation_service.py` usa `ET0_BASE`, una **constante por cultivo** 
 
 - ET0 diaria FAO Penman-Monteith desde Open-Meteo (`et0_fao_evapotranspiration`) por celda climática.
 - Coeficiente de cultivo único (Kc por etapa, FAO-56) y balance diario del agotamiento en la zona de raíces (TAW, RAW, lluvia efectiva, riegos de la bitácora).
-- Cuando hay humedad de suelo válida del sensor, **reemplaza** el agotamiento modelado de ese día (asimilación simple). El error modelo-observación se registra como métrica.
+- Cuando hay humedad de suelo válida del sensor, corrige el agotamiento modelado de ese día con un peso según su calibración y su profundidad ([ADR-0022](0022-estres-hidrico-y-asimilacion.md)). El error modelo-observación se registra como métrica.
 - La recomendación incluye lámina, minutos según el caudal del sistema y un `rationale` con los números usados.
 - Detalle en [06 §5](../06-diseno-detallado.md#5-riego-balance-hídrico-fao-56).
 
@@ -38,4 +38,4 @@ En la v1, `irrigation_service.py` usa `ET0_BASE`, una **constante por cultivo** 
 
 ## Relacionado
 
-[08-ml](../08-ml.md), [11-metricas](../11-metricas.md)
+[ADR-0022](0022-estres-hidrico-y-asimilacion.md), [08-ml](../08-ml.md), [11-metricas](../11-metricas.md)

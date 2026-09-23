@@ -55,7 +55,7 @@ flowchart LR
 | Cliente | PWA offline-first | [0005](adr/0005-pwa-offline-first.md) |
 | UI | Design system primero (Tailwind v4 + shadcn/ui) | [0006](adr/0006-design-system.md) |
 | IA | LLM por API barata; explica, no decide. Sin Ollama | [0007](adr/0007-llm-por-api.md) |
-| Riego | FAO-56 corregido por sensor | [0009](adr/0009-riego-fao56.md) |
+| Riego | FAO-56; estrés hídrico por parcela (`Dr > RAW`) y sensor que corrige el balance con un peso según su calibración | [0009](adr/0009-riego-fao56.md), [0022](adr/0022-estres-hidrico-y-asimilacion.md) |
 | Ejecución | Perfil seminario local con simulador de escenarios; producción futura cambiando adaptadores | [0021](adr/0021-perfil-seminario-local.md) |
 | ML | Modelos reconstruidos desde cero con protocolo fijo; solo se promueve lo que supera su mejor línea base | [0019](adr/0019-reconstruccion-de-modelos.md), [0020](adr/0020-protocolo-de-experimentacion-ml.md) |
 
@@ -68,6 +68,6 @@ flowchart LR
 | Plan de frecuencias LoRaWAN en Colombia y hardware de nodos | Producción futura (E13) |
 | Grabar los fixtures de clima de cada escenario | E16 |
 | Licencia (uso comercial) y límites de tamaño de TabPFN | E10 |
-| Validación agronómica de umbrales de alertas y Kc de variedades locales | Antes de la demo (con el asesor o un agrónomo) |
+| Validación agronómica de umbrales de alertas, Kc de variedades locales (y del ñame, sin Kc en FAO-56), `p`, Zr y profundidades de sensor | Antes de la demo (con el asesor o un agrónomo) |
 | Paleta y escalas concretas del design system (probadas a pleno sol) | E1 |
 | Términos de uso de Open-Meteo si el proyecto se comercializa | Antes del lanzamiento |

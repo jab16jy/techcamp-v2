@@ -81,16 +81,17 @@ sequenceDiagram
 
 ## 3. Evaluación de alertas
 
-Hay cuatro fuentes de alertas, todas en el mismo módulo `alerts`:
+Hay cinco fuentes de alertas, todas en el mismo módulo `alerts`:
 
 | Fuente | Dónde se evalúa | Ejemplo |
 |---|---|---|
-| Umbral sobre lecturas | `ingestor`, en caliente, después de cada lote | Humedad de suelo < umbral del cultivo durante ≥ 6 h |
+| Umbral sobre lecturas | `ingestor`, en caliente, después de cada lote | Humedad del sensor representativo < θ_estrés de la parcela durante ≥ 6 h |
+| Balance hídrico | `worker`, después del balance diario ([§5](#5-riego-balance-hídrico-fao-56)) | `Dr > RAW` en una parcela sin sensor representativo |
 | Pronóstico | `worker`, después de actualizar el clima | Lluvia > 50 mm en 24 h con el suelo ya saturado |
 | Modelo | `worker`, después de la inferencia de riesgo | Probabilidad de inundación con severidad `alto` o `crítico` |
 | Salud del nodo | `worker`, cada 5 min | Sin lecturas durante 3 intervalos; batería < 3,4 V |
 
-Para evitar alertas intermitentes (flapping), cada regla define `min_duration_min` e `hysteresis`. Una alerta de humedad baja abre con < 20 % sostenido 6 h y solo se resuelve con > 23 % (20 + 3) sostenido 1 h.
+Para evitar alertas intermitentes (flapping), cada regla define `min_duration_min` e `hysteresis`. En `water_stress` el umbral no es fijo: es el θ_estrés de la parcela que el job de riego recalcula cada día ([§5](#5-riego-balance-hídrico-fao-56)). En el escenario A (maíz en franco arenoso) vale 15,3 %: la alerta abre con humedad < 15,3 % sostenida 6 h y solo se resuelve con > 18,3 % (15,3 + 3) sostenida 1 h.
 
 ```mermaid
 stateDiagram-v2
@@ -115,7 +116,7 @@ stateDiagram-v2
 
 | Código | Condición | Severidad |
 |---|---|---|
-| `water_stress` | Humedad de suelo < `crop.stress_threshold_pct` durante 6 h | warning; crítica si dura 48 h |
+| `water_stress` | Con sensor representativo: humedad < θ_estrés de la parcela durante 6 h. Sin él: `Dr > RAW` en el balance diario ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | warning; crítica si dura 48 h |
 | `waterlogging` | Humedad de suelo > capacidad de campo + 5 durante 24 h | warning |
 | `heat_stress` | Temperatura del aire > 35 °C durante 3 h | warning |
 | `fungal_risk` | Humedad relativa > 85 % durante ≥ 10 h en el día y temperatura media de 20–30 °C | warning |
@@ -159,7 +160,7 @@ sequenceDiagram
 
 ## 5. Riego: balance hídrico FAO-56
 
-Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8). La humedad medida por el sensor corrige el modelo cada día ([ADR-0009](adr/0009-riego-fao56.md)).
+Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8) ([ADR-0009](adr/0009-riego-fao56.md)). El estrés hídrico se define por parcela y la humedad del sensor corrige el balance con un peso según su calibración ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md); brechas G01–G03 y G18 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
 
 | Símbolo | Cálculo | Fuente |
 |---|---|---|
@@ -167,22 +168,41 @@ Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8). La hu
 | Kc | Por etapa; interpolación lineal durante el desarrollo | `crop_stage` |
 | ETc | `Kc × ET0` | — |
 | TAW | `1000 × (θFC − θWP) × Zr` | `soil_profile`; Zr es la profundidad de raíz en metros |
-| RAW | `p × TAW` | `crop_stage.depletion_fraction_p` |
+| p | `p_tabla + 0,04 × (5 − ETc)`, acotado a 0,1–0,8 | `crop_stage.depletion_fraction_p` (FAO-56, Tabla 22) |
+| RAW | `p × TAW` | — |
+| θ_estrés | `θFC − p × (θFC − θWP)`: la humedad a la que `Dr = RAW` | Se guarda en `water_balance_daily.stress_moisture_pct` para la regla `water_stress` |
 | Pe | `0,8 × P` si P > 5 mm; si no, 0 | Lluvia de la celda o del pluviómetro del nodo |
-| Dr | `Dr(i) = clamp(Dr(i−1) − Pe − I + ETc, 0, TAW)` | Balance diario |
-| Dr observado | `1000 × (θFC − θobs) × Zr` | Promedio diario de humedad del sensor en la zona de raíces |
+| Dr modelado | `Dr_modelo(i) = clamp(Dr(i−1) − Pe − I + ETc, 0, TAW)` | Balance diario |
+| Dr observado | `1000 × (θFC − θobs) × Zr` | Promedio diario de humedad del sensor representativo |
+| Dr | `Dr_modelo + K × (Dr_obs − Dr_modelo)` | Asimilación ponderada; `K` según la tabla siguiente |
+
+**Peso del sensor (`K`).** Un sensor capacitivo barato no es la verdad de la zona de raíces: con calibración de laboratorio llevada al campo su error es de 5,5–19 puntos de humedad, y con calibración de campo baja a 0,5–3,6 puntos ([investigación, H3.2](investigacion/tecnificacion-campo.md#rq3--supuestos-técnicos)). Por eso el sensor corrige el balance, no lo reemplaza:
+
+| Situación del sensor | `K` |
+|---|---|
+| Sin lectura válida en 24 h, calibración `lab` o profundidad no representativa | 0 (solo modelo; recomendación marcada "sin sensor") |
+| Calibración `field` y profundidad representativa | 0,5 (valor inicial; se ajusta con el error modelo − observado registrado) |
+
+- **Profundidad representativa:** un sensor cerca de la mitad de la zona de raíces (Zr/2), o el promedio de dos sensores a profundidades distintas dentro de ella. Un sensor a 10 cm no representa la raíz del maíz (1,0–1,7 m en FAO-56). La tolerancia alrededor de Zr/2 y las profundidades por cultivo están pendientes de validación agronómica.
+- **Sensor representativo** es el que cumple las condiciones de `K > 0`: lectura válida en 24 h, profundidad representativa y calibración `field`. Solo ese sensor alimenta la regla `water_stress` sobre lecturas.
+- `K` es fijo por tipo de calibración. Si el error modelo − observado sigue alto con datos reales, el paso siguiente es un filtro de Kalman que estime `K` cada día a partir de la varianza del modelo y del sensor.
 
 ```mermaid
 flowchart TD
   start([Job diario 04:30 America/Bogota]) --> cyc{¿Parcela con ciclo activo?}
   cyc -- no --> fin([fin])
-  cyc -- sí --> et[Obtener ET0, lluvia y pronóstico de la celda]
-  et --> bal[Dr = balance del día anterior + ETc − Pe − riego registrado]
-  bal --> obs{¿Hay humedad de sensor válida en las últimas 24 h?}
-  obs -- sí --> asm[Dr = Dr observado<br/>guardar el error modelo − observado]
-  obs -- no --> keep[Mantener Dr modelado<br/>marcar recomendación sin sensor]
-  asm --> dec
-  keep --> dec{Dr ≥ RAW?}
+  cyc -- sí --> kc{¿Kc validado?<br/>kc_source ≠ none}
+  kc -- no --> nokc[Sin lámina: falta Kc validado<br/>remitir al técnico]
+  kc -- sí --> et[Obtener ET0, lluvia y pronóstico de la celda]
+  et --> bal[Dr_modelo = balance del día anterior + ETc − Pe − riego registrado<br/>p ajustado, RAW y θ_estrés del día]
+  bal --> obs{¿Sensor válido en 24 h,<br/>representativo y con calibración de campo?}
+  obs -- sí --> asm["Dr = Dr_modelo + K × (Dr_obs − Dr_modelo)<br/>guardar el error modelo − observado"]
+  obs -- no --> keep[K = 0: Dr = Dr_modelo<br/>marcar recomendación sin sensor]
+  keep --> ws{Dr > RAW?}
+  ws -- sí --> wsa[Abrir o mantener water_stress]
+  ws -- no --> dec
+  wsa --> dec
+  asm --> dec{Dr ≥ RAW?}
   dec -- no --> ok[Estado ok o watch<br/>sin riego]
   dec -- sí --> rain{¿Lluvia pronosticada en 48 h ≥ Dr?}
   rain -- sí --> wait[Posponer: va a llover]
@@ -190,11 +210,13 @@ flowchart TD
   rec --> save[Guardar irrigation_recommendation + rationale]
   ok --> save
   wait --> save
+  nokc --> save
   save --> notif[Push informativo: Hoy riegue 12 mm, unos 40 min]
 ```
 
 - **Eficiencia del sistema:** goteo 0,90, aspersión 0,75, gravedad 0,60 (configurable por parcela).
-- **`rationale`** guarda los números usados (ET0, Kc, Dr, pronóstico). Lo muestra la interfaz y lo usa el asistente para explicar la recomendación.
+- **`rationale`** guarda los números usados (ET0, Kc y su `kc_source`, p, RAW, Dr modelado y asimilado, `K`, pronóstico). Lo muestra la interfaz y lo usa el asistente para explicar la recomendación. Un Kc `approximate` se muestra como tal.
+- Con sensor representativo, `water_stress` la abre la regla sobre lecturas contra el θ_estrés del día; sin él, la abre este job cuando `Dr > RAW` ([§3](#3-evaluación-de-alertas)).
 - El error entre modelo y observación es el SLI "error de humedad" ([11-metricas](11-metricas.md)).
 
 ## 6. Clima
@@ -330,11 +352,12 @@ sequenceDiagram
 name: el-nino
 description: Estrés hídrico por El Niño en maíz (escenario A)
 plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, system: drip }
-nodes: 2
+soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
+nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900            # intervalo simulado entre lecturas del backfill
-weather_fixture: el-nino-caribe.json
+weather_fixture: el-nino-caribe.json   # ETc ≈ 5 mm/día → p = 0,55
 trajectories:
-  soil_moisture_10cm: { start: 28, end: 14, noise: 0.8 }   # % volumétrico
+  soil_moisture_30cm: { start: 22, end: 13, noise: 0.8 }   # % volumétrico; cruza θ_estrés = 15,3 % el día 10,4
   air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }
   air_rh: { daily_min: 38, daily_max: 70 }
 faults:
@@ -343,6 +366,14 @@ expected:
   alerts: [water_stress, heat_stress, node_offline]
   irrigation: irrigate
 ```
+
+**Aritmética del escenario A** (brecha G02 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). Franco arenoso con θFC = 0,23 y θWP = 0,09; maíz con p_tabla = 0,55; el fixture da ETc ≈ 5 mm/día, así que p = 0,55 + 0,04 × (5 − 5) = 0,55.
+
+- θ_estrés = 0,23 − 0,55 × (0,23 − 0,09) = 0,23 − 0,077 = 0,153 → **15,3 %**.
+- Con Zr ≈ 0,6 m el día 42 (supuesto del escenario, pendiente de validación agronómica): TAW = 1000 × 0,14 × 0,6 = 84 mm y RAW = 0,55 × 84 = 46,2 mm. Zr/2 = 30 cm: por eso el sensor está a 30 cm.
+- La humedad baja linealmente de 22 % a 13 % en los 14 días del backfill. Cruza 15,3 % en t = 14 × (22 − 15,3) / (22 − 13) ≈ 10,4 días, y `water_stress` abre 6 h después (día ≈ 10,7).
+- Al final, θobs = 13 % → Dr_obs = 1000 × (0,23 − 0,13) × 0,6 = 60 mm > RAW = 46,2 mm → `irrigate`.
+- El umbral fijo anterior (20 %) se habría cruzado el día 3,1, una semana antes de que hubiera estrés según FAO-56.
 
 | Escenario | Qué demuestra |
 |---|---|
@@ -356,6 +387,7 @@ expected:
 
 - El simulador envía lecturas en **ADC crudo** y cada nodo simulado tiene su calibración, así que también se demuestra la calibración.
 - `expected` convierte cada escenario en una **prueba end-to-end**: CI corre el escenario y verifica las alertas y la recomendación esperadas.
+- Un test de dominio verifica, con los parámetros de suelo y cultivo de cada escenario, que `water_stress` abre cuando `Dr > RAW` y no antes.
 - El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con `quality = 2`, huecos de `seq`).
 - Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather`) y quedan versionados: la demo funciona sin internet, salvo el asistente.
 

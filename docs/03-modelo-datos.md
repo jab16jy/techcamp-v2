@@ -93,26 +93,26 @@ erDiagram
   }
   soil_profile {
     uuid plot_id PK, FK
-    text source "soilgrids|lab"
+    text source "soilgrids|lab|fao56_texture"
     numeric ph
     numeric organic_matter_pct
     text texture
-    numeric field_capacity_pct
-    numeric wilting_point_pct
+    numeric field_capacity_pct "θFC"
+    numeric wilting_point_pct "θWP"
     numeric root_depth_cm
   }
   crop {
     int id PK
     text code UK
     text name_es
-    numeric stress_threshold_pct
+    text kc_source "fao56|local|approximate|none"
   }
   crop_stage {
     int crop_id PK, FK
     text stage PK "initial|development|mid|late"
     int length_days
     numeric kc
-    numeric depletion_fraction_p
+    numeric depletion_fraction_p "p de tabla FAO-56"
   }
   crop_cycle {
     uuid id PK
@@ -147,6 +147,7 @@ erDiagram
     bigint sensor_id FK
     int version
     text method "linear|two_point|polynomial"
+    text kind "lab|field"
     jsonb params
     timestamptz valid_from
   }
@@ -180,8 +181,13 @@ erDiagram
     numeric etc_mm
     numeric effective_rain_mm
     numeric irrigation_mm
-    numeric depletion_mm
+    numeric taw_mm
+    numeric raw_mm "p ajustado × TAW"
+    numeric depletion_model_mm "Dr antes de asimilar"
+    numeric depletion_mm "Dr asimilado"
     numeric soil_moisture_obs_pct
+    numeric assimilation_k "0 sin asimilación"
+    numeric stress_moisture_pct "θ_estrés del día"
   }
   irrigation_recommendation {
     uuid id PK
@@ -222,7 +228,7 @@ erDiagram
     text code
     text metric
     text operator
-    numeric threshold
+    numeric threshold "null en water_stress: usa el θ_estrés del día"
     numeric hysteresis
     int min_duration_min
     text severity "info|warning|critical"
@@ -335,9 +341,24 @@ erDiagram
 | Conflictos | Gana la última escritura según `client_updated_at` y se registra el conflicto ([ADR-0013](adr/0013-sincronizacion-offline.md)) |
 | Campos por tipo | Columnas tipadas y un `CHECK` por `kind` (por ejemplo, `harvest ⇒ yield_kg IS NOT NULL`) en vez de un JSON libre, porque las métricas los consultan |
 
+### `water_balance_daily`: estrés hídrico por parcela
+
+El estrés hídrico no tiene un umbral fijo por cultivo: depende del suelo de la parcela y de la etapa del cultivo ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md); brechas G01–G03 y G18 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
+
+| Campo | Cálculo |
+|---|---|
+| `taw_mm` | `1000 × (θFC − θWP) × Zr`, con θFC y θWP de `soil_profile` |
+| `raw_mm` | `p × taw_mm`, con `p = p_tabla + 0,04 × (5 − ETc)` acotado a 0,1–0,8 (FAO-56) |
+| `stress_moisture_pct` | `θFC − p × (θFC − θWP)`: la humedad a la que `Dr = RAW`. La usa la regla `water_stress` sobre lecturas |
+| `depletion_model_mm` / `depletion_mm` | Agotamiento del balance antes y después de asimilar el sensor |
+| `assimilation_k` | Peso `K` del sensor en la asimilación ([06 §5](06-diseno-detallado.md#5-riego-balance-hídrico-fao-56)) |
+
+- Si el perfil de suelo no tiene θFC y θWP de laboratorio ni de SoilGrids, se toman los valores medios de la textura según la Tabla 19 de FAO-56 (`source = fao56_texture`).
+- `crop.kc_source = none` (por ejemplo, el ñame, que no está en la Tabla 12 de FAO-56) bloquea la recomendación de lámina hasta que un agrónomo valide un Kc local.
+
 ### Calibración
 
-La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectura se aplica la calibración vigente según `valid_from`. Recalibrar crea una versión nueva y un job recalcula `value` desde `valid_from`.
+La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectura se aplica la calibración vigente según `valid_from`. Recalibrar crea una versión nueva y un job recalcula `value` desde `valid_from`. El `kind` (`lab` o `field`) indica dónde se calibró y decide cuánto pesa el sensor en el balance hídrico: sin calibración de campo, el sensor no corrige el balance.
 
 | Método | `params` | Uso |
 |---|---|---|
@@ -365,5 +386,5 @@ La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectu
 | `municipios` (PostGIS) | `municipality` | Renombrar columnas y validar geometrías |
 | `indices_satelitales` (~2,5 M puntos NDVI/NDWI) | `ndvi_point` (referencia) | Copia directa; solo alimenta features de riesgo |
 | Datos EVA / AGROSAVIA (`datos_campo`) | `field_record` | Normalizar nombres de cultivos al catálogo `crop` |
-| `crops_requirements.csv` | `crop`, `crop_stage` | Completar Kc por etapa con FAO-56 (tabla 12) |
+| `crops_requirements.csv` | `crop`, `crop_stage` | Completar Kc por etapa con FAO-56 (tabla 12) y registrar su origen en `kc_source` |
 | Sensores y lecturas de demostración | No se migran | Eran datos de ejemplo |

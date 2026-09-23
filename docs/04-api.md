@@ -47,7 +47,7 @@ POST   /farms/{farm_id}/plots                  { name, boundary: GeoJSON Polygon
 PATCH  /plots/{plot_id}                        { name?, boundary?, system_flow_lph? } → Plot
 PUT    /plots/{plot_id}/soil                   SoilProfile → SoilProfile
 POST   /plots/{plot_id}/soil:autofill          → SoilProfile   # SoilGrids
-GET    /crops                                  → Crop[] (con etapas y Kc)
+GET    /crops                                  → Crop[] (con etapas, Kc y kc_source)
 POST   /plots/{plot_id}/cycles                 { crop_id, sown_on } → CropCycle
 PATCH  /cycles/{cycle_id}                      { status?, expected_harvest_on? } → CropCycle
 ```
@@ -60,7 +60,7 @@ Una sola llamada que arma todo lo que el productor ve al abrir la app. Así se e
 GET /plots/{plot_id}/status → {
   plot, active_cycle: { crop, stage, day_of_cycle },
   latest: { soil_moisture_pct, air_temp_c, air_rh_pct, at },
-  water_balance: { depletion_mm, taw_mm, status: "ok|watch|irrigate" },
+  water_balance: { depletion_mm, taw_mm, raw_mm, stress_moisture_pct, status: "ok|watch|irrigate" },
   recommendation: { depth_mm, duration_min, rationale[] } | null,
   open_alerts: Alert[],
   weather_next_3d: WeatherDay[],
@@ -78,7 +78,7 @@ PATCH  /nodes/{node_id}                       { plot_id?, status? } → Node
 POST   /nodes/{node_id}/credentials:rotate    → { password }
 GET    /nodes/{node_id}/health                → { last_seen_at, battery_v, rssi, completeness_24h }
 GET    /nodes/{node_id}/sensors               → Sensor[]
-POST   /sensors/{sensor_id}/calibrations      { method, params, valid_from } → Calibration   # crea una versión nueva
+POST   /sensors/{sensor_id}/calibrations      { method, kind: lab|field, params, valid_from } → Calibration   # crea una versión nueva
 ```
 
 ### Lecturas y clima

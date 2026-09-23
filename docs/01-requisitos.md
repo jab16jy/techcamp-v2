@@ -84,7 +84,7 @@ Vienen de los requisitos de la v1 y ahora se validan con datos medidos:
 
 | Escenario | Condición | Comportamiento esperado |
 |---|---|---|
-| **A. Estrés hídrico (El Niño)** | Temperatura > 35 °C, humedad relativa < 50 %, lluvia < 10 mm en 30 días, humedad de suelo bajo el umbral del cultivo | Alerta de estrés hídrico, recomendación de riego con lámina y tiempo, sugerencia de cobertura (mulch) |
+| **A. Estrés hídrico (El Niño)** | Temperatura > 35 °C, humedad relativa < 50 %, lluvia < 10 mm en 30 días, agotamiento de la parcela mayor que RAW (humedad bajo el θ_estrés que se deriva del suelo y la etapa del cultivo, [ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | Alerta de estrés hídrico, recomendación de riego con lámina y tiempo, sugerencia de cobertura (mulch) |
 | **B. Riesgo fitosanitario (lluvias)** | Humedad relativa > 85 % sostenida, lluvia continua, suelo saturado | Alerta de riesgo de hongos con la ventana de aplicación preventiva según el pronóstico |
 | **C. Nodo caído** | Sin lecturas por 3 intervalos esperados | Alerta de nodo al técnico asignado, no al productor |
 | **D. Sin conexión** | El productor registra una cosecha en modo avión | Queda guardada localmente y se sincroniza sin duplicarse al volver la señal |

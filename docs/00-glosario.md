@@ -9,7 +9,8 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Organización | `organization` | Cooperativa, asociación, programa o productor individual. Es la unidad de permisos: todo dato pertenece a una organización. |
 | Finca | `farm` | Predio de un productor. Tiene ubicación y municipio. |
 | Parcela / lote | `plot` | Área cultivable con polígono dentro de una finca. Es la unidad de decisión: riego, alertas y métricas se calculan por parcela. |
-| Cultivo | `crop` | Especie del catálogo (maíz, yuca, plátano…) con sus coeficientes Kc y umbrales. |
+| Cultivo | `crop` | Especie del catálogo (maíz, yuca, plátano…) con sus coeficientes Kc y su fracción de agotamiento `p` por etapa. No tiene umbral de humedad propio: el estrés hídrico se define por parcela. |
+| Origen del Kc | `kc_source` | De dónde salen los Kc de un cultivo: `fao56` (Tabla 12), `local` (validado en la región), `approximate` (tomado de un cultivo parecido, por ejemplo banano para plátano) o `none` (sin Kc validado, como el ñame). Con `none` no se recomienda lámina de riego. |
 | Ciclo de cultivo | `crop_cycle` | Una siembra concreta de un cultivo en una parcela, desde la siembra hasta la cosecha. Una parcela tiene como máximo un ciclo activo. |
 | Etapa fenológica | `growth_stage` | Inicial, desarrollo, media o final (FAO-56). Determina el Kc. |
 | Bitácora | `logbook` | Registro de lo que hizo el productor: labores, insumos, riegos, costos, observaciones y cosechas. |
@@ -24,7 +25,11 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Kc | `kc` | Coeficiente de cultivo según la etapa fenológica. |
 | ETc | `etc_mm` | Evapotranspiración del cultivo: `ETc = Kc × ET0`. |
 | Balance hídrico | `water_balance` | Contabilidad diaria del agua disponible en la zona de raíces: lluvia efectiva + riego − ETc. |
-| Agotamiento | `depletion_mm` | Agua que falta para llegar a capacidad de campo. |
+| Agotamiento | `depletion_mm` | Agua que falta en la zona de raíces para llegar a capacidad de campo (Dr). |
+| Agua disponible total | `taw_mm` | Agua que el suelo retiene entre capacidad de campo y punto de marchitez en la zona de raíces: `TAW = 1000 × (θFC − θWP) × Zr`. |
+| Agua fácilmente aprovechable | `raw_mm` | Parte de TAW que el cultivo extrae sin estrés: `RAW = p × TAW`, con `p` de la etapa ajustado por ETc (FAO-56). |
+| Estrés hídrico | `water_stress` | El cultivo está en estrés cuando `Dr > RAW` (Ks < 1). Se evalúa por parcela, con el suelo de la parcela y la etapa del cultivo; en humedad equivale a `θ < θ_estrés = θFC − p × (θFC − θWP)`. También es el código de la regla de alerta. |
+| Asimilación del sensor | `assimilation` | Corrección del agotamiento modelado con el observado por el sensor: `Dr = Dr_modelo + K × (Dr_obs − Dr_modelo)`. `K` depende del tipo de calibración y de que la profundidad del sensor sea representativa. |
 | Lámina de riego | `irrigation_depth_mm` | Agua que se recomienda aplicar, en mm (1 mm = 10 m³/ha). |
 | Celda climática | `weather_cell` | Cuadrícula de 0,1° (~11 km) que comparten las parcelas cercanas para no repetir llamadas al proveedor de clima. |
 
@@ -36,7 +41,7 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Sensor | `sensor` | Canal de medición de un nodo: una variable, a una profundidad, con su calibración. |
 | Variable | `metric` | Magnitud medida: `soil_moisture`, `soil_temp`, `air_temp`, `air_rh`, `rain`, `battery_v`, `rssi`. |
 | Lectura | `reading` | Valor de un sensor en un instante. Guarda el valor crudo (`raw_value`) y el calibrado (`value`). |
-| Calibración | `calibration` | Función que convierte el valor crudo en unidades físicas (por ejemplo, ADC → % volumétrico). Es propia de cada sensor y tiene versiones. |
+| Calibración | `calibration` | Función que convierte el valor crudo en unidades físicas (por ejemplo, ADC → % volumétrico). Es propia de cada sensor, tiene versiones y un tipo: `lab` (laboratorio por tipo de suelo) o `field` (en la parcela). |
 | Uplink / downlink | `up` / `down` | Mensaje del nodo al servidor / del servidor al nodo. |
 
 ## Decisión y riesgo

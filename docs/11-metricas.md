@@ -22,7 +22,7 @@ Hay cinco grupos:
 | **Brecha de rendimiento** | `(rendimiento − rendimiento_EVA_municipio) / rendimiento_EVA_municipio` | Bitácora + EVA (promedio de 3 años del cultivo en el municipio) | Por ciclo |
 | **Agua aplicada** | `Σ mm de riego × 10` → m³/ha | Bitácora (`irrigation`) o caudalímetro | Por ciclo |
 | **Productividad del agua (WUE)** | `kg cosechados / m³ aplicados` | Bitácora | Por ciclo |
-| **Días en estrés hídrico** | Días con humedad de suelo media < umbral del cultivo | Agregado diario de lecturas | Por ciclo |
+| **Días en estrés hídrico** | Días con Ks < 1, es decir, `depletion_mm > raw_mm` ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | `water_balance_daily` (balance asimilado) | Por ciclo |
 | **Costo por hectárea** | `Σ costos / área_ha` | Bitácora (`cost` en labores e insumos) | Por ciclo |
 | **Costo por kg** | `Σ costos / kg cosechados` | Bitácora | Por ciclo |
 | **Margen bruto** | `kg × precio_venta − Σ costos` | Bitácora (precio registrado en la cosecha) | Por ciclo |

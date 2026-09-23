@@ -12,7 +12,7 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0006](0006-design-system.md) | Design system propio sobre Tailwind v4 + shadcn/ui (Radix), construido antes que las pantallas | Aceptada |
 | [0007](0007-llm-por-api.md) | LLM por API externa de bajo costo, detrás de un puerto; el LLM explica, no decide | Aceptada |
 | [0008](0008-rag-pgvector.md) | RAG con embeddings en pgvector (reemplaza TF-IDF) | Aceptada |
-| [0009](0009-riego-fao56.md) | Riego con balance hídrico FAO-56 corregido por humedad de suelo medida | Aceptada |
+| [0009](0009-riego-fao56.md) | Riego con balance hídrico FAO-56 corregido por humedad de suelo medida | Aceptada; modificada por 0022 |
 | [0010](0010-rescate-y-gobierno-de-modelos.md) | Rescate selectivo de modelos de la v1 y compuerta de promoción sin excepciones | Reemplazada por 0019 |
 | [0011](0011-aptitud-de-cultivo.md) | Recomendación de cultivo reformulada como aptitud y diferida a v2.x | Aceptada (implementación diferida) |
 | [0012](0012-jobs-en-postgres.md) | Cola de trabajos y tareas periódicas en PostgreSQL (procrastinate) | Aceptada |
@@ -25,6 +25,7 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0019](0019-reconstruccion-de-modelos.md) | Reconstruir los modelos de ML desde cero; de la v1 solo se reutiliza código revisado | Aceptada |
 | [0020](0020-protocolo-de-experimentacion-ml.md) | Protocolo de experimentación de ML con harness fijo, escalera de líneas base y tuning sistemático | Aceptada |
 | [0021](0021-perfil-seminario-local.md) | Perfil de seminario: ejecución local con emuladores | Aceptada |
+| [0022](0022-estres-hidrico-y-asimilacion.md) | Estrés hídrico por parcela y asimilación ponderada del sensor | Aceptada |
 
 Los ADRs 0004, 0007 (en parte), 0014, 0016, 0017 y 0018 describen el perfil `production` (futuro). Cada uno lleva una nota de **Alcance** que remite al [ADR-0021](0021-perfil-seminario-local.md), donde se definen los adaptadores del perfil `seminar`. Esa nota no cambia la decisión.
 
