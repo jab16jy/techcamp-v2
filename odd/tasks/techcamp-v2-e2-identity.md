@@ -1,0 +1,65 @@
+# TechCamp v2 — E2 Identity
+
+## Objective
+Deliver epic E2 from `docs/10-dag.md`: OTP sign-in with the local JWT issuer (code printed in the api console), `GET /me`, memberships and roles, and a test proving isolation between organizations.
+
+## Why
+E2 is on the critical path (E2 → E3 → E4 → E6 → E9). Every later module filters by `org_id` and resolves the caller's role from this module.
+
+## Scope
+- In: DB wiring (SQLAlchemy 2 async + asyncpg, Alembic, first migration), `identity` module (users, organizations, memberships, roles `owner`/`technician`/`producer`/`viewer`), seminar local JWT issuer + JWKS validation (`iss`, `aud`, `exp`, signature; `sub` = `app_user.id`), `POST /dev/auth/otp` (seminar only) plus the verify step that returns the token, `GET /me`, request-scoped org/role resolution, org isolation test, CI Postgres service.
+- Out: any UI (login screen comes after E1 + E2), invitations, consent, `DELETE /me`, `/me/export`, Supabase in production (ADR-0014 is future scope), rate limiting.
+
+## Constraints
+- Follow ADR-0002 (hexagonal, import-linter), ADR-0014, ADR-0021, `docs/03-modelo-datos.md` (identity tables), `docs/04-api.md` (HTTP conventions: problem+json, 404 not 403 across orgs), `docs/09-cuellos-de-botella.md` (security, isolation).
+- Every repository filters by `org_id`. A port exists only with two real implementations or when external I/O needs a test double.
+- `/dev` routes are registered only in the seminar profile.
+- Ponytail: minimal code; no speculative abstractions.
+- Current library docs via ctx7, not memory. English code and comments.
+
+## Route and checks
+- TDD: on (owner decision 2026-09-22, recorded in `CLAUDE.md`). RED → GREEN → REFACTOR, failing test observed before implementation. Runner: `uv run pytest` (from `server/`).
+- Other checks: `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`, `uv run lint-imports`.
+- Route: delegated direct, one sonnet-high writer in worktree `../techcamp-v2-worktrees/e2-identity`. Triggers fired: writer (5+ non-trivial files), preparation (reads 6+ design docs).
+- Delivery: strategy `ask-on-risk` → chain strategy `stacked-to-main` (owner, 2026-09-22): small chained PRs, each targeting `main`, merged in order. Forecast ~900 authored lines (over the 400 budget). Branch `feat/e2-identity` from `main` @ `befa021`. No push, no PRs from this worker; the parent opens them.
+- RDD: on (global). First boundary: branch point `befa021`.
+
+## Slices
+Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact commit SHAs recorded per task below as they land.
+- Slice 1: T1 + T2 (DB wiring + domain/application core).
+- Slice 2: T3 + T4 (JWT issuer/JWKS + `/me` + auth dependency).
+- Slice 3: T5 (org isolation test + CI Postgres service) — plus any carry-over from slice 2 if it exceeds budget.
+
+## Decisions
+- OTP verify endpoint shape (not specified in docs/04-api.md, which only documents `POST /dev/auth/otp {phone} -> 204`): added `POST /dev/auth/otp/verify {phone, code} -> {access_token, token_type}`, the smallest addition consistent with the documented request-a-code step.
+- OTP sign-in requires a pre-existing `app_user` row for the phone (no auto-provisioning on first login): invitations/org-creation flows are out of scope for E2, so tests seed users/orgs/memberships directly via repositories before exercising the OTP flow. `POST /dev/auth/otp/verify` returns a generic 401 for both "wrong code" and "no such user" to avoid leaking account existence.
+- JWKS validation implemented as in-process `kid`-based key resolution (RSA keypair generated once per process, PyJWT `RS256`), not a network-fetched JWKS endpoint: the seminar issuer and validator run in the same process, so there is nothing to fetch over HTTP yet. This keeps the same validation shape (kid lookup, signature, `iss`/`aud`/`exp` checks) that production (ADR-0014, Supabase JWKS) will use.
+- Repository access uses `typing.Protocol` ports defined in `identity/application/ports.py`, satisfied structurally by concrete SQLAlchemy repositories in `identity/adapters/repositories.py`. This isn't a speculative abstraction: ADR-0002's import-linter layering forbids `application` importing `adapters`, so a port is the only way `application` can depend on repository behavior at all; the ports are also exercised directly with in-memory fakes in pure application tests (T2), satisfying ponytail's "port only with two real implementations or a test double" rule via the test-double leg.
+- Async Postgres engine uses `NullPool` (see `shared/db.py` comment): avoids asyncpg connections outliving the event loop that opened them across anyio's per-test event loops. Negligible cost at this project's estimated load (~11 writes/s in year 3, docs/02-estimaciones.md); revisit if load grows.
+- UUIDv7 has no stdlib support in Python 3.12 (added in 3.14) and no dependency already provides it, so `shared/ids.py` implements RFC 9562 §5.7 directly instead of adding a new dependency for one function.
+
+## Tasks
+- [x] T1 DB wiring: settings, async engine/session, Alembic, migration for `app_user`, `organization`, `membership`; tests run against real Postgres (compose locally, service in CI) — route: delegated
+- [ ] T2 Identity domain + application: roles, membership rules, `get_me` use case, org-scoped access check (pure domain tests) — route: delegated
+- [ ] T3 Local JWT issuer (seminar) + JWKS validation dependency; `POST /dev/auth/otp` prints code, verify returns JWT — route: delegated
+- [ ] T4 `GET /me` with memberships; auth dependency resolving user, org and role per request; problem+json errors — route: delegated
+- [ ] T5 Org isolation test: user of org A gets 404 for org B resources; CI Postgres service — route: delegated
+
+## Acceptance criteria
+- [ ] Sign-in flow works end to end in tests: request OTP → code in log → verify → JWT → `GET /me` returns user and memberships.
+- [ ] Invalid, expired or wrong-audience tokens return 401 problem+json.
+- [ ] Isolation test passes: cross-org access returns 404.
+- [ ] All server checks green locally and in CI.
+
+## Progress / evidence
+- Branch and worktree created from `main` @ `befa021`.
+- T1 done. Postgres started locally with `uvx podman-compose -f infra/compose.yaml --profile seminar up -d postgres` (`podman-compose` isn't installed as a bare command in this environment; `uvx podman-compose` runs the same tool from PyPI — noted as a deviation, not a fake DB). Container healthy: `podman exec infra_postgres_1 pg_isready -U techcamp` → `accepting connections`.
+  - Deps added: `uv add "sqlalchemy[asyncio]>=2.0" asyncpg alembic "pyjwt[crypto]"` (SQLAlchemy 2 async + asyncpg per ctx7 `/websites/sqlalchemy_en_20`; Alembic async template per ctx7 `/websites/alembic_sqlalchemy`; PyJWT chosen over the alternative ctx7 offered no other JWT library — single well-rated result `/jpadilla/pyjwt`, RS256 + `cryptography` extra).
+  - RED: `uv run pytest tests/shared/test_ids.py -q` with `ids.py` removed → `ModuleNotFoundError: No module named 'techcamp.shared.ids'`. GREEN after implementing `shared/ids.py`: `2 passed`.
+  - RED→GREEN for repositories: `tests/identity/test_repositories.py` written against `identity/adapters/{orm,repositories}.py` before those modules existed (collection failure), then implemented; final run `uv run pytest -q` → `7 passed`.
+  - Alembic: `uv run alembic revision --autogenerate -m "create identity tables"` against real Postgres (with `include_object` in `migrations/env.py` filtering out PostGIS's `spatial_ref_sys` system table). Verified both directions: `uv run alembic upgrade head` → `Running upgrade -> b358c1328b49`; `uv run alembic downgrade base` → `Running downgrade b358c1328b49 ->`.
+  - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `61 files already formatted`; `uv run mypy` → `Success: no issues found in 57 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
+  - Commit: T1 landed in `6e2e1d2` on `feat/e2-identity`.
+
+## Next step
+T2.

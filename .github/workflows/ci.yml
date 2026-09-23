@@ -11,6 +11,22 @@ jobs:
     defaults:
       run:
         working-directory: server
+    services:
+      postgres:
+        image: docker.io/timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: techcamp
+          POSTGRES_PASSWORD: techcamp
+          POSTGRES_DB: techcamp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U techcamp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
