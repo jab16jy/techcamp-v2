@@ -15,7 +15,7 @@ La decisión y sus alternativas están en [ADR-0003](adr/0003-postgres-unico.md)
 | Regla | Detalle |
 |---|---|
 | Identificadores | UUIDv7 para las entidades (ordenables por tiempo; el cliente puede generarlas offline). `bigint` solo para `sensor`, para que las filas de lecturas sean pequeñas. |
-| Multi-tenant | Todo dato de negocio lleva `org_id`, desnormalizado en las tablas que se consultan con más frecuencia (`plot`, `node`, `alert`, `logbook_entry`) para filtrar sin joins. |
+| Multi-tenant | Todo dato de negocio lleva `org_id`, desnormalizado en las tablas que se consultan con más frecuencia (`plot`, `node`, `alert`, `logbook_entry`, `extension_visit`) para filtrar sin joins. |
 | Tiempo | `timestamptz` en UTC. La interfaz convierte a `America/Bogota`. |
 | Unidades | Unidades SI en el sufijo del nombre: `_mm`, `_c`, `_pct`, `_kg`, `_cop`, `_ha`. |
 | Invariantes | Se validan en la base con `CHECK`, `UNIQUE` y claves foráneas, no solo en la aplicación. |
@@ -49,6 +49,11 @@ erDiagram
   plot ||--o| plot_baseline : inscribe
   crop ||--o{ plot_baseline : cultivaba
   logbook_entry ||--o{ attachment : adjunta
+  app_user ||--o{ farm : asiste
+  farm ||--o{ extension_visit : recibe
+  plot ||--o{ extension_visit : revisa
+  app_user ||--o{ extension_visit : realiza
+  extension_visit ||--o{ attachment : adjunta
   alert_rule ||--o{ alert : dispara
   plot ||--o{ alert : afecta
   node ||--o{ alert : afecta
@@ -83,6 +88,7 @@ erDiagram
     text name
     text municipality_code FK "DIVIPOLA"
     geometry location "Point 4326"
+    uuid technician_id FK "técnico asignado"
   }
   plot {
     uuid id PK
@@ -237,9 +243,25 @@ erDiagram
     text irrigation_practice "none|drip|sprinkler|gravity"
     uuid recorded_by FK
   }
+  extension_visit {
+    uuid id PK "UUIDv7 generado en el cliente"
+    uuid org_id FK
+    uuid farm_id FK
+    uuid plot_id FK "opcional"
+    uuid technician_id FK
+    date visited_on
+    text[] topics "aspectos de la Ley 1876"
+    text recommendations
+    text commitments
+    text notes
+    timestamptz client_updated_at
+    bigint server_version "secuencia global"
+    timestamptz deleted_at
+  }
   attachment {
     uuid id PK
-    uuid logbook_entry_id FK
+    uuid logbook_entry_id FK "o extension_visit_id"
+    uuid extension_visit_id FK
     text object_key
     text content_type
     int bytes
@@ -384,6 +406,25 @@ erDiagram
 ### `plot_baseline`: encuesta de inscripción
 
 Al inscribir una parcela, el técnico registra cómo producía antes de usar TechCamp: cultivo y rendimiento del último ciclo, costos aproximados por hectárea y práctica de riego (con el mismo vocabulario que `plot.irrigation_system`). Hay una por parcela y es la referencia contra la que se mide el impacto ([ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)). No es la "línea base" de ML (`baseline`), que es la heurística que un modelo debe superar.
+
+### `extension_visit`: visitas de extensión
+
+El técnico "registra visitas" ([01](01-requisitos.md#usuarios)); esta entidad lo hace posible (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). La extensión agropecuaria es un servicio público con un enfoque de cinco aspectos (Ley 1876, art. 25), y `topics` usa esos cinco como vocabulario cerrado:
+
+| `topics` | Aspecto de la Ley 1876 |
+|---|---|
+| `human_capacities` | Capacidades humanas integrales: técnico-productivas, administrativas, financieras, informáticas y de comercialización |
+| `social_capacities` | Capacidades sociales y asociatividad |
+| `information_access` | Acceso a información, tecnologías y TIC |
+| `natural_resources` | Gestión sostenible de los recursos naturales: uso eficiente del agua y el suelo, adaptación al cambio climático |
+| `participation` | Participación y autogestión |
+
+| Aspecto | Decisión |
+|---|---|
+| Sincronización | Igual que `logbook_entry`: UUIDv7 del cliente, `server_version` de la misma secuencia global y última escritura gana ([ADR-0013](adr/0013-sincronizacion-offline.md)). La visita se registra sin conexión |
+| Invariantes | `plot_id`, si existe, es una parcela de `farm_id`; `technician_id` tiene rol `technician` en la organización; `topics` solo admite los cinco códigos |
+| Fotos | `attachment` tiene exactamente uno de `logbook_entry_id` o `extension_visit_id` (`CHECK`) |
+| Técnico asignado | `farm.technician_id` decide qué fincas ve el técnico en su bandeja y a quién escalan las alertas críticas y las de nodo |
 
 ### `water_balance_daily`: estrés hídrico por parcela
 

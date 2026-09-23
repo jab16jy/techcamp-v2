@@ -41,7 +41,8 @@ GET    /me/export                             → 202 { job_id }
 
 ```
 GET    /farms?org_id=                          → Page<Farm>
-POST   /farms                                  { org_id, name, municipality_code, location } → Farm
+POST   /farms                                  { org_id, name, municipality_code, location, technician_id? } → Farm
+PATCH  /farms/{farm_id}                        { name?, technician_id? } → Farm
 GET    /farms/{farm_id}/plots                  → Plot[]
 POST   /farms/{farm_id}/plots                  { name, boundary: GeoJSON Polygon, irrigation_system: none|drip|sprinkler|gravity, irrigation_efficiency?, system_flow_lph? } → Plot   # none = secano
 PATCH  /plots/{plot_id}                        { name?, boundary?, irrigation_system?, irrigation_efficiency?, system_flow_lph? } → Plot
@@ -120,18 +121,28 @@ DELETE /push-subscriptions/{id}                → 204
 ```
 POST /sync/push {
   device_id,
-  changes: [{ id, entity: "logbook_entry", op: "upsert|delete", data, client_updated_at }]
+  changes: [{ id, entity: "logbook_entry|extension_visit", op: "upsert|delete", data, client_updated_at }]
 } → { results: [{ id, status: "applied|duplicate|conflict_overwritten|rejected", server_version, error? }] }
 
 GET  /sync/pull?since=<server_version>&limit=500
   → { changes: [{ id, entity, op, data, server_version }], next_since, has_more }
 
-POST /attachments:presign  { logbook_entry_id, content_type, bytes } → { upload_url, object_key }
+POST /attachments:presign  { logbook_entry_id | extension_visit_id, content_type, bytes } → { upload_url, object_key }
 ```
 
 `data` lleva los campos de `logbook_entry` según su `kind`, incluidos `sold_kg`, `sale_price_cop_per_kg`, `labor_days` y `alert_id` ([03](03-modelo-datos.md#logbook_entry-la-tabla-que-se-sincroniza-offline)).
 
 El cliente sube la foto directo al almacenamiento de objetos con la URL prefirmada. La API nunca recibe los bytes ([ADR-0018](adr/0018-almacenamiento-de-objetos.md)).
+
+### Visitas de extensión y bandeja del técnico
+
+Las visitas se crean y editan con `/sync/push` (`entity: "extension_visit"`), porque el técnico las registra en el campo sin conexión.
+
+```
+GET  /me/tray                                  → [{ farm, open_alerts: Alert[], last_visit_on }]   # fincas asignadas al técnico
+GET  /farms/{farm_id}/visits                   → Page<ExtensionVisit>
+GET  /organizations/{org_id}/visits?from=&to=  → Page<ExtensionVisit>   # exportación de visitas por organización
+```
 
 ### Riesgo, métricas y asistente
 

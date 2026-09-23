@@ -35,6 +35,7 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 | RF-12 | **Riesgo climático**: probabilidad y severidad de inundación y sequía por municipio o celda, con explicación de los factores. |
 | RF-13 | **Tablero** de la parcela y de la organización con los [indicadores de tecnificación](11-metricas.md), medidos contra la encuesta de inscripción de cada parcela. |
 | RF-14 | **Asistente agronómico**: preguntas en lenguaje natural respondidas con el contexto de la parcela y fuentes citadas. |
+| RF-19 | **Visitas de extensión**: el técnico ve sus fincas asignadas con las alertas abiertas y registra cada visita sin conexión (temas según los cinco aspectos de la Ley 1876, recomendaciones, compromisos y fotos); la organización exporta las visitas. |
 
 ### Diferidos (v2.x)
 

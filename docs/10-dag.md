@@ -16,7 +16,7 @@ flowchart LR
   E5[E5 Clima<br/>celdas + Open-Meteo]
   E6[E6 Riego FAO-56]
   E7[E7 Alertas +<br/>notificaciones]
-  E8[E8 Bitácora offline]
+  E8[E8 Bitácora offline<br/>y visitas de extensión]
   E9[E9 Pantalla de inicio<br/>estado de parcela]
   E10[E10 Riesgo climático<br/>reconstrucción con protocolo]
   E11[E11 Métricas e<br/>índice de adopción digital]
@@ -68,8 +68,8 @@ flowchart LR
 | E5 | ET0, lluvia y pronóstico por celda con degradación `stale` | E3 |
 | E6 | Recomendación diaria con `rationale`, con lámina en parcelas con riego y recomendación de secano en las demás; test con los ejemplos numéricos de FAO-56 | E4, E5 |
 | E7 | El escenario A dispara una alerta y llega un push (y el SMS simulado a `/dev/outbox`); reintentos y escalamiento probados. Las reglas `flood_risk`/`drought_risk` se activan cuando termina E10 | E4, E5 |
-| E8 | El escenario D (cosecha en modo avión) sincroniza sin duplicar | E1, E3 |
-| E9 | Pantalla de inicio completa con datos reales del simulador | E1, E6, E7 |
+| E8 | El escenario D (cosecha en modo avión) sincroniza sin duplicar; una visita de extensión registrada sin señal también ([03](03-modelo-datos.md#extension_visit-visitas-de-extensión)) | E1, E3 |
+| E9 | Pantalla de inicio completa con datos reales del simulador; bandeja del técnico con sus fincas asignadas y alertas abiertas | E1, E6, E7 |
 | E10 | Model card, dataset reproducible, harness y escalera de líneas base de M2 (inundación); en producción queda el modelo que pase la compuerta o, si ninguno pasa, la línea base ([ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)) | E5 |
 | E11 | Índice de adopción digital mensual, resumen por ciclo y encuesta de inscripción ([11-metricas](11-metricas.md)) | E6, E7, E8 |
 | E12 | Asistente con fuentes citadas, límites y degradación | E6, E7, E10 |

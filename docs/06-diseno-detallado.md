@@ -109,7 +109,7 @@ stateDiagram-v2
 
 - **Una sola alerta abierta** por (`rule_id`, `plot_id`/`node_id`). Lo garantiza un índice único parcial en la base, no el código.
 - `Pending` vive en memoria del evaluador y en el estado de la regla; no se persiste como alerta.
-- Escalar una alerta crítica notifica por SMS o WhatsApp al técnico asignado.
+- Escalar una alerta crítica notifica por SMS o WhatsApp al técnico asignado a la finca (`farm.technician_id`).
 - Las alertas de nodo van al técnico, no al productor ([01-requisitos](01-requisitos.md), escenario C).
 
 **Reglas de fábrica** (`org_id = null`). Los umbrales se validan con un agrónomo antes del piloto:
@@ -281,6 +281,7 @@ sequenceDiagram
 
 | Caso | Comportamiento |
 |---|---|
+| Visitas de extensión | `extension_visit` usa el mismo sincronizador, outbox y reglas que la bitácora; el técnico la registra en la finca sin señal |
 | El mismo cambio llega dos veces | `duplicate`: sin efecto (mismo `id` y mismo `client_updated_at`) |
 | Dos dispositivos editan la misma entrada | Gana el `client_updated_at` mayor; el perdedor recibe `conflict_overwritten` y la interfaz lo avisa. Se acepta porque las entradas de bitácora casi nunca las editan dos personas a la vez ([ADR-0013](adr/0013-sincronizacion-offline.md)). |
 | Entrada con `alert_id` | El servidor comprueba que la alerta sea de la misma parcela; si no, responde `rejected`. El teléfono toma el `alert_id` de las alertas en caché, así que se puede vincular una acción sin conexión |
