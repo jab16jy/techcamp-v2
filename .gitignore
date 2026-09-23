@@ -23,6 +23,9 @@ web/dist/
 .DS_Store
 *.swp
 .codex/
-.impeccable/
+.impeccable/*
+!.impeccable/surfaces/
+!.impeccable/design.json
+!.impeccable/config.json
 .atl/
 .claude/
