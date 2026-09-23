@@ -28,4 +28,5 @@ web/dist/
 !.impeccable/design.json
 !.impeccable/config.json
 .atl/
-.claude/
+.claude/*
+!.claude/skills/

@@ -103,3 +103,8 @@ cover irrigation math. Vitest for web units; Playwright for e2e and scenarios ar
 - Project-mandated skills: `impeccable` (UI), `domain-modeling` (ADR, glossary), `tdd`,
   `work-unit-commits` and `chained-pr` (delivery), `find-docs` (library docs),
   `systematic-debugging` (bugs), `playwright-cli` (e2e).
+- Repo-level skills live in `.claude/skills/`, pinned by `skills-lock.json`; restore with
+  `npx skills experimental_install`. `fastapi` and `pydantic` are upstream copies: leave them
+  unedited and let the docs win where they diverge. Here that means SQLAlchemy 2 async (not
+  SQLModel), mypy (not ty), `async` path operations over asyncpg, no Asyncer, and Pydantic only
+  at the adapter boundary, never in `domain`.
