@@ -1,0 +1,62 @@
+/*
+ * Design tokens: primitive palette (raw values) mapped to semantic tokens.
+ * This is the only source of color, space, radius and type for the app —
+ * the arbitrary-value lint rule keeps components from bypassing it.
+ */
+
+:root {
+  /* Primitive palette — one step per hue actually consumed below. */
+  --palette-cream: #efe7d6;
+  --palette-cream-raised: #faf6ec;
+  --palette-ink-green: #17301f;
+  --palette-ink-green-muted: #4f5f53;
+  --palette-brand-green: #1f4a32;
+  --palette-status-ok: #1f5e33;
+  --palette-status-watch: #654200;
+  --palette-status-irrigate: #164c68;
+  --palette-status-stress: #6b2a1d;
+  --palette-severity-info: #2a4e8a;
+  --palette-severity-warning: #8a5a0e;
+  --palette-severity-critical: #8a3212; /* annatto — alerts only, never a general accent */
+  --palette-offline: #5f564a;
+
+  /* Primitive spacing scale, 4px base. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+}
+
+@theme {
+  /* Semantic color tokens. */
+  --color-surface: var(--palette-cream);
+  --color-surface-raised: var(--palette-cream-raised);
+  --color-text: var(--palette-ink-green);
+  --color-text-muted: var(--palette-ink-green-muted);
+  --color-brand: var(--palette-brand-green);
+  --color-status-ok: var(--palette-status-ok);
+  --color-status-watch: var(--palette-status-watch);
+  --color-status-irrigate: var(--palette-status-irrigate);
+  --color-status-stress: var(--palette-status-stress);
+  --color-severity-info: var(--palette-severity-info);
+  --color-severity-warning: var(--palette-severity-warning);
+  --color-severity-critical: var(--palette-severity-critical);
+  --color-offline: var(--palette-offline);
+
+  /* Radii, 12-16px range per the direction contract. */
+  --radius-sm: 12px;
+  --radius-md: 14px;
+  --radius-lg: 16px;
+
+  /* Type scale, base = 16px. Font stacks stay Tailwind's system defaults
+     (font-sans / font-serif are already system-only, no web fonts). */
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+}
