@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: docker.io/timescale/timescaledb-ha:pg16
+    profiles: [seminar]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-techcamp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-techcamp}
+      POSTGRES_DB: ${POSTGRES_DB:-techcamp}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/home/postgres/pgdata/data
+      - ./postgres/init-extensions.sql:/docker-entrypoint-initdb.d/init-extensions.sql:ro,Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-techcamp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mosquitto:
+    image: docker.io/eclipse-mosquitto:2
+    profiles: [seminar]
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro,Z
+      - mosquitto-data:/mosquitto/data
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    profiles: [seminar]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-techcamp}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-techcamp123}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+
+  api:
+    build:
+      context: ../server
+    profiles: [seminar]
+    environment:
+      TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-techcamp}:${POSTGRES_PASSWORD:-techcamp}@postgres:5432/${POSTGRES_DB:-techcamp}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../web
+    profiles: [seminar]
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  mosquitto-data:
+  minio-data:

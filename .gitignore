@@ -21,3 +21,6 @@ web/dist/
 # OS / editor
 .DS_Store
 *.swp
+.codex/
+.impeccable/
+.atl/
