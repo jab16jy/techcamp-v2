@@ -27,7 +27,7 @@ E0 is the root of the critical path; E1 (design system, Impeccable) and E2 (iden
 ## Tasks
 - [x] T1 `CLAUDE.md`: stack, commands, test/lint policy, skills per area, ODD/RDD workflow, design-system rules — route: delegated
 - [x] T2 `infra/` Compose seminar profile + `.env.example` + Mosquitto config — route: delegated (`.env.example` blocked, see evidence)
-- [ ] T3 `server/` skeleton: uv project, 12 module packages, import-linter contracts, `/health`, smoke test, ruff/mypy — route: delegated
+- [x] T3 `server/` skeleton: uv project, 12 module packages, import-linter contracts, `/health`, smoke test, ruff/mypy — route: delegated
 - [ ] T4 `web/` skeleton: Vite + React 19 + strict TS, ESLint, Vitest smoke test — route: delegated
 - [ ] T5 CI workflow: server and web jobs — route: delegated
 
@@ -49,5 +49,11 @@ E0 is the root of the critical path; E1 (design system, Impeccable) and E2 (iden
     for the user to place at `.env.example` themselves, or to grant a one-off exception. `infra/compose.yaml` has working defaults for every variable (`techcamp`/`techcamp`/`techcamp123`), so `podman-compose --profile seminar up` works without a `.env` file; `.env.example` is documentation/convenience only.
   - `.gitignore` gained `.codex/` and `.impeccable/` (added externally by tooling between T1 and T2; kept as-is, consistent with "don't touch `.codex/`").
 
+- T3 done: `server/` uv project (Python 3.12, `uv_build` backend), package `techcamp` under `src/techcamp` with 11 domain modules (`identity, farms, telemetry, weather, irrigation, alerts, notifications, logbook, risk, metrics, assistant`, each with empty `domain/application/adapters`) plus `shared` (flat, no layers — nothing lives there yet). FastAPI app (`main.py`) with `GET /health`; one pytest smoke test via `TestClient`. Versions resolved by `uv add` (current, not memorized): fastapi 0.141.1, uvicorn 0.53.0, starlette 1.6.0, pydantic 2.13.5, pytest 9.1.1, httpx 0.28.1, ruff 0.16.8, mypy 2.3.1, import-linter 2.15.
+  - Import-linter: one `layers` contract with `containers` = the 11 domain modules and `layers` = adapters > application > domain (import-linter docs: multi-container layers contract, verified via ctx7). Passes: `Contracts: 1 kept, 0 broken`.
+  - Deliberately **not** added: a cross-module "no importing another module's internals" contract. Nothing imports across modules yet (all packages are empty), so it would be speculative and unverifiable; ponytail scope. Add when E2+ introduces real cross-module calls (e.g. `farms` calling `identity.application`).
+  - `server/Dockerfile`: multi-stage uv build (astral-sh docs pattern), runs `uvicorn techcamp.main:app`.
+  - `uv run ruff check`: All checks passed. `uv run ruff format --check`: 49 files already formatted. `uv run mypy`: Success, no issues in 47 source files. `uv run lint-imports`: 1 kept, 0 broken. `uv run pytest`: 1 passed.
+
 ## Next step
-T3.
+T4.
