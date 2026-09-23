@@ -2,11 +2,13 @@
 
 from fastapi import FastAPI
 
+from techcamp.identity.adapters.api.router import router as identity_router
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.errors import register_error_handlers
 
 app = FastAPI(title="TechCamp v2")
 register_error_handlers(app)
+app.include_router(identity_router)
 
 if is_seminar_profile():
     # /dev routes only exist in the seminar profile (ADR-0021).
