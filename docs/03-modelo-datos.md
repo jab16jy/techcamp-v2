@@ -15,7 +15,7 @@ La decisión y sus alternativas están en [ADR-0003](adr/0003-postgres-unico.md)
 | Regla | Detalle |
 |---|---|
 | Identificadores | UUIDv7 para las entidades (ordenables por tiempo; el cliente puede generarlas offline). `bigint` solo para `sensor`, para que las filas de lecturas sean pequeñas. |
-| Multi-tenant | Todo dato de negocio lleva `org_id`, desnormalizado en las tablas que se consultan con más frecuencia (`plot`, `node`, `alert`, `logbook_entry`) para filtrar sin joins. |
+| Multi-tenant | Todo dato de negocio lleva `org_id`, desnormalizado en las tablas que se consultan con más frecuencia (`plot`, `node`, `alert`, `logbook_entry`, `extension_visit`) para filtrar sin joins. |
 | Tiempo | `timestamptz` en UTC. La interfaz convierte a `America/Bogota`. |
 | Unidades | Unidades SI en el sufijo del nombre: `_mm`, `_c`, `_pct`, `_kg`, `_cop`, `_ha`. |
 | Invariantes | Se validan en la base con `CHECK`, `UNIQUE` y claves foráneas, no solo en la aplicación. |
@@ -45,7 +45,15 @@ erDiagram
   plot ||--o{ irrigation_recommendation : recibe
   plot ||--o{ logbook_entry : registra
   crop_cycle ||--o{ logbook_entry : agrupa
+  alert ||--o{ logbook_entry : motiva
+  plot ||--o| plot_baseline : inscribe
+  crop ||--o{ plot_baseline : cultivaba
   logbook_entry ||--o{ attachment : adjunta
+  app_user ||--o{ farm : asiste
+  farm ||--o{ extension_visit : recibe
+  plot ||--o{ extension_visit : revisa
+  app_user ||--o{ extension_visit : realiza
+  extension_visit ||--o{ attachment : adjunta
   alert_rule ||--o{ alert : dispara
   plot ||--o{ alert : afecta
   node ||--o{ alert : afecta
@@ -80,6 +88,7 @@ erDiagram
     text name
     text municipality_code FK "DIVIPOLA"
     geometry location "Point 4326"
+    uuid technician_id FK "técnico asignado"
   }
   plot {
     uuid id PK
@@ -89,30 +98,32 @@ erDiagram
     geometry boundary "Polygon 4326"
     numeric area_ha "generada desde boundary"
     int weather_cell_id FK
-    numeric system_flow_lph "caudal de riego"
+    text irrigation_system "none|drip|sprinkler|gravity"
+    numeric irrigation_efficiency "null en secano"
+    numeric system_flow_lph "caudal de riego; null en secano"
   }
   soil_profile {
     uuid plot_id PK, FK
-    text source "soilgrids|lab"
+    text source "soilgrids|lab|fao56_texture"
     numeric ph
     numeric organic_matter_pct
     text texture
-    numeric field_capacity_pct
-    numeric wilting_point_pct
+    numeric field_capacity_pct "θFC"
+    numeric wilting_point_pct "θWP"
     numeric root_depth_cm
   }
   crop {
     int id PK
     text code UK
     text name_es
-    numeric stress_threshold_pct
+    text kc_source "fao56|local|approximate|none"
   }
   crop_stage {
     int crop_id PK, FK
     text stage PK "initial|development|mid|late"
     int length_days
     numeric kc
-    numeric depletion_fraction_p
+    numeric depletion_fraction_p "p de tabla FAO-56"
   }
   crop_cycle {
     uuid id PK
@@ -131,6 +142,8 @@ erDiagram
     text claim_code UK
     text credential_hash
     text firmware
+    int interval_s "intervalo de envío esperado; base de las lecturas esperadas"
+    timestamptz claimed_at "alta del nodo en una parcela"
     timestamptz last_seen_at
     text status "provisioned|online|offline|retired"
   }
@@ -147,7 +160,9 @@ erDiagram
     bigint sensor_id FK
     int version
     text method "linear|two_point|polynomial"
+    text kind "lab|field"
     jsonb params
+    numeric rmse_pct "error de la calibración, si se midió"
     timestamptz valid_from
   }
   reading {
@@ -180,15 +195,22 @@ erDiagram
     numeric etc_mm
     numeric effective_rain_mm
     numeric irrigation_mm
-    numeric depletion_mm
+    numeric taw_mm
+    numeric raw_mm "p ajustado × TAW"
+    numeric depletion_model_mm "Dr antes de asimilar"
+    numeric depletion_mm "Dr asimilado"
     numeric soil_moisture_obs_pct
+    numeric assimilation_k "0 sin asimilación"
+    numeric stress_moisture_pct "θ_estrés del día"
   }
   irrigation_recommendation {
     uuid id PK
     uuid plot_id FK
     date day
-    numeric depth_mm
-    int duration_min
+    text kind "irrigate|postpone|not_needed|no_kc|rainfed"
+    numeric depth_mm "null salvo en irrigate"
+    int duration_min "null salvo en irrigate"
+    jsonb advice "códigos de consejo de secano"
     jsonb rationale
   }
   logbook_entry {
@@ -202,16 +224,47 @@ erDiagram
     text unit
     numeric cost_cop
     numeric yield_kg
+    numeric sold_kg "harvest"
+    numeric sale_price_cop_per_kg "harvest"
+    numeric labor_days "task: jornales, incluida la mano de obra familiar"
     numeric irrigation_mm
+    uuid alert_id FK "opcional: alerta que motivó la entrada"
     text notes
     uuid created_by FK
+    bool created_offline "el cliente la creó sin conexión"
+    timestamptz client_updated_at
+    bigint server_version "secuencia global"
+    timestamptz deleted_at
+  }
+  plot_baseline {
+    uuid plot_id PK, FK
+    uuid org_id FK
+    date enrolled_on
+    int crop_id FK "cultivo del último ciclo"
+    numeric last_yield_kg_ha
+    numeric last_cost_cop_ha "aproximado"
+    text irrigation_practice "none|drip|sprinkler|gravity"
+    uuid recorded_by FK
+  }
+  extension_visit {
+    uuid id PK "UUIDv7 generado en el cliente"
+    uuid org_id FK
+    uuid farm_id FK
+    uuid plot_id FK "opcional"
+    uuid technician_id FK
+    date visited_on
+    text[] topics "aspectos de la Ley 1876"
+    text recommendations
+    text commitments
+    text notes
     timestamptz client_updated_at
     bigint server_version "secuencia global"
     timestamptz deleted_at
   }
   attachment {
     uuid id PK
-    uuid logbook_entry_id FK
+    uuid logbook_entry_id FK "o extension_visit_id"
+    uuid extension_visit_id FK
     text object_key
     text content_type
     int bytes
@@ -222,7 +275,7 @@ erDiagram
     text code
     text metric
     text operator
-    numeric threshold
+    numeric threshold "null en water_stress: usa el θ_estrés del día"
     numeric hysteresis
     int min_duration_min
     text severity "info|warning|critical"
@@ -240,6 +293,7 @@ erDiagram
     timestamptz opened_at
     timestamptz acknowledged_at
     timestamptz resolved_at
+    text outcome "confirmed|false_alarm; null hasta que el productor o el técnico lo registre"
   }
   notification {
     uuid id PK
@@ -282,6 +336,10 @@ erDiagram
     text title
     text source_url
     text license
+    text kind "guide|agroclimatic_bulletin"
+    date published_on
+    text department "null = nacional"
+    text enso_state "neutral|el_nino|la_nina; solo boletines"
   }
   kb_chunk {
     uuid id PK
@@ -311,7 +369,7 @@ erDiagram
   }
 ```
 
-**Tablas derivadas** (sin relaciones propias): `reading_hourly` y `reading_daily` son agregados continuos de TimescaleDB sobre `reading`, con mín, máx, promedio y conteo. `plot_metric_monthly` guarda el índice de tecnificación y sus componentes. `crop_cycle_summary` guarda rendimiento, agua, costos y margen por ciclo. `field_record` contiene los datos EVA/AGROSAVIA de la v1 para entrenamiento. Las tablas de la cola de trabajos las administra la librería de jobs ([ADR-0012](adr/0012-jobs-en-postgres.md)).
+**Tablas derivadas** (sin relaciones propias): `reading_hourly` y `reading_daily` son agregados continuos de TimescaleDB sobre `reading`, con mín, máx, promedio y conteo. `plot_metric_monthly` guarda el índice de adopción digital y sus componentes. `crop_cycle_summary` guarda rendimiento, rendimiento relativo municipal, cambio frente a la encuesta de inscripción, agua, costos, jornales y margen por ciclo. `field_record` contiene los datos EVA/AGROSAVIA de la v1 para entrenamiento y la referencia del rendimiento relativo municipal: `crop_id`, `municipality_code` (DANE), `year`, `period`, `area_sown_ha`, `area_harvested_ha`, `production_t`, `yield_t_ha` y `source` (`eva` o `agrosavia`). Las tablas de la cola de trabajos las administra la librería de jobs ([ADR-0012](adr/0012-jobs-en-postgres.md)).
 
 ## Decisiones por tabla
 
@@ -333,11 +391,74 @@ erDiagram
 | ID | UUIDv7 generado en el teléfono: la misma entrada reenviada es idempotente |
 | Cursor de sincronización | `server_version` se toma de una secuencia global en cada escritura; el cliente pide `since=<último server_version>` |
 | Conflictos | Gana la última escritura según `client_updated_at` y se registra el conflicto ([ADR-0013](adr/0013-sincronizacion-offline.md)) |
-| Campos por tipo | Columnas tipadas y un `CHECK` por `kind` (por ejemplo, `harvest ⇒ yield_kg IS NOT NULL`) en vez de un JSON libre, porque las métricas los consultan |
+| Campos por tipo | Columnas tipadas y un `CHECK` por `kind` (por ejemplo, `harvest ⇒ yield_kg IS NOT NULL`) en vez de un JSON libre, porque las métricas los consultan. La tabla siguiente dice qué campo alimenta cada métrica |
+
+**Campos que alimentan las métricas de impacto** ([11-metricas](11-metricas.md); brechas G04 y G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)):
+
+| `kind` | Campos | Métrica |
+|---|---|---|
+| `harvest` | `yield_kg`; si se vendió, `sold_kg` (≤ `yield_kg`) y `sale_price_cop_per_kg` | Rendimiento, margen bruto |
+| `task` | `labor_days`, `cost_cop` | Producción por jornal, costos |
+| `input`, `cost` | `cost_cop` | Costos |
+| `irrigation` | `irrigation_mm` | Agua aplicada, balance hídrico |
+| `observation` con `alert_id` | `quantity` + `unit` (kg perdidos), `cost_cop` (COP perdidos) | Pérdidas por evento |
+| cualquiera con `alert_id` | La entrada es la acción registrada tras la alerta | `risk_management` del índice de adopción digital |
+
+- `alert_id` debe ser una alerta de la misma parcela; si no, la sincronización responde `rejected`.
+- Los `cost_cop` de las observaciones son pérdidas, no costos: no entran en `Σ costos`.
+
+### `plot_baseline`: encuesta de inscripción
+
+Al inscribir una parcela, el técnico registra cómo producía antes de usar TechCamp: cultivo y rendimiento del último ciclo, costos aproximados por hectárea y práctica de riego (con el mismo vocabulario que `plot.irrigation_system`). Hay una por parcela y es la referencia contra la que se mide el impacto ([ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)). No es la "línea base" de ML (`baseline`), que es la heurística que un modelo debe superar.
+
+### `extension_visit`: visitas de extensión
+
+El técnico "registra visitas" ([01](01-requisitos.md#usuarios)); esta entidad lo hace posible (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). La extensión agropecuaria es un servicio público con un enfoque de cinco aspectos (Ley 1876, art. 25), y `topics` usa esos cinco como vocabulario cerrado:
+
+| `topics` | Aspecto de la Ley 1876 |
+|---|---|
+| `human_capacities` | Capacidades humanas integrales: técnico-productivas, administrativas, financieras, informáticas y de comercialización |
+| `social_capacities` | Capacidades sociales y asociatividad |
+| `information_access` | Acceso a información, tecnologías y TIC |
+| `natural_resources` | Gestión sostenible de los recursos naturales: uso eficiente del agua y el suelo, adaptación al cambio climático |
+| `participation` | Participación y autogestión |
+
+| Aspecto | Decisión |
+|---|---|
+| Sincronización | Igual que `logbook_entry`: UUIDv7 del cliente, `server_version` de la misma secuencia global y última escritura gana ([ADR-0013](adr/0013-sincronizacion-offline.md)). La visita se registra sin conexión |
+| Invariantes | `plot_id`, si existe, es una parcela de `farm_id`; `technician_id` tiene rol `technician` en la organización; `topics` solo admite los cinco códigos |
+| Fotos | `attachment` tiene exactamente uno de `logbook_entry_id` o `extension_visit_id` (`CHECK`) |
+| Técnico asignado | `farm.technician_id` decide qué fincas ve el técnico en su bandeja y a quién escalan las alertas críticas y las de nodo |
+
+### `water_balance_daily`: estrés hídrico por parcela
+
+El estrés hídrico no tiene un umbral fijo por cultivo: depende del suelo de la parcela y de la etapa del cultivo ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md); brechas G01–G03 y G18 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
+
+| Campo | Cálculo |
+|---|---|
+| `taw_mm` | `1000 × (θFC − θWP) × Zr`, con θFC y θWP de `soil_profile` |
+| `raw_mm` | `p × taw_mm`, con `p = p_tabla + 0,04 × (5 − ETc)` acotado a 0,1–0,8 (FAO-56) |
+| `stress_moisture_pct` | `θFC − p × (θFC − θWP)`: la humedad a la que `Dr = RAW`. La usa la regla `water_stress` sobre lecturas |
+| `depletion_model_mm` / `depletion_mm` | Agotamiento del balance antes y después de asimilar el sensor |
+| `assimilation_k` | Peso `K` del sensor en la asimilación ([06 §5](06-diseno-detallado.md#5-riego-balance-hídrico-fao-56)) |
+
+- Si el perfil de suelo no tiene θFC y θWP de laboratorio ni de SoilGrids, se toman los valores medios de la textura según la Tabla 19 de FAO-56 (`source = fao56_texture`).
+- `crop.kc_source = none` (por ejemplo, el ñame, que no está en la Tabla 12 de FAO-56) bloquea la recomendación de lámina hasta que un agrónomo valide un Kc local.
+
+### `plot` e `irrigation_recommendation`: parcelas con riego y de secano
+
+Solo un tercio de las UPA con cultivos usa riego, así que el modelo sirve a las dos clases de parcela ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md); brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
+
+| Campo | Regla |
+|---|---|
+| `plot.irrigation_system` | `none` es una parcela de secano. Un `CHECK` exige `irrigation_efficiency` y `system_flow_lph` nulos en secano |
+| `plot.irrigation_efficiency` | Al crear la parcela toma el valor por defecto de su sistema (goteo 0,90, aspersión 0,75, gravedad 0,60) y se puede cambiar |
+| `irrigation_recommendation.kind` | `irrigate` (lámina y minutos), `postpone` (va a llover), `not_needed`, `no_kc` (sin Kc validado) o `rainfed` (recomendación de secano, [06 §5](06-diseno-detallado.md#5-riego-balance-hídrico-fao-56)) |
+| `irrigation_recommendation.advice` | Solo en `rainfed`: lista de códigos de la tabla de consejos de secano. `depth_mm` y `duration_min` quedan nulos |
 
 ### Calibración
 
-La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectura se aplica la calibración vigente según `valid_from`. Recalibrar crea una versión nueva y un job recalcula `value` desde `valid_from`.
+La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectura se aplica la calibración vigente según `valid_from`. Recalibrar crea una versión nueva y un job recalcula `value` desde `valid_from`. El `kind` (`lab` o `field`) indica dónde se calibró y decide cuánto pesa el sensor en el balance hídrico: sin calibración de campo, el sensor no corrige el balance.
 
 | Método | `params` | Uso |
 |---|---|---|
@@ -365,5 +486,5 @@ La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectu
 | `municipios` (PostGIS) | `municipality` | Renombrar columnas y validar geometrías |
 | `indices_satelitales` (~2,5 M puntos NDVI/NDWI) | `ndvi_point` (referencia) | Copia directa; solo alimenta features de riesgo |
 | Datos EVA / AGROSAVIA (`datos_campo`) | `field_record` | Normalizar nombres de cultivos al catálogo `crop` |
-| `crops_requirements.csv` | `crop`, `crop_stage` | Completar Kc por etapa con FAO-56 (tabla 12) |
+| `crops_requirements.csv` | `crop`, `crop_stage` | Completar Kc por etapa con FAO-56 (tabla 12) y registrar su origen en `kc_source` |
 | Sensores y lecturas de demostración | No se migran | Eran datos de ejemplo |

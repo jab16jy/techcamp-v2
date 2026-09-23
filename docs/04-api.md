@@ -41,13 +41,16 @@ GET    /me/export                             → 202 { job_id }
 
 ```
 GET    /farms?org_id=                          → Page<Farm>
-POST   /farms                                  { org_id, name, municipality_code, location } → Farm
+POST   /farms                                  { org_id, name, municipality_code, location, technician_id? } → Farm
+PATCH  /farms/{farm_id}                        { name?, technician_id? } → Farm
 GET    /farms/{farm_id}/plots                  → Plot[]
-POST   /farms/{farm_id}/plots                  { name, boundary: GeoJSON Polygon, system_flow_lph? } → Plot
-PATCH  /plots/{plot_id}                        { name?, boundary?, system_flow_lph? } → Plot
+POST   /farms/{farm_id}/plots                  { name, boundary: GeoJSON Polygon, irrigation_system: none|drip|sprinkler|gravity, irrigation_efficiency?, system_flow_lph? } → Plot   # none = secano
+PATCH  /plots/{plot_id}                        { name?, boundary?, irrigation_system?, irrigation_efficiency?, system_flow_lph? } → Plot
 PUT    /plots/{plot_id}/soil                   SoilProfile → SoilProfile
 POST   /plots/{plot_id}/soil:autofill          → SoilProfile   # SoilGrids
-GET    /crops                                  → Crop[] (con etapas y Kc)
+GET    /plots/{plot_id}/baseline               → PlotBaseline
+PUT    /plots/{plot_id}/baseline               { enrolled_on, crop_id, last_yield_kg_ha, last_cost_cop_ha?, irrigation_practice } → PlotBaseline   # encuesta de inscripción
+GET    /crops                                  → Crop[] (con etapas, Kc y kc_source)
 POST   /plots/{plot_id}/cycles                 { crop_id, sown_on } → CropCycle
 PATCH  /cycles/{cycle_id}                      { status?, expected_harvest_on? } → CropCycle
 ```
@@ -60,14 +63,16 @@ Una sola llamada que arma todo lo que el productor ve al abrir la app. Así se e
 GET /plots/{plot_id}/status → {
   plot, active_cycle: { crop, stage, day_of_cycle },
   latest: { soil_moisture_pct, air_temp_c, air_rh_pct, at },
-  water_balance: { depletion_mm, taw_mm, status: "ok|watch|irrigate" },
-  recommendation: { depth_mm, duration_min, rationale[] } | null,
+  water_balance: { depletion_mm, taw_mm, raw_mm, stress_moisture_pct, status: "ok|watch|irrigate|stress" },
+  recommendation: { kind, depth_mm?, duration_min?, advice[]?, rationale[] } | null,
   open_alerts: Alert[],
   weather_next_3d: WeatherDay[],
   nodes: NodeHealth[],
-  technification_index: { value, month }
+  digital_adoption_index: { value, month }
 }
 ```
+
+En una parcela de secano el `status` nunca es `irrigate`: cuando `Dr > RAW` es `stress`, y `recommendation.kind = rainfed` trae `advice[]` sin `depth_mm` ni `duration_min` ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)).
 
 ### Nodos y sensores
 
@@ -78,7 +83,7 @@ PATCH  /nodes/{node_id}                       { plot_id?, status? } → Node
 POST   /nodes/{node_id}/credentials:rotate    → { password }
 GET    /nodes/{node_id}/health                → { last_seen_at, battery_v, rssi, completeness_24h }
 GET    /nodes/{node_id}/sensors               → Sensor[]
-POST   /sensors/{sensor_id}/calibrations      { method, params, valid_from } → Calibration   # crea una versión nueva
+POST   /sensors/{sensor_id}/calibrations      { method, kind: lab|field, params, rmse_pct?, valid_from } → Calibration   # crea una versión nueva
 ```
 
 ### Lecturas y clima
@@ -116,16 +121,28 @@ DELETE /push-subscriptions/{id}                → 204
 ```
 POST /sync/push {
   device_id,
-  changes: [{ id, entity: "logbook_entry", op: "upsert|delete", data, client_updated_at }]
+  changes: [{ id, entity: "logbook_entry|extension_visit", op: "upsert|delete", data, client_updated_at }]
 } → { results: [{ id, status: "applied|duplicate|conflict_overwritten|rejected", server_version, error? }] }
 
 GET  /sync/pull?since=<server_version>&limit=500
   → { changes: [{ id, entity, op, data, server_version }], next_since, has_more }
 
-POST /attachments:presign  { logbook_entry_id, content_type, bytes } → { upload_url, object_key }
+POST /attachments:presign  { logbook_entry_id | extension_visit_id, content_type, bytes } → { upload_url, object_key }
 ```
 
+`data` lleva los campos de `logbook_entry` según su `kind`, incluidos `sold_kg`, `sale_price_cop_per_kg`, `labor_days` y `alert_id` ([03](03-modelo-datos.md#logbook_entry-la-tabla-que-se-sincroniza-offline)).
+
 El cliente sube la foto directo al almacenamiento de objetos con la URL prefirmada. La API nunca recibe los bytes ([ADR-0018](adr/0018-almacenamiento-de-objetos.md)).
+
+### Visitas de extensión y bandeja del técnico
+
+Las visitas se crean y editan con `/sync/push` (`entity: "extension_visit"`), porque el técnico las registra en el campo sin conexión.
+
+```
+GET  /me/tray                                  → [{ farm, open_alerts: Alert[], last_visit_on }]   # fincas asignadas al técnico
+GET  /farms/{farm_id}/visits                   → Page<ExtensionVisit>
+GET  /organizations/{org_id}/visits?from=&to=  → Page<ExtensionVisit>   # exportación de visitas por organización
+```
 
 ### Riesgo, métricas y asistente
 

@@ -41,7 +41,7 @@ flowchart TB
 | `--color-surface`, `--color-surface-raised` | Fondos |
 | `--color-text`, `--color-text-muted` | Texto |
 | `--color-brand` | Acciones principales |
-| `--color-status-ok` / `-watch` / `-irrigate` | Estado del balance hídrico |
+| `--color-status-ok` / `-watch` / `-irrigate` / `-stress` | Estado del balance hídrico (`stress` solo en secano) |
 | `--color-severity-info` / `-warning` / `-critical` | Severidad de alertas |
 | `--color-offline` | Indicador sin conexión |
 | `--space-1 … --space-8` | Escala de 4 px |
@@ -62,6 +62,7 @@ web/src/
 │   ├── plot-status/     # pantalla de inicio de la parcela
 │   ├── alerts/
 │   ├── logbook/
+│   ├── visits/          # bandeja del técnico y visitas de extensión
 │   ├── plots/           # fincas, parcelas, mapa, ciclos
 │   ├── nodes/           # alta por QR, calibración, salud
 │   ├── irrigation/
@@ -99,7 +100,7 @@ flowchart LR
 |---|---|
 | Shell de la app (JS, CSS, íconos) | Precache del Service Worker: abre sin red |
 | Estado de parcela, alertas, clima | TanStack Query con caché persistida en IndexedDB: offline se ve el último estado con su hora |
-| Bitácora | **Local primero**: se escribe en Dexie y el sincronizador la sube ([06 §7](06-diseno-detallado.md#7-sincronización-offline-de-la-bitácora)) |
+| Bitácora y visitas de extensión | **Local primero**: se escribe en Dexie y el sincronizador la sube ([06 §7](06-diseno-detallado.md#7-sincronización-offline-de-la-bitácora)) |
 | Eventos en vivo | SSE invalida o actualiza las consultas afectadas |
 | Teselas del mapa | Caché en tiempo de ejecución (las últimas vistas); mapas offline completos quedan diferidos (RF-18) |
 
@@ -118,6 +119,8 @@ flowchart TB
   home --> rec[Detalle de la recomendación de riego]
   home --> chart[Historial de sensores]
   home --> risk[Riesgo climático]
+  home --> tray[Bandeja del técnico<br/>fincas asignadas y alertas abiertas]
+  tray --> visit[Nueva visita de extensión]
   alerts --> alertd[Detalle de alerta + reconocer]
   log --> newentry[Nueva entrada: labor, insumo, riego, cosecha, costo, foto]
   plots --> plotd[Parcela: polígono, suelo, ciclo]
@@ -132,10 +135,12 @@ flowchart TB
 **Inicio (pantalla más importante):**
 
 1. Parcela activa y cultivo con su etapa ("Maíz · día 42 · desarrollo").
-2. Tarjeta de decisión: **"Hoy: regar 12 mm (≈ 40 min)"** o **"Hoy no necesita riego"**, con el porqué a un toque.
+2. Tarjeta de decisión: **"Hoy: regar 12 mm (≈ 40 min)"** o **"Hoy no necesita riego"**, con el porqué a un toque. En una parcela de secano no muestra lámina ni minutos, sino el déficit (**"Al cultivo le faltan 80 mm: está en estrés"**), la lluvia esperada en 7 días y el consejo del día (**"Cubra el suelo con rastrojo para conservar la humedad"**) ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)).
 3. Alertas abiertas.
 4. Humedad de suelo actual con su hora y el pronóstico de 3 días.
 5. Estado de sincronización y de los nodos.
+
+**Bandeja del técnico.** Con el rol `technician`, el inicio abre su bandeja: las fincas asignadas (`farm.technician_id`) ordenadas por alertas abiertas, las críticas primero, con la fecha de la última visita. Desde una finca registra la visita de extensión (temas según la Ley 1876, recomendaciones, compromisos y fotos), también sin conexión (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
 
 ## Presupuestos y calidad
 

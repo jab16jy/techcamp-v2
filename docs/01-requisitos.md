@@ -10,7 +10,7 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 
 | Perfil | Contexto real | Qué necesita |
 |---|---|---|
-| **Productor** | Android de gama baja, señal intermitente, sol directo, poco tiempo | Saber si debe regar hoy, recibir alertas, anotar labores y cosechas sin conexión |
+| **Productor** | Android de gama baja, señal intermitente, sol directo, poco tiempo; la mayoría sin sistema de riego | Saber qué hacer hoy con el agua de su parcela (regar o, en secano, cómo manejar el déficit), recibir alertas, anotar labores y cosechas sin conexión |
 | **Técnico / extensionista** | Visita varias fincas, reporta a una cooperativa o entidad | Ver el estado de muchas parcelas, instalar y calibrar nodos, registrar visitas |
 | **Administrador de organización** | Cooperativa, asociación o programa | Gestionar miembros, fincas y nodos; ver indicadores agregados |
 | **Investigador** | Universidad o entidad agropecuaria | Exportar datos anonimizados, evaluar modelos |
@@ -22,19 +22,20 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 | ID | Requisito |
 |---|---|
 | RF-01 | Registro e inicio de sesión con **teléfono (OTP por SMS)** o correo. Roles por organización: `owner`, `technician`, `producer`, `viewer`. |
-| RF-02 | Gestión de **fincas y parcelas**: dibujar el polígono en el mapa o caminar el perímetro con GPS; calcular área automáticamente. |
+| RF-02 | Gestión de **fincas y parcelas**: dibujar el polígono en el mapa o caminar el perímetro con GPS; calcular área automáticamente; indicar el sistema de riego o que la parcela es de secano. |
 | RF-03 | Perfil de suelo por parcela: autocompletado desde SoilGrids y reemplazable por análisis de laboratorio. |
 | RF-04 | **Ciclos de cultivo**: cultivo, fecha de siembra, etapa fenológica estimada y fecha de cosecha esperada. |
 | RF-05 | **Nodos IoT**: alta (código QR del nodo), asignación a parcela, **calibración por sensor**, estado (en línea, batería, señal). |
 | RF-06 | **Telemetría**: ingesta continua de humedad de suelo, temperatura y humedad relativa, lluvia y batería; lecturas en vivo e históricas. |
 | RF-07 | **Alertas** por reglas (estrés hídrico, saturación, calor, riesgo fitosanitario, nodo caído, batería baja) y por modelos (riesgo de inundación o sequía). Ciclo: abierta → reconocida → resuelta. |
 | RF-08 | **Notificaciones**: push web; SMS o WhatsApp como respaldo para alertas críticas. |
-| RF-09 | **Recomendación de riego diaria** por parcela: lámina en mm y tiempo de riego según el caudal del sistema, basada en ET0 FAO, Kc del cultivo, lluvia y humedad de suelo medida. |
-| RF-10 | **Bitácora de campo offline**: labores, aplicaciones de insumos, riegos, costos, observaciones con foto y cosechas en kg. Sincroniza al recuperar señal. |
+| RF-09 | **Decisión hídrica diaria** por parcela, basada en ET0 FAO, Kc del cultivo, lluvia y humedad de suelo medida. Con riego: lámina en mm y tiempo de riego según el caudal del sistema. De secano: déficit hídrico, lluvia pronosticada y consejo de manejo, sin lámina ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)). |
+| RF-10 | **Bitácora de campo offline**: labores con jornales, aplicaciones de insumos, riegos, costos, observaciones con foto (vinculables a una alerta) y cosechas en kg con lo vendido y su precio. Sincroniza al recuperar señal. |
 | RF-11 | **Clima**: pronóstico a 7–16 días por parcela y acumulados históricos. |
 | RF-12 | **Riesgo climático**: probabilidad y severidad de inundación y sequía por municipio o celda, con explicación de los factores. |
-| RF-13 | **Tablero** de la parcela y de la organización con los [indicadores de tecnificación](11-metricas.md). |
+| RF-13 | **Tablero** de la parcela y de la organización con los [indicadores de tecnificación](11-metricas.md), medidos contra la encuesta de inscripción de cada parcela. |
 | RF-14 | **Asistente agronómico**: preguntas en lenguaje natural respondidas con el contexto de la parcela y fuentes citadas. |
+| RF-19 | **Visitas de extensión**: el técnico ve sus fincas asignadas con las alertas abiertas y registra cada visita sin conexión (temas según los cinco aspectos de la Ley 1876, recomendaciones, compromisos y fotos); la organización exporta las visitas. |
 
 ### Diferidos (v2.x)
 
@@ -62,7 +63,7 @@ La v1 analizaba ubicaciones con datos públicos y modelos entrenados con datos s
 | RNF-11 | **Trazabilidad de modelos** | Toda predicción guarda la versión del modelo. Ningún modelo pasa a producción sin superar su línea base ([ADR-0019](adr/0019-reconstruccion-de-modelos.md), [ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)). |
 | RNF-12 | **Idioma** | Interfaz en español. Código e identificadores en inglés. |
 | RNF-13 | **Ejecución local** | El perfil seminario levanta con `docker compose --profile seminar up` en un portátil de 8 GB, sin cuentas pagas. |
-| RNF-14 | **Demo reproducible** | Cada escenario (A–D) produce siempre las mismas alertas y recomendaciones, y funciona sin internet salvo el asistente. |
+| RNF-14 | **Demo reproducible** | Cada escenario (A–E) produce siempre las mismas alertas y recomendaciones, y funciona sin internet salvo el asistente. |
 
 ## Requisitos extendidos
 
@@ -84,7 +85,8 @@ Vienen de los requisitos de la v1 y ahora se validan con datos medidos:
 
 | Escenario | Condición | Comportamiento esperado |
 |---|---|---|
-| **A. Estrés hídrico (El Niño)** | Temperatura > 35 °C, humedad relativa < 50 %, lluvia < 10 mm en 30 días, humedad de suelo bajo el umbral del cultivo | Alerta de estrés hídrico, recomendación de riego con lámina y tiempo, sugerencia de cobertura (mulch) |
+| **A. Estrés hídrico (El Niño)** | Temperatura > 35 °C, humedad relativa < 50 %, lluvia < 10 mm en 30 días, agotamiento de la parcela mayor que RAW (humedad bajo el θ_estrés que se deriva del suelo y la etapa del cultivo, [ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | Alerta de estrés hídrico, recomendación de riego con lámina y tiempo, sugerencia de cobertura (mulch) |
 | **B. Riesgo fitosanitario (lluvias)** | Humedad relativa > 85 % sostenida, lluvia continua, suelo saturado | Alerta de riesgo de hongos con la ventana de aplicación preventiva según el pronóstico |
 | **C. Nodo caído** | Sin lecturas por 3 intervalos esperados | Alerta de nodo al técnico asignado, no al productor |
 | **D. Sin conexión** | El productor registra una cosecha en modo avión | Queda guardada localmente y se sincroniza sin duplicarse al volver la señal |
+| **E. Veranillo en secano** | Maíz de secano en floración, sin sensor, 21 días sin lluvia efectiva y sin lluvia en el pronóstico de 7 días; agotamiento mayor que RAW desde el día 16 | Alerta de estrés hídrico abierta por el balance diario, recomendación de secano sin lámina con consejo de conservar la humedad ([06 §10](06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario)) |

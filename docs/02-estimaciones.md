@@ -136,4 +136,4 @@ Por LoRaWAN el payload es binario y mide una decena de bytes, porque el tamaño 
 | Presupuesto de piloto | Un VPS; APIs gratuitas o baratas; sin Kubernetes |
 | Sensores baratos (capacitivos) | Imprecisos de fábrica: calibración por sensor obligatoria y versionada |
 | Regulación de datos (Ley 1581 de 2012) | Consentimiento, minimización, exportación y borrado |
-| Bandas de radio LoRaWAN en Colombia | Confirmar el plan de frecuencias (AU915/US915) con la regulación vigente antes de comprar gateways |
+| Bandas de radio LoRaWAN en Colombia | Plan **AU915** (915–928 MHz, uso libre; brecha G12 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). La banda cabe entera en la ventana de uso libre de la Res. ANE 105 de 2020 (Anexo 1), con cualquier lectura de la Res. ANE 000028 del 26-01-2026, que adopta un plan de 896–915 MHz para servicios móviles y fijos; US915 queda descartado porque transmite desde 902,3 MHz. Antes de comprar gateways y nodos para el piloto, verificar los límites de potencia del Anexo 1 y los canales de AU915 en los parámetros regionales de LoRaWAN |

@@ -16,14 +16,14 @@ flowchart LR
   E5[E5 Clima<br/>celdas + Open-Meteo]
   E6[E6 Riego FAO-56]
   E7[E7 Alertas +<br/>notificaciones]
-  E8[E8 Bitácora offline]
+  E8[E8 Bitácora offline<br/>y visitas de extensión]
   E9[E9 Pantalla de inicio<br/>estado de parcela]
   E10[E10 Riesgo climático<br/>reconstrucción con protocolo]
-  E11[E11 Métricas e<br/>índice de tecnificación]
+  E11[E11 Métricas e<br/>índice de adopción digital]
   E12[E12 Asistente]
   E13[E13 LoRaWAN<br/>ChirpStack]
   E14[E14 Operación<br/>backups, monitoreo, DR]
-  E16[E16 Simulador de escenarios<br/>A–D + fixtures de clima]
+  E16[E16 Simulador de escenarios<br/>A–E + fixtures de clima]
   E15((Demo del<br/>seminario))
 
   E0 --> E1
@@ -66,14 +66,14 @@ flowchart LR
 | E3 | Crear finca y parcela dibujando el polígono; autocompletado de suelo; catálogo de cultivos con Kc | E2 |
 | E4 | Un **simulador de nodo básico** publica y las lecturas aparecen calibradas en la base y en vivo (SSE) | E3 |
 | E5 | ET0, lluvia y pronóstico por celda con degradación `stale` | E3 |
-| E6 | Recomendación diaria con `rationale`; test con los ejemplos numéricos de FAO-56 | E4, E5 |
+| E6 | Recomendación diaria con `rationale`, con lámina en parcelas con riego y recomendación de secano en las demás; test con los ejemplos numéricos de FAO-56 | E4, E5 |
 | E7 | El escenario A dispara una alerta y llega un push (y el SMS simulado a `/dev/outbox`); reintentos y escalamiento probados. Las reglas `flood_risk`/`drought_risk` se activan cuando termina E10 | E4, E5 |
-| E8 | El escenario D (cosecha en modo avión) sincroniza sin duplicar | E1, E3 |
-| E9 | Pantalla de inicio completa con datos reales del simulador | E1, E6, E7 |
+| E8 | El escenario D (cosecha en modo avión) sincroniza sin duplicar; una visita de extensión registrada sin señal también ([03](03-modelo-datos.md#extension_visit-visitas-de-extensión)) | E1, E3 |
+| E9 | Pantalla de inicio completa con datos reales del simulador; bandeja del técnico con sus fincas asignadas y alertas abiertas | E1, E6, E7 |
 | E10 | Model card, dataset reproducible, harness y escalera de líneas base de M2 (inundación); en producción queda el modelo que pase la compuerta o, si ninguno pasa, la línea base ([ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)) | E5 |
-| E11 | Índice de tecnificación mensual y resumen por ciclo | E6, E7, E8 |
+| E11 | Índice de adopción digital mensual, resumen por ciclo y encuesta de inscripción ([11-metricas](11-metricas.md)) | E6, E7, E8 |
 | E12 | Asistente con fuentes citadas, límites y degradación | E6, E7, E10 |
-| E16 | Los escenarios A–D corren con un comando, con fixtures de clima grabados, y su bloque `expected` pasa como prueba end-to-end en CI ([06 §10](06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario)) | E4, E5, E7 |
+| E16 | Los escenarios A–E corren con un comando, con fixtures de clima grabados, y su bloque `expected` pasa como prueba end-to-end en CI ([06 §10](06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario)) | E4, E5, E7 |
 | E13 *(producción futura)* | Un nodo LoRa real llega por ChirpStack con el mismo mensaje interno | E4 |
 | E14 *(producción futura)* | Backup y restauración ensayados; tableros de SLO | E0 |
 
@@ -88,6 +88,7 @@ flowchart LR
     s2[Open-Meteo]
     s3[SoilGrids / laboratorio]
     s4[Bitácora del productor]
+    s6[Encuesta de inscripción]
     s5[Eventos UNGRD / HDX]
   end
   subgraph almacenados [Datos base]
@@ -96,6 +97,7 @@ flowchart LR
     sp[(soil_profile)]
     lb[(logbook_entry)]
     cc[(crop_cycle)]
+    pb[(plot_baseline)]
   end
   subgraph derivados [Derivados]
     rh[reading_hourly / daily]
@@ -119,6 +121,7 @@ flowchart LR
   s3 --> sp
   s4 --> lb
   s4 --> cc
+  s6 --> pb
   rh --> wb
   w --> wb
   sp --> wb
@@ -131,6 +134,8 @@ flowchart LR
   w --> al
   rp --> al
   lb --> cs
+  pb --> cs
+  lb --> pm
   rh --> cs
   cs --> pm
   al --> pm
@@ -168,6 +173,6 @@ flowchart LR
   end
 
   subgraph mensual [Mensual: día 1, 02:00]
-    o[resumen de ciclos cerrados] --> p[índice de tecnificación]
+    o[resumen de ciclos cerrados] --> p[índice de adopción digital]
   end
 ```
