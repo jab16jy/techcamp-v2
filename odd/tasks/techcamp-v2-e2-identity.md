@@ -42,7 +42,7 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
 - [x] T1 DB wiring: settings, async engine/session, Alembic, migration for `app_user`, `organization`, `membership`; tests run against real Postgres (compose locally, service in CI) — route: delegated
 - [x] T2 Identity domain + application: roles, membership rules, `get_me` use case, org-scoped access check (pure domain tests) — route: delegated
 - [x] T3 Local JWT issuer (seminar) + JWKS validation dependency; `POST /dev/auth/otp` prints code, verify returns JWT — route: delegated
-- [ ] T4 `GET /me` with memberships; auth dependency resolving user, org and role per request; problem+json errors — route: delegated
+- [x] T4 `GET /me` with memberships; auth dependency resolving user, org and role per request; problem+json errors — route: delegated
 - [ ] T5 Org isolation test: user of org A gets 404 for org B resources; CI Postgres service — route: delegated
 
 ## Acceptance criteria
@@ -71,5 +71,10 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
   - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `76 files already formatted`; `uv run mypy` → `Success: no issues found in 64 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
   - Commit: T3 landed in `b7d9498` on `feat/e2-identity`.
 
+- T4 done. `identity/adapters/api/router.py`: `GET /me` (uses `get_me` + `get_current_user_id`, maps `UserNotFoundError` to 404) and `GET /organizations/{org_id}/members` (uses `resolve_org_membership`, maps `NotAMemberError` to 404) — the latter also gives T5's isolation test a concrete resource to exercise. Wired unconditionally in `main.py` (not `/dev`-gated).
+  - RED: `uv run pytest tests/identity/test_me.py -q` before the router existed → 4 failures (FastAPI 404s, no such route). GREEN after implementing: `uv run pytest -q` → `27 passed`.
+  - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format .` (one test file needed reformatting) then `--check` → `78 files already formatted`; `uv run mypy` → `Success: no issues found in 65 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
+  - Commit: T4 landed in `<pending>` on `feat/e2-identity`.
+
 ## Next step
-T4.
+T5.
