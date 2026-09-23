@@ -39,6 +39,18 @@ Total authored (excluding generated files): `git diff --stat befa021..HEAD` (fil
 - Async Postgres engine uses `NullPool` (see `shared/db.py` comment): avoids asyncpg connections outliving the event loop that opened them across anyio's per-test event loops. Negligible cost at this project's estimated load (~11 writes/s in year 3, docs/02-estimaciones.md); revisit if load grows.
 - UUIDv7 has no stdlib support in Python 3.12 (added in 3.14) and no dependency already provides it, so `shared/ids.py` implements RFC 9562 §5.7 directly instead of adding a new dependency for one function.
 
+## Review (RDD)
+- Assess over `befa021..e2828d6` (committed-only): risk **high** (auth, security, alembic process boundary, CI shell). Owner granted consent.
+- Lineage `review-90b294e6ddd18a22`, 4 lenses (risk, resilience, readability, reliability). First attempt failed on the provider session limit; slots re-offered and relaunched after reset.
+- Outcome: **approved**, acknowledged, authority burned (revision `sha256:bbc196b6…`). 0 blocking findings; 20 informational (9 warnings, 11 suggestions) kept as follow-ups: dev-profile fail-open default (`shared/config.py`), unbounded OTP guessing and non-ASCII 500 (`otp_store.py`), malformed `sub` → 500 (`deps.py:46`), `exp` not required in decode, process-local OTP store and signing key, dev-route gating unproved by a test, NullPool connection bound, test/readability duplication.
+
+## PR plan (stacked-to-main)
+Authored lines exclude `uv.lock` and Alembic generated templates.
+- PR 1: T1 `6e2e1d2` + `bfd06e5` — 811 lines (149 are the `alembic init` config); over budget.
+- PR 2: T2 `077ce31` + `76b1ff3` — 194.
+- PR 3: T3 `b7d9498` + `08ef1d2` — 329.
+- PR 4: T4 + T5 `d8d81cb`, `f3ed12b`, `58f69e0`, `e2828d6` — 254.
+
 ## Tasks
 - [x] T1 DB wiring: settings, async engine/session, Alembic, migration for `app_user`, `organization`, `membership`; tests run against real Postgres (compose locally, service in CI) — route: delegated
 - [x] T2 Identity domain + application: roles, membership rules, `get_me` use case, org-scoped access check (pure domain tests) — route: delegated
