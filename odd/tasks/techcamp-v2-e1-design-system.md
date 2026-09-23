@@ -42,7 +42,7 @@ ADR-0006: the design system comes before any feature screen. E8 and E9 depend on
 
 ## Progress / evidence
 - Branch created from `main` @ `befa021`.
-- T1: PRODUCT.md (from docs/01, docs/07, owner decisions), surface brief verified (6 contract blocks + seed key present).
+- T1 (commit 877b865): PRODUCT.md (from docs/01, docs/07, owner decisions), surface brief verified (6 contract blocks + seed key present).
 
 ## Next step
 T2–T7 (delegated writer).
