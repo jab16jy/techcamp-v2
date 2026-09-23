@@ -40,7 +40,7 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
 
 ## Tasks
 - [x] T1 DB wiring: settings, async engine/session, Alembic, migration for `app_user`, `organization`, `membership`; tests run against real Postgres (compose locally, service in CI) — route: delegated
-- [ ] T2 Identity domain + application: roles, membership rules, `get_me` use case, org-scoped access check (pure domain tests) — route: delegated
+- [x] T2 Identity domain + application: roles, membership rules, `get_me` use case, org-scoped access check (pure domain tests) — route: delegated
 - [ ] T3 Local JWT issuer (seminar) + JWKS validation dependency; `POST /dev/auth/otp` prints code, verify returns JWT — route: delegated
 - [ ] T4 `GET /me` with memberships; auth dependency resolving user, org and role per request; problem+json errors — route: delegated
 - [ ] T5 Org isolation test: user of org A gets 404 for org B resources; CI Postgres service — route: delegated
@@ -61,5 +61,10 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
   - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `61 files already formatted`; `uv run mypy` → `Success: no issues found in 57 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
   - Commit: T1 landed in `6e2e1d2` on `feat/e2-identity`.
 
+- T2 done. Pure application tests using in-memory fake repositories (Protocol test doubles), no DB.
+  - RED: `uv run pytest tests/identity/test_get_me.py tests/identity/test_resolve_org_access.py -q` before `application/{ports,get_me,resolve_org_access}.py` existed → `ModuleNotFoundError`. GREEN after implementing: `uv run pytest -q` → `12 passed`.
+  - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `67 files already formatted`; `uv run mypy` → `Success: no issues found in 60 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
+  - Commit: T2 landed in `<pending>` on `feat/e2-identity`.
+
 ## Next step
-T2.
+T3.
