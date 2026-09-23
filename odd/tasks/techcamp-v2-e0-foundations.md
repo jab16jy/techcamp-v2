@@ -28,7 +28,7 @@ E0 is the root of the critical path; E1 (design system, Impeccable) and E2 (iden
 - [x] T1 `CLAUDE.md`: stack, commands, test/lint policy, skills per area, ODD/RDD workflow, design-system rules — route: delegated
 - [x] T2 `infra/` Compose seminar profile + `.env.example` + Mosquitto config — route: delegated (`.env.example` blocked, see evidence)
 - [x] T3 `server/` skeleton: uv project, 12 module packages, import-linter contracts, `/health`, smoke test, ruff/mypy — route: delegated
-- [ ] T4 `web/` skeleton: Vite + React 19 + strict TS, ESLint, Vitest smoke test — route: delegated
+- [x] T4 `web/` skeleton: Vite + React 19 + strict TS, ESLint, Vitest smoke test — route: delegated
 - [ ] T5 CI workflow: server and web jobs — route: delegated
 
 ## Acceptance criteria
@@ -55,5 +55,11 @@ E0 is the root of the critical path; E1 (design system, Impeccable) and E2 (iden
   - `server/Dockerfile`: multi-stage uv build (astral-sh docs pattern), runs `uvicorn techcamp.main:app`.
   - `uv run ruff check`: All checks passed. `uv run ruff format --check`: 49 files already formatted. `uv run mypy`: Success, no issues in 47 source files. `uv run lint-imports`: 1 kept, 0 broken. `uv run pytest`: 1 passed.
 
+- T4 done: `npm create vite@latest web -- --template react-ts`, then stripped to a bare skeleton (removed the marketing demo: hero image, logos, docs/social links, template CSS) so E1/Impeccable starts from a blank `<App>`. `strict: true` added to `tsconfig.app.json`. Versions via `npm view`/install (current, not memorized): vite 8.3.0, react/react-dom 19.2.8, @vitejs/plugin-react 6.1.1, eslint 10.11.0, typescript-eslint 8.70.1, eslint-plugin-react-hooks 7.1.1, eslint-plugin-react-refresh 0.5.7, vitest 5.0.1, @testing-library/react 16.3.3.
+  - Deviation: the Vite react-ts template now ships `oxlint`, not ESLint; removed it and installed ESLint (flat config, `typescript-eslint` recommended + `react-hooks` + `react-refresh`, matching the task's explicit "ESLint" requirement).
+  - Deviation: TypeScript pinned to `6.0.3`, not the newer `7.0.2` that `npm view typescript version` reports as `latest`. Verified via `npm install`: `typescript-eslint@8.70.1` (the current release) declares `peerDependencies.typescript: ">=4.8.4 <6.1.0"` — TS 7 (the Go-ported compiler) isn't supported by the lint toolchain yet. `create-vite`'s own template independently pins `~6.0.2`, confirming 6.0.x is the current working pair; not a memorized guess.
+  - `web/Dockerfile`: `node:22-slim`, runs the Vite dev server (`--host 0.0.0.0`) for the seminar profile per ADR-0021 (no Caddy locally).
+  - `npm run lint`: exit 0. `npm run typecheck` (`tsc -b --noEmit`): exit 0. `npm test -- --run`: 1 test file, 1 test passed. `npm run build`: succeeds (219.62 kB JS, 68.58 kB gzip).
+
 ## Next step
-T4.
+T5.
