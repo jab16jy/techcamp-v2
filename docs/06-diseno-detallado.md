@@ -336,9 +336,12 @@ sequenceDiagram
 - **Sensores** (`telemetry`): última lectura calibrada por variable de la parcela con su `received_at`, y agregados de `reading_daily` de los últimos días. Se marcan las lecturas con `quality` distinto de 0, la versión de calibración vigente del sensor y si el dato no está fresco.
 - **Alertas** (`alerts`): alertas abiertas o reconocidas de la parcela con su `severity`, `opened_at` y `evidence`.
 - **Riego** (`irrigation`): la `irrigation_recommendation` del día con su `kind`, su `rationale` y, según el caso, `depth_mm` y `duration_min` o los consejos de secano (`advice`).
+- **Clima estacional** (`assistant`): el estado ENSO y la perspectiva de lluvia del último boletín agroclimático del departamento de la finca, o del nacional si no hay uno regional, con su fecha de publicación. El estado ENSO (`kb_document.enso_state`) se registra al cargar el boletín; en el seminario viene un boletín fijo con los fixtures.
 - **Riesgo climático** (`risk`): la `risk_prediction` vigente de la celda de la parcela con `probability`, `severity` y `top_factors`, más el modelo que la produjo: `model_version.version` y su métrica de validación de `model_version.metrics`. Si la predicción viene de la heurística de línea base, se indica.
 
 En la respuesta sin LLM se devuelven estos mismos hechos junto con los documentos relevantes.
+
+**Corpus (RAG).** Cada documento guarda su fuente y su licencia ([ADR-0008](adr/0008-rag-pgvector.md)). Además de las guías agronómicas revisadas por licencia, el corpus incluye los boletines agroclimáticos: el Boletín Agroclimático Nacional mensual (MADR, FAO e IDEAM) y los de las Mesas Técnicas Agroclimáticas con mesa en el Caribe (Córdoba, Sucre y Magdalena–Cesar–La Guajira–Atlántico). Son la fuente institucional de la perspectiva estacional y ENSO para la región (brecha G08 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
 
 **Reglas del prompt:**
 

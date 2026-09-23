@@ -67,7 +67,7 @@ flowchart LR
 |---|---|
 | Proveedor de LLM y de embeddings (evaluación con 30 preguntas) | E12 |
 | Proveedor S3 y de SMS/WhatsApp | Producción futura |
-| Plan de frecuencias LoRaWAN en Colombia y hardware de nodos | Producción futura (E13) |
+| Hardware de nodos LoRaWAN para el plan AU915 (915–928 MHz, ya fijado en [02](02-estimaciones.md#restricciones)); verificar los límites de potencia del Anexo 1 de la Res. ANE 105 de 2020 antes de comprar | Producción futura (E13) |
 | Grabar los fixtures de clima de cada escenario | E16 |
 | Licencia (uso comercial) y límites de tamaño de TabPFN | E10 |
 | Validación agronómica de umbrales de alertas, Kc de variedades locales (y del ñame, sin Kc en FAO-56), `p`, Zr y profundidades de sensor | Antes de la demo (con el asesor o un agrónomo) |

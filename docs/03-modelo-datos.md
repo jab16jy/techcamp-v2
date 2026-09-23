@@ -310,6 +310,10 @@ erDiagram
     text title
     text source_url
     text license
+    text kind "guide|agroclimatic_bulletin"
+    date published_on
+    text department "null = nacional"
+    text enso_state "neutral|el_nino|la_nina; solo boletines"
   }
   kb_chunk {
     uuid id PK

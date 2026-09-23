@@ -35,9 +35,9 @@ Los nodos IoT envían lecturas cada 15 min con energía solar y, a veces, sin co
 **Negativas / costos aceptados**
 
 - Operar un broker y, con LoRa, ChirpStack (que requiere Redis).
-- Las bandas LoRaWAN en Colombia deben confirmarse antes de comprar hardware (solo en producción).
+- LoRaWAN usa el plan AU915 (915–928 MHz, uso libre según la Res. ANE 105 de 2020 y la Res. ANE 000028 del 26-01-2026; brecha G12 de la [investigación](../investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). Antes de comprar hardware para el piloto hay que verificar los límites de potencia del Anexo 1 de la Res. 105 (solo en producción).
 - La calibración de sensores baratos es obligatoria y consume tiempo del técnico.
 
 ## Relacionado
 
-[06 §1-2](../06-diseno-detallado.md), [09](../09-cuellos-de-botella.md)
+[06 §1-2](../06-diseno-detallado.md), [09](../09-cuellos-de-botella.md), [02 Restricciones](../02-estimaciones.md#restricciones)
