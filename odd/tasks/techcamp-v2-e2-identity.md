@@ -69,7 +69,7 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
 - T3 done. RSA-backed local JWT issuer (`identity/adapters/security/token_issuer.py`), in-memory OTP store, `POST /dev/auth/otp` (204, prints the code), `POST /dev/auth/otp/verify` (returns `{access_token, token_type}`), and the `get_current_user_id` JWKS-style validation dependency (`identity/adapters/api/deps.py`). `/dev/*` only registered when `is_seminar_profile()` (default), wired in `main.py`.
   - RED: `uv run pytest tests/identity/test_token_issuer.py tests/identity/test_otp_store.py tests/identity/test_dev_auth.py -q` before the adapters existed → `ModuleNotFoundError`. GREEN after implementing: `uv run pytest -q` → `23 passed`.
   - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `76 files already formatted`; `uv run mypy` → `Success: no issues found in 64 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
-  - Commit: T3 landed in `<pending>` on `feat/e2-identity`.
+  - Commit: T3 landed in `b7d9498` on `feat/e2-identity`.
 
 ## Next step
 T4.
