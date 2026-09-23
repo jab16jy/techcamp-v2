@@ -1,0 +1,24 @@
+"""Environment-driven settings (ADR-0021: one env var switches the execution profile)."""
+
+from __future__ import annotations
+
+import os
+
+
+def database_url() -> str:
+    return os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp",
+    )
+
+
+def is_seminar_profile() -> bool:
+    return os.environ.get("TECHCAMP_PROFILE", "seminar") != "production"
+
+
+def jwt_issuer() -> str:
+    return os.environ.get("TECHCAMP_JWT_ISSUER", "https://seminar.techcamp.local")
+
+
+def jwt_audience() -> str:
+    return os.environ.get("TECHCAMP_JWT_AUDIENCE", "techcamp-api")
