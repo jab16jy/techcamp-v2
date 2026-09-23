@@ -78,3 +78,13 @@ E0 is the root of the critical path; E1 (design system, Impeccable) and E2 (iden
 
 ## Next step
 User places `.env.example` from the scratchpad content (or grants a settings exception), then RDD review of the 5 work-unit commits against boundary `94cec05` per the feature doc's Route and checks.
+
+## RDD evidence (parent, 2026-09-22)
+- History rewritten (unpushed, same final tree; backup branch `backup/e0-pre-split`) so each lockfile sits in its own commit before its code. SHA map: T1 `eedb3cd`→`3f60c42`, T2 `c5eab18`→`dbe62e7`, T3 `125a74e`→`4b0a6e8` (uv.lock) + `746d6ac` (code), T4 `a37c6dd`→`979d8d4` (package-lock) + `68dcadd` (code), T5 `2dc53a5`→`6ad5756`, doc `5a4d1fd`→`f2b0c2f`.
+- Whole range and first slice: `lens_context_budget_exceeded` (lockfiles), no authority created; one lineage abandoned by the owner (`review-9517d3fede4131cd`, finding caused by the split).
+- S1 `94cec05..dbe62e7` (CLAUDE.md + infra, medium): approved, acknowledged (`review-4f141f4da0ce4049`).
+- S2 `dbe62e7..4b0a6e8` (uv.lock): `lens_context_budget_exceeded`, unreviewable; validated by `uv sync --locked` in CI.
+- S3 `4b0a6e8..746d6ac` (server code, medium): false-positive CRITICAL (claimed the base lacks `uv.lock`; `git ls-tree 4c1a669` shows `server/uv.lock`). Abandoned by the owner (`review-3117d2cede4065f2`, `operator_disposition`). Server code has no receipt.
+- S4 `746d6ac..979d8d4` (package-lock, medium): approved, acknowledged (`review-581621597bb48977`).
+- S5 `979d8d4..f2b0c2f` (web code + CI + doc, high, 4 lenses): approved, acknowledged (`review-74a366bd704f6955`).
+- Advisory follow-ups (non-blocking): pin image digests/tags (`pg16`, `mosquitto:2`); `web/Dockerfile` `COPY . .` can clobber `node_modules` (add `.dockerignore`); web dev server exposed on 0.0.0.0; stale `web/README.md` (mentions oxlint); CI `permissions: contents: read`; RTL cleanup registration; template favicon; `.env.example` still pending.
