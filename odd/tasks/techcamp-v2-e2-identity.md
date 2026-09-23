@@ -59,7 +59,7 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
   - RED→GREEN for repositories: `tests/identity/test_repositories.py` written against `identity/adapters/{orm,repositories}.py` before those modules existed (collection failure), then implemented; final run `uv run pytest -q` → `7 passed`.
   - Alembic: `uv run alembic revision --autogenerate -m "create identity tables"` against real Postgres (with `include_object` in `migrations/env.py` filtering out PostGIS's `spatial_ref_sys` system table). Verified both directions: `uv run alembic upgrade head` → `Running upgrade -> b358c1328b49`; `uv run alembic downgrade base` → `Running downgrade b358c1328b49 ->`.
   - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `61 files already formatted`; `uv run mypy` → `Success: no issues found in 57 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
-  - Commit: T1 landed in `<pending — see git log>` on `feat/e2-identity` (this doc update commits alongside it).
+  - Commit: T1 landed in `6e2e1d2` on `feat/e2-identity`.
 
 ## Next step
 T2.
