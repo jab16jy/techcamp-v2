@@ -1,0 +1,38 @@
+/*
+ * Sheet is the one motion primitive in the design system (direction contract:
+ * sheets slide up 240ms ease-out, nothing else moves). Radix Dialog.Content
+ * unmounts on data-state=closed once its CSS animation finishes, so this uses
+ * a real `animation`, not a transition, and honors reduced motion.
+ */
+@keyframes ds-sheet-slide-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes ds-sheet-slide-out {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+.ds-sheet-content {
+  animation: ds-sheet-slide-in 240ms ease-out;
+}
+
+.ds-sheet-content[data-state='closed'] {
+  animation: ds-sheet-slide-out 240ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-sheet-content,
+  .ds-sheet-content[data-state='closed'] {
+    animation-duration: 0.01ms;
+  }
+}
