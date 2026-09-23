@@ -60,3 +60,35 @@
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
 }
+
+/*
+ * Browser surfaces theming: the parts no component draws still carry the
+ * design (craft-floor). All values reference the tokens above — no new
+ * arbitrary values.
+ */
+:root {
+  color-scheme: light;
+  caret-color: var(--color-brand);
+  scrollbar-color: var(--color-text-muted) var(--color-surface);
+  scrollbar-width: thin;
+}
+
+::selection {
+  background-color: var(--color-brand);
+  color: var(--color-surface);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: var(--color-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-text-muted);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--color-surface);
+}
