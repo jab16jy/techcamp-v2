@@ -74,7 +74,7 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
 - T4 done. `identity/adapters/api/router.py`: `GET /me` (uses `get_me` + `get_current_user_id`, maps `UserNotFoundError` to 404) and `GET /organizations/{org_id}/members` (uses `resolve_org_membership`, maps `NotAMemberError` to 404) — the latter also gives T5's isolation test a concrete resource to exercise. Wired unconditionally in `main.py` (not `/dev`-gated).
   - RED: `uv run pytest tests/identity/test_me.py -q` before the router existed → 4 failures (FastAPI 404s, no such route). GREEN after implementing: `uv run pytest -q` → `27 passed`.
   - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format .` (one test file needed reformatting) then `--check` → `78 files already formatted`; `uv run mypy` → `Success: no issues found in 65 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
-  - Commit: T4 landed in `<pending>` on `feat/e2-identity`.
+  - Commit: T4 landed in `d8d81cb` on `feat/e2-identity`.
 
 ## Next step
 T5.
