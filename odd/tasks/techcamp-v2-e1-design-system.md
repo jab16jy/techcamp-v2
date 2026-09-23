@@ -20,8 +20,18 @@ ADR-0006: the design system comes before any feature screen. E8 and E9 depend on
 - TDD: on for behavioral logic (status mapping, freshness/sync formatting, routing guards). Source: CLAUDE.md (on from E2; E1 runs concurrently and follows it). Visual layers verified through the catalog and the finish review. Runner: `npm test` (Vitest) in `web/`.
 - Other checks: `npm run lint`, `npm run typecheck`, `npm run build`, size-limit, offline open checked with `playwright-cli`.
 - Route: T1 inline (parent, 3 files); T2–T7 delegated to one sonnet-high writer (writer trigger: 20+ non-trivial files; preparation trigger: impeccable references + design docs); T8 impeccable finish reviewer + documenter agents.
-- Delivery: strategy `ask-on-risk`; forecast ~1,800 authored lines (over budget; chain strategy asked before PR). Branch `feat/e1-design-system` from `main` @ `befa021`.
+- Delivery: strategy `ask-on-risk` → chain strategy `stacked-to-main` (owner, 2026-09-22); forecast ~1,800 authored lines (over budget). Branch `feat/e1-design-system` from `main` @ `befa021`.
 - RDD: on (global). First boundary: branch point `befa021`.
+
+## Slices
+Small chained PRs, each targeting `main`, merged in order. Cut on task commit boundaries (each task closes with one clean work-unit commit); boundaries below are planned and adjusted as real sizes land.
+- Slice 1 = T1 + T2 — commits `877b865`, `a5e893e` (+ doc bookkeeping `668e991`, `47bc289`).
+- Slice 2 = T3 — commit TBD.
+- Slice 3 = T4 — commit TBD.
+- Slice 4 = T5 + T6 — commits TBD.
+- Slice 5 = T7 — commit TBD.
+- Slice 6 = T8 — commit TBD.
+No push, no PR opened by this worker; the parent opens PRs per slice.
 
 ## Tasks
 - [x] T1 `PRODUCT.md`, surface brief with direction contract, `.gitignore` keeps durable `.impeccable/` files — route: inline
