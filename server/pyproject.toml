@@ -1,0 +1,67 @@
+[project]
+name = "techcamp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "johan borrero", email = "johanbm0609@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "import-linter>=2.15",
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["techcamp"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.importlinter]
+root_package = "techcamp"
+
+[[tool.importlinter.contracts]]
+name = "Hexagonal layers per module"
+type = "layers"
+layers = [
+    "adapters",
+    "application",
+    "domain",
+]
+containers = [
+    "techcamp.identity",
+    "techcamp.farms",
+    "techcamp.telemetry",
+    "techcamp.weather",
+    "techcamp.irrigation",
+    "techcamp.alerts",
+    "techcamp.notifications",
+    "techcamp.logbook",
+    "techcamp.risk",
+    "techcamp.metrics",
+    "techcamp.assistant",
+]
