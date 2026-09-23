@@ -41,7 +41,7 @@ No push, no PR opened by this worker; the parent opens PRs per slice.
 - [x] T5 Patterns + router + AppShell with bottom tab bar — route: delegated (commit 20b7bc9)
 - [x] T6 `/dev/ui` catalog, every component in all states (dev only) — route: delegated (commit 5b099c5)
 - [x] T7 PWA: manifest, icons, Workbox precache, offline open; size-limit in CI — route: delegated (commit 53d5d28)
-- [ ] T8 Finish review (impeccable-finish-reviewer), fixes, `DESIGN.md` + `.impeccable/design.json` (impeccable-documenter) — route: delegated
+- [x] T8 Finish review (impeccable-finish-reviewer), fixes, `DESIGN.md` + `.impeccable/design.json` (impeccable-documenter) — route: delegated
 
 ## Acceptance criteria
 - [ ] No color, space, radius or type value outside tokens (lint enforced).
@@ -142,3 +142,5 @@ Delivery evidence for this batch (`git show --shortstat 9382ca7`): 11 files chan
 
 ## Next step
 `DESIGN.md` + `.impeccable/design.json` via `impeccable-documenter` — the remaining half of T8, out of this worker's authorized scope (this batch was fixes only); hand to the parent to delegate.
+
+- T8: finish review (impeccable-finish-reviewer) disposition **fix** (5 material fixes) → batch `9382ca7` → verdict pass **ship** (all 5 resolved, no regressions; scope: those 5 fixes). Documenter wrote `DESIGN.md` + `.impeccable/design.json` (`2fc587f`). Documenter-reported drift (dead `--space-*` tokens) fixed in `abbf0f1` (`--spacing: 0.25rem` in `@theme`). Parent spot-check: lint, typecheck, 26 tests, build 107.98 kB gzip, size-limit pass.
