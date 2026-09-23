@@ -5,7 +5,7 @@ import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, Dialog
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../design-system/ui/tabs'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../design-system/ui/select'
 import { Toaster, toast } from '../design-system/ui/toast'
-import { StatusBand } from '../design-system/components/StatusBand'
+import { PressableStatusBand } from '../design-system/components/PressableStatusBand'
 import { StatusBadge } from '../design-system/components/StatusBadge'
 import { MetricTile } from '../design-system/components/MetricTile'
 import { AlertCard } from '../design-system/components/AlertCard'
@@ -18,11 +18,31 @@ import { ListWithFilters } from '../design-system/patterns/ListWithFilters'
 import type { StatusState } from '../design-system/components/status'
 import type { Severity } from '../design-system/components/severity'
 
-const STATUSES: { status: StatusState; message: string }[] = [
-  { status: 'ok', message: 'Hoy no necesita riego.' },
-  { status: 'watch', message: 'Vigile la humedad, riego probable mañana.' },
-  { status: 'irrigate', message: 'Hoy: regar 12 mm ≈ 40 min.' },
-  { status: 'stress', message: 'Al cultivo le faltan 80 mm: está en estrés.' },
+const STATUSES: { status: StatusState; message: string; rationale: string }[] = [
+  {
+    status: 'ok',
+    message: 'Hoy no necesita riego.',
+    rationale:
+      'La humedad del suelo está en el rango adecuado y no hay déficit acumulado. El balance FAO-56 no pide riego hoy.',
+  },
+  {
+    status: 'watch',
+    message: 'Vigile la humedad, riego probable mañana.',
+    rationale:
+      'La humedad bajó cerca del umbral de riego. Si no llueve en las próximas 24 horas, mañana probablemente toque regar.',
+  },
+  {
+    status: 'irrigate',
+    message: 'Hoy: regar 12 mm ≈ 40 min.',
+    rationale:
+      'El balance hídrico del cultivo muestra un déficit de 12 mm. Regar hoy evita que el cultivo entre en estrés.',
+  },
+  {
+    status: 'stress',
+    message: 'Al cultivo le faltan 80 mm: está en estrés.',
+    rationale:
+      'El déficit acumulado llegó a 80 mm sin lluvia ni riego disponible. El cultivo ya está en estrés hídrico (ruta de secano).',
+  },
 ]
 
 const SEVERITIES: { severity: Severity; title: string; description: string }[] = [
@@ -46,7 +66,7 @@ const DEMO_PLOTS: DemoPlot[] = [
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section id={id} className="scroll-mt-6 px-4 pt-8">
-      <h2 className="font-serif text-xl">{title}</h2>
+      <h2 className="font-sans text-xl font-semibold">{title}</h2>
       <div className="mt-3 flex flex-col gap-3">{children}</div>
     </section>
   )
@@ -87,8 +107,11 @@ export default function DevUiCatalog() {
       </nav>
 
       <Section id="bandas" title="Bandas de estado">
-        {STATUSES.map(({ status, message }) => (
-          <StatusBand key={status} status={status} message={message} />
+        <p className="text-sm text-text-muted">
+          Presione una banda para ver el porqué (interacción de firma).
+        </p>
+        {STATUSES.map(({ status, message, rationale }) => (
+          <PressableStatusBand key={status} status={status} message={message} rationale={rationale} />
         ))}
       </Section>
 
@@ -101,11 +124,11 @@ export default function DevUiCatalog() {
       </Section>
 
       <Section id="metricas" title="Métricas">
-        <div className="grid grid-cols-2 gap-3">
-          <MetricTile label="Humedad de suelo" value={62} unit="%" lastDataMinutesAgo={12} />
-          <MetricTile label="Temperatura" value={28.5} unit="°C" lastDataMinutesAgo={0} />
-          <MetricTile label="Lluvia (7 días)" value={14} unit="mm" lastDataMinutesAgo={1} />
-          <MetricTile label="Último riego" value="—" lastDataMinutesAgo={null} />
+        <div className="divide-y divide-text/10 overflow-hidden rounded-lg border border-text/10 bg-surface-raised">
+          <MetricTile label="Humedad de suelo" value={62} unit="%" lastDataMinutesAgo={12} status="ok" />
+          <MetricTile label="Temperatura" value={28.5} unit="°C" lastDataMinutesAgo={0} status="watch" />
+          <MetricTile label="Lluvia (7 días)" value={14} unit="mm" lastDataMinutesAgo={1} status="ok" />
+          <MetricTile label="Último riego" value="—" lastDataMinutesAgo={null} status="watch" />
         </div>
       </Section>
 
@@ -116,9 +139,11 @@ export default function DevUiCatalog() {
       </Section>
 
       <Section id="agua" title="Nivel de agua">
-        <WaterGauge percentage={20} label="Humedad de suelo · seco" valueLabel="20 % de capacidad" />
-        <WaterGauge percentage={62} label="Humedad de suelo · adecuado" valueLabel="62 % de capacidad" />
-        <WaterGauge percentage={95} label="Humedad de suelo · saturado" valueLabel="95 % de capacidad" />
+        <div className="divide-y divide-text/10 overflow-hidden rounded-lg border border-text/10 bg-surface-raised">
+          <WaterGauge percentage={20} label="Humedad de suelo · seco" valueLabel="20 % de capacidad" status="stress" />
+          <WaterGauge percentage={62} label="Humedad de suelo · adecuado" valueLabel="62 % de capacidad" status="ok" />
+          <WaterGauge percentage={95} label="Humedad de suelo · saturado" valueLabel="95 % de capacidad" status="watch" />
+        </div>
       </Section>
 
       <Section id="sincronizacion" title="Sincronización">

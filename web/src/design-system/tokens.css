@@ -19,19 +19,12 @@
   --palette-severity-warning: #8a5a0e;
   --palette-severity-critical: #8a3212; /* annatto — alerts only, never a general accent */
   --palette-offline: #5f564a;
-
-  /* Primitive spacing scale, 4px base. */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-7: 28px;
-  --space-8: 32px;
 }
 
 @theme {
+  /* Spacing base: every p-/m-/gap- utility is a multiple of 4px (0.25rem). */
+  --spacing: 0.25rem;
+
   /* Semantic color tokens. */
   --color-surface: var(--palette-cream);
   --color-surface-raised: var(--palette-cream-raised);
@@ -59,4 +52,36 @@
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
+}
+
+/*
+ * Browser surfaces theming: the parts no component draws still carry the
+ * design (craft-floor). All values reference the tokens above — no new
+ * arbitrary values.
+ */
+:root {
+  color-scheme: light;
+  caret-color: var(--color-brand);
+  scrollbar-color: var(--color-text-muted) var(--color-surface);
+  scrollbar-width: thin;
+}
+
+::selection {
+  background-color: var(--color-brand);
+  color: var(--color-surface);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: var(--color-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-text-muted);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--color-surface);
 }
