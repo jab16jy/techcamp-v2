@@ -2,6 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
+- **Alcance:** ambos perfiles. En el perfil `seminar` no hay Caddy: el proxy del Vite dev server reenvía `/api/v1/stream` y también debe hacerlo sin buffer ([ADR-0021](0021-perfil-seminario-local.md)).
 
 ## Contexto
 

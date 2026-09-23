@@ -2,6 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
+- **Alcance:** producción futura. En el perfil `seminar` el sistema corre en local con `docker compose --profile seminar`, sin VPS, Caddy ni backups ([ADR-0021](0021-perfil-seminario-local.md)).
 
 ## Contexto
 
@@ -27,11 +28,11 @@ El piloto necesita un costo bajo y una operación simple. La v1 usaba Docker Com
 **Positivas**
 
 - Un solo archivo describe todo el sistema; el entorno local es igual a producción.
-- Costo de un VPS.
+- Costo de un VPS (solo en producción).
 
 **Negativas / costos aceptados**
 
-- El VPS es un punto único de falla (aceptado en el piloto, ver [09](../09-cuellos-de-botella.md#puntos-únicos-de-falla)).
+- El VPS es un punto único de falla (solo en producción; aceptado en el piloto, ver [09](../09-cuellos-de-botella.md#puntos-únicos-de-falla)).
 - Escalar requiere pasos manuales (réplica, segundo host).
 
 ## Relacionado

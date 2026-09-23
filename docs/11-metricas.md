@@ -71,6 +71,8 @@ Estado de los modelos de la v1: ver [08-ml](08-ml.md).
 
 ## 4. Operación (SLI → SLO)
 
+> **Aplica al perfil `production` (futuro).** En el perfil seminario no hay monitoreo ([09](09-cuellos-de-botella.md), [ADR-0021](adr/0021-perfil-seminario-local.md)), así que estos SLO no se vigilan. Solo el tope de presupuesto del LLM (USD 5) se aplica como límite.
+
 | SLI | Medición | SLO |
 |---|---|---|
 | Disponibilidad de la API | `respuestas no 5xx / respuestas` | 99,5 % mensual |
@@ -104,7 +106,7 @@ flowchart LR
   L --> M
   C --> T[tablero de parcela y organización]
   M --> T
-  S[métricas Prometheus] --> G[Grafana interno: SLI/SLO]
+  S[métricas Prometheus] -.-> G[Grafana interno: SLI/SLO<br/>solo producción]
 ```
 
 Las métricas de impacto y adopción se guardan en `plot_metric_monthly` y `crop_cycle_summary` ([03-modelo-datos](03-modelo-datos.md)) para que el tablero no las recalcule en cada consulta.

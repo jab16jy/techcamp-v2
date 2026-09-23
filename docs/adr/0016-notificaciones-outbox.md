@@ -2,6 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
+- **Alcance:** el outbox, los reintentos y Web Push aplican en ambos perfiles. El proveedor de SMS/WhatsApp es de producción futura; en el perfil `seminar` se usa un adaptador que escribe en el log y en la bandeja `/dev/outbox` ([ADR-0021](0021-perfil-seminario-local.md)).
 
 ## Contexto
 
@@ -31,7 +32,7 @@ Una alerta crítica que no llega puede costar una cosecha. Los proveedores de pu
 
 **Negativas / costos aceptados**
 
-- Costo por SMS/WhatsApp; se reserva a críticas escaladas.
+- Costo por SMS/WhatsApp (solo en producción); se reserva a críticas escaladas.
 - Integrar WhatsApp Business requiere plantillas aprobadas por Meta.
 
 ## Relacionado

@@ -2,6 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
+- **Alcance:** producción futura. En el perfil `seminar` se usa un emisor local de JWT que imprime el código OTP en consola; el backend valida por JWKS igual que en producción ([ADR-0021](0021-perfil-seminario-local.md)).
 
 ## Contexto
 
@@ -31,7 +32,7 @@ Muchos productores no usan correo electrónico. La v1 usaba Supabase Auth. Const
 **Negativas / costos aceptados**
 
 - Dependencia de un tercero para el login (con sesión activa se sigue usando la app offline).
-- Costo de SMS de OTP según el proveedor configurado.
+- Costo de SMS de OTP según el proveedor configurado (solo en producción).
 
 ## Relacionado
 
