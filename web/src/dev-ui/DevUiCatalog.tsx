@@ -192,7 +192,7 @@ export default function DevUiCatalog() {
       </Section>
 
       <Section id="patrones" title="Patrones">
-        <Button variant="secondary" onClick={() => setSheetOpen(true)}>
+        <Button variant="secondary" className="self-start" onClick={() => setSheetOpen(true)}>
           Abrir hoja de formulario
         </Button>
         <FormSheet

@@ -22,12 +22,12 @@ const TABS: Tab[] = [
 export function AppShell() {
   return (
     <div className="flex min-h-dvh flex-col bg-surface text-text">
-      <main className="flex-1 pb-24">
+      <main className="mx-auto w-full max-w-md flex-1 pb-24">
         <Outlet />
       </main>
       <nav
         aria-label="Navegación principal"
-        className="fixed inset-x-0 bottom-0 flex border-t border-text/10 bg-surface-raised"
+        className="fixed inset-x-0 bottom-0 mx-auto flex max-w-md border-t border-text/10 bg-surface-raised"
       >
         {TABS.map(({ to, label, Icon, end }) => (
           <NavLink
