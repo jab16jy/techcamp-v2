@@ -29,7 +29,7 @@ E0 is the root of the critical path; E1 (design system, Impeccable) and E2 (iden
 - [x] T2 `infra/` Compose seminar profile + `.env.example` + Mosquitto config — route: delegated (`.env.example` blocked, see evidence)
 - [x] T3 `server/` skeleton: uv project, 12 module packages, import-linter contracts, `/health`, smoke test, ruff/mypy — route: delegated
 - [x] T4 `web/` skeleton: Vite + React 19 + strict TS, ESLint, Vitest smoke test — route: delegated
-- [ ] T5 CI workflow: server and web jobs — route: delegated
+- [x] T5 CI workflow: server and web jobs — route: delegated
 
 ## Acceptance criteria
 - All server and web checks above pass locally.
@@ -61,5 +61,7 @@ E0 is the root of the critical path; E1 (design system, Impeccable) and E2 (iden
   - `web/Dockerfile`: `node:22-slim`, runs the Vite dev server (`--host 0.0.0.0`) for the seminar profile per ADR-0021 (no Caddy locally).
   - `npm run lint`: exit 0. `npm run typecheck` (`tsc -b --noEmit`): exit 0. `npm test -- --run`: 1 test file, 1 test passed. `npm run build`: succeeds (219.62 kB JS, 68.58 kB gzip).
 
+- T5 done: `.github/workflows/ci.yml`, two jobs. Server: `astral-sh/setup-uv@v10.2.0` (exact — no floating major tag published upstream, confirmed via GitHub tags API) + `uv sync --locked`, ruff check/format, mypy, lint-imports, pytest. Web: `actions/setup-node@v7` (floating major, confirmed current via GitHub releases API) + `npm ci`, lint, typecheck, test. `actions/checkout@v7` in both. No `actionlint` available locally; validated with `python3 -c "import yaml; yaml.safe_load(...)"` → valid. Each job's commands were already run and passed locally in T3/T4.
+
 ## Next step
-T5.
+Verification pass, then close.
