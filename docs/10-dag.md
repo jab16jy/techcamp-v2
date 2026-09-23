@@ -23,7 +23,7 @@ flowchart LR
   E12[E12 Asistente]
   E13[E13 LoRaWAN<br/>ChirpStack]
   E14[E14 Operación<br/>backups, monitoreo, DR]
-  E16[E16 Simulador de escenarios<br/>A–D + fixtures de clima]
+  E16[E16 Simulador de escenarios<br/>A–E + fixtures de clima]
   E15((Demo del<br/>seminario))
 
   E0 --> E1
@@ -66,14 +66,14 @@ flowchart LR
 | E3 | Crear finca y parcela dibujando el polígono; autocompletado de suelo; catálogo de cultivos con Kc | E2 |
 | E4 | Un **simulador de nodo básico** publica y las lecturas aparecen calibradas en la base y en vivo (SSE) | E3 |
 | E5 | ET0, lluvia y pronóstico por celda con degradación `stale` | E3 |
-| E6 | Recomendación diaria con `rationale`; test con los ejemplos numéricos de FAO-56 | E4, E5 |
+| E6 | Recomendación diaria con `rationale`, con lámina en parcelas con riego y recomendación de secano en las demás; test con los ejemplos numéricos de FAO-56 | E4, E5 |
 | E7 | El escenario A dispara una alerta y llega un push (y el SMS simulado a `/dev/outbox`); reintentos y escalamiento probados. Las reglas `flood_risk`/`drought_risk` se activan cuando termina E10 | E4, E5 |
 | E8 | El escenario D (cosecha en modo avión) sincroniza sin duplicar | E1, E3 |
 | E9 | Pantalla de inicio completa con datos reales del simulador | E1, E6, E7 |
 | E10 | Model card, dataset reproducible, harness y escalera de líneas base de M2 (inundación); en producción queda el modelo que pase la compuerta o, si ninguno pasa, la línea base ([ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)) | E5 |
 | E11 | Índice de tecnificación mensual y resumen por ciclo | E6, E7, E8 |
 | E12 | Asistente con fuentes citadas, límites y degradación | E6, E7, E10 |
-| E16 | Los escenarios A–D corren con un comando, con fixtures de clima grabados, y su bloque `expected` pasa como prueba end-to-end en CI ([06 §10](06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario)) | E4, E5, E7 |
+| E16 | Los escenarios A–E corren con un comando, con fixtures de clima grabados, y su bloque `expected` pasa como prueba end-to-end en CI ([06 §10](06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario)) | E4, E5, E7 |
 | E13 *(producción futura)* | Un nodo LoRa real llega por ChirpStack con el mismo mensaje interno | E4 |
 | E14 *(producción futura)* | Backup y restauración ensayados; tableros de SLO | E0 |
 

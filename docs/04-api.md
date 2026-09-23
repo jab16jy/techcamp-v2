@@ -43,8 +43,8 @@ GET    /me/export                             → 202 { job_id }
 GET    /farms?org_id=                          → Page<Farm>
 POST   /farms                                  { org_id, name, municipality_code, location } → Farm
 GET    /farms/{farm_id}/plots                  → Plot[]
-POST   /farms/{farm_id}/plots                  { name, boundary: GeoJSON Polygon, system_flow_lph? } → Plot
-PATCH  /plots/{plot_id}                        { name?, boundary?, system_flow_lph? } → Plot
+POST   /farms/{farm_id}/plots                  { name, boundary: GeoJSON Polygon, irrigation_system: none|drip|sprinkler|gravity, irrigation_efficiency?, system_flow_lph? } → Plot   # none = secano
+PATCH  /plots/{plot_id}                        { name?, boundary?, irrigation_system?, irrigation_efficiency?, system_flow_lph? } → Plot
 PUT    /plots/{plot_id}/soil                   SoilProfile → SoilProfile
 POST   /plots/{plot_id}/soil:autofill          → SoilProfile   # SoilGrids
 GET    /crops                                  → Crop[] (con etapas, Kc y kc_source)
@@ -60,14 +60,16 @@ Una sola llamada que arma todo lo que el productor ve al abrir la app. Así se e
 GET /plots/{plot_id}/status → {
   plot, active_cycle: { crop, stage, day_of_cycle },
   latest: { soil_moisture_pct, air_temp_c, air_rh_pct, at },
-  water_balance: { depletion_mm, taw_mm, raw_mm, stress_moisture_pct, status: "ok|watch|irrigate" },
-  recommendation: { depth_mm, duration_min, rationale[] } | null,
+  water_balance: { depletion_mm, taw_mm, raw_mm, stress_moisture_pct, status: "ok|watch|irrigate|stress" },
+  recommendation: { kind, depth_mm?, duration_min?, advice[]?, rationale[] } | null,
   open_alerts: Alert[],
   weather_next_3d: WeatherDay[],
   nodes: NodeHealth[],
   technification_index: { value, month }
 }
 ```
+
+En una parcela de secano el `status` nunca es `irrigate`: cuando `Dr > RAW` es `stress`, y `recommendation.kind = rainfed` trae `advice[]` sin `depth_mm` ni `duration_min` ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)).
 
 ### Nodos y sensores
 

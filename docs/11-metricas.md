@@ -20,13 +20,15 @@ Hay cinco grupos:
 |---|---|---|---|
 | **Rendimiento** | `Σ kg cosechados / área_ha` | Bitácora (`harvest`) | Por ciclo |
 | **Brecha de rendimiento** | `(rendimiento − rendimiento_EVA_municipio) / rendimiento_EVA_municipio` | Bitácora + EVA (promedio de 3 años del cultivo en el municipio) | Por ciclo |
-| **Agua aplicada** | `Σ mm de riego × 10` → m³/ha | Bitácora (`irrigation`) o caudalímetro | Por ciclo |
-| **Productividad del agua (WUE)** | `kg cosechados / m³ aplicados` | Bitácora | Por ciclo |
-| **Días en estrés hídrico** | Días con Ks < 1, es decir, `depletion_mm > raw_mm` ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | `water_balance_daily` (balance asimilado) | Por ciclo |
+| **Agua aplicada** | `Σ mm de riego × 10` → m³/ha. Solo parcelas con riego | Bitácora (`irrigation`) o caudalímetro | Por ciclo |
+| **Productividad del agua de riego (WUE)** | `kg cosechados / m³ aplicados`. Solo parcelas con riego | Bitácora | Por ciclo |
+| **Días en estrés hídrico** | Días con Ks < 1, es decir, `depletion_mm > raw_mm` ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)). Aplica con riego y en secano | `water_balance_daily` (balance asimilado) | Por ciclo |
 | **Costo por hectárea** | `Σ costos / área_ha` | Bitácora (`cost` en labores e insumos) | Por ciclo |
 | **Costo por kg** | `Σ costos / kg cosechados` | Bitácora | Por ciclo |
 | **Margen bruto** | `kg × precio_venta − Σ costos` | Bitácora (precio registrado en la cosecha) | Por ciclo |
 | **Pérdidas por evento** | kg o COP perdidos reportados en observaciones ligadas a alertas | Bitácora | Por evento |
+
+**Parcelas de secano** (`irrigation_system = none`, [ADR-0023](adr/0023-parcelas-con-riego-y-secano.md); brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). No tienen agua aplicada ni productividad del agua de riego: su resultado hídrico se reporta con el rendimiento y los días en estrés hídrico.
 
 **Línea base.** Al inscribir una parcela se registra una encuesta corta: rendimiento del último ciclo, costos aproximados y forma de riego. Sin línea base no hay forma de mostrar impacto. Si el programa lo permite, se comparan también contra parcelas de control del mismo municipio que no tienen sensores.
 
@@ -44,6 +46,8 @@ technification_index = 25 × monitoring + 25 × record_keeping + 25 × decision 
 | `record_keeping` | `semanas con ≥ 1 entrada de bitácora / semanas del mes` | El productor registra lo que hace |
 | `decision` | `días con recomendación seguida / días con recomendación`. Seguida = lámina aplicada dentro de ±25 % de la recomendada, o no regar cuando la recomendación fue 0 | Las decisiones usan los datos |
 | `risk_management` | `alertas reconocidas a tiempo / alertas abiertas`. A tiempo = 2 h para críticas, 24 h para el resto | Las alertas llegan y se atienden |
+
+En una parcela de secano `decision` no aplica (no hay lámina que seguir) y los otros tres componentes pesan 100/3 cada uno.
 
 Los pesos son fijos en v2.0 y se revisan con los datos del piloto.
 

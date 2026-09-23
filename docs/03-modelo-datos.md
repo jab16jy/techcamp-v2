@@ -89,7 +89,9 @@ erDiagram
     geometry boundary "Polygon 4326"
     numeric area_ha "generada desde boundary"
     int weather_cell_id FK
-    numeric system_flow_lph "caudal de riego"
+    text irrigation_system "none|drip|sprinkler|gravity"
+    numeric irrigation_efficiency "null en secano"
+    numeric system_flow_lph "caudal de riego; null en secano"
   }
   soil_profile {
     uuid plot_id PK, FK
@@ -193,8 +195,10 @@ erDiagram
     uuid id PK
     uuid plot_id FK
     date day
-    numeric depth_mm
-    int duration_min
+    text kind "irrigate|postpone|not_needed|no_kc|rainfed"
+    numeric depth_mm "null salvo en irrigate"
+    int duration_min "null salvo en irrigate"
+    jsonb advice "códigos de consejo de secano"
     jsonb rationale
   }
   logbook_entry {
@@ -355,6 +359,17 @@ El estrés hídrico no tiene un umbral fijo por cultivo: depende del suelo de la
 
 - Si el perfil de suelo no tiene θFC y θWP de laboratorio ni de SoilGrids, se toman los valores medios de la textura según la Tabla 19 de FAO-56 (`source = fao56_texture`).
 - `crop.kc_source = none` (por ejemplo, el ñame, que no está en la Tabla 12 de FAO-56) bloquea la recomendación de lámina hasta que un agrónomo valide un Kc local.
+
+### `plot` e `irrigation_recommendation`: parcelas con riego y de secano
+
+Solo un tercio de las UPA con cultivos usa riego, así que el modelo sirve a las dos clases de parcela ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md); brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
+
+| Campo | Regla |
+|---|---|
+| `plot.irrigation_system` | `none` es una parcela de secano. Un `CHECK` exige `irrigation_efficiency` y `system_flow_lph` nulos en secano |
+| `plot.irrigation_efficiency` | Al crear la parcela toma el valor por defecto de su sistema (goteo 0,90, aspersión 0,75, gravedad 0,60) y se puede cambiar |
+| `irrigation_recommendation.kind` | `irrigate` (lámina y minutos), `postpone` (va a llover), `not_needed`, `no_kc` (sin Kc validado) o `rainfed` (recomendación de secano, [06 §5](06-diseno-detallado.md#5-riego-balance-hídrico-fao-56)) |
+| `irrigation_recommendation.advice` | Solo en `rainfed`: lista de códigos de la tabla de consejos de secano. `depth_mm` y `duration_min` quedan nulos |
 
 ### Calibración
 

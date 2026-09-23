@@ -3,7 +3,7 @@
 TechCamp v2 tecnifica parcelas del Caribe colombiano:
 
 - **Mide** con sensores IoT y bitácora offline.
-- **Decide** con riego FAO-56, alertas y riesgo climático.
+- **Decide** con el balance hídrico FAO-56 (en parcelas con riego y de secano), alertas y riesgo climático.
 - **Demuestra impacto** con indicadores de tecnificación.
 
 > **Proyecto de seminario:** corre en `localhost` con un simulador de nodos y escenarios ([ADR-0021](adr/0021-perfil-seminario-local.md)). Lo marcado como *producción futura* (VPS, LoRaWAN real, SMS, backups) queda diseñado pero no se implementa en el seminario.
@@ -56,6 +56,7 @@ flowchart LR
 | UI | Design system primero (Tailwind v4 + shadcn/ui) | [0006](adr/0006-design-system.md) |
 | IA | LLM por API barata; explica, no decide. Sin Ollama | [0007](adr/0007-llm-por-api.md) |
 | Riego | FAO-56; estrés hídrico por parcela (`Dr > RAW`) y sensor que corrige el balance con un peso según su calibración | [0009](adr/0009-riego-fao56.md), [0022](adr/0022-estres-hidrico-y-asimilacion.md) |
+| Parcelas | Con riego y de secano: el mismo balance hídrico; lámina solo con sistema de riego, consejo de manejo en secano | [0023](adr/0023-parcelas-con-riego-y-secano.md) |
 | Ejecución | Perfil seminario local con simulador de escenarios; producción futura cambiando adaptadores | [0021](adr/0021-perfil-seminario-local.md) |
 | ML | Modelos reconstruidos desde cero con protocolo fijo; solo se promueve lo que supera su mejor línea base | [0019](adr/0019-reconstruccion-de-modelos.md), [0020](adr/0020-protocolo-de-experimentacion-ml.md) |
 

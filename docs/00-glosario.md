@@ -9,6 +9,8 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Organización | `organization` | Cooperativa, asociación, programa o productor individual. Es la unidad de permisos: todo dato pertenece a una organización. |
 | Finca | `farm` | Predio de un productor. Tiene ubicación y municipio. |
 | Parcela / lote | `plot` | Área cultivable con polígono dentro de una finca. Es la unidad de decisión: riego, alertas y métricas se calculan por parcela. |
+| Sistema de riego | `irrigation_system` | Cómo se riega la parcela: `drip` (goteo), `sprinkler` (aspersión), `gravity` (gravedad) o `none`. Con un sistema, la parcela tiene su eficiencia (`irrigation_efficiency`) y su caudal. |
+| Parcela de secano | `irrigation_system = none` | Parcela sin sistema de riego: el cultivo depende solo de la lluvia. Tiene balance hídrico, pero recibe una recomendación de secano en vez de una lámina. |
 | Cultivo | `crop` | Especie del catálogo (maíz, yuca, plátano…) con sus coeficientes Kc y su fracción de agotamiento `p` por etapa. No tiene umbral de humedad propio: el estrés hídrico se define por parcela. |
 | Origen del Kc | `kc_source` | De dónde salen los Kc de un cultivo: `fao56` (Tabla 12), `local` (validado en la región), `approximate` (tomado de un cultivo parecido, por ejemplo banano para plátano) o `none` (sin Kc validado, como el ñame). Con `none` no se recomienda lámina de riego. |
 | Ciclo de cultivo | `crop_cycle` | Una siembra concreta de un cultivo en una parcela, desde la siembra hasta la cosecha. Una parcela tiene como máximo un ciclo activo. |
@@ -51,6 +53,7 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Regla de alerta | `alert_rule` | Condición sobre variables (umbral, duración, histéresis) que abre una alerta. |
 | Alerta | `alert` | Instancia de una regla que se cumplió en una parcela o un nodo. Estados: `open`, `acknowledged`, `resolved`. |
 | Recomendación | `recommendation` | Acción sugerida con su justificación: regar X mm, aplicar un preventivo, revisar un nodo. |
+| Recomendación de secano | `rainfed` | Tipo (`kind`) de la recomendación hídrica diaria de una parcela de secano: déficit frente a RAW, lluvia pronosticada y consejos de manejo (`advice`), sin lámina ni minutos. |
 | Riesgo climático | `risk_prediction` | Probabilidad calibrada de un evento (inundación o sequía) en un horizonte, con severidad. |
 | Versión de modelo | `model_version` | Artefacto entrenado con sus métricas, su línea base y su estado de promoción. |
 | Línea base | `baseline` | Método simple (una heurística) que un modelo debe superar para promoverse. |

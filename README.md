@@ -9,8 +9,8 @@ Sucesor de TechCamp v1 (AgroCaribe AI). Ver [ADR-0001](docs/adr/0001-nuevo-repos
 | | v1 (AgroCaribe AI) | v2 |
 |---|---|---|
 | **De dónde salen los datos** | Datos públicos y datasets sintéticos sobre una ubicación | **Datos del propio campo**: sensores de humedad y clima, más la bitácora del productor. Los datos públicos complementan. |
-| **Qué recibe el productor** | Un análisis y un "top de cultivos" | **Una decisión diaria**: "hoy riegue 12 mm, unos 40 minutos", con el porqué |
-| **Riego** | ET0 constante por cultivo | Balance hídrico **FAO-56** con ET0 diaria real, corregido con la humedad medida |
+| **Qué recibe el productor** | Un análisis y un "top de cultivos" | **Una decisión diaria sobre el agua**, con el porqué: "hoy riegue 12 mm, unos 40 minutos" en una parcela con riego; en una de secano, cuánta agua le falta al cultivo, la lluvia esperada y qué hacer |
+| **Riego** | ET0 constante por cultivo | Balance hídrico **FAO-56** con ET0 diaria real, corregido con la humedad medida; también en parcelas de **secano**, la mayoría en el campo |
 | **Conectividad** | Requiere internet | **Offline-first**: la bitácora y el último estado funcionan sin señal; **LoRaWAN** donde no hay cobertura celular |
 | **Alertas** | Paneles que hay que ir a mirar | **Avisos que llegan**: push, con escalamiento a SMS/WhatsApp si una crítica no se atiende, sin saturar |
 | **Modelos de ML** | Métricas no reproducibles, con fuga de datos; un recomendador con 7 % de acierto real | **Solo se publica un modelo que le gana a la regla simple**, con un protocolo reproducible. El campo tecnificado genera los datos que mejoran los modelos. |
@@ -22,7 +22,7 @@ Sucesor de TechCamp v1 (AgroCaribe AI). Ver [ADR-0001](docs/adr/0001-nuevo-repos
 
 ## Estado
 
-**Proyecto de seminario.** Se ejecuta en local (`docker compose --profile seminar up`) con un simulador de nodos IoT y escenarios reproducibles (sequía de El Niño, lluvias con riesgo de hongos, nodo caído, productor sin señal). La arquitectura queda lista para pasar a producción si el proyecto crece, cambiando adaptadores y no el dominio ([ADR-0021](docs/adr/0021-perfil-seminario-local.md)).
+**Proyecto de seminario.** Se ejecuta en local (`docker compose --profile seminar up`) con un simulador de nodos IoT y escenarios reproducibles (sequía de El Niño, lluvias con riesgo de hongos, nodo caído, productor sin señal, veranillo en una parcela de secano). La arquitectura queda lista para pasar a producción si el proyecto crece, cambiando adaptadores y no el dominio ([ADR-0021](docs/adr/0021-perfil-seminario-local.md)).
 
 Fase actual: diseño. Todavía no hay código.
 

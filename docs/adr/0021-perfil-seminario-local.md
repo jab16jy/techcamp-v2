@@ -57,7 +57,7 @@ Es la pieza central de la demo. Detalle en [06 §10](../06-diseno-detallado.md#1
 **Positivas**
 
 - Costo del seminario ≈ USD 0 más el LLM (~USD 1–5).
-- Demo determinista: los escenarios A–D de [01-requisitos](../01-requisitos.md#escenarios-de-validación) se reproducen igual cada vez.
+- Demo determinista: los escenarios A–E de [01-requisitos](../01-requisitos.md#escenarios-de-validación) se reproducen igual cada vez.
 - Pasar a producción es cambiar adaptadores y configuración, no el dominio.
 
 **Negativas / costos aceptados**

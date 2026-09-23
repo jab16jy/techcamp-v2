@@ -190,7 +190,9 @@ Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8) ([ADR-
 ```mermaid
 flowchart TD
   start([Job diario 04:30 America/Bogota]) --> cyc{¿Parcela con ciclo activo?}
-  cyc -- no --> fin([fin])
+  cyc -- no --> pre{¿Parcela de secano?<br/>irrigation_system = none}
+  pre -- no --> fin([fin])
+  pre -- sí --> sow[Consejo de siembra: lluvia frente a ET0<br/>pronosticadas en 7 días]
   cyc -- sí --> kc{¿Kc validado?<br/>kc_source ≠ none}
   kc -- no --> nokc[Sin lámina: falta Kc validado<br/>remitir al técnico]
   kc -- sí --> et[Obtener ET0, lluvia y pronóstico de la celda]
@@ -200,24 +202,50 @@ flowchart TD
   obs -- no --> keep[K = 0: Dr = Dr_modelo<br/>marcar recomendación sin sensor]
   keep --> ws{Dr > RAW?}
   ws -- sí --> wsa[Abrir o mantener water_stress]
-  ws -- no --> dec
-  wsa --> dec
-  asm --> dec{Dr ≥ RAW?}
+  ws -- no --> sys
+  wsa --> sys
+  asm --> sys{¿Parcela de secano?<br/>irrigation_system = none}
+  sys -- sí --> rf[Recomendación de secano: Dr frente a RAW,<br/>lluvia pronosticada en 7 días y consejos]
+  sys -- no --> dec{Dr ≥ RAW?}
   dec -- no --> ok[Estado ok o watch<br/>sin riego]
   dec -- sí --> rain{¿Lluvia pronosticada en 48 h ≥ Dr?}
   rain -- sí --> wait[Posponer: va a llover]
-  rain -- no --> rec[lámina = Dr / eficiencia del sistema<br/>minutos = lámina × área_m² / caudal_lph × 60]
+  rain -- no --> rec[lámina = Dr / irrigation_efficiency<br/>minutos = lámina × área_m² / caudal_lph × 60]
   rec --> save[Guardar irrigation_recommendation + rationale]
   ok --> save
   wait --> save
   nokc --> save
+  rf --> save
+  sow --> save
   save --> notif[Push informativo: Hoy riegue 12 mm, unos 40 min]
 ```
 
-- **Eficiencia del sistema:** goteo 0,90, aspersión 0,75, gravedad 0,60 (configurable por parcela).
+- **Eficiencia del sistema:** `plot.irrigation_efficiency`, que al crear la parcela toma el valor por defecto de su `irrigation_system`: goteo 0,90, aspersión 0,75, gravedad 0,60.
+- **`kind`** de la recomendación según la rama: `irrigate` (lámina), `postpone` (va a llover), `not_needed` (ok o watch), `no_kc` o `rainfed` ([03](03-modelo-datos.md#plot-e-irrigation_recommendation-parcelas-con-riego-y-de-secano)).
 - **`rationale`** guarda los números usados (ET0, Kc y su `kc_source`, p, RAW, Dr modelado y asimilado, `K`, pronóstico). Lo muestra la interfaz y lo usa el asistente para explicar la recomendación. Un Kc `approximate` se muestra como tal.
-- Con sensor representativo, `water_stress` la abre la regla sobre lecturas contra el θ_estrés del día; sin él, la abre este job cuando `Dr > RAW` ([§3](#3-evaluación-de-alertas)).
+- Con sensor representativo, `water_stress` la abre la regla sobre lecturas contra el θ_estrés del día; sin él, la abre este job cuando `Dr > RAW` ([§3](#3-evaluación-de-alertas)). Vale igual en secano.
 - El error entre modelo y observación es el SLI "error de humedad" ([11-metricas](11-metricas.md)).
+
+### Parcelas de secano
+
+Una parcela con `irrigation_system = none` no recibe lámina, pero el balance corre igual: el riego registrado es 0 y el agua solo entra por la lluvia ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md); brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). La recomendación (`kind = rainfed`) trae:
+
+- el déficit: `Dr` frente a RAW, y si el cultivo ya está en estrés (`Dr > RAW`);
+- la lluvia pronosticada en los próximos 7 días (Pe de la celda);
+- los consejos (`advice`) que salen de esta tabla, evaluada en orden. Se incluyen todos los que se cumplen.
+
+Las reglas y sus textos están **pendientes de validación agronómica**:
+
+| Código | Cuándo aplica | Consejo al productor |
+|---|---|---|
+| `delay_sowing` | Sin ciclo activo y lluvia pronosticada en 7 días < ET0 pronosticada en 7 días | "Espere para sembrar: esta semana no se espera lluvia suficiente" |
+| `rain_expected` | `Dr ≥ RAW` y lluvia pronosticada en 7 días ≥ Dr | "Se espera lluvia que repone el agua del suelo" |
+| `conserve_moisture` | `Dr ≥ RAW` y lluvia pronosticada en 7 días < Dr | "Cubra el suelo con rastrojo (mulch) y controle malezas para conservar la humedad" |
+| `prioritize_harvest` | `conserve_moisture` en la etapa `late` | "Priorice la cosecha: la sequía puede aumentar las pérdidas" |
+| `no_action` | `Dr < RAW` | "El suelo tiene agua suficiente para el cultivo" |
+
+- El push matutino de secano solo sale cuando cambian los consejos del día anterior, para no repetir el mismo aviso cada mañana.
+- `water_stress` y los días en estrés se calculan igual que en una parcela con riego ([11-metricas](11-metricas.md)).
 
 ## 6. Clima
 
@@ -306,7 +334,7 @@ sequenceDiagram
 
 - **Sensores** (`telemetry`): última lectura calibrada por variable de la parcela con su `received_at`, y agregados de `reading_daily` de los últimos días. Se marcan las lecturas con `quality` distinto de 0, la versión de calibración vigente del sensor y si el dato no está fresco.
 - **Alertas** (`alerts`): alertas abiertas o reconocidas de la parcela con su `severity`, `opened_at` y `evidence`.
-- **Riego** (`irrigation`): la `irrigation_recommendation` del día (`depth_mm`, `duration_min`) con su `rationale`.
+- **Riego** (`irrigation`): la `irrigation_recommendation` del día con su `kind`, su `rationale` y, según el caso, `depth_mm` y `duration_min` o los consejos de secano (`advice`).
 - **Riesgo climático** (`risk`): la `risk_prediction` vigente de la celda de la parcela con `probability`, `severity` y `top_factors`, más el modelo que la produjo: `model_version.version` y su métrica de validación de `model_version.metrics`. Si la predicción viene de la heurística de línea base, se indica.
 
 En la respuesta sin LLM se devuelven estos mismos hechos junto con los documentos relevantes.
@@ -351,7 +379,7 @@ sequenceDiagram
 ```yaml
 name: el-nino
 description: Estrés hídrico por El Niño en maíz (escenario A)
-plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, system: drip }
+plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, irrigation_system: drip }
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900            # intervalo simulado entre lecturas del backfill
@@ -375,12 +403,36 @@ expected:
 - Al final, θobs = 13 % → Dr_obs = 1000 × (0,23 − 0,13) × 0,6 = 60 mm > RAW = 46,2 mm → `irrigate`.
 - El umbral fijo anterior (20 %) se habría cruzado el día 3,1, una semana antes de que hubiera estrés según FAO-56.
 
+**Escenario E: veranillo en maíz de secano** (brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). Mismo suelo que el escenario A, sin sistema de riego y sin nodo: demuestra la recomendación de secano y el camino "sin sensor" del balance (`K = 0`). Se corre con `sim run --scenario dry-spell-rainfed --backfill 21d`.
+
+```yaml
+name: dry-spell-rainfed
+description: Veranillo durante la floración en maíz de secano (escenario E)
+plot: { crop: maize, sown_days_ago: 60, area_ha: 2, soil: sandy_loam, irrigation_system: none }   # etapa mid (floración); duración de etapas pendiente de validación agronómica
+soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
+nodes: { count: 0 }        # parcela sin sensor: el balance corre solo con clima
+weather_fixture: veranillo-caribe.json   # ET0 ≈ 4,2 mm/día y ninguna lluvia > 5 mm en los 21 días ni en los 7 de pronóstico
+expected:
+  alerts: [water_stress]   # abierta por el balance diario; crítica desde el día 18
+  irrigation: rainfed      # kind de irrigation_recommendation: sin lámina ni minutos
+  advice: [conserve_moisture]
+```
+
+**Aritmética del escenario E.** Franco arenoso con θFC = 0,23 y θWP = 0,09; maíz en etapa media con Kc = 1,20 y p_tabla = 0,55 (FAO-56, Tablas 12 y 22).
+
+- ETc = 1,20 × 4,2 ≈ 5 mm/día, así que p = 0,55 + 0,04 × (5 − 5) = 0,55 y θ_estrés = 15,3 %, como en el escenario A.
+- Con Zr = 1,0 m en floración (extremo inferior de 1,0–1,7 m de FAO-56; supuesto pendiente de validación agronómica): TAW = 1000 × 0,14 × 1,0 = 140 mm y RAW = 0,55 × 140 = 77 mm.
+- El día 0 el suelo está a capacidad de campo tras la última lluvia (Dr = 0). Sin lluvia efectiva (Pe = 0 porque ninguna lluvia supera 5 mm) y sin riego, Dr = 5 × día.
+- El día 15, Dr = 75 mm ≤ RAW; el día 16, Dr = 80 mm > RAW = 77 mm: el balance abre `water_stress`. Sigue abierta 48 h, así que pasa a crítica el día 18.
+- El día 21, Dr = 105 mm, por debajo de TAW = 140 mm (todavía no llega al punto de marchitez). Como `Dr ≥ RAW` y la lluvia pronosticada en 7 días (0 mm) es menor que Dr, el consejo es `conserve_moisture`. La etapa no es `late`, así que no aparece `prioritize_harvest`.
+
 | Escenario | Qué demuestra |
 |---|---|
 | `el-nino` (A) | Estrés hídrico, alerta crítica, recomendación "regar X mm" |
 | `rainy-season` (B) | Humedad relativa alta sostenida, alerta `fungal_risk`, "no regar: va a llover" |
 | `node-failure` (C) | Nodo caído, alerta al técnico, hueco en la completitud |
 | `offline-farmer` (D) | Se ejecuta en la PWA (modo avión): bitácora offline y sincronización sin duplicados |
+| `dry-spell-rainfed` (E) | Parcela de secano sin nodo: estrés abierto por el balance, recomendación de secano sin lámina |
 | `normal` | Operación estable, para contrastar |
 
 **Reglas:**

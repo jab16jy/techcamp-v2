@@ -41,7 +41,7 @@ flowchart TB
 | `--color-surface`, `--color-surface-raised` | Fondos |
 | `--color-text`, `--color-text-muted` | Texto |
 | `--color-brand` | Acciones principales |
-| `--color-status-ok` / `-watch` / `-irrigate` | Estado del balance hídrico |
+| `--color-status-ok` / `-watch` / `-irrigate` / `-stress` | Estado del balance hídrico (`stress` solo en secano) |
 | `--color-severity-info` / `-warning` / `-critical` | Severidad de alertas |
 | `--color-offline` | Indicador sin conexión |
 | `--space-1 … --space-8` | Escala de 4 px |
@@ -132,7 +132,7 @@ flowchart TB
 **Inicio (pantalla más importante):**
 
 1. Parcela activa y cultivo con su etapa ("Maíz · día 42 · desarrollo").
-2. Tarjeta de decisión: **"Hoy: regar 12 mm (≈ 40 min)"** o **"Hoy no necesita riego"**, con el porqué a un toque.
+2. Tarjeta de decisión: **"Hoy: regar 12 mm (≈ 40 min)"** o **"Hoy no necesita riego"**, con el porqué a un toque. En una parcela de secano no muestra lámina ni minutos, sino el déficit (**"Al cultivo le faltan 80 mm: está en estrés"**), la lluvia esperada en 7 días y el consejo del día (**"Cubra el suelo con rastrojo para conservar la humedad"**) ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)).
 3. Alertas abiertas.
 4. Humedad de suelo actual con su hora y el pronóstico de 3 días.
 5. Estado de sincronización y de los nodos.
