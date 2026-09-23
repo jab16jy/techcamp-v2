@@ -64,7 +64,7 @@ Slice boundaries cut on task/commit boundaries (~400 authored lines each); exact
 - T2 done. Pure application tests using in-memory fake repositories (Protocol test doubles), no DB.
   - RED: `uv run pytest tests/identity/test_get_me.py tests/identity/test_resolve_org_access.py -q` before `application/{ports,get_me,resolve_org_access}.py` existed → `ModuleNotFoundError`. GREEN after implementing: `uv run pytest -q` → `12 passed`.
   - Checks: `uv run ruff check .` → `All checks passed!`; `uv run ruff format --check .` → `67 files already formatted`; `uv run mypy` → `Success: no issues found in 60 source files`; `uv run lint-imports` → `Contracts: 1 kept, 0 broken.`
-  - Commit: T2 landed in `<pending>` on `feat/e2-identity`.
+  - Commit: T2 landed in `077ce31` on `feat/e2-identity`.
 
 ## Next step
 T3.
