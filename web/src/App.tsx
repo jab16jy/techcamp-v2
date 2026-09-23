@@ -1,5 +1,8 @@
+import { RouterProvider } from 'react-router'
+import { router } from './app/router'
+
 function App() {
-  return <p>TechCamp v2</p>
+  return <RouterProvider router={router} />
 }
 
 export default App

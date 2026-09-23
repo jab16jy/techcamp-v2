@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest'
 import App from './App'
 
 describe('App', () => {
-  it('renders the app name', () => {
+  it('renders the home tab and the bottom tab bar', () => {
     render(<App />)
 
-    expect(screen.getByText('TechCamp v2')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Inicio' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Alertas/ })).toBeInTheDocument()
   })
 })
