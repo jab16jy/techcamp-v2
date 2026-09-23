@@ -10,7 +10,7 @@ let devRoute: RouteObject | null = null
 if (import.meta.env.DEV) {
   const DevUiCatalog = lazy(() => import('../dev-ui/DevUiCatalog'))
   devRoute = {
-    path: '/dev/ui',
+    path: 'dev/ui',
     element: (
       <Suspense fallback={null}>
         <DevUiCatalog />
