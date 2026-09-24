@@ -53,7 +53,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250 — actual 1063
 - [x] T6b Fix #21 round 8: map the partial-unique-index `IntegrityError` on cycle create to 409; reject `expected_harvest_on` < `sown_on` (422 + DB `CHECK`); assert 201 in `_create_cycle`; chain and log the original SoilGrids parse exception — route: delegated — forecast ~120 — actual 164
 - [x] T7 Web data layer, minimal OTP sign-in and plots route: API client with bearer token, phone + code sign-in, farm/plot list in the plots tab (via `impeccable`, existing design only) — route: delegated — forecast ~250 — actual 988
-- [ ] T7b Align with docs and fix #21 round 10: server routers under `/api/v1` (docs/04:7), web client on generated OpenAPI types + `openapi-fetch` + TanStack Query (docs/05:179-180), document `POST /dev/auth/otp/verify` in docs/04; 401 → sign-out and redirect to sign-in, request timeout, atomic sign-in session, single proxy config, farms pagination, error copy by cause — route: delegated — forecast ~500
+- [x] T7b Align with docs and fix #21 round 10: server routers under `/api/v1` (docs/04:7), web client on generated OpenAPI types + `openapi-fetch` + TanStack Query (docs/05:179-180), document `POST /dev/auth/otp/verify` in docs/04; 401 → sign-out and redirect to sign-in, request timeout, atomic sign-in session, single proxy config, farms pagination, error copy by cause — route: delegated — forecast ~500 — actual 166 (server) + 667 (web)
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
 
@@ -896,6 +896,169 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     (4) `GET /me` has no organization name, only `org_id`/`role`, so the
     multi-org chooser can't show a human-readable name.
 
+- 2026-09-24: T7b done by a delegated `sonnet-high` writer on branch
+  `feat/e3-farms-web` @ `99c5d47` (T7 done). Two work-unit commits, per the
+  task's own split (server, then web).
+
+  **Commit 1 (server): `refactor(api): serve the REST API under /api/v1`.**
+  `main.py`: `app.include_router(..., prefix="/api/v1")` for identity, farms,
+  and the seminar `dev_auth_router` (the `/dev` routes are part of the
+  versioned REST API too, not a separate operational surface). `/health`
+  stays unprefixed — decision: it's an operational probe (docs/04-api.md's
+  "Operación" section lists `/healthz`/`/readyz`/`/metrics` separately from
+  the `/api/v1` endpoint list), and neither `infra/compose.yaml` nor
+  `server/Dockerfile` defines a container healthcheck that pins its path
+  either way, so moving it carried no infra risk in either direction.
+  `docs/04-api.md`'s `/dev` section gained the `POST /dev/auth/otp/verify`
+  line (implemented in E2, never documented).
+  - Test paths: the shortest-diff fix (ponytail) was `TestClient(app,
+    base_url="http://testserver/api/v1")` (verified empirically that httpx's
+    `base_url` + a relative path join correctly) in the 5 test files that hit
+    non-`/health` endpoints (`tests/farms/test_api.py`,
+    `tests/identity/test_dev_auth.py`, `test_me.py`, `test_org_isolation.py`,
+    `test_sign_in_flow.py`) — no shared `client` fixture existed to change in
+    one place. `tests/test_health.py` keeps `TestClient(app)` unprefixed.
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner
+    `uv run pytest` (server/). RED observed by mounting the prefix without
+    touching tests yet: `uv run pytest -q` → `82 failed, 130 passed` (404s
+    on every moved path, plus one `content-type` mismatch from the shared
+    `RequestValidationError` handler on an unrelated 404 body). Updated the
+    5 test files: GREEN, `uv run pytest -q` → `212 passed`. REFACTOR: none
+    needed.
+  - Verification (server/): `uv run pytest -q` → `212 passed, 2 warnings`;
+    `uv run ruff check .` → `All checks passed!`; `uv run ruff format
+    --check .` → `102 files already formatted`; `uv run mypy` → `Success: no
+    issues found in 79 source files`; `uv run lint-imports` → `Hexagonal
+    layers per module KEPT, 1 kept, 0 broken`.
+  - Commit: `f3a7992` — `refactor(api): serve the REST API under /api/v1`.
+    Authored lines (`git diff --cached --stat -- . ':!server/uv.lock'`): 88
+    insertions, 78 deletions across 7 files.
+
+  **Commit 2 (web): `refactor(web): use generated OpenAPI client and
+  TanStack Query`, `Refs #21`.**
+  Added `@tanstack/react-query`, `openapi-fetch` (deps) and
+  `openapi-typescript` (dev dep, docs/05:179-180); `npm run gen:api` prints
+  the FastAPI app's own `app.openapi()` to a temp file and generates
+  `web/src/lib/api/schema.d.ts` from it (committed). `web/src/lib/api/
+  client.ts` rewritten around `openapi-fetch`'s `createClient<paths>` with
+  one middleware (`sessionMiddleware`) doing bearer-token injection, a 10s
+  `AbortSignal.timeout` per request (a fresh `Request` per call — request
+  bodies survive that re-wrap, verified interactively), and centralized
+  error handling (parses problem+json and FastAPI's own validation-error
+  shape into the existing `ApiError`, same as T7). Deleted
+  `useApiResource.ts` (ponytail: delete what the library replaces) and the
+  dead `useToken` from `session.ts`. New `queryClient.ts`
+  (`retry: false` — this app's own retry UX is the "Reintentar" button, not
+  TanStack Query's automatic retries) wired into `App.tsx` via
+  `QueryClientProvider`. New `errorCopy.ts` (`describeApiError`): network/
+  timeout (`TypeError`/`DOMException`) → "Revisa tu conexión…", anything
+  else → a generic message. `plotsApi.ts`: `useFarms` (`useQuery`, first
+  page only, `hasMore` from `next_cursor`) and `usePlotsByFarm`
+  (`useQueries`, one query per farm id) replace the old combined
+  `Promise.all` load — a single farm's plots query fails independently, so
+  `PlotsList`/`PlotsScreen` render every other farm normally (#21 round 10).
+  `authApi.ts`/`SignInScreen.tsx`: same request shapes, reuse the generated
+  `components["schemas"]["MeResponse"|"MembershipView"]` types instead of
+  hand-written ones; "Cambiar número" now clears both the code and the error
+  (`handleChangeNumber`); error copy in both catch blocks routes through
+  `describeApiError` for the non-401 case. `vite.config.ts`: one proxy entry
+  (`/api/v1` → `VITE_API_URL` or `localhost:8000`) replaces the 8-prefix
+  array; the browser always calls the relative `/api/v1`.
+  - Decisions:
+    - 401 handling is global and request-scoped, not endpoint-specific:
+      `sessionMiddleware.onResponse` clears the session and
+      `window.location.assign('/ingreso')` only when the *failing* request
+      itself carried an `Authorization` header. An anonymous call (OTP
+      request/verify, before any session exists) returning 401 is a normal
+      in-flow error the screen already handles (wrong code) — this is what
+      distinguishes it from an authenticated call's 401 (expired/invalid
+      token), without an allowlist of "auth endpoints".
+    - Atomic sign-in session: unchanged from T7 — `setSession` already only
+      runs after `verifyOtp` succeeds, and `setOrgId` only runs after `GET
+      /me` returns at least one membership (re-verified, not re-implemented;
+      T7's review WARNING was about the *old* client never recovering from a
+      401 afterward, not about this ordering).
+    - Farms pagination: implemented as a `hasMore` flag + a note ("Tu
+      organización tiene más fincas de las que se muestran aquí."), not a
+      full pager — T7b's brief explicitly allows "clearly shows that more
+      exist" as the alternative; a real cursor pager belongs with the fuller
+      plots UI in T8/T9.
+    - `openapi-typescript`'s peer range (`typescript ^5.x`) lags this repo's
+      `typescript@6.0.3` (confirmed: no released or `next`-tagged version
+      changes this). `web/.npmrc` sets `legacy-peer-deps=true` (verified
+      both `npm install` and `npm ci` succeed with it). That flag also
+      disables npm's automatic peer-dependency install project-wide — it
+      silently dropped `@testing-library/dom` (an undeclared peer of
+      `@testing-library/react`), which broke `screen`/`fireEvent`/`waitFor`
+      imports; added it back explicitly as a devDependency rather than
+      dropping `legacy-peer-deps` (no released fix exists for the root
+      conflict). Caught by `npm run typecheck`, confirmed pre-existing
+      unrelated to this task's own diff by reproducing on a `git stash`.
+    - `apiClient` passes `fetch: (...args) => globalThis.fetch(...args)` to
+      `createClient` instead of relying on its default: `createClient`
+      captures whatever `globalThis.fetch` is once, at module import time,
+      which in tests is *before* `vi.stubGlobal('fetch', ...)` ever runs
+      (`apiClient` is a module-level singleton) — every mocked-fetch test
+      was hitting the real network until this fix. No behavior change
+      outside tests (`globalThis.fetch` never changes in the real app).
+    - Test environment: Node's native `fetch`/`Request` need an absolute
+      URL (no page origin exists under Vitest), unlike a real browser which
+      resolves the app's actual relative `''` base URL against its own
+      origin — `vite.config.ts`'s `test.env` sets `VITE_API_URL` to
+      `http://localhost` for the test run only.
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner
+    `npm test -- --run` (web/). RED observed per behavior, incrementally
+    while porting each file off `apiFetch`/`useApiResource` (`vitest` failed
+    with `Invalid URL`/`ECONNREFUSED`/`Cannot redefine property: assign`
+    errors before the `fetch` indirection, `test.env`, and
+    `vi.stubGlobal('location', …)` fixes above — each one a real RED against
+    the new implementation, not a placeholder). Final GREEN:
+    `npm test -- --run` → `11 passed (11), 47 passed (47)`. New tests:
+    `client.test.ts` (bearer token, 204, problem+json, FastAPI validation
+    shape, 401 sign-out+redirect, 401 without a session does *not* sign
+    out); `PlotsScreen.test.tsx` (retry after a farms-list error, the
+    "more farms" note, one farm's plots failing without blanking the
+    others); `SignInScreen.test.tsx` ("Cambiar número" clears the error and
+    the code). REFACTOR: none needed beyond what the fixes above already
+    settled.
+  - Verification (web/): `npm run lint` → clean; `npm run typecheck` →
+    clean; `npm test -- --run` → `11 passed (11), 47 passed (47)`;
+    `npm run build` → built, PWA precache 13 entries; `npm run size` →
+    `151.57 kB` gzip (limit 200 kB, up from T7's 139.07 kB).
+  - Manual smoke check: real stack — `uv run alembic upgrade head` on the
+    (previously unmigrated) dev Postgres, `uv run uvicorn techcamp.main:app`
+    (seminar profile), `npm run dev` (Vite). Seeded one organization, user,
+    membership, farm and plot directly in Postgres. Drove the same six-call
+    chain T7 proved, now against `/api/v1` through the Vite proxy (`curl`
+    against `localhost:5173`): `POST /api/v1/dev/auth/otp` → 204, `POST
+    /api/v1/dev/auth/otp/verify` → token, `GET /api/v1/me` → the seeded
+    membership, `GET /api/v1/farms?org_id=` → the seeded farm, `GET
+    /api/v1/farms/{id}/plots` → the seeded plot, `GET /api/v1/me` with a
+    bogus bearer → `401` problem+json (the shape `sessionMiddleware`
+    recovers from). All six calls returned the expected status and body
+    through the single `/api/v1` proxy entry. Cleaned up the seeded rows,
+    ran `uv run alembic downgrade base` to restore the dev database to the
+    unmigrated state it was found in, and stopped both processes afterward.
+  - Commit: `c7d30f3` — `refactor(web): use generated OpenAPI client and
+    TanStack Query`. Authored lines (`git diff --cached --stat -- . ':!web/
+    package-lock.json' ':!web/src/lib/api/schema.d.ts'`): 430 insertions,
+    237 deletions across 17 files — above the ~500 forecast for the task as
+    a whole (166 + 667 = 833) but within one work-unit commit per the
+    task's own two-commit split; flagging for the owner/parent
+    orchestrator's delivery-strategy decision, same as every other task in
+    this epic.
+  - #21 round 10 resolved in `c7d30f3` (all six T7 review findings: no 401
+    recovery, no fetch timeout, token persisted before `/me`, `VITE_API_URL`
+    dual use, farms pagination ignored, 401 shown as connection error) plus
+    the docs-drift items the parent found (`/api/v1` prefix — resolved in
+    `f3a7992`; TanStack Query + `openapi-typescript`/`openapi-fetch` —
+    resolved in `c7d30f3`). Nothing from round 10 deferred.
+  - Doc gaps carried from T1-T7, unchanged: `farm.municipality_code` is
+    plain `text`, not a real FK; `GET /me` still has no organization name
+    (the chooser still shows a shortened org id + role).
+  - RDD assessment/acknowledgement for both commits not run by this
+    writer — left to the parent orchestrator; boundary not advanced here.
+
 ## PR plan (stacked-to-main, one PR per task; owner 2026-09-23)
 All slices are `size:exception` (each task is one work-unit commit).
 - #22 `feat/e3-farms-01-schema` T1 `4684262..8f7c472` (724)
@@ -909,4 +1072,4 @@ All slices are `size:exception` (each task is one work-unit commit).
 
 ## Next step
 T8 (web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot
-forms) on branch `feat/e3-farms-web` @ `99c5d47` (T7 done).
+forms) on branch `feat/e3-farms-web` @ `c7d30f3` (T7b done).
