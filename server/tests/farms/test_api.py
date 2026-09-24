@@ -10,11 +10,18 @@ import json as jsonlib
 from itertools import count
 from uuid import UUID
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.farms.adapters.api.deps import get_soilgrids_port
+from techcamp.farms.adapters.soilgrids import (
+    SEMINAR_FIXTURE_RESPONSE,
+    SOILGRIDS_PROPERTIES,
+    IsricSoilGridsAdapter,
+)
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.main import app
@@ -989,3 +996,149 @@ async def test_putting_a_soil_profile_of_a_foreign_org_plot_is_404(
 
     assert response.status_code == 404
     assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_autofilling_soil_uses_the_seminar_recorded_fixture(
+    db_session: AsyncSession,
+) -> None:
+    """T5, ADR-0021: in tests (seminar profile, `TECHCAMP_PROFILE` unset),
+    the wired adapter is the recorded fixture — no network call."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(token))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["plot_id"] == plot_id
+    assert body["source"] == "soilgrids"
+    assert body["texture"] == "loam"
+    assert body["ph"] == pytest.approx(6.5)
+    assert body["organic_matter_pct"] == pytest.approx(1.5 * 1.724)
+    assert body["field_capacity_pct"] == pytest.approx(25.0)
+    assert body["wilting_point_pct"] == pytest.approx(12.0)
+
+
+async def test_technician_can_autofill_soil(db_session: AsyncSession) -> None:
+    org_id, _user_id, owner_token = await _member(db_session, role="owner")
+    _org2, tech_id, _tech_token = await _member(db_session, role="technician", org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+    plot_id = await _create_plot(client, farm_id, owner_token)
+    tech_token = issue_token(str(tech_id))
+
+    response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(tech_token))
+
+    assert response.status_code == 200, response.text
+
+
+async def test_viewer_cannot_autofill_soil(db_session: AsyncSession) -> None:
+    org_id, _user_id, owner_token = await _member(db_session, role="owner")
+    _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+    plot_id = await _create_plot(client, farm_id, owner_token)
+    viewer_token = issue_token(str(viewer_id))
+
+    response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(viewer_token))
+
+    assert response.status_code == 403
+
+
+async def test_autofilling_soil_of_a_foreign_org_plot_is_404(db_session: AsyncSession) -> None:
+    _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
+    org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_b, token_b)
+    plot_id = await _create_plot(client, farm_id, token_b)
+
+    response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(token_a))
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_autofilling_soil_maps_a_soilgrids_timeout_to_503(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    def _timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("boom", request=request)
+
+    app.dependency_overrides[get_soilgrids_port] = lambda: IsricSoilGridsAdapter(
+        transport=httpx.MockTransport(_timeout)
+    )
+    try:
+        response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(token))
+    finally:
+        del app.dependency_overrides[get_soilgrids_port]
+
+    assert response.status_code == 503
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_autofilling_soil_maps_a_soilgrids_error_status_to_502(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    def _server_error(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    app.dependency_overrides[get_soilgrids_port] = lambda: IsricSoilGridsAdapter(
+        transport=httpx.MockTransport(_server_error)
+    )
+    try:
+        response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(token))
+    finally:
+        del app.dependency_overrides[get_soilgrids_port]
+
+    assert response.status_code == 502
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_autofilling_soil_queries_soilgrids_at_the_plots_centroid(
+    db_session: AsyncSession,
+) -> None:
+    """GitHub issue #21 round 7: proves the plot's actual PostGIS centroid
+    reaches SoilGrids as `lon`/`lat`, not swapped. `_POLYGON` is an
+    axis-aligned square with a known centroid, `(-74.095, 10.905)`: lon and
+    lat are distinct enough that a swap would fail this assertion."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    captured: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=SEMINAR_FIXTURE_RESPONSE)
+
+    app.dependency_overrides[get_soilgrids_port] = lambda: IsricSoilGridsAdapter(
+        transport=httpx.MockTransport(_handler)
+    )
+    try:
+        response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(token))
+    finally:
+        del app.dependency_overrides[get_soilgrids_port]
+
+    assert response.status_code == 200, response.text
+    assert len(captured) == 1
+    params = captured[0].url.params
+    assert float(params["lon"]) == pytest.approx(-74.095)
+    assert float(params["lat"]) == pytest.approx(10.905)
+    assert set(params.get_list("property")) == set(SOILGRIDS_PROPERTIES)
+    assert params.get_list("depth") == ["0-5cm"]
+    assert params.get_list("value") == ["mean"]

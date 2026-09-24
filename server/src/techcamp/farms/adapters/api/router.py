@@ -18,6 +18,7 @@ from techcamp.farms.adapters.api.deps import (
     CropRepoDep,
     FarmRepoDep,
     PlotRepoDep,
+    SoilGridsPortDep,
     SoilProfileRepoDep,
 )
 from techcamp.farms.adapters.geojson import (
@@ -29,7 +30,7 @@ from techcamp.farms.adapters.geojson import (
 )
 from techcamp.farms.application.manage_farms import create_farm, resolve_farm_access, update_farm
 from techcamp.farms.application.manage_plots import create_plot, update_plot
-from techcamp.farms.application.manage_soil import put_soil_profile
+from techcamp.farms.application.manage_soil import autofill_soil_profile, put_soil_profile
 from techcamp.farms.domain.errors import (
     FarmNotFoundError,
     InsufficientRoleError,
@@ -37,6 +38,7 @@ from techcamp.farms.domain.errors import (
     MissingIrrigationEfficiencyError,
     PlotNotFoundError,
     RainfedPlotHasIrrigationError,
+    SoilGridsUnavailableError,
 )
 from techcamp.farms.domain.models import Crop, Farm, IrrigationSystem, Plot, SoilProfile
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
@@ -404,6 +406,38 @@ async def put_soil(
         raise ProblemError(status=404, title="Plot not found") from exc
     except InsufficientRoleError as exc:
         raise ProblemError(status=403, title="Role cannot update this plot") from exc
+    return _soil_profile_view(profile)
+
+
+@router.post("/plots/{plot_id}/soil:autofill", response_model=SoilProfileView)
+async def autofill_soil(
+    plot_id: UUID,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    soil_profiles: SoilProfileRepoDep,
+    memberships: MembershipRepoDep,
+    soilgrids: SoilGridsPortDep,
+) -> SoilProfileView:
+    """RF-03: autocomplete the soil profile from SoilGrids at the plot's
+    centroid (T5). A full-document replace, same as `PUT .../soil`."""
+    try:
+        profile = await autofill_soil_profile(
+            user_id=user_id,
+            plot_id=plot_id,
+            plots=plots,
+            soil_profiles=soil_profiles,
+            memberships=memberships,
+            soilgrids=soilgrids,
+        )
+    except PlotNotFoundError as exc:
+        raise ProblemError(status=404, title="Plot not found") from exc
+    except InsufficientRoleError as exc:
+        raise ProblemError(status=403, title="Role cannot update this plot") from exc
+    except SoilGridsUnavailableError as exc:
+        status = 502 if exc.upstream_status is not None else 503
+        raise ProblemError(
+            status=status, title="SoilGrids is unavailable", detail=exc.detail
+        ) from exc
     return _soil_profile_view(profile)
 
 

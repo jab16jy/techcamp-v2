@@ -12,6 +12,8 @@ from techcamp.farms.adapters.repositories import (
     SqlAlchemyPlotRepository,
     SqlAlchemySoilProfileRepository,
 )
+from techcamp.farms.adapters.soilgrids import IsricSoilGridsAdapter, seminar_soilgrids_adapter
+from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.db import SessionDep
 
 
@@ -31,9 +33,16 @@ async def get_soil_profile_repository(session: SessionDep) -> SqlAlchemySoilProf
     return SqlAlchemySoilProfileRepository(session)
 
 
+def get_soilgrids_port() -> IsricSoilGridsAdapter:
+    """ADR-0021: the seminar profile's recorded fixture, or the real ISRIC
+    adapter in production."""
+    return seminar_soilgrids_adapter() if is_seminar_profile() else IsricSoilGridsAdapter()
+
+
 FarmRepoDep = Annotated[SqlAlchemyFarmRepository, Depends(get_farm_repository)]
 PlotRepoDep = Annotated[SqlAlchemyPlotRepository, Depends(get_plot_repository)]
 CropRepoDep = Annotated[SqlAlchemyCropRepository, Depends(get_crop_repository)]
 SoilProfileRepoDep = Annotated[
     SqlAlchemySoilProfileRepository, Depends(get_soil_profile_repository)
 ]
+SoilGridsPortDep = Annotated[IsricSoilGridsAdapter, Depends(get_soilgrids_port)]

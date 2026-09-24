@@ -45,7 +45,8 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300 — actual 428
 - [x] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80 — actual ~160
 - [x] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250 — actual 590
-- [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
+- [x] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250 — actual 733
+- [x] T5b Fix #21 round 7: every malformed SoilGrids 200 body → 502 problem+json; test that the centroid reaches SoilGrids as correct lon/lat and query params — route: delegated — forecast ~100 — actual 141
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
@@ -84,12 +85,16 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   assessment/acknowledgement not run by this writer — left to the parent orchestrator; boundary
   not advanced here.
 - T3b + T4 slice `a337f57..111cffc` (medium, 907 lines, standing grant): lineage `review-7d6076ce2e31e46b`, approved and acknowledged. WARNING (cassava seed edited in place in `67cf2dd1f13e`) accepted: revision only on this unmerged branch. Three test-strength suggestions open in #21 round 6. Reviewed boundary is now `111cffc`.
+- T5 slice `111cffc..47f0b83` (T5 + parent USDA texture fix; medium, 851 lines, standing grant): lineage `review-23b5b52e438ac3e2`, approved and acknowledged. Two WARNINGs (nested malformed SoilGrids body → 500; centroid lon/lat query unproved) tracked in #21 round 7, fixed by task T5b. Reviewed boundary is now `47f0b83`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
+- T5b `47f0b83..658e5b9` (fix, no migration, 141 lines): #21 round 7 resolved in `658e5b9`. RDD
+  assessment/acknowledgement for this commit not run by this writer — left to the parent
+  orchestrator; boundary not advanced here.
 
 ## Acceptance criteria
 - [ ] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
 - [ ] Rainfed plots reject irrigation efficiency and flow (DB `CHECK` and 422).
-- [ ] Soil autofill fills θFC/θWP from SoilGrids, or from the FAO-56 texture table with `source = fao56_texture`.
+- [x] Soil autofill fills θFC/θWP from SoilGrids, or from the FAO-56 texture table with `source = fao56_texture`.
 - [x] `GET /crops` returns stages, Kc and `kc_source`.
 - [ ] A plot holds at most one active crop cycle.
 - [ ] Cross-org access to farms, plots, soil and cycles returns 404.
@@ -447,6 +452,141 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     owner/parent orchestrator's delivery-strategy decision, not re-split here.
   - Doc gap carried from T1/T2/T3: `farm.municipality_code` is plain `text`, not yet a real FK.
 
+- 2026-09-23: T5 done by a delegated `sonnet-high` writer. `farms` module additions:
+  `domain/models.py` (`SoilGridsSample`, `ORGANIC_CARBON_TO_MATTER_FACTOR`, `classify_usda_texture`,
+  `build_soil_profile_from_soilgrids` — pure), `domain/errors.py` (`SoilGridsUnavailableError`),
+  `application/ports.py` (`SoilGridsPort`; `PlotRepository.get_centroid`), `adapters/repositories.py`
+  (`SqlAlchemyPlotRepository.get_centroid`, `ST_X(ST_Centroid(boundary))`/`ST_Y(...)`),
+  `adapters/soilgrids.py` (new: `IsricSoilGridsAdapter`, `seminar_soilgrids_adapter`,
+  `SEMINAR_FIXTURE_RESPONSE`), `application/manage_soil.py` (`autofill_soil_profile`),
+  `adapters/api/deps.py` (`get_soilgrids_port`, `SoilGridsPortDep`), `adapters/api/router.py`
+  (`POST /plots/{plot_id}/soil:autofill`). No migration: `soil_profile.source` already allows
+  `soilgrids` (T4).
+  - Decisions:
+    - One `IsricSoilGridsAdapter` class serves both real implementations the port needs
+      (ADR-0002: a port only for external I/O needing a test double): a live network call for
+      production, and an injected `httpx.MockTransport` for the seminar profile's recorded
+      fixture and for this task's own adapter tests (ponytail: reuse over a second class, since
+      httpx already provides exactly the transport-injection mechanism needed).
+    - SoilGrids API verified live (2026-09-23, WebFetch against docs.isric.org/rest.isric.org,
+      cross-checked against the `soilDB` R package's response-parsing source on GitHub):
+      `/properties/query` (`lon`, `lat`, repeated `property`/`depth`, `value=mean`); six standard
+      depths (`0-5cm` … `100-200cm`), this adapter reads only `0-5cm` (topsoil; a documented
+      simplification, `ponytail:` comment on `IsricSoilGridsAdapter`'s docstring — depth-weighting
+      the root zone is out of scope); each `properties.layers[].unit_measure.d_factor` converts
+      the mapped integer to the documented conventional unit, read from the response itself
+      rather than hardcoded.
+    - The live `/properties/query` endpoint returned `503 Service Unavailable` on every fetch
+      attempt during this task (2026-09-23): the seminar/test fixture (`SEMINAR_FIXTURE_RESPONSE`)
+      is built from the documented v2.0 schema, not a captured live response — disclosed in the
+      adapter module's docstring and in `soilgrids.py`'s fixture comment, per this task's
+      instruction to say so explicitly when that happens.
+    - Organic matter: `soc` (organic carbon) → organic matter % uses the conventional van
+      Bemmelen factor 1.724 (verified via WebSearch: Minasny et al., 2020, "Precocious 19th
+      century soil carbon science", Geoderma Regional — attributed to van Bemmelen, 1890, still
+      the conventional default despite known soil-to-soil error). Cited, not invented, per this
+      task's instruction.
+    - USDA texture triangle: the writer shipped axis-aligned bands and claimed they only affected
+      the `texture` string. **Superseded by the parent in `816ef5b`**: the bands misclassified
+      sand, sandy clay loam and sandy clay, and a wrong class also changes θFC/θWP whenever
+      SoilGrids lacks `wv0033`/`wv1500`, because the fallback is keyed by texture. Now uses the
+      NRCS class rules (Soil Survey Manual ch. 3), cross-checked against the `USDA.TT` vertex
+      table of the `soiltexture` CRAN package (NRCS page unreachable). TDD: RED 4 failed, GREEN
+      `169 passed`; ruff, format, mypy, lint-imports green.
+    - θFC/θWP: `source = soilgrids` only when SoilGrids returns **both** `wv0033` and `wv1500` at
+      the query point; a lone one of the two falls back to the FAO-56 texture means rather than
+      mixing a real SoilGrids value with an invented pair.
+    - `root_depth_cm` is never set by autofill (task instruction: "stays as docs say") — SoilGrids
+      has no such property, and root depth is a crop/rooting choice, not a soil property. Since
+      `soil_profiles.put` is the same full-document-replace upsert T4 established, a later
+      autofill call clears any manually-set `root_depth_cm`, same replace semantics as `PUT`.
+    - 502 vs 503 (docs/04-api.md is silent on which): 503 when the request never reached ISRIC
+      (timeout, connection failure — `upstream_status=None`), 502 when ISRIC answered with a
+      non-200 status — a standard REST convention (our service vs. a bad upstream response),
+      documented on `SoilGridsUnavailableError`.
+    - Response status: `POST .../soil:autofill` returns `200` (no `status_code` override), same
+      as `PUT /plots/{id}/soil` — it upserts the same resource, not a new one.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by moving the new adapter file aside and `git stash`-ing the seven modified
+    implementation files, keeping the new/changed tests: `uv run pytest -q tests/farms/test_domain_models.py
+    tests/farms/test_soilgrids_adapter.py tests/farms/test_api.py -k "soilgrids or autofill or
+    usda_texture or classify"` → 3 collection errors (`ImportError: cannot import name
+    'SoilGridsSample'`; `ModuleNotFoundError: No module named 'techcamp.farms.adapters.soilgrids'`;
+    `ImportError: cannot import name 'get_soilgrids_port'`). Restored the implementation: GREEN,
+    same selection → `98 passed`; full `uv run pytest -q` → `154 passed`. REFACTOR: none needed
+    beyond the mypy/ruff fixes below.
+  - Verification (server/): `uv run pytest -q` → `154 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!` (two `E501` long-line fixes: `router.py`'s exception mapping,
+    `soilgrids.py`'s `_extract_conventional` signature); `uv run ruff format --check .` → `101
+    files already formatted`; `uv run mypy` → `Success: no issues found in 78 source files` (two
+    fixes: an explicit `float | None` annotation for `field_capacity_pct`/`wilting_point_pct` in
+    `build_soil_profile_from_soilgrids`, and `httpx.AsyncBaseTransport` instead of `BaseTransport`
+    on `IsricSoilGridsAdapter`'s `transport` parameter — `MockTransport` implements both, but
+    `AsyncClient` only accepts the async one); `uv run lint-imports` → `Hexagonal layers per
+    module KEPT, 1 kept, 0 broken`.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start; no migration in
+    this task, so no `alembic upgrade`/`downgrade` cycle to verify.
+  - Commit: `ee3e4f4` — `feat(farms): autofill soil profile from SoilGrids with seminar fixture`.
+    Authored lines (`git diff --stat --cached -- . ':!server/uv.lock'`): 728 insertions, 5
+    deletions across 12 files (2 new, 10 modified) — well above the ~250 forecast and the
+    ~400-line delivery heuristic in a single commit, same reason as T2/T2b/T3b/T4: one work-unit
+    commit was specified for this task, and the full port+adapter+application+router stack plus
+    three test files (~30 new tests) don't split smaller within a single task. Flagging for the
+    owner/parent orchestrator's delivery-strategy decision, not re-split here.
+  - Doc gaps: (1) carried from T1-T4, unchanged — `farm.municipality_code` is plain `text`, not
+    yet a real FK. The USDA texture gap was
+    resolved in `816ef5b` (see Decisions above).
+
+- 2026-09-23: T5b done by a delegated `sonnet-high` writer. Resolves GitHub issue #21 round 7 (the
+  two T5 review WARNINGs: a nested malformed SoilGrids body could still crash to a raw 500; the
+  centroid lon/lat query was unproved).
+  - `farms/adapters/soilgrids.py` `IsricSoilGridsAdapter.fetch_sample`: the `response.json()[...]`
+    parse and the `SoilGridsSample(...)` construction now share one `try`/`except (ValueError,
+    KeyError, TypeError, AttributeError)` block — a single parsing boundary, not a per-field guard
+    (task instruction, ponytail). Root cause: `layers = response.json()["properties"]["layers"]`
+    only raised on a missing/wrong-typed `properties`/`layers` *key*; an explicit `null` or a
+    wrongly-shaped nested value (`unit_measure`, `depths`, `values`, a non-dict layer/depth entry,
+    a non-numeric `mean`/`d_factor`) passed that line without raising and then crashed later inside
+    `_extract_conventional` or `float(...)`, outside the original `try`, as an uncaught
+    `TypeError`/`AttributeError`/`ValueError` (a raw 500 through FastAPI's default handler).
+    Widening the `try` to wrap the whole parse, and adding `AttributeError` to the caught types,
+    fixes every shape at once without touching `_extract_conventional`.
+  - `tests/farms/test_soilgrids_adapter.py`: `_MALFORMED_BODIES`, a parametrized
+    `test_fetch_sample_raises_soil_grids_unavailable_on_every_malformed_shape` over 10 shapes (null
+    `layers`; `layers` as a dict; a string/number layer entry; null `unit_measure`; null `depths`;
+    a string depth entry; null `values`; a non-numeric `mean`; a non-numeric `d_factor`) — each
+    must raise `SoilGridsUnavailableError` with `upstream_status == 200`.
+  - `tests/farms/test_api.py`: `test_autofilling_soil_queries_soilgrids_at_the_plots_centroid`
+    captures the outgoing `httpx.Request` through a `MockTransport` handler and asserts
+    `lon == -74.095`, `lat == 10.905` (the axis-aligned `_POLYGON` fixture's known PostGIS
+    centroid — lon and lat are distinct enough that a swap fails the assertion), the full
+    `property` list, `depth == ["0-5cm"]`, `value == ["mean"]`.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/). RED
+    observed with `git stash push -- src/techcamp/farms/adapters/soilgrids.py` (keeping the new/
+    changed tests): `uv run pytest -q tests/farms/test_soilgrids_adapter.py tests/farms/test_api.py
+    -k "malformed or centroid"` → `10 failed, 2 passed` — each malformed-shape case failing with
+    the actual pre-fix crash (`TypeError: 'NoneType' object is not iterable`,
+    `AttributeError: 'str'/'NoneType'/'int' object has no attribute 'get'`,
+    `ValueError: could not convert string to float`), the centroid test already passing (it
+    doesn't depend on the fix). `git stash pop` restored the fix: GREEN, same selection →
+    `12 passed`. REFACTOR: `ruff format` reformatted one multi-line dict literal in the new
+    parametrize table.
+  - Decisions: no new decisions; this is a bug fix within T5's existing design (`upstream_status`
+    stays the HTTP status of the successful-but-malformed response, `200`, consistent with the
+    existing 502-vs-503 convention already documented on `SoilGridsUnavailableError`).
+  - Verification (server/): `uv run pytest -q` → `180 passed, 2 warnings`; `uv run ruff check .` →
+    `All checks passed!`; `uv run ruff format --check .` → all files formatted (1 file reformatted
+    on the first pass); `uv run mypy` → `Success: no issues found in 78 source files`; `uv run
+    lint-imports` → `Hexagonal layers per module KEPT, 1 kept, 0 broken`.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start; no migration in
+    this task, so no `alembic upgrade`/`downgrade` cycle to verify.
+  - Commit: `658e5b9` — `fix(farms): map malformed SoilGrids bodies to 502 and prove the centroid
+    query`. Authored lines (`git diff --stat` for this commit's files, excluding
+    `server/uv.lock`): 141 insertions, 13 deletions across 3 files (0 new, 3 modified) — above the
+    ~100 forecast, expected given the 10-shape parametrized table.
+  - Doc gap carried from T1-T5, unchanged: `farm.municipality_code` is plain `text`, not yet a real
+    FK.
+
 ## Next step
-T5 soil autofill (SoilGrids port + adapter + test double,
-`POST /plots/{id}/soil:autofill`, seminar recorded fixture, ADR-0021 row).
+T6 crop cycles (`crop_cycle` migration, one active cycle per plot,
+`POST /plots/{id}/cycles`, `PATCH /cycles/{id}`).

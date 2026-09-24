@@ -173,7 +173,8 @@ def apply_fao56_texture_fallback(
     soil profile has neither lab nor SoilGrids θFC/θWP, fill the texture
     class's mean values and mark `source = fao56_texture`. Given values pass
     through unchanged as `source = lab` (SoilGrids has its own endpoint,
-    `POST /plots/{plot_id}/soil:autofill`, T5, out of scope here).
+    `POST /plots/{plot_id}/soil:autofill`, T5, uses `build_soil_profile_from_soilgrids`
+    below instead of this function's `lab` branch).
     """
     if field_capacity_pct is not None and wilting_point_pct is not None:
         return field_capacity_pct, wilting_point_pct, SoilProfileSource.LAB
@@ -181,3 +182,112 @@ def apply_fao56_texture_fallback(
     if means is None:
         return None, None, None
     return means[0], means[1], SoilProfileSource.FAO56_TEXTURE
+
+
+@dataclass(frozen=True, slots=True)
+class SoilGridsSample:
+    """A SoilGrids ISRIC v2.0 `properties/query` response, already converted
+    from mapped integer storage units to conventional units (T5 decision:
+    the adapter reads each property's own `unit_measure.d_factor` from the
+    response rather than hardcoding a divisor, docs.isric.org/rest.isric.org
+    verified 2026-09-23). Any field is `None` when SoilGrids has no
+    prediction at that point/depth (a normal outcome, not a failure)."""
+
+    ph: float | None
+    organic_carbon_pct: float | None
+    """Soil organic carbon, percentage by mass (`soc`, g/kg / 10)."""
+    sand_pct: float | None
+    silt_pct: float | None
+    clay_pct: float | None
+    field_capacity_pct: float | None
+    """θFC at 33 kPa (`wv0033`), already a percentage."""
+    wilting_point_pct: float | None
+    """θWP at 1500 kPa (`wv1500`), already a percentage."""
+
+
+ORGANIC_CARBON_TO_MATTER_FACTOR = 1.724
+"""The van Bemmelen factor (organic matter ≈ 58% carbon by mass, so
+OM% = OC% × 1.724), attributed to van Bemmelen (1890) and still the
+conventional soil-science default despite known soil-to-soil error
+(Minasny et al., 2020, "Precocious 19th century soil carbon science",
+Geoderma Regional 22 — verified 2026-09-23). No better single factor is
+documented for this project, so it's applied as-is, not invented."""
+
+
+def classify_usda_texture(
+    sand_pct: float | None, silt_pct: float | None, clay_pct: float | None
+) -> str | None:
+    """USDA soil texture class from sand/silt/clay percentages.
+
+    Uses the NRCS class rules (USDA Soil Survey Manual, Handbook 18, ch. 3;
+    NRCS Soil Texture Calculator). They were cross-checked against the USDA
+    triangle vertex table in the `soiltexture` R package (Moeys, CRAN,
+    `USDA.TT`): for example sand is bounded by silt + 1.5 clay = 15 (P15-P20)
+    and loamy sand by silt + 2 clay = 30 (P14-P21).
+    """
+    if sand_pct is None or silt_pct is None or clay_pct is None:
+        return None
+    sand, silt, clay = sand_pct, silt_pct, clay_pct
+    if silt + 1.5 * clay < 15:
+        return "sand"
+    if silt + 2 * clay < 30:
+        return "loamy_sand"
+    if clay >= 40:
+        if silt >= 40:
+            return "silty_clay"
+        return "sandy_clay" if sand > 45 else "clay"
+    if clay >= 35 and sand > 45:
+        return "sandy_clay"
+    if clay >= 27:
+        if sand <= 20:
+            return "silty_clay_loam"
+        if sand <= 45:
+            return "clay_loam"
+    if clay >= 20 and silt < 28 and sand > 45:
+        return "sandy_clay_loam"
+    if silt >= 80 and clay < 12:
+        return "silt"
+    if silt >= 50:
+        return "silt_loam"
+    if clay >= 7 and silt >= 28 and sand <= 52:
+        return "loam"
+    return "sandy_loam"
+
+
+def build_soil_profile_from_soilgrids(plot_id: UUID, sample: SoilGridsSample) -> SoilProfile:
+    """`POST /plots/{plot_id}/soil:autofill` (docs/04-api.md:50; RF-03).
+
+    θFC/θWP come straight from SoilGrids (`source = soilgrids`) when both
+    `wv0033` and `wv1500` are available at the query point; otherwise this
+    falls back to the same FAO-56 Table 19 texture means `PUT /plots/{id}/soil`
+    uses (`source = fao56_texture`, or `None` if the derived texture isn't
+    one of the nine classes in `FAO56_TEXTURE_WATER_LIMITS`). `root_depth_cm`
+    is never set here: SoilGrids has no such property, and it isn't a soil
+    property at all but a crop/rooting choice (T5 decision).
+    """
+    texture = classify_usda_texture(sample.sand_pct, sample.silt_pct, sample.clay_pct)
+    field_capacity_pct: float | None
+    wilting_point_pct: float | None
+    if sample.field_capacity_pct is not None and sample.wilting_point_pct is not None:
+        field_capacity_pct = sample.field_capacity_pct
+        wilting_point_pct = sample.wilting_point_pct
+        source: SoilProfileSource | None = SoilProfileSource.SOILGRIDS
+    else:
+        field_capacity_pct, wilting_point_pct, source = apply_fao56_texture_fallback(
+            texture, None, None
+        )
+    organic_matter_pct = (
+        sample.organic_carbon_pct * ORGANIC_CARBON_TO_MATTER_FACTOR
+        if sample.organic_carbon_pct is not None
+        else None
+    )
+    return SoilProfile(
+        plot_id=plot_id,
+        source=source,
+        ph=sample.ph,
+        organic_matter_pct=organic_matter_pct,
+        texture=texture,
+        field_capacity_pct=field_capacity_pct,
+        wilting_point_pct=wilting_point_pct,
+        root_depth_cm=None,
+    )

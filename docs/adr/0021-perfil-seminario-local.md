@@ -25,6 +25,7 @@ Dos **perfiles de ejecución** sobre la misma base de código. Cambian los **ada
 | SMS / WhatsApp | Adaptador que escribe en el log y en una bandeja visible en `/dev/outbox` | Proveedor real ([ADR-0016](0016-notificaciones-outbox.md)) |
 | Web Push | Real (en `localhost` el navegador lo permite) | Real |
 | Clima | Open-Meteo gratis (uso no comercial) **más fixtures grabados** por escenario | Open-Meteo con plan comercial si aplica |
+| Suelo (SoilGrids) | Respuesta **grabada** de ISRIC SoilGrids (offline, determinista, mismo patrón que el clima) | API real de ISRIC SoilGrids |
 | Almacenamiento de objetos | MinIO en Docker | S3 compatible ([ADR-0018](0018-almacenamiento-de-objetos.md)) |
 | LLM | API real con **tope de presupuesto de USD 5** y modo sin LLM disponible | API real con tope mensual ([ADR-0007](0007-llm-por-api.md)) |
 | Jobs diarios | Programados **y** ejecutables al instante con `POST /dev/jobs/{name}:run` | Solo programados |
