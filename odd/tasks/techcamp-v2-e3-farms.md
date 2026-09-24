@@ -48,7 +48,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250 — actual 733
 - [x] T5b Fix #21 round 7: every malformed SoilGrids 200 body → 502 problem+json; test that the centroid reaches SoilGrids as correct lon/lat and query params — route: delegated — forecast ~100 — actual 141
 - [x] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250 — actual 1063
-- [ ] T6b Fix #21 round 8: map the partial-unique-index `IntegrityError` on cycle create to 409; reject `expected_harvest_on` < `sown_on` (422 + DB `CHECK`); assert 201 in `_create_cycle`; chain and log the original SoilGrids parse exception — route: delegated — forecast ~120
+- [x] T6b Fix #21 round 8: map the partial-unique-index `IntegrityError` on cycle create to 409; reject `expected_harvest_on` < `sown_on` (422 + DB `CHECK`); assert 201 in `_create_cycle`; chain and log the original SoilGrids parse exception — route: delegated — forecast ~120 — actual 164
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
@@ -95,6 +95,9 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T6 `907bde2..97127e2` (new migration, 1063 lines, likely `slice_budget_reached`): RDD
   assessment/acknowledgement not run by this writer — left to the parent orchestrator; boundary
   not advanced here.
+- T6b `b0c3b55..6dda806` (fix, migration edited in place, 164 lines): #21 round 8 resolved in
+  `6dda806`. RDD assessment/acknowledgement for this commit not run by this writer — left to the
+  parent orchestrator; boundary not advanced here.
 
 ## Acceptance criteria
 - [ ] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
@@ -668,6 +671,91 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     task. Flagging for the owner/parent orchestrator's delivery-strategy decision, not re-split
     here.
   - Doc gap carried from T1-T5, unchanged: `farm.municipality_code` is plain `text`, not yet a
+    real FK.
+
+- 2026-09-23: T6b done by a delegated `sonnet-high` writer. Resolves GitHub issue #21 round 8 (the
+  two T5b+T6 review WARNINGs: concurrent cycle create → raw 500 instead of 409; harvest date
+  before sowing silently accepted) plus the two open suggestions (missing 201 assert in
+  `_create_cycle`; SoilGrids parse exception not logged).
+  - `farms/adapters/repositories.py` `SqlAlchemyCropCycleRepository.create`: wraps
+    `self._session.commit()` in `try`/`except IntegrityError`. asyncpg's driver-level exception
+    carries no `constraint_name` attribute by the time SQLAlchemy's asyncpg dialect re-wraps it
+    (verified interactively: only `sqlstate`/`pgcode` survive, `23505` is the generic
+    `unique_violation` SQLSTATE) — matched the constraint name in the wrapped exception's message
+    text instead (`"uq_crop_cycle_active_per_plot" in str(exc.orig)`), scoped to that one
+    constraint so any other integrity error (e.g. a bad `crop_id` FK) still propagates unchanged.
+    On a match: rollback, then raise the existing `ActiveCropCycleExistsError(plot_id)` (already
+    mapped to `409` by the router since T6) — `create_cycle`'s application-layer precheck
+    (`get_active_for_plot`) stays as the normal path; this is the DB-side backstop for the race
+    window between two concurrent creates on the same plot.
+  - `farms/domain/errors.py`: `HarvestBeforeSowingError` (same pattern as
+    `RainfedPlotHasIrrigationError`: a domain error backed by a DB `CHECK`).
+  - `farms/domain/models.py`: `ensure_harvest_not_before_sowing(sown_on, expected_harvest_on)` —
+    pure, rejects a non-null `expected_harvest_on` earlier than `sown_on`.
+  - `farms/application/manage_cycles.py` `update_cycle`: calls the new domain rule only when
+    `expected_harvest_on` is in the PATCH `changes` (same style as the existing
+    `"status" in changes` guard); `sown_on` itself isn't patchable, so `merged.sown_on` always
+    equals the stored value.
+  - `farms/adapters/api/router.py` `patch_cycle`: maps `HarvestBeforeSowingError` → `422`
+    problem+json.
+  - `migrations/versions/ff21853418b8_add_crop_cycles.py` (edited in place — this branch's own
+    unmerged migration, per the task instruction) and `farms/adapters/orm.py` `CropCycleRow`: add
+    `CheckConstraint("expected_harvest_on is null or expected_harvest_on >= sown_on",
+    name="ck_crop_cycle_harvest_not_before_sowing")`, matching the ORM/migration pairing pattern
+    every other farms table already uses.
+  - `farms/adapters/soilgrids.py` `IsricSoilGridsAdapter.fetch_sample`: the malformed-body
+    `except (ValueError, KeyError, TypeError, AttributeError)` block already chained
+    (`raise ... from exc`, from T5b) — added a module-level `logger = logging.getLogger(__name__)`
+    (no existing logging call anywhere in `server/src` to match; this is the standard stdlib
+    idiom) and `logger.warning("malformed SoilGrids response body: %s", exc)` before the raise.
+  - `tests/farms/test_api.py` `_create_cycle`: added `assert created.status_code == 201,
+    created.text` before parsing the response body (matches the same helpers' existing pattern
+    for `_create_farm`/`_create_plot`).
+  - Tests: `test_a_second_active_cycle_on_the_same_plot_raises_active_crop_cycle_exists_error`
+    (renamed/updated from the old `..._is_rejected_by_the_database`, now asserts the translated
+    domain error and its `plot_id`, `test_repositories.py`) calls `repo.create` twice directly —
+    the task's suggested race simulation, bypassing `create_cycle`'s precheck; new
+    `test_creating_a_cycle_with_a_bad_crop_id_still_raises_integrity_error` proves an unrelated
+    integrity error still propagates raw; new
+    `test_a_harvest_date_before_the_sown_date_is_rejected_by_the_database` proves the DB `CHECK`;
+    new `test_ensure_harvest_not_before_sowing_allows_none_or_on_or_after_sowing` and
+    `..._rejects_a_harvest_date_before_sowing` (`test_domain_models.py`); new
+    `test_patching_a_cycles_expected_harvest_on_before_sown_on_is_422` (`test_api.py`); added an
+    `exc_info.value.__cause__ is not None` assertion to the existing
+    `test_fetch_sample_raises_on_a_malformed_response_body` (`test_soilgrids_adapter.py`) to prove
+    the chain survives.
+  - Decisions: no new decisions beyond the `sqlstate`+message-text matching above (forced by
+    what the asyncpg/SQLAlchemy dialect actually preserves, verified interactively against real
+    Postgres rather than assumed).
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by `git stash push` of the eight implementation files (domain/errors.py,
+    domain/models.py, manage_cycles.py, router.py, repositories.py, orm.py, soilgrids.py, the
+    migration), keeping the new/changed tests: `test_domain_models.py` → 1 collection error
+    (`ImportError: cannot import name 'HarvestBeforeSowingError'`);
+    `tests/farms/test_repositories.py -k "crop_cycle_exists_error or bad_crop_id or
+    harvest_date_before"` → 2 failed (a raw `IntegrityError` instead of
+    `ActiveCropCycleExistsError`; `DID NOT RAISE IntegrityError` for the CHECK, since it didn't
+    exist yet); `tests/farms/test_api.py -k expected_harvest_on_before_sown_on` → 1 failed (`200`
+    where `422` was expected). `git stash pop` restored the implementation: GREEN, `uv run pytest
+    -q` → `212 passed`. One further RED found mid-implementation: the repository fix's first
+    attempt matched `exc.orig.constraint_name`, which doesn't exist on the wrapped asyncpg
+    exception SQLAlchemy's asyncpg dialect produces (verified interactively: only
+    `sqlstate`/`pgcode` survive) — the still-failing
+    `test_a_second_active_cycle_on_the_same_plot_raises_active_crop_cycle_exists_error` caught it;
+    fixed by matching `sqlstate == "23505"` plus the constraint name in the message text. REFACTOR:
+    `ruff format` reformatted one boolean expression in the fixed repository method.
+  - Verification (server/): `uv run pytest -q` → `212 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!`; `uv run ruff format --check .` → `1 file reformatted` on the first
+    pass, all formatted after; `uv run mypy` → `Success: no issues found in 79 source files`;
+    `uv run lint-imports` → `Hexagonal layers per module KEPT, 1 kept, 0 broken`; `uv run alembic
+    upgrade head` → applied through `ff21853418b8` (edited in place); `uv run alembic downgrade
+    -1` → reverted it; `uv run alembic upgrade head` → reapplied clean.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `6dda806` — `fix(farms): return 409 on concurrent cycle creates and reject harvest
+    before sowing`. Authored lines (`git diff --stat` for this commit's files, excluding
+    `server/uv.lock`): 164 insertions, 5 deletions across 12 files (0 new, 12 modified) — within
+    the delivery heuristic and close to the ~120 forecast.
+  - Doc gap carried from T1-T6, unchanged: `farm.municipality_code` is plain `text`, not yet a
     real FK.
 
 ## Next step
