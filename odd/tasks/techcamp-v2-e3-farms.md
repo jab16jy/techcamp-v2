@@ -71,6 +71,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - WARNING: `update_farm` re-validated a stale `technician_id` on every PATCH, blocking unrelated edits. **Resolved** in the next commit (parent, inline TDD): validate only when the PATCH sets `technician_id`; RED `assert 422 == 200` in `test_stale_technician_does_not_block_an_unrelated_patch`, GREEN `101 passed`, ruff/format/mypy/lint-imports green.
   - SUGGESTION (open in #21): explicit `irrigation_efficiency: null` on an irrigated plot silently becomes the default; the phone counter depends on per-test cleanup of committed users.
 - Review findings are tracked in GitHub issue #21 (rule added to `AGENTS.md` in `1152a61`).
+- Whole branch `4684262..a23d6cf` (stop-hook, standing grant): lineage `review-8c6a346f3ac1752e`, approved and acknowledged. WARNING: switching between irrigated systems kept the previous efficiency; **resolved** in `799f6d8` (parent, inline TDD: RED `comparison failed` in `test_switching_between_irrigated_systems_uses_the_new_default`, GREEN `102 passed`, all checks green). Two suggestions open in #21 (validation 422 not problem+json; multi-ring polygon round trip untested).
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
