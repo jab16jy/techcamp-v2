@@ -27,11 +27,22 @@ export function CreateFarmSheet({ open, onOpenChange }: CreateFarmSheetProps) {
   const [error, setError] = useState<string | null>(null)
   const mutation = useCreateFarm(orgId)
 
+  const latitudeValue = Number(latitude)
+  const longitudeValue = Number(longitude)
+  const hasCoordinates = latitude.trim().length > 0 && longitude.trim().length > 0
+  const coordinatesInRange =
+    Number.isFinite(latitudeValue) &&
+    latitudeValue >= -90 &&
+    latitudeValue <= 90 &&
+    Number.isFinite(longitudeValue) &&
+    longitudeValue >= -180 &&
+    longitudeValue <= 180
+
   const canSubmit =
     name.trim().length > 0 &&
     municipalityCode.trim().length > 0 &&
-    latitude.trim().length > 0 &&
-    longitude.trim().length > 0
+    hasCoordinates &&
+    coordinatesInRange
 
   function reset() {
     setName('')
@@ -110,6 +121,11 @@ export function CreateFarmSheet({ open, onOpenChange }: CreateFarmSheetProps) {
           />
         </label>
       </div>
+      {hasCoordinates && !coordinatesInRange && (
+        <p className="text-sm text-severity-critical">
+          Latitud entre -90 y 90, longitud entre -180 y 180.
+        </p>
+      )}
       {error && <p className="text-base text-severity-critical">{error}</p>}
     </FormSheet>
   )

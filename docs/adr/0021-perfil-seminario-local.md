@@ -31,6 +31,15 @@ Dos **perfiles de ejecución** sobre la misma base de código. Cambian los **ada
 | Jobs diarios | Programados **y** ejecutables al instante con `POST /dev/jobs/{name}:run` | Solo programados |
 | Proxy y TLS | Vite dev server; túnel HTTPS (cloudflared o ngrok) solo para probar en un teléfono | Caddy con TLS automático |
 | Backups, monitoreo, DR | No aplica | pgBackRest, Prometheus, Grafana ([09](../09-cuellos-de-botella.md)) |
+| Teselas del mapa | Teselas públicas de OpenStreetMap (`tile.openstreetmap.org`), sin cuenta ni llave; requieren internet para mostrar el mapa base, pero dibujar el polígono de la parcela no depende de la red | Mismo servicio público, o uno propio si el volumen lo justifica |
+
+- Teselas del mapa (owner, 2026-09-24): OpenStreetMap público en **todo** perfil, seminario y
+  producción — no solo el seminario, a diferencia del resto de esta tabla. `PlotDrawMap`
+  (`web/src/features/plots/components/PlotDrawMap.tsx`, E3 T8) debe conservar la atribución de
+  OpenStreetMap (`&copy; OpenStreetMap contributors`) que Leaflet muestra por defecto en su control
+  de atribución. El mapa base necesita internet en el salón (RF-18, mapas offline, sigue diferido);
+  dibujar y guardar el polígono de la parcela no lo necesita, porque el dibujo es una interacción
+  puramente cliente y solo el `POST` final toca la red.
 
 - El perfil se elige con una sola variable (`TECHCAMP_PROFILE=seminar|production`) y un perfil de Docker Compose.
 - Los endpoints `/dev/*` **solo existen** en el perfil `seminar`; en `production` no se registran.

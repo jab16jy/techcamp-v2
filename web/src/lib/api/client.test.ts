@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { apiClient, ApiError } from './client'
+import { apiClient, ApiError, REQUEST_TIMEOUT_MS } from './client'
 import { clearSession, getToken, setSession } from './session'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -159,10 +159,49 @@ describe('apiClient', () => {
     expect(assign).not.toHaveBeenCalled()
   })
 
-  it('forwards a request that carries an abort signal (the 10s timeout)', async () => {
+  it('rejects with a TimeoutError once a stalled request passes REQUEST_TIMEOUT_MS', async () => {
+    vi.useFakeTimers()
+    // `AbortSignal.timeout`'s own internal scheduling isn't guaranteed to be
+    // driven by the timers vitest fakes, so it's stubbed with an equivalent
+    // built from `setTimeout`, which fake timers do control (find-docs/ctx7:
+    // vitest.dev/guide/mocking/timers).
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const controller = new AbortController()
+      setTimeout(
+        () => controller.abort(new DOMException('The operation timed out.', 'TimeoutError')),
+        ms,
+      )
+      return controller.signal
+    })
+    // A stalled fetch: it only ever settles if its request signal aborts.
+    vi.mocked(fetch).mockImplementation(
+      (input: RequestInfo | URL) =>
+        new Promise((_resolve, reject) => {
+          const request = input as Request
+          request.signal.addEventListener('abort', () => reject(request.signal.reason as Error))
+        }),
+    )
+
+    const pending = apiClient.GET('/api/v1/me', {})
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS)
+    await assertion
+
+    timeoutSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('falls back to a timeout-only signal when AbortSignal.any is unavailable (older WebViews)', async () => {
+    const originalAny = AbortSignal.any
+    // @ts-expect-error simulating a WebView without AbortSignal.any (#21 round 12)
+    delete AbortSignal.any
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'u1', memberships: [] }))
 
-    await apiClient.GET('/api/v1/me', {})
+    try {
+      await apiClient.GET('/api/v1/me', {})
+    } finally {
+      AbortSignal.any = originalAny
+    }
 
     const [request] = vi.mocked(fetch).mock.calls[0]
     expect((request as Request).signal).toBeInstanceOf(AbortSignal)

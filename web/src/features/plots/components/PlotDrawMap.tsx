@@ -51,7 +51,15 @@ export default function PlotDrawMap({ vertices, onMapClick }: PlotDrawMapProps) 
       onMapClickRef.current({ lat: event.latlng.lat, lng: event.latlng.lng })
     })
     mapRef.current = map
+    // The sheet slides in via a CSS transform (`sheet.css`'s `translateY`),
+    // which doesn't change the container's box size, but Leaflet's very
+    // first tile fetch can still measure a not-yet-settled layout on the
+    // first paint inside an animating ancestor. One deferred
+    // `invalidateSize()` re-measures it once the browser has settled
+    // (#21 round 12 suggestion).
+    const resizeTimer = setTimeout(() => map.invalidateSize(), 0)
     return () => {
+      clearTimeout(resizeTimer)
       map.remove()
       mapRef.current = null
     }
@@ -66,7 +74,12 @@ export default function PlotDrawMap({ vertices, onMapClick }: PlotDrawMapProps) 
     }
     if (vertices.length === 0) return
     const latLngs: L.LatLngTuple[] = vertices.map((v) => [v.lat, v.lng])
-    const layer = vertices.length >= 2 ? L.polygon(latLngs) : L.marker(latLngs[0])
+    // `L.circleMarker` for the first vertex, not `L.marker`: the default
+    // marker icon's relative asset paths (`marker-icon.png`, `marker-
+    // shadow.png`) break under Vite's bundling (find-docs/ctx7:
+    // github.com/leaflet/leaflet DefaultIcon.js) — this needs no icon
+    // import at all (ponytail: smaller than fixing the asset paths).
+    const layer = vertices.length >= 2 ? L.polygon(latLngs) : L.circleMarker(latLngs[0])
     layer.addTo(map)
     layerRef.current = layer
   }, [vertices])

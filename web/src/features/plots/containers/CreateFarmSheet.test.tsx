@@ -73,6 +73,23 @@ describe('CreateFarmSheet', () => {
     expect(screen.getByRole('button', { name: 'Crear finca' })).not.toBeDisabled()
   })
 
+  it('disables submit and shows a hint for out-of-range coordinates (#21 round 12)', () => {
+    renderSheet(vi.fn())
+
+    fillRequiredFields()
+    expect(screen.getByRole('button', { name: 'Crear finca' })).not.toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Latitud'), { target: { value: '95' } })
+
+    expect(screen.getByRole('button', { name: 'Crear finca' })).toBeDisabled()
+    expect(screen.getByText('Latitud entre -90 y 90, longitud entre -180 y 180.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Latitud'), { target: { value: '10.46' } })
+    fireEvent.change(screen.getByLabelText('Longitud'), { target: { value: '-190' } })
+
+    expect(screen.getByRole('button', { name: 'Crear finca' })).toBeDisabled()
+  })
+
   it('shows the 422 detail on the form and keeps the sheet open', async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse(
