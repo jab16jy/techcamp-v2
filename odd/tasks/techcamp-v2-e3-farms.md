@@ -41,7 +41,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 ## Tasks
 - [x] T1 Farm and plot schema: `geoalchemy2` dependency, ORM rows, Alembic migration (GiST index, irrigation `CHECK`, `area_ha`), domain rules (default efficiency by system), repositories filtered by `org_id` — route: delegated — forecast ~300 — actual ~623
 - [x] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test; T1 review follow-ups (see Review) — route: delegated — forecast ~350 — actual ~1519
-- [ ] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150
+- [x] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150 — actual ~445
 - [ ] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300
 - [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
@@ -59,9 +59,13 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - Owner standing decision (2026-09-23): consent is granted by default for new-feature candidates. Reviewed boundary is now `1d44cf8`.
 - Whole branch `4684262..8f7c472` (stop-hook candidate, standing grant): lineage `review-276fecec5c5794cf`, approved and acknowledged; same five T1 findings, already resolved in T2.
 - T2 `8f7c472..17c3943` (medium, new migration, 1588 lines, `slice_budget_reached`, standing grant): lineage `review-3bf23165586f9cfb`, reliability lens, approved and acknowledged. 0 blocking; follow-ups become task T2b:
-  - WARNING: explicit JSON `null` in `PATCH /plots` (`boundary`, `irrigation_system`, `name`) and `PATCH /farms` (`name`) reaches the DB or `polygon_to_wkt` and returns 500 instead of 422.
-  - WARNING: `technician_id` on `POST`/`PATCH /farms` is not checked to be a member of the farm's org; an unknown id gives an `IntegrityError` 500.
-  - SUGGESTION: `update_plot` does not apply the default efficiency when switching a rainfed plot to an irrigated system; GeoJSON coordinates accept out-of-range and non-finite values; API tests miss 403 for producer/viewer writes, cross-org `PATCH /plots` 404, technician write, cursor paging and null-body cases.
+  - WARNING: explicit JSON `null` in `PATCH /plots` (`boundary`, `irrigation_system`, `name`) and `PATCH /farms` (`name`) reaches the DB or `polygon_to_wkt` and returns 500 instead of 422. **Resolved in T2b**: `router._reject_explicit_null` (shared by `patch_farm`/`patch_plot`) raises `422` for an explicit null on a non-nullable field before either the DB write or the boundary conversion runs; nullable fields (`technician_id`, `irrigation_efficiency`, `system_flow_lph`) still accept null. Covered by `test_explicit_null_on_farm_name_is_422`, `test_explicit_null_on_non_nullable_plot_fields_is_422`, `test_explicit_null_on_technician_id_still_clears_it`.
+  - WARNING: `technician_id` on `POST`/`PATCH /farms` is not checked to be a member of the farm's org; an unknown id gives an `IntegrityError` 500. **Resolved in T2b**: `manage_farms._ensure_valid_technician` requires `technician_id` to be a member of the org with a write role (owner or technician — `WRITE_ROLES`; docs/03 is silent on the exact role). Raises `InvalidTechnicianError` → `422`. Covered by `test_foreign_technician_id_is_422_not_500`, `test_technician_id_of_a_producer_is_422`, `test_technician_id_of_a_technician_is_accepted`.
+  - SUGGESTION: `update_plot` does not apply the default efficiency when switching a rainfed plot to an irrigated system. **Resolved in T2b**: same rule as `create_plot`, applied in `manage_plots.update_plot`; `test_switching_a_plot_to_irrigated_without_efficiency_uses_the_default`.
+  - SUGGESTION: GeoJSON coordinates accept out-of-range and non-finite values. **Resolved in T2b**: `router._validate_position` rejects non-finite and out-of-range lon/lat on both `GeoJSONPoint` and `GeoJSONPolygon`; `test_point_with_invalid_coordinates_is_422`, `test_polygon_with_out_of_range_coordinates_is_422`. Self-intersection (`ST_IsValid`) is **deferred**: it needs a DB round trip from a pydantic field validator, not a one-liner at this layer.
+  - SUGGESTION: API tests miss 403 for producer/viewer writes, cross-org `PATCH /plots` 404, technician write, cursor paging and null-body cases. **Resolved in T2b**: `test_non_writer_roles_cannot_patch_a_farm`, `test_non_writer_roles_cannot_create_a_plot`, `test_non_writer_roles_cannot_patch_a_plot`, `test_patching_a_plot_of_a_foreign_org_is_404`, `test_technician_can_write_a_plot`, `test_get_farms_pages_by_cursor`, plus the null-body tests above.
+  - Found during T2b (not a pre-existing follow-up): the non-finite-coordinate validator turned into an unhandled `500` because FastAPI's default `RequestValidationError` handler echoes the raw invalid `input` back into the response, and Starlette's `JSONResponse` refuses to serialize `NaN`/`Infinity` (`allow_nan=False`). Fixed with a shared `RequestValidationError` handler in `shared/errors.py` that sanitizes non-finite floats before serializing.
+  - Tracked separately in GitHub issue #21 (parent-managed, not closed here): `tests/farms/test_api.py`'s `_member` fixture built its unique `phone` from `uuid7().int % 100000`, a collision risk on the unique column. Fixed in this commit by switching to an `itertools.count()` sequence.
 - Reviewed boundary is now `17c3943`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
@@ -177,5 +181,58 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gap carried from T1, unchanged: `farm.municipality_code` is plain `text`, not yet a real
     FK (docs/03-modelo-datos.md:89 models a `municipality` table that isn't migrated from v1).
 
+- 2026-09-23: T2b done by a delegated `sonnet-high` writer. Resolves all five T2 review
+  follow-ups (see Review section above for the per-finding resolution and test names). No
+  migration: only application/adapter code and tests changed.
+  - `farms/domain/errors.py`: `InvalidTechnicianError`.
+  - `farms/application/manage_farms.py`: `_ensure_valid_technician` (owner/technician
+    membership check via `MembershipRepository.get`), called from `create_farm` and
+    `update_farm` before the write.
+  - `farms/application/manage_plots.py`: `update_plot` applies `default_efficiency_for` when
+    the merged state switches to an irrigated system with no efficiency set.
+  - `farms/adapters/api/router.py`: `_reject_explicit_null` (shared by `patch_farm`/
+    `patch_plot`), `_validate_position` + `field_validator`s on `GeoJSONPoint`/`GeoJSONPolygon`,
+    `InvalidTechnicianError` → `422` in `post_farm`/`patch_farm`.
+  - `shared/errors.py`: a `RequestValidationError` handler that sanitizes non-finite floats
+    before `JSONResponse` serializes them (see Review: found during this task, not a
+    pre-existing follow-up).
+  - `tests/farms/test_api.py`: 24 new tests (see Review); `_member`'s phone fixture switched
+    from `uuid7().int % 100000` to an `itertools.count()` sequence (GitHub issue #21,
+    parent-managed — this commit fixes it but does not close the issue).
+  - Decisions:
+    - `technician_id` valid role: docs/03 says `technician_id FK "técnico asignado"` but is
+      silent on which membership role qualifies. Reused `WRITE_ROLES` (owner or technician) —
+      the same set already used for who may write farms/plots, per the task's fallback
+      instruction.
+    - Self-intersection (`ST_IsValid`) validation stays deferred: rejecting it needs a DB round
+      trip from inside a pydantic `field_validator` (no DB session available there), so it's not
+      the one-liner the task allowed; would need a new port/adapter call before insert.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by running the 27 new/changed tests against pre-fix code: `uv run pytest -q
+    tests/farms/test_api.py` → 12 failed (2 client-side `ValueError: Out of range float values
+    are not JSON compliant` from httpx itself, adjusted to send raw `content=` for those two
+    cases; the other 10 are the real server-side bugs: `IntegrityError` 500s on explicit null,
+    `TypeError`/`AttributeError` on null `boundary`/`irrigation_system`, `201` where `422` was
+    expected for foreign/wrong-role `technician_id` and out-of-range/non-finite coordinates,
+    `None` instead of the default efficiency on system switch). Implemented the fixes: GREEN,
+    `uv run pytest -q tests/farms/` → `71 passed`. One further RED found mid-implementation: the
+    non-finite-coordinate case surfaced a framework-level `500` (Starlette `JSONResponse`
+    `allow_nan=False` crashing on the echoed invalid `input`), fixed with the shared
+    `RequestValidationError` handler. REFACTOR: `ruff format` wrapped two lines past 100 cols
+    (`_reject_explicit_null`'s comprehension, `update_plot`'s switch condition).
+  - Verification (server/): `uv run pytest -q` → `100 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!`; `uv run ruff format --check .` → all files formatted (2 reformatted
+    on the first pass); `uv run mypy` → `Success: no issues found in 76 source files`; `uv run
+    lint-imports` → `Hexagonal layers per module KEPT, 1 kept, 0 broken`.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `86909fa` — `fix(farms): reject null patches and foreign technicians with 422`.
+    Authored lines (`git diff --stat` for this commit's files, excluding `server/uv.lock`): 445
+    insertions, 4 deletions across 6 files. Above the ~150 forecast and at the ~400-line delivery
+    heuristic in a single commit, for the same reason as T2: one work-unit commit was specified
+    for this task, and the added API tests (333 lines) are most of the diff. Flagging for the
+    owner/parent orchestrator's delivery-strategy decision, not re-split here.
+  - Doc gap carried from T1/T2, unchanged: `farm.municipality_code` is plain `text`, not yet a
+    real FK.
+
 ## Next step
-T2b (delegated writer): T2 review follow-ups; then T3 crop catalog (`crop` + `crop_stage` migration, FAO-56 Table 12 seed, `GET /crops`).
+T3 crop catalog (`crop` + `crop_stage` migration, FAO-56 Table 12 seed, `GET /crops`).
