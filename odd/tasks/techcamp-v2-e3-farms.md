@@ -42,7 +42,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T1 Farm and plot schema: `geoalchemy2` dependency, ORM rows, Alembic migration (GiST index, irrigation `CHECK`, `area_ha`), domain rules (default efficiency by system), repositories filtered by `org_id` — route: delegated — forecast ~300 — actual ~623
 - [x] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test; T1 review follow-ups (see Review) — route: delegated — forecast ~350 — actual ~1519
 - [x] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150 — actual ~445
-- [ ] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300
+- [x] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300 — actual 428
 - [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
@@ -78,7 +78,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [ ] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
 - [ ] Rainfed plots reject irrigation efficiency and flow (DB `CHECK` and 422).
 - [ ] Soil autofill fills θFC/θWP from SoilGrids, or from the FAO-56 texture table with `source = fao56_texture`.
-- [ ] `GET /crops` returns stages, Kc and `kc_source`.
+- [x] `GET /crops` returns stages, Kc and `kc_source`.
 - [ ] A plot holds at most one active crop cycle.
 - [ ] Cross-org access to farms, plots, soil and cycles returns 404.
 - [ ] All server and web checks green locally and in CI.
@@ -239,5 +239,73 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gap carried from T1/T2, unchanged: `farm.municipality_code` is plain `text`, not yet a
     real FK.
 
+- 2026-09-23: T3 done by a delegated `sonnet-high` writer. `farms` module additions:
+  `domain/models.py` (`CROP_STAGES`, `KcSource`, `CropStage`, `Crop` dataclasses),
+  `adapters/orm.py` (`CropRow`, `CropStageRow` — global reference data, no `org_id`),
+  `adapters/repositories.py` (`SqlAlchemyCropRepository.list_all`, stages sorted to
+  `CROP_STAGES` order), `adapters/api/deps.py` (`CropRepoDep`), `adapters/api/router.py`
+  (`GET /crops` → `CropView[]`, `CurrentUserId`-only, no application-layer function — same
+  pattern as `GET /farms`'s direct repository call, no business rule to enforce for a
+  read-only catalog). Migration `67cf2dd1f13e` (chained off `6628f7c0aa3b`): `crop` and
+  `crop_stage` tables plus the 12-crop seed from v1's `crops_requirements.csv`
+  (docs/03-modelo-datos.md:489), inline in the migration (ponytail: shortest reviewable
+  option — no CSV parsing at migration time).
+  - Confirmed per task: `crop`/`crop_stage` have no `org_id` column in docs/03-modelo-datos.md:115-127
+    — global reference data, not org-scoped, matching the ponytail note in this task's brief.
+  - Decisions (FAO-56 = Allen, Pereira, Raes & Smith, 1998, Irrigation and Drainage Paper 56,
+    fao.org; Table 12 = Kc initial/mid/end per crop category, Table 22 = `p`, the no-stress
+    depletion fraction at ETc=5mm/day):
+    - `kc_source = fao56` (7 crops, direct Table 12 category): maize (Cereals: Maize, grain),
+      rice (Rice, wetland, continued flooding), beans (Legumes: Beans, dry), cacao (Tropical
+      Fruits and Trees: Cacao), cotton (Fiber Crops: Cotton, leaves not removed), sorghum
+      (Cereals: Sorghum, grain), chili_pepper/Ají (Vegetables – Solanum Family: Peppers, bell).
+    - `kc_source = approximate` (4 crops, mapped to the closest Table 12 entry, a different
+      species/variant): cassava/Yuca → Cassava, year 1 (v1 doesn't record plant age to choose
+      year 1 vs. year 2 canopy); plantain/Plátano → Banana, 1st year (same genus Musa, not
+      tabulated separately); oil_palm/Palma Aceitera → Palm Trees (generic evergreen palm
+      canopy, oil palm isn't tabulated separately); mango → Avocado (closest evergreen
+      sub/tropical fruit-tree analog, mango isn't tabulated).
+    - `kc_source = none` (1 crop): yam/Ñame — not in FAO-56 Table 12, docs/03-modelo-datos.md:446's
+      own example; no `crop_stage` rows.
+    - `development`-stage Kc is not a Table 12 value (FAO-56 ramps it linearly from Kc initial
+      to Kc mid); used the ramp's midpoint, `(kc_initial + kc_mid) / 2`, hardcoded per crop in
+      the migration (not computed at runtime, to avoid floating-point rounding surprises in a
+      data migration).
+    - `depletion_fraction_p` (Table 22) is one value per crop, not per stage (FAO-56 doesn't
+      vary `p` by growth stage); the same value is stored on all four `crop_stage` rows.
+    - `length_days` is **not** a literal FAO-56 Table 11 row (Table 11's rows are
+      region/planting-date examples that don't match this Caribbean dataset's varieties or v1's
+      total cycle days); instead each crop's four stage lengths are a 20/30/35/15%
+      initial/development/mid/late split of its `ciclo_dias` from `crops_requirements.csv`,
+      `mid` absorbing the rounding remainder so the four stages sum exactly to that documented
+      total cycle. Flagged as a modeling simplification, not verified against a specific table
+      row, per the "never invent values" instruction — this affects only the descriptive stage
+      length, not the Kc/`p` values the irrigation math (E6) actually consumes.
+    - `crop.id` is a plain integer PK with explicit values 1–12 assigned in the seed (no
+      sequence): the catalog has no `POST /crops` (out of scope, admin/migration-managed data),
+      so there's nothing to autoincrement for.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed two ways: (1) `git stash` of the implementation files (keeping the new
+    migration and tests) → `uv run pytest -q tests/farms/test_crop_seed.py` → 1 collection
+    error, `ImportError: cannot import name 'SqlAlchemyCropRepository'`; (2)
+    `tests/farms/test_api.py::test_get_crops_*` against the same pre-fix code → 2 failed
+    (`404` instead of `200`/`401`, the `/crops` route didn't exist yet). Restored the
+    implementation: GREEN, `uv run pytest -q tests/farms/test_crop_seed.py tests/farms/test_api.py`
+    → `42 passed`. REFACTOR: none needed beyond the formatting already applied while writing.
+  - Verification (server/): `uv run pytest -q` → `107 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!`; `uv run ruff format --check .` → `98 files already formatted`;
+    `uv run mypy` → `Success: no issues found in 76 source files`; `uv run lint-imports` →
+    `Hexagonal layers per module KEPT, 1 kept, 0 broken`; `uv run alembic upgrade head` →
+    applied `67cf2dd1f13e`; `uv run alembic downgrade -1` → reverted it; `uv run alembic
+    upgrade head` → reapplied clean.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `a1ad865` — `feat(farms): add crop catalog with FAO-56 Kc stages`. Authored lines
+    (`git diff --stat --cached` for this commit's files, excluding `server/uv.lock`): 433
+    insertions, 5 deletions across 8 files (2 new, 6 modified) — within the ~400-line delivery
+    heuristic.
+  - Doc gap carried from T1/T2, unchanged: `farm.municipality_code` is plain `text`, not yet a
+    real FK.
+
 ## Next step
-T3 crop catalog (`crop` + `crop_stage` migration, FAO-56 Table 12 seed, `GET /crops`).
+T4 soil profile (`soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture
+fallback).
