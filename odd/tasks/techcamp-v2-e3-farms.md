@@ -52,7 +52,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T5b Fix #21 round 7: every malformed SoilGrids 200 body → 502 problem+json; test that the centroid reaches SoilGrids as correct lon/lat and query params — route: delegated — forecast ~100 — actual 141
 - [x] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250 — actual 1063
 - [x] T6b Fix #21 round 8: map the partial-unique-index `IntegrityError` on cycle create to 409; reject `expected_harvest_on` < `sown_on` (422 + DB `CHECK`); assert 201 in `_create_cycle`; chain and log the original SoilGrids parse exception — route: delegated — forecast ~120 — actual 164
-- [ ] T7 Web data layer, minimal OTP sign-in and plots route: API client with bearer token, phone + code sign-in, farm/plot list in the plots tab (via `impeccable`, existing design only) — route: delegated — forecast ~250
+- [x] T7 Web data layer, minimal OTP sign-in and plots route: API client with bearer token, phone + code sign-in, farm/plot list in the plots tab (via `impeccable`, existing design only) — route: delegated — forecast ~250 — actual 988
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
 
@@ -762,6 +762,138 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gap carried from T1-T6, unchanged: `farm.municipality_code` is plain `text`, not yet a
     real FK.
 
+- 2026-09-23: T7 done by a delegated `sonnet-high` writer on branch
+  `feat/e3-farms-web` (from `main` @ `a912e8f`, backend already merged via
+  #22–#27). `web/src/lib/api/` (shared, per docs/07's "lo compartido baja a
+  design-system/ o lib/"): `client.ts` (`apiFetch`, `ApiError` — base URL,
+  bearer header, JSON body, problem+json parsing), `session.ts` (token/org id
+  in `localStorage`, `useToken`/`useOrgId` via `useSyncExternalStore`),
+  `useApiResource.ts` (loading/error/success hook). `web/src/features/auth/`:
+  `api/authApi.ts` (`requestOtp`, `verifyOtp`, `fetchMe`),
+  `containers/SignInScreen.tsx` (phone → code → org-pick steps),
+  `components/SignOutButton.tsx`, `guard.ts` (`requireAuthLoader`, redirects
+  to `/ingreso`). `web/src/features/plots/`: `api/plotsApi.ts`
+  (`loadFarmsWithPlots`: `GET /farms?org_id=` then `GET
+  /farms/{id}/plots` per farm), `components/PlotsList.tsx` (presentational),
+  `containers/PlotsScreen.tsx` (loading/error/empty states, replaces the
+  `parcelas` tab's `PlaceholderPage`). `app/routes.tsx`: `/ingreso` route,
+  `requireAuthLoader` on the `/` (`AppShell`) route so every tab redirects an
+  unauthenticated visitor. `app/PlaceholderPage.tsx`: optional `children`
+  (used to add `SignOutButton` to the `Más` tab without a new screen).
+  `vite.config.ts`: dev proxy for the api's actual top-level path prefixes.
+  - Decisions:
+    - Token storage: ADR-0014 and docs/05 don't say where the PWA keeps the
+      token (owner fallback instruction). Used `localStorage` (two keys,
+      token + org id) so a refresh keeps the session.
+    - No TanStack Query: docs/05 names it as the server-state layer, but
+      nothing installs it yet and this task's own scope is "a small fetch
+      wrapper". A one-shot GET list has no caching/invalidation need today,
+      so `useApiResource` (plain `useState`/`useEffect`) covers it without a
+      new dependency. Flagged for the owner: adopt TanStack Query when T8/T9
+      need its cache invalidation or offline persistence, and replace this
+      hook then — not attempted here to avoid inventing the migration path
+      speculatively.
+    - No `openapi-typescript`/`openapi-fetch`: docs/05 names generated types
+      from OpenAPI, but there's no OpenAPI schema-generation step wired yet
+      and the task explicitly scoped T7 to "a small fetch wrapper". Types for
+      the four endpoints used are hand-written in `authApi.ts`/`plotsApi.ts`
+      instead. Flagged as a gap, not invented as a bigger codegen setup.
+    - Vite dev proxy: `main.py` registers routes with no common prefix (`/me`,
+      `/organizations`, `/farms`, `/crops`, `/plots`, `/cycles`, `/dev`,
+      `/health`), not the `/api/v1` docs/04-api.md names — a doc/code gap
+      carried from earlier tasks (unaddressed here, out of T7's scope).
+      `vite.config.ts` proxies each of those exact prefixes to
+      `http://localhost:8000` (or `VITE_API_URL`) instead of one shared
+      `/api` prefix, matching what the backend actually serves; verified live
+      (see Verification).
+    - Org chooser labels: `GET /me`'s `MeResponse` only returns
+      `memberships: [{org_id, role}]`, no organization name (no such field
+      reachable from that endpoint) — flagged, not invented: the chooser
+      shows a shortened org id plus the Spanish role label
+      (`Organización 3f9a2c1b · Propietario`) until an org-name source
+      exists.
+    - `apiFetch` error parsing handles two response shapes: the documented
+      problem+json (`type/title/status/detail`, from `ProblemError`) and
+      FastAPI's own default `RequestValidationError` handler
+      (`shared/errors.py`), which returns `{"detail": [{msg, ...}]}` with a
+      plain `application/json` content type — not the documented shape. This
+      is a real doc/code gap in the existing backend (not introduced here);
+      the client is defensive against it since a malformed `org_id` or
+      similar framework-level 422 would otherwise show as an unparsed error.
+    - User-facing error copy: raw backend error titles stay in English
+      (`ProblemError.title`, e.g. "Invalid or expired code") since backend
+      code is English-only per `AGENTS.md`. The sign-in screen maps the one
+      error case it distinguishes (401 on verify) to a fixed Spanish message;
+      the plots screen shows one fixed Spanish message for any load failure.
+      Full backend-error-message localization is out of scope and flagged,
+      not attempted.
+    - Irrigation system label: rendered as plain text ("Secano"/"Goteo"/…),
+      not `StatusBadge` — `status.ts`'s `StatusState` (`ok/watch/irrigate/
+      stress`) is the water-balance vocabulary only; docs/07's "Two
+      Vocabularies Rule" (also stated in `.impeccable/design.json`) bars
+      reusing it for irrigation system type.
+    - `PlaceholderPage` gained an optional `children` prop (backward
+      compatible) instead of a new `MasScreen`: the only thing needed on the
+      `Más` tab for T7 is a sign-out control, and a full "Más" screen isn't
+      in this epic's scope.
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner
+    `npm test -- --run` (`web/`). RED observed by moving the ten new
+    implementation files (not the new/changed tests) to a temp location and
+    running the full suite: 5 test files failed with `Failed to resolve
+    import` (Vite import-analysis) for the missing modules —
+    `App.test.tsx`, `routes.test.tsx` (via `routes.tsx`'s now-broken
+    imports), `client.test.ts`, `SignInScreen.test.tsx`,
+    `PlotsScreen.test.tsx` — 6 unrelated test files still passed (22 passed,
+    5 failed). Restored the files: GREEN, `11 passed (11 files), 43 passed`.
+    REFACTOR: `useApiResource` initially called `setState` synchronously at
+    the top of its effect body, which `eslint-plugin-react-hooks`'s
+    `set-state-in-effect` rule (already enabled via
+    `reactHooks.configs.recommended.rules`) flagged; rewritten to reset to
+    `loading` during render when `deps` changes (React's own "adjusting
+    state when a prop changes" pattern) instead of inside the effect.
+  - Verification (`web/`): `npm run lint` → clean (0 errors after the
+    `useApiResource` refactor above; 1 error before it); `npm run typecheck`
+    → clean; `npm test -- --run` → `11 passed (11), 43 passed (43)`;
+    `npm run build` → built, PWA precache 13 entries; `npm run size` →
+    `139.07 kB` gzip (limit 200 kB).
+  - Manual smoke check: ran the real stack — `uv run uvicorn
+    techcamp.main:app` (seminar profile) against the already-running dev
+    Postgres, and `npm run dev` (Vite). Seeded one organization, user,
+    membership, farm and plot directly in Postgres (no scenario/seed loader
+    exists yet for this epic). Drove the exact request chain the UI makes,
+    through the Vite dev proxy (`curl` against `localhost:5173`, not the UI
+    itself — no browser automation tool was used): `POST /dev/auth/otp` →
+    204, read the printed code from the api log, `POST
+    /dev/auth/otp/verify` → token, `GET /me` → the seeded membership, `GET
+    /farms?org_id=` → the seeded farm, `GET /farms/{id}/plots` → the seeded
+    plot (`area_ha` computed by Postgres, `irrigation_system: "drip"`). All
+    six calls returned the expected status and body through the proxy,
+    confirming the path-prefix proxy config is correct end to end. Cleaned
+    up the seeded rows and stopped both processes afterward; a pre-existing,
+    unrelated organization/user row from earlier work was left untouched.
+    The UI itself (React rendering in a real browser) wasn't driven — that's
+    covered by the Vitest component tests with mocked `fetch` using the same
+    request shapes proven live here.
+  - Commit: `99c5d47` — `feat(web): add OTP sign-in and plots list for E3`.
+    Authored lines (`git diff --cached --stat -- . ':!web/package-lock.json'`
+    for this commit's files): 988 insertions, 7 deletions across 17 files
+    (13 new, 4 modified) — well above the ~250 forecast, same reason as
+    several backend tasks in this epic: one work-unit commit was specified,
+    and a full data layer (client + session + hook) plus two complete
+    features (3-step auth flow, plots list) with their tests don't split
+    smaller within a single task. Flagging for the owner/parent
+    orchestrator's delivery-strategy decision, not re-split here. RDD
+    assessment/acknowledgement for this commit not run by this writer — left
+    to the parent orchestrator; boundary not advanced here.
+  - Doc gaps flagged (new, beyond the carried `municipality_code` one from
+    T1–T6, which this task doesn't touch): (1) docs/05 names TanStack Query
+    and `openapi-typescript`/`openapi-fetch`; T7 uses neither, per its own
+    "small fetch wrapper" scoping — see Decisions above. (2) docs/04-api.md's
+    endpoint list is missing `POST /dev/auth/otp/verify` (implemented,
+    undocumented). (3) The api has no `/api/v1` prefix docs/04 describes.
+    (4) `GET /me` has no organization name, only `org_id`/`role`, so the
+    multi-org chooser can't show a human-readable name.
+
 ## PR plan (stacked-to-main, one PR per task; owner 2026-09-23)
 All slices are `size:exception` (each task is one work-unit commit).
 - #22 `feat/e3-farms-01-schema` T1 `4684262..8f7c472` (724)
@@ -774,4 +906,5 @@ All slices are `size:exception` (each task is one work-unit commit).
 - CI fix (2026-09-24): every PR failed in CI with `type "geometry" does not exist`, because CI's Postgres service does not run `infra/postgres/init-extensions.sql`. Root fix `c0edf39` (on #22): the farm migration runs `CREATE EXTENSION IF NOT EXISTS postgis`. Reproduced on a fresh database without PostGIS (alembic failed), then 212 passed at the chain tip on a fresh database. The chain was restacked with `git rebase --update-refs` and force-pushed, so the commit hashes above changed. CI is green on #22–#27.
 
 ## Next step
-T7 on branch `feat/e3-farms-web` from `main` @ `a912e8f` (backend merged via #22–#27).
+T8 (web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot
+forms) on branch `feat/e3-farms-web` @ `99c5d47` (T7 done).
