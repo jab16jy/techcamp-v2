@@ -44,7 +44,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150 — actual ~445
 - [x] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300 — actual 428
 - [x] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80 — actual ~160
-- [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
+- [x] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250 — actual 590
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
@@ -79,6 +79,9 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   parent orchestrator added mid-task (see T3b progress below for all five).
   #21 round 4 resolved in `81f57e3`. RDD assessment/acknowledgement for this
   commit not run by this writer — left to the parent orchestrator; boundary
+  not advanced here.
+- T4 `81f57e3..3703cbe` (new migration, 590 lines, likely `slice_budget_reached`): RDD
+  assessment/acknowledgement not run by this writer — left to the parent orchestrator; boundary
   not advanced here.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
@@ -381,6 +384,80 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gap carried from T1/T2/T3, unchanged: `farm.municipality_code` is plain `text`, not yet a
     real FK.
 
+- 2026-09-23: T4 done by a delegated `sonnet-high` writer. `farms` module additions:
+  `domain/models.py` (`SoilProfileSource`, `SoilProfile`, `FAO56_TEXTURE_WATER_LIMITS`,
+  `apply_fao56_texture_fallback` — pure), `adapters/orm.py` (`SoilProfileRow`, no `org_id`:
+  access gated through the plot), `adapters/repositories.py` (`SqlAlchemySoilProfileRepository.put`,
+  Postgres `INSERT ... ON CONFLICT (plot_id) DO UPDATE`), `application/ports.py`
+  (`SoilProfileRepository`), `application/manage_soil.py` (`put_soil_profile`, reuses
+  `manage_plots.resolve_plot_access` + `ensure_can_write`), `adapters/api/deps.py`
+  (`SoilProfileRepoDep`), `adapters/api/router.py` (`PUT /plots/{plot_id}/soil` →
+  `SoilProfileView`). Migration `7f9c1b3cae7f` (chained off `67cf2dd1f13e`): `soil_profile`
+  table (`plot_id` PK/FK to `plot.id`, range `CHECK`s, `θWP < θFC` `CHECK`, `source` `CHECK`
+  restricted to `soilgrids|lab|fao56_texture`).
+  - Decisions:
+    - **FAO-56 Table 19 doc gap (flag for the owner)**: the task asked for the full Table 19
+      texture-class fallback (sand, loamy sand, sandy loam, loam, silt loam, silt, silt clay
+      loam, silty clay, clay). After an extensive good-faith search (direct fetch of
+      `fao.org/4/x0490e/x0490e0e.htm`'s raw HTML via `curl`, its PDF mirrors, academic
+      reproductions, and an R/Python FAO-56 package), Table 19 itself is **not reproduced** in
+      the accessible FAO HTML mirror or in any secondary source found — only three worked
+      values inside that same chapter's Example 36 ("Estimate RAW for a full-grown onion,
+      tomato and maize crop... loamy sand, silt and silty clay soils", each row explicitly
+      marked "From Table 19"): loamy sand θFC≈0.15/θWP≈0.06, silt θFC≈0.32/θWP≈0.15, silty clay
+      θFC≈0.35/θWP≈0.23 m³/m³. Per "never invent values" (this task's own instruction, and the
+      precedent T3 set for yam/`kc_source=none`), `apply_fao56_texture_fallback` implements
+      **only these three verified classes**; any other texture (including the other six Table 19
+      classes) leaves θFC/θWP and `source` unset rather than guessing. This is a real,
+      undecided gap: the owner should either supply/point to a verified copy of the full Table
+      19, or accept the three-class scope, before T5 (SoilGrids autofill) or E6 (irrigation
+      balance, which consumes θFC/θWP) ship depending on unset values for the other six classes.
+    - `soil_profile` has no `org_id` column, matching docs/03-modelo-datos.md:106's field list
+      exactly (only `plot_id PK, FK`): access is gated once through
+      `manage_plots.resolve_plot_access` (org-scoped) before the soil repository is ever
+      touched, the same defense-in-depth boundary the read-only `crop`/`crop_stage` tables use
+      for a different reason (global data, T3).
+    - `source` is nullable (docs/03 doesn't mark it `NOT NULL`): set to `lab` when the client
+      sends both θFC and θWP, `fao56_texture` when the pure fallback fills them from a verified
+      texture class, and left `null` when neither is available (no lab values, no recognized
+      texture) — an honest "not yet determined" state, not an invented third source.
+    - `PUT` is a full-document upsert (docs/04-api.md:49: `SoilProfile → SoilProfile`, no
+      separate create endpoint), not a `PATCH`-style partial merge: a second `PUT` replaces every
+      field, including clearing ones the first call set and the second omits (test
+      `test_putting_a_soil_profile_twice_replaces_it`).
+    - Router-level validation (pydantic, same layer as the existing GeoJSON/explicit-null
+      checks): `ph` in [0, 14], `organic_matter_pct`/`field_capacity_pct` in (0, 100],
+      `wilting_point_pct` in [0, 100), `root_depth_cm` > 0, θFC and θWP must be given together
+      (not just one), and θWP must be strictly less than θFC when both are given — all `422`.
+    - No `GET /plots/{plot_id}/soil`: docs/04-api.md:43-56 lists only `PUT` and
+      `POST .../soil:autofill` (T5) for this resource, per the task's explicit instruction.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by moving the two new files aside (migration, `manage_soil.py`) and
+    `git stash`-ing the six modified implementation files, keeping the new/changed tests:
+    `uv run pytest -q tests/farms/test_domain_models.py` → 1 collection error,
+    `ImportError: cannot import name 'SoilProfileSource'`; `uv run pytest -q
+    tests/farms/test_api.py -k soil` → 8 failed (404 "Not Found" — the route didn't exist —
+    where 200/403/422 were expected, and 404 with the wrong `content-type` where problem+json
+    was expected). Restored the implementation: GREEN, `uv run pytest -q` → `128 passed`.
+    REFACTOR: `ruff format` wrapped three long `client.put(...)` calls in the new API tests.
+  - Verification (server/): `uv run pytest -q` → `128 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!`; `uv run ruff format --check .` → `99 files already formatted` (1
+    file reformatted first pass); `uv run mypy` → `Success: no issues found in 77 source files`;
+    `uv run lint-imports` → `Hexagonal layers per module KEPT, 1 kept, 0 broken`; `uv run alembic
+    upgrade head` → applied `7f9c1b3cae7f`; `uv run alembic downgrade -1` → reverted it; `uv run
+    alembic upgrade head` → reapplied clean.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `3703cbe` — `feat(farms): add soil profile with FAO-56 texture fallback`. Authored
+    lines (`git diff --stat --cached` for this commit's files, excluding `server/uv.lock`): 590
+    insertions, 5 deletions across 10 files (2 new, 8 modified). Above the ~250 forecast, for the
+    same reason as T2/T2b/T3b: one work-unit commit was specified for this task, and the full
+    CRUD stack (domain + orm + repository + port + application + deps + router + migration) plus
+    two test files (~20 new tests) don't split smaller within a single task. Flagging for the
+    owner/parent orchestrator's delivery-strategy decision, not re-split here.
+  - Doc gap carried from T1/T2/T3: `farm.municipality_code` is plain `text`, not yet a real FK.
+    New doc gap: FAO-56 Table 19's other six texture classes, see Decisions above.
+
 ## Next step
-T4 soil profile (`soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture
-fallback).
+T5 soil autofill (SoilGrids port + adapter + test double,
+`POST /plots/{id}/soil:autofill`, seminar recorded fixture, ADR-0021 row) — and resolve the T4
+FAO-56 Table 19 doc gap above before T5 or E6 ship on it.
