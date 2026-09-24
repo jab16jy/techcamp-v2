@@ -16,7 +16,7 @@ async def test_read_me_returns_user_and_memberships(db_session) -> None:
     await db_session.commit()
     db_session.add(MembershipRow(org_id=org_id, user_id=user_id, role="owner"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.get("/me", headers={"Authorization": f"Bearer {issue_token(str(user_id))}"})
 
@@ -28,7 +28,7 @@ async def test_read_me_returns_user_and_memberships(db_session) -> None:
 
 
 def test_read_me_requires_a_bearer_token() -> None:
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.get("/me")
 
@@ -37,7 +37,7 @@ def test_read_me_requires_a_bearer_token() -> None:
 
 
 def test_read_me_rejects_an_invalid_token() -> None:
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.get("/me", headers={"Authorization": "Bearer not-a-jwt"})
 
@@ -46,7 +46,7 @@ def test_read_me_rejects_an_invalid_token() -> None:
 
 
 def test_read_me_returns_404_when_the_token_subject_has_no_user_record() -> None:
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.get("/me", headers={"Authorization": f"Bearer {issue_token(str(uuid7()))}"})
 

@@ -171,6 +171,7 @@ Estos endpoints no se registran en el perfil `production` ([ADR-0021](adr/0021-p
 
 ```
 POST /dev/auth/otp            { phone } → 204     # el código se imprime en la consola del api
+POST /dev/auth/otp/verify     { phone, code } → { access_token, token_type }   # 401 si el código es inválido o expiró
 POST /dev/jobs/{name}:run     { day? } → { job_id }   # weather, water-balance, irrigation, risk, metrics
 GET  /dev/outbox              → Notification[]    # SMS/WhatsApp simulados
 POST /dev/scenarios/{name}:load → 202             # lo usa el simulador para crear datos base y fixtures

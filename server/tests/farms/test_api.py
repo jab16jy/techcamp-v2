@@ -61,7 +61,7 @@ def _auth(token: str) -> dict[str, str]:
 
 async def test_owner_creates_a_farm(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.post(
         "/farms",
@@ -82,7 +82,7 @@ async def test_owner_creates_a_farm(db_session: AsyncSession) -> None:
 
 async def test_viewer_cannot_create_a_farm(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="viewer")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.post(
         "/farms",
@@ -102,7 +102,7 @@ async def test_viewer_cannot_create_a_farm(db_session: AsyncSession) -> None:
 async def test_creating_a_farm_in_a_foreign_org_is_404(db_session: AsyncSession) -> None:
     _org_id, _user_id, token = await _member(db_session, role="owner")
     foreign_org_id = uuid7()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.post(
         "/farms",
@@ -122,7 +122,7 @@ async def test_creating_a_farm_in_a_foreign_org_is_404(db_session: AsyncSession)
 async def test_list_farms_only_returns_the_callers_org(db_session: AsyncSession) -> None:
     org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     client.post(
         "/farms",
         json={"org_id": str(org_a), "name": "A1", "municipality_code": "47001", "location": _POINT},
@@ -144,7 +144,7 @@ async def test_list_farms_only_returns_the_callers_org(db_session: AsyncSession)
 async def test_farm_in_another_org_is_404(db_session: AsyncSession) -> None:
     _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     create = client.post(
         "/farms",
         json={"org_id": str(org_b), "name": "B1", "municipality_code": "47001", "location": _POINT},
@@ -160,7 +160,7 @@ async def test_farm_in_another_org_is_404(db_session: AsyncSession) -> None:
 
 async def test_owner_patches_a_farm_name(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     create = client.post(
         "/farms",
         json={
@@ -200,7 +200,7 @@ async def test_creating_a_drip_plot_without_efficiency_uses_the_default(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
 
     response = client.post(
@@ -217,7 +217,7 @@ async def test_creating_a_drip_plot_without_efficiency_uses_the_default(
 
 async def test_rainfed_plot_with_efficiency_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
 
     response = client.post(
@@ -238,7 +238,7 @@ async def test_out_of_range_efficiency_is_422_before_the_database(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
 
     response = client.post(
@@ -259,7 +259,7 @@ async def test_out_of_range_efficiency_is_422_before_the_database(
 async def test_plots_of_a_foreign_farm_are_404(db_session: AsyncSession) -> None:
     _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, user_b, _token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_b, issue_token(str(user_b)))
 
     response = client.get(f"/farms/{farm_id}/plots", headers=_auth(token_a))
@@ -270,7 +270,7 @@ async def test_plots_of_a_foreign_farm_are_404(db_session: AsyncSession) -> None
 
 async def test_list_and_patch_plots(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -297,7 +297,7 @@ async def test_patching_a_plot_to_rainfed_clears_leftover_efficiency_and_flow(
     switches to `none` without sending either field clears both instead of
     leaving the old system's values behind (GitHub issue #21 round 4)."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -328,7 +328,7 @@ async def test_patching_a_plot_to_rainfed_with_explicit_flow_is_422(
     """Unlike an omitted field, an explicit non-null value on a field that
     contradicts `none` stays a client error (#21 round 4)."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -356,7 +356,7 @@ async def test_switching_a_plot_to_irrigated_without_efficiency_uses_the_default
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -377,7 +377,7 @@ async def test_switching_between_irrigated_systems_uses_the_new_default(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -401,7 +401,7 @@ async def test_explicit_null_efficiency_on_a_plot_that_stays_irrigated_is_422(
     invalid input, not "use the default" (the default applies only when the
     field is omitted; GitHub issue #21 round 4)."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -427,7 +427,7 @@ async def test_patching_a_plots_boundary_recomputes_area_ha(db_session: AsyncSes
     an `UPDATE` of `boundary` must recompute it, not keep the old value
     (GitHub issue #21 round 4)."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -461,7 +461,7 @@ async def test_explicit_null_on_farm_name_is_422(
     db_session: AsyncSession, path_suffix: str, payload: dict[str, object]
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
 
     response = client.patch(path_suffix.format(farm_id=farm_id), json=payload, headers=_auth(token))
@@ -482,7 +482,7 @@ async def test_explicit_null_on_non_nullable_plot_fields_is_422(
     db_session: AsyncSession, payload: dict[str, object]
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -501,7 +501,7 @@ async def test_explicit_null_on_technician_id_still_clears_it(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
 
     response = client.patch(f"/farms/{farm_id}", json={"technician_id": None}, headers=_auth(token))
@@ -512,7 +512,7 @@ async def test_explicit_null_on_technician_id_still_clears_it(
 
 async def test_foreign_technician_id_is_422_not_500(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.post(
         "/farms",
@@ -533,7 +533,7 @@ async def test_foreign_technician_id_is_422_not_500(db_session: AsyncSession) ->
 async def test_technician_id_of_a_producer_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
     _org2, producer_id, _token2 = await _member(db_session, role="producer", org_name="Finca A")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     db_session.add(MembershipRow(org_id=org_id, user_id=producer_id, role="producer"))
     await db_session.commit()
 
@@ -557,7 +557,7 @@ async def test_technician_id_of_a_technician_is_accepted(db_session: AsyncSessio
     _org2, tech_id, _token2 = await _member(db_session, role="technician", org_name="Finca A")
     db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.post(
         "/farms",
@@ -581,7 +581,7 @@ async def test_stale_technician_does_not_block_an_unrelated_patch(
     _org2, tech_id, _token2 = await _member(db_session, role="technician", org_name="Finca A")
     db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     created = client.post(
         "/farms",
         json={
@@ -613,7 +613,7 @@ async def test_technician_can_write_a_plot(db_session: AsyncSession) -> None:
     _org2, tech_id, tech_token = await _member(db_session, role="technician", org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
 
     response = client.post(
@@ -631,7 +631,7 @@ async def test_non_writer_roles_cannot_patch_a_farm(db_session: AsyncSession, ro
     _user_id, member_id, member_token = await _member(db_session, role=role, org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=member_id, role=role))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
 
     response = client.patch(
@@ -648,7 +648,7 @@ async def test_non_writer_roles_cannot_create_a_plot(db_session: AsyncSession, r
     _user_id, member_id, member_token = await _member(db_session, role=role, org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=member_id, role=role))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
 
     response = client.post(
@@ -667,7 +667,7 @@ async def test_non_writer_roles_cannot_patch_a_plot(db_session: AsyncSession, ro
     _user_id, member_id, member_token = await _member(db_session, role=role, org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=member_id, role=role))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -687,7 +687,7 @@ async def test_non_writer_roles_cannot_patch_a_plot(db_session: AsyncSession, ro
 async def test_patching_a_plot_of_a_foreign_org_is_404(db_session: AsyncSession) -> None:
     _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_b, token_b)
     created = client.post(
         f"/farms/{farm_id}/plots",
@@ -704,7 +704,7 @@ async def test_patching_a_plot_of_a_foreign_org_is_404(db_session: AsyncSession)
 
 async def test_get_farms_pages_by_cursor(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     for i in range(3):
         client.post(
             "/farms",
@@ -750,7 +750,7 @@ async def test_point_with_invalid_coordinates_is_422(
     db_session: AsyncSession, coordinates: list[float]
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     # httpx's `json=` param rejects NaN/Infinity client-side (allow_nan=False);
     # `json.dumps` defaults to allow_nan=True, so send the raw body instead —
     # pydantic-core accepts NaN/Infinity floats by default (allow_inf_nan=True),
@@ -770,7 +770,7 @@ async def test_point_with_invalid_coordinates_is_422(
 
 async def test_polygon_with_out_of_range_coordinates_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     bad_polygon = {
         "type": "Polygon",
@@ -796,7 +796,7 @@ async def test_get_crops_returns_the_catalog_with_stages_kc_and_kc_source(
     member can read it, with no `org_id` involved.
     """
     _org_id, _user_id, token = await _member(db_session, role="viewer")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.get("/crops", headers=_auth(token))
 
@@ -814,7 +814,7 @@ async def test_get_crops_returns_the_catalog_with_stages_kc_and_kc_source(
 
 async def test_get_crops_without_a_token_is_401(db_session: AsyncSession) -> None:
     await _member(db_session, role="viewer")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.get("/crops")
 
@@ -834,7 +834,7 @@ async def _create_plot(client: TestClient, farm_id: str, token: str) -> str:
 async def test_owner_puts_a_lab_soil_profile(db_session: AsyncSession) -> None:
     """docs/04-api.md:49; lab values pass through and `source` becomes `lab`."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -866,7 +866,7 @@ async def test_soil_profile_without_water_limits_falls_back_to_fao56_texture(
     verified texture class fills θFC/θWP and marks `source = fao56_texture`.
     """
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -883,7 +883,7 @@ async def test_soil_profile_with_an_unrecognized_texture_leaves_water_limits_nul
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -899,7 +899,7 @@ async def test_soil_profile_with_an_unrecognized_texture_leaves_water_limits_nul
 async def test_putting_a_soil_profile_twice_replaces_it(db_session: AsyncSession) -> None:
     """`PUT` is idempotent full-document write (docs/04-api.md:49), not a merge."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
     first = client.put(
@@ -925,7 +925,7 @@ async def test_putting_a_soil_profile_twice_replaces_it(db_session: AsyncSession
 
 async def test_wilting_point_at_or_above_field_capacity_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -940,7 +940,7 @@ async def test_wilting_point_at_or_above_field_capacity_is_422(db_session: Async
 
 async def test_soil_profile_with_only_one_water_limit_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -955,7 +955,7 @@ async def test_soil_profile_with_only_one_water_limit_is_422(db_session: AsyncSe
 
 async def test_soil_profile_with_out_of_range_ph_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -969,7 +969,7 @@ async def test_viewer_cannot_put_a_soil_profile(db_session: AsyncSession) -> Non
     _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
     plot_id = await _create_plot(client, farm_id, owner_token)
     viewer_token = issue_token(str(viewer_id))
@@ -986,7 +986,7 @@ async def test_putting_a_soil_profile_of_a_foreign_org_plot_is_404(
 ) -> None:
     _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_b, token_b)
     plot_id = await _create_plot(client, farm_id, token_b)
 
@@ -1004,7 +1004,7 @@ async def test_autofilling_soil_uses_the_seminar_recorded_fixture(
     """T5, ADR-0021: in tests (seminar profile, `TECHCAMP_PROFILE` unset),
     the wired adapter is the recorded fixture — no network call."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -1026,7 +1026,7 @@ async def test_technician_can_autofill_soil(db_session: AsyncSession) -> None:
     _org2, tech_id, _tech_token = await _member(db_session, role="technician", org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
     plot_id = await _create_plot(client, farm_id, owner_token)
     tech_token = issue_token(str(tech_id))
@@ -1041,7 +1041,7 @@ async def test_viewer_cannot_autofill_soil(db_session: AsyncSession) -> None:
     _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
     plot_id = await _create_plot(client, farm_id, owner_token)
     viewer_token = issue_token(str(viewer_id))
@@ -1054,7 +1054,7 @@ async def test_viewer_cannot_autofill_soil(db_session: AsyncSession) -> None:
 async def test_autofilling_soil_of_a_foreign_org_plot_is_404(db_session: AsyncSession) -> None:
     _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_b, token_b)
     plot_id = await _create_plot(client, farm_id, token_b)
 
@@ -1066,7 +1066,7 @@ async def test_autofilling_soil_of_a_foreign_org_plot_is_404(db_session: AsyncSe
 
 async def test_autofilling_soil_maps_a_soilgrids_timeout_to_503(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -1089,7 +1089,7 @@ async def test_autofilling_soil_maps_a_soilgrids_error_status_to_502(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -1116,7 +1116,7 @@ async def test_autofilling_soil_queries_soilgrids_at_the_plots_centroid(
     axis-aligned square with a known centroid, `(-74.095, 10.905)`: lon and
     lat are distinct enough that a swap would fail this assertion."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -1173,7 +1173,7 @@ async def test_owner_creates_a_crop_cycle_and_derives_expected_harvest_on(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -1196,7 +1196,7 @@ async def test_creating_a_cycle_for_a_crop_with_no_stages_leaves_expected_harves
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -1214,7 +1214,7 @@ async def test_creating_a_second_active_cycle_on_the_same_plot_is_409(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
     first = client.post(
@@ -1236,7 +1236,7 @@ async def test_creating_a_second_active_cycle_on_the_same_plot_is_409(
 
 async def test_creating_a_cycle_with_an_unknown_crop_id_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
@@ -1255,7 +1255,7 @@ async def test_viewer_cannot_create_a_crop_cycle(db_session: AsyncSession) -> No
     _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
     plot_id = await _create_plot(client, farm_id, owner_token)
     viewer_token = issue_token(str(viewer_id))
@@ -1274,7 +1274,7 @@ async def test_technician_can_create_a_crop_cycle(db_session: AsyncSession) -> N
     _org2, tech_id, _tech_token = await _member(db_session, role="technician", org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
     plot_id = await _create_plot(client, farm_id, owner_token)
     tech_token = issue_token(str(tech_id))
@@ -1291,7 +1291,7 @@ async def test_technician_can_create_a_crop_cycle(db_session: AsyncSession) -> N
 async def test_creating_a_cycle_on_a_foreign_org_plot_is_404(db_session: AsyncSession) -> None:
     _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_b, token_b)
     plot_id = await _create_plot(client, farm_id, token_b)
 
@@ -1307,7 +1307,7 @@ async def test_creating_a_cycle_on_a_foreign_org_plot_is_404(db_session: AsyncSe
 
 async def test_owner_patches_a_cycle_to_harvested(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
     cycle = await _create_cycle(client, plot_id, token)
@@ -1324,7 +1324,7 @@ async def test_patching_a_cycle_can_change_expected_harvest_on_without_a_status(
     db_session: AsyncSession,
 ) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
     cycle = await _create_cycle(client, plot_id, token)
@@ -1345,7 +1345,7 @@ async def test_patching_a_cycles_expected_harvest_on_before_sown_on_is_422(
     """GitHub issue #21 round 8: `sown_on` ("2026-01-01" per `_create_cycle`'s
     default) is the earliest a cycle's `expected_harvest_on` may be."""
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
     cycle = await _create_cycle(client, plot_id, token)
@@ -1360,7 +1360,7 @@ async def test_patching_a_cycles_expected_harvest_on_before_sown_on_is_422(
 
 async def test_patching_a_harvested_cycle_back_to_active_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
     cycle = await _create_cycle(client, plot_id, token)
@@ -1379,7 +1379,7 @@ async def test_patching_a_harvested_cycle_back_to_active_is_422(db_session: Asyn
 
 async def test_patching_a_cycle_with_explicit_null_status_is_422(db_session: AsyncSession) -> None:
     org_id, _user_id, token = await _member(db_session, role="owner")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
     cycle = await _create_cycle(client, plot_id, token)
@@ -1395,7 +1395,7 @@ async def test_viewer_cannot_patch_a_crop_cycle(db_session: AsyncSession) -> Non
     _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
     db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_id, owner_token)
     plot_id = await _create_plot(client, farm_id, owner_token)
     cycle = await _create_cycle(client, plot_id, owner_token)
@@ -1411,7 +1411,7 @@ async def test_viewer_cannot_patch_a_crop_cycle(db_session: AsyncSession) -> Non
 async def test_patching_a_cycle_of_a_foreign_org_plot_is_404(db_session: AsyncSession) -> None:
     _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
     org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     farm_id = await _create_farm(client, org_b, token_b)
     plot_id = await _create_plot(client, farm_id, token_b)
     cycle = await _create_cycle(client, plot_id, token_b)

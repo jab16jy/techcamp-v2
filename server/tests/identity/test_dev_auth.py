@@ -16,7 +16,7 @@ def _read_code(capsys: pytest.CaptureFixture[str]) -> str:
 def test_otp_request_prints_a_code_and_returns_204(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     response = client.post("/dev/auth/otp", json={"phone": "+573009990001"})
 
@@ -29,7 +29,7 @@ async def test_otp_verify_returns_a_jwt_for_an_existing_user(
 ) -> None:
     db_session.add(AppUserRow(id=uuid7(), phone="+573009990002"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     client.post("/dev/auth/otp", json={"phone": "+573009990002"})
     code = _read_code(capsys)
 
@@ -42,7 +42,7 @@ async def test_otp_verify_returns_a_jwt_for_an_existing_user(
 
 
 def test_otp_verify_rejects_a_wrong_code(capsys: pytest.CaptureFixture[str]) -> None:
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     client.post("/dev/auth/otp", json={"phone": "+573009990003"})
     capsys.readouterr()
 
@@ -55,7 +55,7 @@ def test_otp_verify_rejects_a_wrong_code(capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_otp_verify_rejects_an_unknown_user(capsys: pytest.CaptureFixture[str]) -> None:
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     client.post("/dev/auth/otp", json={"phone": "+573009990004"})
     code = _read_code(capsys)
 
