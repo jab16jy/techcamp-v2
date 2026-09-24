@@ -56,7 +56,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T7b Align with docs and fix #21 round 10: server routers under `/api/v1` (docs/04:7), web client on generated OpenAPI types + `openapi-fetch` + TanStack Query (docs/05:179-180), document `POST /dev/auth/otp/verify` in docs/04; 401 → sign-out and redirect to sign-in, request timeout, atomic sign-in session, single proxy config, farms pagination, error copy by cause — route: delegated — forecast ~500 — actual 166 (server) + 667 (web)
 - [x] T7c Fix #21 round 11: `VITE_API_URL` only as the dev-proxy target (non-`VITE_` variable, relative browser base, test base separate); do not sign out on 401 from anonymous OTP calls (no token on them); test the 10 s timeout and `describeApiError`; per-farm plots retry — route: delegated — forecast ~150 — actual 219
 - [x] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350 — actual 158 (map) + 701 (forms)
-- [ ] T8b Fix #21 round 12: `AbortSignal.any` fallback for older WebViews; real fake-timer timeout test; test list refetch after farm/plot create; `PlotDrawMap` glue test + `invalidateSize()` in the sheet + marker icon under Vite; `errorCopy` test with `ApiError`; client lat/lng range check; ADR-0021 row for map tiles (public OSM, owner 2026-09-24) — route: delegated — forecast ~150
+- [x] T8b Fix #21 round 12: `AbortSignal.any` fallback for older WebViews; real fake-timer timeout test; test list refetch after farm/plot create; `PlotDrawMap` glue test + `invalidateSize()` in the sheet + marker icon under Vite; `errorCopy` test with `ApiError`; client lat/lng range check; ADR-0021 row for map tiles (public OSM, owner 2026-09-24) — route: delegated — forecast ~150 — actual 352
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
 
 ## Review (RDD)
@@ -1339,7 +1339,121 @@ All slices are `size:exception` (each task is one work-unit commit).
     unchanged: `farm.municipality_code` plain `text`; `GET /me` has no
     organization name.
 
+- 2026-09-24: T8b done by a delegated `sonnet-high` writer on branch
+  `feat/e3-farms-web` @ `431d75b` (T7c + T8 reviewed, plus the owner's map-tile
+  decision recorded). Resolves GitHub issue #21 round 12 (three WARNINGs, all
+  four suggestions).
+  - `web/src/lib/api/client.ts`: new `combineWithTimeout` helper —
+    `AbortSignal.any` (Chrome 116+, Safari 17.4+) is feature-detected
+    (`typeof AbortSignal.any === 'function'`) before use; when absent (older
+    field WebViews), the timeout signal alone wins and a caller-initiated
+    abort no longer cancels the request (accepted tradeoff, task instruction).
+    `REQUEST_TIMEOUT_MS` exported so the test asserts the same constant.
+  - `web/src/lib/api/client.test.ts`: replaced the vacuous timeout test
+    (asserted only that *some* `AbortSignal` was attached, which can never
+    fail) with `rejects with a TimeoutError once a stalled request passes
+    REQUEST_TIMEOUT_MS` — fake timers plus a stubbed `AbortSignal.timeout`
+    (real `AbortSignal.timeout` isn't driven by vitest's fake timers; a
+    `setTimeout`-based stand-in is), a stalled `fetch` mock that only settles
+    on its request signal aborting. New `falls back to a timeout-only signal
+    when AbortSignal.any is unavailable`: deletes `AbortSignal.any` for the
+    call, proves the request still completes instead of throwing.
+  - `web/src/features/plots/api/plotsApi.test.tsx` (new): two `renderHook`
+    tests (`useFarms`+`useCreateFarm`, `usePlotsByFarm`+`useCreatePlot`)
+    proving each list goes from 0 to 1 item after its create mutation and
+    that exactly 3 fetches happen (initial GET, POST, refetch GET) — proves a
+    real invalidation-triggered refetch, not the mutation's own response
+    being reused. The existing `['farms', orgId]`/`['plots', farmId]`
+    invalidation keys already matched their query keys (verified by
+    temporarily breaking each to a wrong key and observing the new test fail
+    — see TDD below); no key fix was needed, only the missing coverage the
+    review flagged.
+  - `web/src/features/plots/components/PlotDrawMap.tsx`: `L.circleMarker`
+    replaces `L.marker` for a single drawn vertex — the default Leaflet
+    marker icon's relative asset paths break under Vite's bundling
+    (find-docs/ctx7 confirmed against `leaflet/leaflet`'s `DefaultIcon.js`);
+    `circleMarker` needs no icon asset at all (ponytail: smaller than
+    importing/re-pointing the marker images). Added one deferred
+    `map.invalidateSize()` (`setTimeout(..., 0)`, cleared on unmount) after
+    mount: the sheet's own slide-in is a CSS `transform` (doesn't change the
+    container's box size), but Leaflet's first tile fetch can still measure
+    a not-yet-settled first paint inside an animating ancestor.
+  - `web/src/features/plots/components/PlotDrawMap.test.tsx` (new): glue
+    test with a mocked `leaflet` module (task instruction) — click calls
+    `onMapClick` with `{lat, lng}`; `map.remove()` on unmount;
+    `map.invalidateSize()` called after mount; a single vertex draws via
+    `L.circleMarker`, not `L.marker`; the tile layer is added with an
+    attribution string containing "OpenStreetMap".
+  - OSM attribution (task item 5): verified, not changed — Leaflet's
+    `L.Map` defaults `attributionControl: true`
+    (`node_modules/leaflet/dist/leaflet-src.js:5865-5868`, grepped directly)
+    and `PlotDrawMap.tsx` already passes `attribution: TILE_ATTRIBUTION` to
+    `L.tileLayer`, so the OSM attribution control was already showing; no
+    code change needed, only the new glue test's assertion.
+  - `web/src/lib/api/errorCopy.test.ts`: the "generic copy... including an
+    ApiError" case passed a plain `Error`, never an actual `ApiError`; now
+    builds a real `ApiError(422, 'Validation error', 'name: Field required')`
+    and keeps a separate plain-`Error` case. `describeApiError` needed no
+    change (it doesn't special-case `ApiError`; both fall into the generic
+    branch) — this was a mislabeled test, not a bug.
+  - `web/src/features/plots/containers/CreateFarmSheet.tsx`: client-side
+    latitude/longitude range check (−90..90, −180..180) folded into
+    `canSubmit`, plus an inline hint shown once both fields are non-empty and
+    out of range. Server-side validation (T2b) still owns the authoritative
+    check; this only avoids a round trip for an obviously invalid pair.
+  - `docs/adr/0021-perfil-seminario-local.md`: new "Teselas del mapa" table
+    row plus a decision paragraph — OpenStreetMap public tiles in **every**
+    profile (not seminar-only, unlike the rest of the table), owner decision
+    2026-09-24; the map base needs internet to show, but drawing/saving the
+    polygon doesn't (only the final `POST` touches the network); the OSM
+    attribution requirement is carried into code (`PlotDrawMap.tsx`,
+    verified above).
+  - Decisions: no new decisions beyond the ones inline above
+    (`combineWithTimeout`'s fallback semantics, `circleMarker` over fixing
+    marker icon assets, ADR tile scope covering both profiles).
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner
+    `npm test -- --run` (web/). RED observed per behavior, by temporarily
+    reverting only the relevant implementation file(s) with `git stash push`
+    and running the new/changed test file:
+    - `client.ts` reverted → `client.test.ts`: the new timeout test **timed
+      out** (5000ms, the real `AbortSignal.timeout` never fires under fake
+      timers) and the new fallback test failed `TypeError: AbortSignal.any is
+      not a function`. Restored: GREEN, `13 passed`.
+    - `PlotDrawMap.tsx` reverted → `PlotDrawMap.test.tsx`: `invalidates the
+      map size after mount` failed (`invalidateSize` called 0 times) and
+      `draws a circleMarker...` failed `TypeError: default.marker is not a
+      function` (mock has no `marker`). Restored: GREEN, `5 passed`.
+    - `CreateFarmSheet.tsx` reverted → `CreateFarmSheet.test.tsx`: the new
+      range-check test failed (`toBeDisabled()` on an enabled button).
+      Restored: GREEN, `4 passed`.
+    - `plotsApi.ts`'s two invalidation keys, each temporarily changed to a
+      wrong `queryKey` one at a time: the matching new test failed (`data`
+      stayed length 0). Reverted to the real keys: GREEN, `2 passed`.
+    - `errorCopy.test.ts` and the ADR row needed no RED (no implementation
+      bug — pure coverage/doc additions).
+  - Verification (web/): `npm run lint` → clean; `npm run typecheck` →
+    clean; `npm test -- --run` → `17 files, 80 passed` (up from 70); `npm run
+    build` → succeeded (`PlotDrawMap-*.js` 149.79 kB / gzip 43.89 kB still its
+    own chunk, `index-*.js` 496.07 kB / gzip 156.47 kB); `npm run size` →
+    `155.22 kB` gzipped (limit 200 kB).
+  - Commit: `4c1069b` — `fix(web): resolve review round 12 findings`. Refs
+    #21. Authored lines (`git diff --stat --cached -- . ':!web/package-lock
+    .json'` for this commit's files): 340 insertions, 12 deletions across 9
+    files (2 new, 7 modified) — above the ~150 forecast, consistent with
+    every other fix task in this epic (three WARNINGs plus four suggestions,
+    each needing its own new test, plus a docs row). One commit: all nine
+    files serve the same round-12 fix, and the ADR row directly documents the
+    same `PlotDrawMap` tile decision the code changes touch (`work-unit-
+    commits` skill: "docs belong with the feature... they explain";
+    consistent with this epic's own T5 precedent of folding an ADR row into
+    the feature commit rather than a separate `docs(adr)` commit). RDD
+    assessment/acknowledgement not run by this writer — left to the parent
+    orchestrator; boundary not advanced here (still `7749c8f`).
+  - Skipped/open items: self-intersection polygon validation (deferred since
+    T2b, unrelated to round 12); `VITE_API_URL` dual-use note already closed
+    in T7c; no new doc gaps beyond the ones carried forward.
+
 ## Next step
-T8b (fix #21 round 12), then T9
-(web soil and cycle forms), on branch `feat/e3-farms-web` @ `7749c8f`
-(T7c + T8 reviewed; boundary `7749c8f`).
+T9 (web soil and cycle forms), on branch `feat/e3-farms-web` @ `4c1069b`
+(T8b done; RDD review of the `4c1069b` slice still pending — boundary stays
+`7749c8f` until the parent orchestrator runs it).
