@@ -1,10 +1,12 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../../../lib/api/client'
 import type { components } from '../../../lib/api/schema'
+import type { GeoJsonPolygon } from '../polygon'
 
 export type FarmView = components['schemas']['FarmView']
 export type PlotView = components['schemas']['PlotView']
 export type IrrigationSystem = components['schemas']['IrrigationSystem']
+export type GeoJsonPoint = components['schemas']['GeoJSONPoint']
 
 export interface FarmsPage {
   farms: FarmView[]
@@ -54,5 +56,60 @@ export function usePlotsByFarm(farmIds: string[]) {
       queryKey: ['plots', farmId],
       queryFn: () => fetchPlots(farmId),
     })),
+  })
+}
+
+export interface CreateFarmInput {
+  name: string
+  municipality_code: string
+  location: GeoJsonPoint
+}
+
+async function createFarm(orgId: string, input: CreateFarmInput): Promise<FarmView> {
+  const { data, error } = await apiClient.POST('/api/v1/farms', {
+    body: { org_id: orgId, ...input },
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from POST /farms')
+  return data
+}
+
+/** docs/04-api.md: `POST /farms`. Invalidates the org's farms list on success (T8). */
+export function useCreateFarm(orgId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateFarmInput) => createFarm(orgId as string, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['farms', orgId] })
+    },
+  })
+}
+
+export interface CreatePlotInput {
+  name: string
+  boundary: GeoJsonPolygon
+  irrigation_system: IrrigationSystem
+  irrigation_efficiency: number | null
+  system_flow_lph: number | null
+}
+
+async function createPlot(farmId: string, input: CreatePlotInput): Promise<PlotView> {
+  const { data, error } = await apiClient.POST('/api/v1/farms/{farm_id}/plots', {
+    params: { path: { farm_id: farmId } },
+    body: input,
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from POST /farms/{farm_id}/plots')
+  return data
+}
+
+/** docs/04-api.md: `POST /farms/{farm_id}/plots`. Invalidates that farm's plots on success (T8). */
+export function useCreatePlot(farmId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreatePlotInput) => createPlot(farmId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['plots', farmId] })
+    },
   })
 }

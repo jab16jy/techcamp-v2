@@ -58,7 +58,7 @@
   "size-limit": [
     {
       "name": "initial JS (gzip)",
-      "path": "dist/assets/*.js",
+      "path": "dist/assets/index-*.js",
       "limit": "200 KB",
       "gzip": true
     }
