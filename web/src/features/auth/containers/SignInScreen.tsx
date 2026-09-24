@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from '../../../design-system/ui/select'
 import { ApiError } from '../../../lib/api/client'
+import { describeApiError } from '../../../lib/api/errorCopy'
 import { setOrgId, setSession } from '../../../lib/api/session'
 import { fetchMe, requestOtp, verifyOtp, type Membership } from '../api/authApi'
 
@@ -52,8 +53,8 @@ export function SignInScreen() {
     try {
       await requestOtp(phone)
       setStep('code')
-    } catch {
-      setError('No pudimos enviar el código. Intenta de nuevo.')
+    } catch (err) {
+      setError(describeApiError(err))
     } finally {
       setLoading(false)
     }
@@ -83,11 +84,17 @@ export function SignInScreen() {
       if (err instanceof ApiError && err.status === 401) {
         setError('El código es incorrecto o venció.')
       } else {
-        setError('No pudimos verificar el código. Intenta de nuevo.')
+        setError(describeApiError(err))
       }
     } finally {
       setLoading(false)
     }
+  }
+
+  function handleChangeNumber() {
+    setError(null)
+    setCode('')
+    setStep('phone')
   }
 
   function handleChooseOrg(event: FormEvent) {
@@ -148,7 +155,7 @@ export function SignInScreen() {
           <Button type="submit" loading={loading}>
             Verificar
           </Button>
-          <Button type="button" variant="ghost" onClick={() => setStep('phone')}>
+          <Button type="button" variant="ghost" onClick={handleChangeNumber}>
             Cambiar número
           </Button>
         </form>

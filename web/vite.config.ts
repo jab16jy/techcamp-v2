@@ -4,18 +4,17 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// The api process has no common path prefix (`main.py` registers `/me`,
-// `/organizations`, `/farms`, `/crops`, `/plots`, `/cycles`, `/health`, and
-// `/dev` in the seminar profile, directly — no `/api/v1` yet, unlike
-// docs/04-api.md's convention). Proxying each one avoids a CORS setup the
-// backend doesn't have (`infra/compose.yaml`: api on API_PORT, default 8000).
+// The browser always calls the relative /api/v1 (docs/04-api.md's
+// convention, `main.py` mounts every router there — #21 round 10).
+// `VITE_API_URL` is this dev proxy's only job: it picks where that one
+// prefix is forwarded (`infra/compose.yaml`: api on API_PORT, default 8000)
+// and never changes what the browser itself requests.
 const API_PROXY_TARGET = process.env.VITE_API_URL ?? 'http://localhost:8000'
-const API_PATH_PREFIXES = ['/me', '/organizations', '/farms', '/crops', '/plots', '/cycles', '/dev', '/health']
 
 // https://vite.dev/config/
 export default defineConfig({
   server: {
-    proxy: Object.fromEntries(API_PATH_PREFIXES.map((prefix) => [prefix, API_PROXY_TARGET])),
+    proxy: { '/api/v1': API_PROXY_TARGET },
   },
   plugins: [
     tailwindcss(),
@@ -54,5 +53,11 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // Node's native `fetch`/`Request` (unlike a real browser's) require an
+    // absolute URL — a bare page origin never exists under Vitest — so
+    // `openapi-fetch`'s internal `new Request(path)` throws for the app's
+    // real relative `''` base. Tests only; the browser always resolves the
+    // relative `/api/v1` fine (see `client.ts`).
+    env: { VITE_API_URL: 'http://localhost' },
   },
 })

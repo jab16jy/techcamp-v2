@@ -78,10 +78,6 @@ function subscribe(listener: Listener): () => void {
   return () => listeners.delete(listener)
 }
 
-export function useToken(): string | null {
-  return useSyncExternalStore(subscribe, getToken, () => null)
-}
-
 export function useOrgId(): string | null {
   return useSyncExternalStore(subscribe, getOrgId, () => null)
 }

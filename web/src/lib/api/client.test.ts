@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { apiFetch, ApiError } from './client'
-import { clearSession, setSession } from './session'
+import { apiClient, ApiError } from './client'
+import { clearSession, getToken, setSession } from './session'
 
-describe('apiFetch', () => {
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+describe('apiClient', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn())
   })
@@ -10,78 +17,101 @@ describe('apiFetch', () => {
   afterEach(() => {
     clearSession()
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('sends the bearer token when a session exists', async () => {
     setSession('token-123', 'org-1')
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'u1', memberships: [] }))
 
-    await apiFetch('/me')
+    await apiClient.GET('/api/v1/me', {})
 
-    const [, init] = vi.mocked(fetch).mock.calls[0]
-    const headers = new Headers(init?.headers)
-    expect(headers.get('Authorization')).toBe('Bearer token-123')
+    const [request] = vi.mocked(fetch).mock.calls[0]
+    expect((request as Request).headers.get('Authorization')).toBe('Bearer token-123')
   })
 
   it('omits the Authorization header when there is no session', async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'u1', memberships: [] }))
 
-    await apiFetch('/me')
+    await apiClient.GET('/api/v1/me', {})
 
-    const [, init] = vi.mocked(fetch).mock.calls[0]
-    const headers = new Headers(init?.headers)
-    expect(headers.has('Authorization')).toBe(false)
+    const [request] = vi.mocked(fetch).mock.calls[0]
+    expect((request as Request).headers.has('Authorization')).toBe(false)
   })
 
-  it('sends a JSON body with Content-Type when given one', async () => {
+  it('returns undefined data for a 204 response', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }))
 
-    await apiFetch('/dev/auth/otp', { method: 'POST', body: { phone: '3001234567' } })
+    const { data, error } = await apiClient.POST('/api/v1/dev/auth/otp', { body: { phone: '3001234567' } })
 
-    const [, init] = vi.mocked(fetch).mock.calls[0]
-    const headers = new Headers(init?.headers)
-    expect(headers.get('Content-Type')).toBe('application/json')
-    expect(init?.body).toBe(JSON.stringify({ phone: '3001234567' }))
-  })
-
-  it('returns undefined for a 204 response', async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }))
-
-    await expect(apiFetch('/dev/auth/otp', { method: 'POST', body: {} })).resolves.toBeUndefined()
+    expect(data).toBeUndefined()
+    expect(error).toBeUndefined()
   })
 
   it('throws an ApiError with the problem+json title and detail', async () => {
     vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({
+      jsonResponse(
+        {
           type: 'about:blank',
           title: 'Invalid or expired code',
           status: 401,
           detail: 'The OTP code is invalid or has expired.',
-        }),
-        { status: 401, headers: { 'content-type': 'application/problem+json' } },
+        },
+        401,
       ),
     )
 
-    await expect(apiFetch('/dev/auth/otp/verify', { method: 'POST', body: {} })).rejects.toMatchObject({
+    await expect(
+      apiClient.POST('/api/v1/dev/auth/otp/verify', { body: { phone: '3001234567', code: '000000' } }),
+    ).rejects.toMatchObject({
       status: 401,
       title: 'Invalid or expired code',
       detail: 'The OTP code is invalid or has expired.',
     })
   })
 
-  it('throws an ApiError from FastAPI default validation error shape', async () => {
+  it('throws an ApiError from the FastAPI default validation error shape', async () => {
     vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({ detail: [{ loc: ['query', 'org_id'], msg: 'Field required', type: 'missing' }] }),
-        { status: 422 },
+      jsonResponse(
+        { detail: [{ loc: ['query', 'org_id'], msg: 'Field required', type: 'missing' }] },
+        422,
       ),
     )
 
-    const error = await apiFetch('/farms').catch((err: unknown) => err)
+    const error = await apiClient.GET('/api/v1/farms', { params: { query: { org_id: 'org-1' } } }).catch(
+      (err: unknown) => err,
+    )
 
     expect(error).toBeInstanceOf(ApiError)
     expect((error as ApiError).status).toBe(422)
     expect((error as ApiError).title).toBe('Field required')
+  })
+
+  it('signs out and redirects to sign-in on a 401 for an authenticated request', async () => {
+    setSession('token-123', 'org-1')
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign })
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ type: 'about:blank', title: 'Invalid token', status: 401 }, 401),
+    )
+
+    await expect(apiClient.GET('/api/v1/me', {})).rejects.toThrow()
+
+    expect(getToken()).toBeNull()
+    expect(assign).toHaveBeenCalledWith('/ingreso')
+  })
+
+  it('does not sign out on a 401 for an unauthenticated request', async () => {
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign })
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ type: 'about:blank', title: 'Invalid or expired code', status: 401 }, 401),
+    )
+
+    await expect(
+      apiClient.POST('/api/v1/dev/auth/otp/verify', { body: { phone: '3001234567', code: '000000' } }),
+    ).rejects.toThrow()
+
+    expect(assign).not.toHaveBeenCalled()
   })
 })

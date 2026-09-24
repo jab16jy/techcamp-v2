@@ -24,7 +24,7 @@ async def test_user_of_org_a_gets_404_for_org_b_members(db_session) -> None:
     db_session.add(MembershipRow(org_id=org_a, user_id=user_a, role="owner"))
     db_session.add(MembershipRow(org_id=org_b, user_id=user_b, role="owner"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
     token_a = issue_token(str(user_a))
 
     own_org_response = client.get(

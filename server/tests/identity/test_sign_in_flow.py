@@ -20,7 +20,7 @@ async def test_full_sign_in_flow_returns_the_user_and_their_memberships(
     await db_session.commit()
     db_session.add(MembershipRow(org_id=org_id, user_id=user_id, role="producer"))
     await db_session.commit()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://testserver/api/v1")
 
     otp_response = client.post("/dev/auth/otp", json={"phone": phone})
     assert otp_response.status_code == 204

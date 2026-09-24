@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../../../lib/api/session'
@@ -5,6 +6,19 @@ import { PlotsScreen } from './PlotsScreen'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+}
+
+function requestUrl(input: Request | string | URL): string {
+  return input instanceof Request ? input.url : String(input)
+}
+
+function renderPlotsScreen() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <PlotsScreen />
+    </QueryClientProvider>,
+  )
 }
 
 describe('PlotsScreen', () => {
@@ -18,7 +32,7 @@ describe('PlotsScreen', () => {
   })
 
   it('prompts to choose an organization when none is selected', () => {
-    render(<PlotsScreen />)
+    renderPlotsScreen()
 
     expect(screen.getByText('Elige una organización')).toBeInTheDocument()
   })
@@ -26,7 +40,7 @@ describe('PlotsScreen', () => {
   it('shows the farms and plots for the selected org, with area and irrigation', async () => {
     setSession('token-abc', 'org-1')
     vi.mocked(fetch).mockImplementation(async (input) => {
-      const url = String(input)
+      const url = requestUrl(input as Request)
       if (url.includes('/farms/farm-1/plots')) {
         return jsonResponse([
           { id: 'plot-1', farm_id: 'farm-1', name: 'Lote Norte', area_ha: 2.456, irrigation_system: 'drip' },
@@ -38,11 +52,11 @@ describe('PlotsScreen', () => {
       throw new Error(`unexpected request: ${url}`)
     })
 
-    render(<PlotsScreen />)
+    renderPlotsScreen()
 
     expect(screen.getByText('Cargando parcelas…')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByText('Finca La Esperanza')).toBeInTheDocument())
-    expect(screen.getByText('Lote Norte')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Lote Norte')).toBeInTheDocument())
     expect(screen.getByText('2,46 ha · Goteo')).toBeInTheDocument()
   })
 
@@ -50,22 +64,81 @@ describe('PlotsScreen', () => {
     setSession('token-abc', 'org-1')
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ items: [], next_cursor: null }))
 
-    render(<PlotsScreen />)
+    renderPlotsScreen()
 
     await waitFor(() => expect(screen.getByText('Todavía no hay fincas')).toBeInTheDocument())
   })
 
-  it('shows an error state when the request fails', async () => {
+  it('shows an error state and retries the farms request', async () => {
     setSession('token-abc', 'org-1')
-    vi.mocked(fetch).mockResolvedValue(
+    vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({ type: 'about:blank', title: 'Organization not found', status: 404 }, 404),
     )
 
-    render(<PlotsScreen />)
+    renderPlotsScreen()
 
     await waitFor(() =>
       expect(screen.getByText('No se pudieron cargar las parcelas')).toBeInTheDocument(),
     )
-    expect(screen.getByRole('button', { name: 'Reintentar' })).toBeInTheDocument()
+    const retryButton = screen.getByRole('button', { name: 'Reintentar' })
+
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ items: [], next_cursor: null }))
+    retryButton.click()
+
+    await waitFor(() => expect(screen.getByText('Todavía no hay fincas')).toBeInTheDocument())
+  })
+
+  it('shows a note when the org has more farms than the first page', async () => {
+    setSession('token-abc', 'org-1')
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/plots')) return jsonResponse([])
+      return jsonResponse({
+        items: [{ id: 'farm-1', org_id: 'org-1', name: 'Finca La Esperanza' }],
+        next_cursor: 'farm-1',
+      })
+    })
+
+    renderPlotsScreen()
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Tu organización tiene más fincas de las que se muestran aquí.'),
+      ).toBeInTheDocument(),
+    )
+  })
+
+  it("degrades one farm's plots on failure without blanking the other farms", async () => {
+    setSession('token-abc', 'org-1')
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/farms/farm-1/plots')) {
+        return jsonResponse({ type: 'about:blank', title: 'Server error', status: 500 }, 500)
+      }
+      if (url.includes('/farms/farm-2/plots')) {
+        return jsonResponse([
+          { id: 'plot-2', farm_id: 'farm-2', name: 'Lote Sur', area_ha: 1, irrigation_system: 'none' },
+        ])
+      }
+      if (url.includes('/farms?org_id=org-1')) {
+        return jsonResponse({
+          items: [
+            { id: 'farm-1', org_id: 'org-1', name: 'Finca Uno' },
+            { id: 'farm-2', org_id: 'org-1', name: 'Finca Dos' },
+          ],
+          next_cursor: null,
+        })
+      }
+      throw new Error(`unexpected request: ${url}`)
+    })
+
+    renderPlotsScreen()
+
+    await waitFor(() =>
+      expect(screen.getByText('No se pudieron cargar las parcelas de esta finca.')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Finca Uno')).toBeInTheDocument()
+    expect(screen.getByText('Finca Dos')).toBeInTheDocument()
+    expect(screen.getByText('Lote Sur')).toBeInTheDocument()
   })
 })
