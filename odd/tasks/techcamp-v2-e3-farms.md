@@ -45,7 +45,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300 — actual 428
 - [x] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80 — actual ~160
 - [x] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250 — actual 590
-- [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
+- [x] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250 — actual 733
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
@@ -89,7 +89,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 ## Acceptance criteria
 - [ ] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
 - [ ] Rainfed plots reject irrigation efficiency and flow (DB `CHECK` and 422).
-- [ ] Soil autofill fills θFC/θWP from SoilGrids, or from the FAO-56 texture table with `source = fao56_texture`.
+- [x] Soil autofill fills θFC/θWP from SoilGrids, or from the FAO-56 texture table with `source = fao56_texture`.
 - [x] `GET /crops` returns stages, Kc and `kc_source`.
 - [ ] A plot holds at most one active crop cycle.
 - [ ] Cross-org access to farms, plots, soil and cycles returns 404.
@@ -447,6 +447,96 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     owner/parent orchestrator's delivery-strategy decision, not re-split here.
   - Doc gap carried from T1/T2/T3: `farm.municipality_code` is plain `text`, not yet a real FK.
 
+- 2026-09-23: T5 done by a delegated `sonnet-high` writer. `farms` module additions:
+  `domain/models.py` (`SoilGridsSample`, `ORGANIC_CARBON_TO_MATTER_FACTOR`, `classify_usda_texture`,
+  `build_soil_profile_from_soilgrids` — pure), `domain/errors.py` (`SoilGridsUnavailableError`),
+  `application/ports.py` (`SoilGridsPort`; `PlotRepository.get_centroid`), `adapters/repositories.py`
+  (`SqlAlchemyPlotRepository.get_centroid`, `ST_X(ST_Centroid(boundary))`/`ST_Y(...)`),
+  `adapters/soilgrids.py` (new: `IsricSoilGridsAdapter`, `seminar_soilgrids_adapter`,
+  `SEMINAR_FIXTURE_RESPONSE`), `application/manage_soil.py` (`autofill_soil_profile`),
+  `adapters/api/deps.py` (`get_soilgrids_port`, `SoilGridsPortDep`), `adapters/api/router.py`
+  (`POST /plots/{plot_id}/soil:autofill`). No migration: `soil_profile.source` already allows
+  `soilgrids` (T4).
+  - Decisions:
+    - One `IsricSoilGridsAdapter` class serves both real implementations the port needs
+      (ADR-0002: a port only for external I/O needing a test double): a live network call for
+      production, and an injected `httpx.MockTransport` for the seminar profile's recorded
+      fixture and for this task's own adapter tests (ponytail: reuse over a second class, since
+      httpx already provides exactly the transport-injection mechanism needed).
+    - SoilGrids API verified live (2026-09-23, WebFetch against docs.isric.org/rest.isric.org,
+      cross-checked against the `soilDB` R package's response-parsing source on GitHub):
+      `/properties/query` (`lon`, `lat`, repeated `property`/`depth`, `value=mean`); six standard
+      depths (`0-5cm` … `100-200cm`), this adapter reads only `0-5cm` (topsoil; a documented
+      simplification, `ponytail:` comment on `IsricSoilGridsAdapter`'s docstring — depth-weighting
+      the root zone is out of scope); each `properties.layers[].unit_measure.d_factor` converts
+      the mapped integer to the documented conventional unit, read from the response itself
+      rather than hardcoded.
+    - The live `/properties/query` endpoint returned `503 Service Unavailable` on every fetch
+      attempt during this task (2026-09-23): the seminar/test fixture (`SEMINAR_FIXTURE_RESPONSE`)
+      is built from the documented v2.0 schema, not a captured live response — disclosed in the
+      adapter module's docstring and in `soilgrids.py`'s fixture comment, per this task's
+      instruction to say so explicitly when that happens.
+    - Organic matter: `soc` (organic carbon) → organic matter % uses the conventional van
+      Bemmelen factor 1.724 (verified via WebSearch: Minasny et al., 2020, "Precocious 19th
+      century soil carbon science", Geoderma Regional — attributed to van Bemmelen, 1890, still
+      the conventional default despite known soil-to-soil error). Cited, not invented, per this
+      task's instruction.
+    - USDA texture triangle: could not fetch the triangle's definitive polygon boundary table —
+      the NRCS Soil Texture Calculator page and the USDA Soil Survey Manual page both failed to
+      load via WebFetch (timeout/404) during this task. `classify_usda_texture` is a best-effort,
+      axis-aligned reproduction of the standard 12-class triangle (USDA Soil Survey Manual, 1993,
+      Ch. 3, Fig. 3-14), documented as unverified against a fetched primary numeric source in its
+      own docstring (`ponytail:` comment) and flagged here as a **doc gap for owner review**:
+      the three classes with no FAO-56 Table 19 fallback row (`sandy_clay_loam`, `clay_loam`,
+      `sandy_clay`) only affect the descriptive `texture` string, never θFC/θWP, since
+      `apply_fao56_texture_fallback` already returns `None` for any class it doesn't recognize.
+      Pinned with tests at the four uncontroversial reference points (pure sand/silt/clay, and
+      the 40/40/20 loam center) that don't depend on the uncertain boundary lines.
+    - θFC/θWP: `source = soilgrids` only when SoilGrids returns **both** `wv0033` and `wv1500` at
+      the query point; a lone one of the two falls back to the FAO-56 texture means rather than
+      mixing a real SoilGrids value with an invented pair.
+    - `root_depth_cm` is never set by autofill (task instruction: "stays as docs say") — SoilGrids
+      has no such property, and root depth is a crop/rooting choice, not a soil property. Since
+      `soil_profiles.put` is the same full-document-replace upsert T4 established, a later
+      autofill call clears any manually-set `root_depth_cm`, same replace semantics as `PUT`.
+    - 502 vs 503 (docs/04-api.md is silent on which): 503 when the request never reached ISRIC
+      (timeout, connection failure — `upstream_status=None`), 502 when ISRIC answered with a
+      non-200 status — a standard REST convention (our service vs. a bad upstream response),
+      documented on `SoilGridsUnavailableError`.
+    - Response status: `POST .../soil:autofill` returns `200` (no `status_code` override), same
+      as `PUT /plots/{id}/soil` — it upserts the same resource, not a new one.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by moving the new adapter file aside and `git stash`-ing the seven modified
+    implementation files, keeping the new/changed tests: `uv run pytest -q tests/farms/test_domain_models.py
+    tests/farms/test_soilgrids_adapter.py tests/farms/test_api.py -k "soilgrids or autofill or
+    usda_texture or classify"` → 3 collection errors (`ImportError: cannot import name
+    'SoilGridsSample'`; `ModuleNotFoundError: No module named 'techcamp.farms.adapters.soilgrids'`;
+    `ImportError: cannot import name 'get_soilgrids_port'`). Restored the implementation: GREEN,
+    same selection → `98 passed`; full `uv run pytest -q` → `154 passed`. REFACTOR: none needed
+    beyond the mypy/ruff fixes below.
+  - Verification (server/): `uv run pytest -q` → `154 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!` (two `E501` long-line fixes: `router.py`'s exception mapping,
+    `soilgrids.py`'s `_extract_conventional` signature); `uv run ruff format --check .` → `101
+    files already formatted`; `uv run mypy` → `Success: no issues found in 78 source files` (two
+    fixes: an explicit `float | None` annotation for `field_capacity_pct`/`wilting_point_pct` in
+    `build_soil_profile_from_soilgrids`, and `httpx.AsyncBaseTransport` instead of `BaseTransport`
+    on `IsricSoilGridsAdapter`'s `transport` parameter — `MockTransport` implements both, but
+    `AsyncClient` only accepts the async one); `uv run lint-imports` → `Hexagonal layers per
+    module KEPT, 1 kept, 0 broken`.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start; no migration in
+    this task, so no `alembic upgrade`/`downgrade` cycle to verify.
+  - Commit: `ee3e4f4` — `feat(farms): autofill soil profile from SoilGrids with seminar fixture`.
+    Authored lines (`git diff --stat --cached -- . ':!server/uv.lock'`): 728 insertions, 5
+    deletions across 12 files (2 new, 10 modified) — well above the ~250 forecast and the
+    ~400-line delivery heuristic in a single commit, same reason as T2/T2b/T3b/T4: one work-unit
+    commit was specified for this task, and the full port+adapter+application+router stack plus
+    three test files (~30 new tests) don't split smaller within a single task. Flagging for the
+    owner/parent orchestrator's delivery-strategy decision, not re-split here.
+  - Doc gaps: (1) carried from T1-T4, unchanged — `farm.municipality_code` is plain `text`, not
+    yet a real FK; (2) new — `classify_usda_texture`'s boundary bands are an unverified
+    best-effort reproduction of the USDA triangle (see Decisions above), flagged for owner review
+    if texture-only reporting accuracy on the three unfallbacked classes matters.
+
 ## Next step
-T5 soil autofill (SoilGrids port + adapter + test double,
-`POST /plots/{id}/soil:autofill`, seminar recorded fixture, ADR-0021 row).
+T6 crop cycles (`crop_cycle` migration, one active cycle per plot,
+`POST /plots/{id}/cycles`, `PATCH /cycles/{id}`).
