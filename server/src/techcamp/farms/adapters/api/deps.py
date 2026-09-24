@@ -10,6 +10,7 @@ from techcamp.farms.adapters.repositories import (
     SqlAlchemyCropRepository,
     SqlAlchemyFarmRepository,
     SqlAlchemyPlotRepository,
+    SqlAlchemySoilProfileRepository,
 )
 from techcamp.shared.db import SessionDep
 
@@ -26,6 +27,13 @@ async def get_crop_repository(session: SessionDep) -> SqlAlchemyCropRepository:
     return SqlAlchemyCropRepository(session)
 
 
+async def get_soil_profile_repository(session: SessionDep) -> SqlAlchemySoilProfileRepository:
+    return SqlAlchemySoilProfileRepository(session)
+
+
 FarmRepoDep = Annotated[SqlAlchemyFarmRepository, Depends(get_farm_repository)]
 PlotRepoDep = Annotated[SqlAlchemyPlotRepository, Depends(get_plot_repository)]
 CropRepoDep = Annotated[SqlAlchemyCropRepository, Depends(get_crop_repository)]
+SoilProfileRepoDep = Annotated[
+    SqlAlchemySoilProfileRepository, Depends(get_soil_profile_repository)
+]

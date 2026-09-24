@@ -12,9 +12,14 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from techcamp.farms.adapters.api.deps import CropRepoDep, FarmRepoDep, PlotRepoDep
+from techcamp.farms.adapters.api.deps import (
+    CropRepoDep,
+    FarmRepoDep,
+    PlotRepoDep,
+    SoilProfileRepoDep,
+)
 from techcamp.farms.adapters.geojson import (
     Position,
     point_to_wkt,
@@ -24,6 +29,7 @@ from techcamp.farms.adapters.geojson import (
 )
 from techcamp.farms.application.manage_farms import create_farm, resolve_farm_access, update_farm
 from techcamp.farms.application.manage_plots import create_plot, update_plot
+from techcamp.farms.application.manage_soil import put_soil_profile
 from techcamp.farms.domain.errors import (
     FarmNotFoundError,
     InsufficientRoleError,
@@ -32,7 +38,7 @@ from techcamp.farms.domain.errors import (
     PlotNotFoundError,
     RainfedPlotHasIrrigationError,
 )
-from techcamp.farms.domain.models import Crop, Farm, IrrigationSystem, Plot
+from techcamp.farms.domain.models import Crop, Farm, IrrigationSystem, Plot, SoilProfile
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.identity.domain.errors import NotAMemberError
@@ -327,6 +333,78 @@ async def patch_plot(
     except MissingIrrigationEfficiencyError as exc:
         raise ProblemError(status=422, title="Irrigated plot requires an efficiency") from exc
     return _plot_view(plot)
+
+
+class SoilProfilePutRequest(BaseModel):
+    texture: str | None = None
+    ph: float | None = Field(default=None, ge=0, le=14)
+    organic_matter_pct: float | None = Field(default=None, ge=0, le=100)
+    field_capacity_pct: float | None = Field(default=None, gt=0, le=100)
+    wilting_point_pct: float | None = Field(default=None, ge=0, lt=100)
+    root_depth_cm: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _water_limits_are_consistent(self) -> SoilProfilePutRequest:
+        fc, wp = self.field_capacity_pct, self.wilting_point_pct
+        if (fc is None) != (wp is None):
+            raise ValueError("field_capacity_pct and wilting_point_pct must be given together")
+        if fc is not None and wp is not None and wp >= fc:
+            raise ValueError("wilting_point_pct must be less than field_capacity_pct")
+        return self
+
+
+class SoilProfileView(BaseModel):
+    plot_id: UUID
+    source: str | None
+    ph: float | None
+    organic_matter_pct: float | None
+    texture: str | None
+    field_capacity_pct: float | None
+    wilting_point_pct: float | None
+    root_depth_cm: float | None
+
+
+def _soil_profile_view(profile: SoilProfile) -> SoilProfileView:
+    return SoilProfileView(
+        plot_id=profile.plot_id,
+        source=profile.source.value if profile.source is not None else None,
+        ph=profile.ph,
+        organic_matter_pct=profile.organic_matter_pct,
+        texture=profile.texture,
+        field_capacity_pct=profile.field_capacity_pct,
+        wilting_point_pct=profile.wilting_point_pct,
+        root_depth_cm=profile.root_depth_cm,
+    )
+
+
+@router.put("/plots/{plot_id}/soil", response_model=SoilProfileView)
+async def put_soil(
+    plot_id: UUID,
+    payload: SoilProfilePutRequest,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    soil_profiles: SoilProfileRepoDep,
+    memberships: MembershipRepoDep,
+) -> SoilProfileView:
+    try:
+        profile = await put_soil_profile(
+            user_id=user_id,
+            plot_id=plot_id,
+            texture=payload.texture,
+            ph=payload.ph,
+            organic_matter_pct=payload.organic_matter_pct,
+            field_capacity_pct=payload.field_capacity_pct,
+            wilting_point_pct=payload.wilting_point_pct,
+            root_depth_cm=payload.root_depth_cm,
+            plots=plots,
+            soil_profiles=soil_profiles,
+            memberships=memberships,
+        )
+    except PlotNotFoundError as exc:
+        raise ProblemError(status=404, title="Plot not found") from exc
+    except InsufficientRoleError as exc:
+        raise ProblemError(status=403, title="Role cannot update this plot") from exc
+    return _soil_profile_view(profile)
 
 
 class CropStageView(BaseModel):

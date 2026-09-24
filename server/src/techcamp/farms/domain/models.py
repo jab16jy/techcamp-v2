@@ -122,3 +122,65 @@ class Crop:
     stages: tuple[CropStage, ...]
     """Empty when `kc_source` is `none` (docs/03-modelo-datos.md:446): no
     validated Kc blocks the irrigation depth recommendation."""
+
+
+class SoilProfileSource(StrEnum):
+    SOILGRIDS = "soilgrids"
+    LAB = "lab"
+    FAO56_TEXTURE = "fao56_texture"
+
+
+@dataclass(frozen=True, slots=True)
+class SoilProfile:
+    plot_id: UUID
+    source: SoilProfileSource | None
+    """`None` when neither lab/SoilGrids values nor a recognized FAO-56
+    texture class were available to fill θFC/θWP (T4 decision: docs/03
+    doesn't mark `source` `NOT NULL`, and inventing a source for missing
+    data would misrepresent it)."""
+    ph: float | None
+    organic_matter_pct: float | None
+    texture: str | None
+    field_capacity_pct: float | None
+    """θFC, as a percentage (docs/03-modelo-datos.md:106)."""
+    wilting_point_pct: float | None
+    """θWP, as a percentage (docs/03-modelo-datos.md:107)."""
+    root_depth_cm: float | None
+
+
+FAO56_TEXTURE_WATER_LIMITS: dict[str, tuple[float, float]] = {
+    # FAO-56 (Allen, Pereira, Raes & Smith, 1998), Irrigation and Drainage
+    # Paper 56, fao.org, Chapter 8 "ETc under soil water stress conditions",
+    # Table 19 "Soil water characteristics for different soil types":
+    # field capacity (θFC) and wilting point (θWP) as volumetric water
+    # content (m3/m3), reported here as a percentage.
+    #
+    # docs gap (flagged in odd/tasks/techcamp-v2-e3-farms.md T4): the FAO
+    # HTML mirror (fao.org/4/x0490e/x0490e0e.htm) does not reproduce Table
+    # 19 itself, only Example 36's three worked values, each explicitly
+    # marked "From Table 19" in that same chapter. Those are the only three
+    # classes verified against the primary source; the other FAO-56 Table
+    # 19 classes (sand, sandy loam, loam, silt loam, silt clay loam, clay)
+    # are deliberately omitted rather than invented — add them only once
+    # independently verified against Table 19 directly.
+    "loamy_sand": (15.0, 6.0),
+    "silt": (32.0, 15.0),
+    "silty_clay": (35.0, 23.0),
+}
+
+
+def apply_fao56_texture_fallback(
+    texture: str | None, field_capacity_pct: float | None, wilting_point_pct: float | None
+) -> tuple[float | None, float | None, SoilProfileSource | None]:
+    """FAO-56 Table 19 texture fallback (docs/03-modelo-datos.md:445): when a
+    soil profile has neither lab nor SoilGrids θFC/θWP, fill the texture
+    class's mean values and mark `source = fao56_texture`. Given values pass
+    through unchanged as `source = lab` (SoilGrids has its own endpoint,
+    `POST /plots/{plot_id}/soil:autofill`, T5, out of scope here).
+    """
+    if field_capacity_pct is not None and wilting_point_pct is not None:
+        return field_capacity_pct, wilting_point_pct, SoilProfileSource.LAB
+    means = FAO56_TEXTURE_WATER_LIMITS.get(texture.lower()) if texture else None
+    if means is None:
+        return None, None, None
+    return means[0], means[1], SoilProfileSource.FAO56_TEXTURE

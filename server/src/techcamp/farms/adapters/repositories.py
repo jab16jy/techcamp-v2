@@ -15,9 +15,10 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Row, func, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from techcamp.farms.adapters.orm import CropRow, CropStageRow, FarmRow, PlotRow
+from techcamp.farms.adapters.orm import CropRow, CropStageRow, FarmRow, PlotRow, SoilProfileRow
 from techcamp.farms.domain.models import (
     CROP_STAGES,
     Crop,
@@ -26,6 +27,8 @@ from techcamp.farms.domain.models import (
     IrrigationSystem,
     KcSource,
     Plot,
+    SoilProfile,
+    SoilProfileSource,
 )
 
 
@@ -282,3 +285,51 @@ class SqlAlchemyCropRepository:
         for stage_row in stage_rows:
             stages_by_crop[stage_row.crop_id].append(stage_row)
         return [_crop_from_rows(row, stages_by_crop[row.id]) for row in crop_rows]
+
+
+def _soil_profile_from_row(row: SoilProfileRow) -> SoilProfile:
+    return SoilProfile(
+        plot_id=row.plot_id,
+        source=SoilProfileSource(row.source) if row.source is not None else None,
+        ph=float(row.ph) if row.ph is not None else None,
+        organic_matter_pct=(
+            float(row.organic_matter_pct) if row.organic_matter_pct is not None else None
+        ),
+        texture=row.texture,
+        field_capacity_pct=(
+            float(row.field_capacity_pct) if row.field_capacity_pct is not None else None
+        ),
+        wilting_point_pct=(
+            float(row.wilting_point_pct) if row.wilting_point_pct is not None else None
+        ),
+        root_depth_cm=float(row.root_depth_cm) if row.root_depth_cm is not None else None,
+    )
+
+
+class SqlAlchemySoilProfileRepository:
+    """docs/03-modelo-datos.md:106-113. `put` is an upsert keyed by `plot_id`:
+    `PUT /plots/{plot_id}/soil` is a full-document write (docs/04-api.md:49),
+    not a partial `PATCH`, so there is no separate create/update split."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def put(self, profile: SoilProfile) -> SoilProfile:
+        values = {
+            "source": profile.source.value if profile.source is not None else None,
+            "ph": profile.ph,
+            "organic_matter_pct": profile.organic_matter_pct,
+            "texture": profile.texture,
+            "field_capacity_pct": profile.field_capacity_pct,
+            "wilting_point_pct": profile.wilting_point_pct,
+            "root_depth_cm": profile.root_depth_cm,
+        }
+        stmt = insert(SoilProfileRow).values(plot_id=profile.plot_id, **values)
+        stmt = stmt.on_conflict_do_update(index_elements=[SoilProfileRow.plot_id], set_=values)
+        await self._session.execute(stmt)
+        await self._session.commit()
+        result = await self._session.execute(
+            select(SoilProfileRow).where(SoilProfileRow.plot_id == profile.plot_id)
+        )
+        row = result.scalar_one()
+        return _soil_profile_from_row(row)

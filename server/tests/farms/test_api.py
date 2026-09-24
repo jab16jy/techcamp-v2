@@ -812,3 +812,180 @@ async def test_get_crops_without_a_token_is_401(db_session: AsyncSession) -> Non
     response = client.get("/crops")
 
     assert response.status_code == 401
+
+
+async def _create_plot(client: TestClient, farm_id: str, token: str) -> str:
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(token),
+    )
+    plot_id: str = created.json()["id"]
+    return plot_id
+
+
+async def test_owner_puts_a_lab_soil_profile(db_session: AsyncSession) -> None:
+    """docs/04-api.md:49; lab values pass through and `source` becomes `lab`."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.put(
+        f"/plots/{plot_id}/soil",
+        json={
+            "texture": "sandy_loam",
+            "ph": 6.5,
+            "organic_matter_pct": 3.2,
+            "field_capacity_pct": 22.0,
+            "wilting_point_pct": 9.0,
+            "root_depth_cm": 60,
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["plot_id"] == plot_id
+    assert body["source"] == "lab"
+    assert body["field_capacity_pct"] == pytest.approx(22.0)
+    assert body["wilting_point_pct"] == pytest.approx(9.0)
+
+
+async def test_soil_profile_without_water_limits_falls_back_to_fao56_texture(
+    db_session: AsyncSession,
+) -> None:
+    """FAO-56 Table 19 texture fallback (docs/03-modelo-datos.md:445): a
+    verified texture class fills θFC/θWP and marks `source = fao56_texture`.
+    """
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.put(f"/plots/{plot_id}/soil", json={"texture": "silt"}, headers=_auth(token))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["source"] == "fao56_texture"
+    assert body["field_capacity_pct"] == pytest.approx(32.0)
+    assert body["wilting_point_pct"] == pytest.approx(15.0)
+
+
+async def test_soil_profile_with_an_unrecognized_texture_leaves_water_limits_null(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.put(f"/plots/{plot_id}/soil", json={"texture": "clay"}, headers=_auth(token))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["source"] is None
+    assert body["field_capacity_pct"] is None
+    assert body["wilting_point_pct"] is None
+
+
+async def test_putting_a_soil_profile_twice_replaces_it(db_session: AsyncSession) -> None:
+    """`PUT` is idempotent full-document write (docs/04-api.md:49), not a merge."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+    first = client.put(
+        f"/plots/{plot_id}/soil",
+        json={"texture": "silt", "ph": 6.0},
+        headers=_auth(token),
+    )
+    assert first.status_code == 200, first.text
+
+    second = client.put(
+        f"/plots/{plot_id}/soil",
+        json={"field_capacity_pct": 25.0, "wilting_point_pct": 10.0},
+        headers=_auth(token),
+    )
+
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["texture"] is None
+    assert body["ph"] is None
+    assert body["source"] == "lab"
+    assert body["field_capacity_pct"] == pytest.approx(25.0)
+
+
+async def test_wilting_point_at_or_above_field_capacity_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.put(
+        f"/plots/{plot_id}/soil",
+        json={"field_capacity_pct": 20.0, "wilting_point_pct": 20.0},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 422
+
+
+async def test_soil_profile_with_only_one_water_limit_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.put(
+        f"/plots/{plot_id}/soil",
+        json={"field_capacity_pct": 20.0},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 422
+
+
+async def test_soil_profile_with_out_of_range_ph_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.put(f"/plots/{plot_id}/soil", json={"ph": 15.0}, headers=_auth(token))
+
+    assert response.status_code == 422
+
+
+async def test_viewer_cannot_put_a_soil_profile(db_session: AsyncSession) -> None:
+    org_id, _user_id, owner_token = await _member(db_session, role="owner")
+    _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+    plot_id = await _create_plot(client, farm_id, owner_token)
+    viewer_token = issue_token(str(viewer_id))
+
+    response = client.put(
+        f"/plots/{plot_id}/soil", json={"texture": "silt"}, headers=_auth(viewer_token)
+    )
+
+    assert response.status_code == 403
+
+
+async def test_putting_a_soil_profile_of_a_foreign_org_plot_is_404(
+    db_session: AsyncSession,
+) -> None:
+    _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
+    org_b, user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_b, token_b)
+    plot_id = await _create_plot(client, farm_id, token_b)
+
+    response = client.put(
+        f"/plots/{plot_id}/soil", json={"texture": "silt"}, headers=_auth(token_a)
+    )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
