@@ -51,6 +51,19 @@ class InsufficientRoleError(Exception):
         super().__init__(f"Role '{role}' cannot write farms or plots")
 
 
+class MissingIrrigationEfficiencyError(Exception):
+    """Raised when a `PATCH` explicitly nulls `irrigation_efficiency` while the
+    plot stays or becomes irrigated (GitHub issue #21 round 4,
+    odd/tasks/techcamp-v2-e3-farms.md T3b): an irrigated plot always needs an
+    efficiency, so an explicit `null` is invalid input, not "use the
+    default" — the default applies only when the field is omitted.
+    """
+
+    def __init__(self, irrigation_system: str) -> None:
+        self.irrigation_system = irrigation_system
+        super().__init__(f"An irrigated plot (system={irrigation_system}) requires an efficiency")
+
+
 class InvalidTechnicianError(Exception):
     """Raised when `technician_id` isn't a member of the farm's org with a
     write role (T2b decision, odd/tasks/techcamp-v2-e3-farms.md: docs/03 is

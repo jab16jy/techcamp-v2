@@ -283,9 +283,12 @@ async def test_list_and_patch_plots(db_session: AsyncSession) -> None:
     assert patched.json()["name"] == "Lote 1 renamed"
 
 
-async def test_patching_a_plot_to_rainfed_with_leftover_flow_is_422(
+async def test_patching_a_plot_to_rainfed_clears_leftover_efficiency_and_flow(
     db_session: AsyncSession,
 ) -> None:
+    """ADR-0023: rainfed has neither efficiency nor flow. A `PATCH` that
+    switches to `none` without sending either field clears both instead of
+    leaving the old system's values behind (GitHub issue #21 round 4)."""
     org_id, _user_id, token = await _member(db_session, role="owner")
     client = TestClient(app)
     farm_id = await _create_farm(client, org_id, token)
@@ -304,6 +307,39 @@ async def test_patching_a_plot_to_rainfed_with_leftover_flow_is_422(
 
     response = client.patch(
         f"/plots/{plot_id}", json={"irrigation_system": "none"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["irrigation_efficiency"] is None
+    assert body["system_flow_lph"] is None
+
+
+async def test_patching_a_plot_to_rainfed_with_explicit_flow_is_422(
+    db_session: AsyncSession,
+) -> None:
+    """Unlike an omitted field, an explicit non-null value on a field that
+    contradicts `none` stays a client error (#21 round 4)."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={
+            "name": "Lote 1",
+            "boundary": _POLYGON,
+            "irrigation_system": "drip",
+            "irrigation_efficiency": 0.9,
+            "system_flow_lph": 250,
+        },
+        headers=_auth(token),
+    )
+    plot_id = created.json()["id"]
+
+    response = client.patch(
+        f"/plots/{plot_id}",
+        json={"irrigation_system": "none", "system_flow_lph": 250},
+        headers=_auth(token),
     )
 
     assert response.status_code == 422
@@ -349,6 +385,63 @@ async def test_switching_between_irrigated_systems_uses_the_new_default(
 
     assert response.status_code == 200, response.text
     assert response.json()["irrigation_efficiency"] == pytest.approx(0.60)
+
+
+async def test_explicit_null_efficiency_on_a_plot_that_stays_irrigated_is_422(
+    db_session: AsyncSession,
+) -> None:
+    """An irrigated plot always needs an efficiency: an explicit `null` is
+    invalid input, not "use the default" (the default applies only when the
+    field is omitted; GitHub issue #21 round 4)."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={
+            "name": "Lote 1",
+            "boundary": _POLYGON,
+            "irrigation_system": "drip",
+            "irrigation_efficiency": 0.9,
+        },
+        headers=_auth(token),
+    )
+    plot_id = created.json()["id"]
+
+    response = client.patch(
+        f"/plots/{plot_id}", json={"irrigation_efficiency": None}, headers=_auth(token)
+    )
+
+    assert response.status_code == 422
+
+
+async def test_patching_a_plots_boundary_recomputes_area_ha(db_session: AsyncSession) -> None:
+    """`area_ha` is a DB-generated column (`ST_Area(boundary::geography)`);
+    an `UPDATE` of `boundary` must recompute it, not keep the old value
+    (GitHub issue #21 round 4)."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(token),
+    )
+    plot_id = created.json()["id"]
+    original_area_ha = created.json()["area_ha"]
+    larger_polygon = {
+        "type": "Polygon",
+        "coordinates": [
+            [[-74.20, 10.80], [-74.20, 10.90], [-74.10, 10.90], [-74.10, 10.80], [-74.20, 10.80]]
+        ],
+    }
+
+    response = client.patch(
+        f"/plots/{plot_id}", json={"boundary": larger_polygon}, headers=_auth(token)
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["area_ha"] != pytest.approx(original_area_ha)
 
 
 @pytest.mark.parametrize(
@@ -493,6 +586,7 @@ async def test_stale_technician_does_not_block_an_unrelated_patch(
         },
         headers=_auth(token),
     )
+    assert created.status_code == 201, created.text
     await db_session.execute(
         update(MembershipRow)
         .where(MembershipRow.org_id == org_id, MembershipRow.user_id == tech_id)
@@ -685,3 +779,36 @@ async def test_polygon_with_out_of_range_coordinates_is_422(db_session: AsyncSes
     )
 
     assert response.status_code == 422
+
+
+async def test_get_crops_returns_the_catalog_with_stages_kc_and_kc_source(
+    db_session: AsyncSession,
+) -> None:
+    """docs/04-api.md:53: `GET /crops` -> `Crop[]` with stages, Kc and kc_source.
+    Global reference data (docs/03-modelo-datos.md:115-127): any authenticated
+    member can read it, with no `org_id` involved.
+    """
+    _org_id, _user_id, token = await _member(db_session, role="viewer")
+    client = TestClient(app)
+
+    response = client.get("/crops", headers=_auth(token))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body) == 12
+    maize = next(c for c in body if c["code"] == "maize")
+    assert maize["kc_source"] == "fao56"
+    assert {s["stage"] for s in maize["stages"]} == {"initial", "development", "mid", "late"}
+    assert next(s for s in maize["stages"] if s["stage"] == "mid")["kc"] == pytest.approx(1.20)
+    yam = next(c for c in body if c["code"] == "yam")
+    assert yam["kc_source"] == "none"
+    assert yam["stages"] == []
+
+
+async def test_get_crops_without_a_token_is_401(db_session: AsyncSession) -> None:
+    await _member(db_session, role="viewer")
+    client = TestClient(app)
+
+    response = client.get("/crops")
+
+    assert response.status_code == 401

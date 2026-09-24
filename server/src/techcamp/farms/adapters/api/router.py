@@ -14,7 +14,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field, field_validator
 
-from techcamp.farms.adapters.api.deps import FarmRepoDep, PlotRepoDep
+from techcamp.farms.adapters.api.deps import CropRepoDep, FarmRepoDep, PlotRepoDep
 from techcamp.farms.adapters.geojson import (
     Position,
     point_to_wkt,
@@ -28,10 +28,11 @@ from techcamp.farms.domain.errors import (
     FarmNotFoundError,
     InsufficientRoleError,
     InvalidTechnicianError,
+    MissingIrrigationEfficiencyError,
     PlotNotFoundError,
     RainfedPlotHasIrrigationError,
 )
-from techcamp.farms.domain.models import Farm, IrrigationSystem, Plot
+from techcamp.farms.domain.models import Crop, Farm, IrrigationSystem, Plot
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.identity.domain.errors import NotAMemberError
@@ -323,4 +324,48 @@ async def patch_plot(
         raise ProblemError(status=403, title="Role cannot update this plot") from exc
     except RainfedPlotHasIrrigationError as exc:
         raise ProblemError(status=422, title="Rainfed plot cannot have efficiency or flow") from exc
+    except MissingIrrigationEfficiencyError as exc:
+        raise ProblemError(status=422, title="Irrigated plot requires an efficiency") from exc
     return _plot_view(plot)
+
+
+class CropStageView(BaseModel):
+    stage: str
+    length_days: int
+    kc: float
+    depletion_fraction_p: float
+
+
+class CropView(BaseModel):
+    id: int
+    code: str
+    name_es: str
+    kc_source: str
+    stages: list[CropStageView]
+
+
+def _crop_view(crop: Crop) -> CropView:
+    return CropView(
+        id=crop.id,
+        code=crop.code,
+        name_es=crop.name_es,
+        kc_source=crop.kc_source.value,
+        stages=[
+            CropStageView(
+                stage=s.stage,
+                length_days=s.length_days,
+                kc=s.kc,
+                depletion_fraction_p=s.depletion_fraction_p,
+            )
+            for s in crop.stages
+        ],
+    )
+
+
+@router.get("/crops", response_model=list[CropView])
+async def list_crops(user_id: CurrentUserId, crops: CropRepoDep) -> list[CropView]:
+    """Global crop catalog (docs/03-modelo-datos.md:115-127; docs/04-api.md:53):
+    no org scoping, any authenticated user reads it.
+    """
+    _ = user_id  # authentication only; the catalog has no per-org data
+    return [_crop_view(c) for c in await crops.list_all()]

@@ -88,3 +88,37 @@ class Plot:
     irrigation_system: IrrigationSystem
     irrigation_efficiency: float | None
     system_flow_lph: float | None
+
+
+CROP_STAGES: tuple[str, ...] = ("initial", "development", "mid", "late")
+"""FAO-56 growth-stage order (Table 11); `crop_stage` rows are always
+returned in this order regardless of storage order."""
+
+
+class KcSource(StrEnum):
+    FAO56 = "fao56"
+    LOCAL = "local"
+    APPROXIMATE = "approximate"
+    NONE = "none"
+
+
+@dataclass(frozen=True, slots=True)
+class CropStage:
+    stage: str
+    """One of `CROP_STAGES`."""
+    length_days: int
+    kc: float
+    depletion_fraction_p: float
+    """FAO-56 Table 22 `p` (no-stress depletion fraction); the same value for
+    every stage of a crop, since FAO-56 doesn't vary `p` by growth stage."""
+
+
+@dataclass(frozen=True, slots=True)
+class Crop:
+    id: int
+    code: str
+    name_es: str
+    kc_source: KcSource
+    stages: tuple[CropStage, ...]
+    """Empty when `kc_source` is `none` (docs/03-modelo-datos.md:446): no
+    validated Kc blocks the irrigation depth recommendation."""
