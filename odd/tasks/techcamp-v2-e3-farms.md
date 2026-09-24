@@ -481,17 +481,13 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
       century soil carbon science", Geoderma Regional — attributed to van Bemmelen, 1890, still
       the conventional default despite known soil-to-soil error). Cited, not invented, per this
       task's instruction.
-    - USDA texture triangle: could not fetch the triangle's definitive polygon boundary table —
-      the NRCS Soil Texture Calculator page and the USDA Soil Survey Manual page both failed to
-      load via WebFetch (timeout/404) during this task. `classify_usda_texture` is a best-effort,
-      axis-aligned reproduction of the standard 12-class triangle (USDA Soil Survey Manual, 1993,
-      Ch. 3, Fig. 3-14), documented as unverified against a fetched primary numeric source in its
-      own docstring (`ponytail:` comment) and flagged here as a **doc gap for owner review**:
-      the three classes with no FAO-56 Table 19 fallback row (`sandy_clay_loam`, `clay_loam`,
-      `sandy_clay`) only affect the descriptive `texture` string, never θFC/θWP, since
-      `apply_fao56_texture_fallback` already returns `None` for any class it doesn't recognize.
-      Pinned with tests at the four uncontroversial reference points (pure sand/silt/clay, and
-      the 40/40/20 loam center) that don't depend on the uncertain boundary lines.
+    - USDA texture triangle: the writer shipped axis-aligned bands and claimed they only affected
+      the `texture` string. **Superseded by the parent in `816ef5b`**: the bands misclassified
+      sand, sandy clay loam and sandy clay, and a wrong class also changes θFC/θWP whenever
+      SoilGrids lacks `wv0033`/`wv1500`, because the fallback is keyed by texture. Now uses the
+      NRCS class rules (Soil Survey Manual ch. 3), cross-checked against the `USDA.TT` vertex
+      table of the `soiltexture` CRAN package (NRCS page unreachable). TDD: RED 4 failed, GREEN
+      `169 passed`; ruff, format, mypy, lint-imports green.
     - θFC/θWP: `source = soilgrids` only when SoilGrids returns **both** `wv0033` and `wv1500` at
       the query point; a lone one of the two falls back to the FAO-56 texture means rather than
       mixing a real SoilGrids value with an invented pair.
@@ -533,9 +529,8 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     three test files (~30 new tests) don't split smaller within a single task. Flagging for the
     owner/parent orchestrator's delivery-strategy decision, not re-split here.
   - Doc gaps: (1) carried from T1-T4, unchanged — `farm.municipality_code` is plain `text`, not
-    yet a real FK; (2) new — `classify_usda_texture`'s boundary bands are an unverified
-    best-effort reproduction of the USDA triangle (see Decisions above), flagged for owner review
-    if texture-only reporting accuracy on the three unfallbacked classes matters.
+    yet a real FK. The USDA texture gap was
+    resolved in `816ef5b` (see Decisions above).
 
 ## Next step
 T6 crop cycles (`crop_cycle` migration, one active cycle per plot,
