@@ -43,6 +43,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test; T1 review follow-ups (see Review) — route: delegated — forecast ~350 — actual ~1519
 - [x] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150 — actual ~445
 - [x] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300 — actual 428
+- [ ] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80
 - [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
@@ -72,6 +73,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - SUGGESTION (open in #21): explicit `irrigation_efficiency: null` on an irrigated plot silently becomes the default; the phone counter depends on per-test cleanup of committed users.
 - Review findings are tracked in GitHub issue #21 (rule added to `AGENTS.md` in `1152a61`).
 - Whole branch `4684262..a23d6cf` (stop-hook, standing grant): lineage `review-8c6a346f3ac1752e`, approved and acknowledged. WARNING: switching between irrigated systems kept the previous efficiency; **resolved** in `799f6d8` (parent, inline TDD: RED `comparison failed` in `test_switching_between_irrigated_systems_uses_the_new_default`, GREEN `102 passed`, all checks green). Two suggestions open in #21 (validation 422 not problem+json; multi-ring polygon round trip untested).
+- T3 slice `e05bce8..a337f57` (T3 + parent fixes `1f4efde`, `799f6d8`; medium, new migration, 589 lines, `slice_budget_reached`, standing grant): lineage `review-576ae0774ec7ef76`, approved and acknowledged. WARNING: switching to rainfed clears efficiency but keeps flow (untested path); suggestions: cassava stage split, missing 201 assert. All tracked in #21 round 4; fixed by task T3b. Reviewed boundary is now `a337f57`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
