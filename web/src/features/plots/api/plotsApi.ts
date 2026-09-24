@@ -248,6 +248,12 @@ export function usePatchCycle(plotId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ cycleId, changes }: PatchCycleInput) => patchCycle(cycleId, changes),
-    onSuccess: (cycle) => queryClient.setQueryData(activeCycleQueryKey(plotId), cycle),
+    onSuccess: (cycle) => {
+      if (cycle.status === 'harvested' || cycle.status === 'lost') {
+        queryClient.setQueryData(activeCycleQueryKey(plotId), null)
+      } else {
+        queryClient.setQueryData(activeCycleQueryKey(plotId), cycle)
+      }
+    },
   })
 }

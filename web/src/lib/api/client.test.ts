@@ -208,14 +208,14 @@ describe('apiClient', () => {
 
     try {
       await apiClient.GET('/api/v1/me', {})
+      expect(timeoutSpy).toHaveBeenCalledWith(REQUEST_TIMEOUT_MS)
+      const [request] = vi.mocked(fetch).mock.calls[0]
+      expect((request as Request).signal).toBeInstanceOf(AbortSignal)
+      expect((request as Request).signal.aborted).toBe(false)
     } finally {
+      timeoutSpy.mockRestore()
       AbortSignal.any = originalAny
     }
-
-    expect(timeoutSpy).toHaveBeenCalledWith(REQUEST_TIMEOUT_MS)
-    const [request] = vi.mocked(fetch).mock.calls[0]
-    expect((request as Request).signal).toBeInstanceOf(AbortSignal)
-    expect((request as Request).signal.aborted).toBe(false)
   })
 
   it('preserves a caller-supplied abort signal alongside the timeout', async () => {

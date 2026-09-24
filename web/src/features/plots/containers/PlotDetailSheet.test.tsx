@@ -179,23 +179,155 @@ describe('PlotDetailSheet', () => {
     ).toBeInTheDocument()
   })
 
-  it('disables starting a cycle when the expected harvest is before the sowing date', async () => {
+  it('disables the SoilGrids autofill button while manual soil editing is open', async () => {
     mockFetch({ '/crops': () => jsonResponse(CROPS) })
+    renderSheet()
+
+    const autofillButton = screen.getByRole('button', { name: 'Autocompletar desde SoilGrids' })
+    const editButton = screen.getByRole('button', { name: 'Editar manualmente' })
+    expect(autofillButton).toBeEnabled()
+
+    fireEvent.click(editButton)
+    expect(autofillButton).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar edición' }))
+    expect(autofillButton).toBeEnabled()
+  })
+
+  it('shows general error copy for 502/503 on manual soil PUT, not SoilGrids copy', async () => {
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/soil': () =>
+        jsonResponse(
+          { type: 'about:blank', title: 'Bad Gateway', status: 502 },
+          502,
+        ),
+    })
+    renderSheet()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editar manualmente' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar suelo' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Ocurrió un error. Intenta de nuevo.')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByText(/SoilGrids no está disponible/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows general error copy for 502/503 on cycle POST, not SoilGrids copy', async () => {
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      'plots/plot-1/cycles': () =>
+        jsonResponse(
+          { type: 'about:blank', title: 'Bad Gateway', status: 502 },
+          502,
+        ),
+    })
     renderSheet()
 
     await waitFor(() => screen.getByRole('combobox'))
     fireEvent.click(screen.getByRole('combobox'))
     fireEvent.click(await screen.findByRole('option', { name: 'Maíz' }))
     fireEvent.change(screen.getByLabelText(/Fecha de siembra/), { target: { value: '2026-06-01' } })
-    fireEvent.change(screen.getByLabelText(/Cosecha esperada/), { target: { value: '2026-05-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Iniciar ciclo' }))
 
+    await waitFor(() =>
+      expect(screen.getByText('Ocurrió un error. Intenta de nuevo.')).toBeInTheDocument(),
+    )
     expect(
-      screen.getByText('La cosecha esperada no puede ser antes de la siembra.'),
-    ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Iniciar ciclo' })).toBeDisabled()
+      screen.queryByText(/SoilGrids no está disponible/),
+    ).not.toBeInTheDocument()
   })
 
-  it('starts a cycle and overrides the expected harvest date, then shows it as active', async () => {
+  it('shows general error copy for 502/503 on cycle PATCH, not SoilGrids copy', async () => {
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      'cycles/cycle-1': () =>
+        jsonResponse(
+          { type: 'about:blank', title: 'Service Unavailable', status: 503 },
+          503,
+        ),
+      '/plots/plot-1/cycles': () =>
+        jsonResponse(
+          {
+            id: 'cycle-1',
+            plot_id: 'plot-1',
+            crop_id: 1,
+            sown_on: '2026-06-01',
+            expected_harvest_on: '2026-09-15',
+            status: 'active',
+          },
+          201,
+        ),
+    })
+    renderSheet()
+
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Maíz' }))
+    fireEvent.change(screen.getByLabelText(/Fecha de siembra/), { target: { value: '2026-06-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Iniciar ciclo' }))
+
+    await waitFor(() => expect(screen.getByText('Estado: Activo')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Registrar cosecha' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Ocurrió un error. Intenta de nuevo.')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByText(/SoilGrids no está disponible/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows loading state while crops are loading', async () => {
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    renderSheet()
+
+    expect(screen.getByText('Cargando cultivos…')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  })
+
+  it('shows error state with retry when crops request fails', async () => {
+    let attempts = 0
+    vi.mocked(fetch).mockImplementation(async () => {
+      attempts += 1
+      if (attempts === 1) {
+        return jsonResponse({ type: 'about:blank', title: 'Server error', status: 500 }, 500)
+      }
+      return jsonResponse(CROPS)
+    })
+    renderSheet()
+
+    await waitFor(() =>
+      expect(screen.getByText('Ocurrió un error. Intenta de nuevo.')).toBeInTheDocument(),
+    )
+    const retryButton = screen.getByRole('button', { name: 'Reintentar' })
+    expect(retryButton).toBeInTheDocument()
+
+    fireEvent.click(retryButton)
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument())
+    expect(attempts).toBe(2)
+  })
+
+  it('disables starting a cycle until crop and sowing date are selected', async () => {
+    mockFetch({ '/crops': () => jsonResponse(CROPS) })
+    renderSheet()
+
+    await waitFor(() => screen.getByRole('combobox'))
+    const submitButton = screen.getByRole('button', { name: 'Iniciar ciclo' })
+    expect(submitButton).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Maíz' }))
+    expect(submitButton).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText(/Fecha de siembra/), { target: { value: '2026-06-01' } })
+    expect(submitButton).toBeEnabled()
+  })
+
+  it('starts a cycle with crop and sowing date only, letting backend derive expected harvest', async () => {
     mockFetch({
       '/crops': () => jsonResponse(CROPS),
       'plots/plot-1/cycles': () =>
@@ -210,41 +342,29 @@ describe('PlotDetailSheet', () => {
           },
           201,
         ),
-      'cycles/cycle-1': () =>
-        jsonResponse({
-          id: 'cycle-1',
-          plot_id: 'plot-1',
-          crop_id: 1,
-          sown_on: '2026-06-01',
-          expected_harvest_on: '2026-10-01',
-          status: 'active',
-        }),
     })
     renderSheet()
 
     await waitFor(() => screen.getByRole('combobox'))
+    expect(screen.queryByLabelText(/Cosecha esperada/)).not.toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('combobox'))
     fireEvent.click(await screen.findByRole('option', { name: 'Maíz' }))
     fireEvent.change(screen.getByLabelText(/Fecha de siembra/), { target: { value: '2026-06-01' } })
-    fireEvent.change(screen.getByLabelText(/Cosecha esperada/), { target: { value: '2026-10-01' } })
     fireEvent.click(screen.getByRole('button', { name: 'Iniciar ciclo' }))
 
     await waitFor(() =>
-      expect(screen.getByText(/cosecha esperada el 2026-10-01/)).toBeInTheDocument(),
+      expect(screen.getByText(/cosecha esperada el 2026-09-15/)).toBeInTheDocument(),
     )
     expect(screen.getByText(/Maíz · sembrado el 2026-06-01/)).toBeInTheDocument()
 
-    const [postRequest] = vi.mocked(fetch).mock.calls.find(([input]) =>
-      requestOf(input as Request).url.includes('/cycles') &&
-      !requestOf(input as Request).url.includes('cycles/cycle-1'),
-    )!
-    expect(await requestOf(postRequest as Request).json()).toEqual({ crop_id: 1, sown_on: '2026-06-01' })
-
-    const [patchRequest] = vi.mocked(fetch).mock.calls.find(([input]) =>
-      requestOf(input as Request).url.includes('cycles/cycle-1'),
-    )!
-    expect(await requestOf(patchRequest as Request).json()).toEqual({
-      expected_harvest_on: '2026-10-01',
+    const cycleCalls = vi.mocked(fetch).mock.calls.filter(([input]) =>
+      requestOf(input as Request).url.includes('/cycles'),
+    )
+    expect(cycleCalls).toHaveLength(1)
+    expect(await requestOf(cycleCalls[0][0] as Request).json()).toEqual({
+      crop_id: 1,
+      sown_on: '2026-06-01',
     })
   })
 
@@ -275,7 +395,7 @@ describe('PlotDetailSheet', () => {
     )
   })
 
-  it('ends an active cycle by marking it harvested', async () => {
+  it('ends an active cycle by marking it harvested and returns the start-cycle form', async () => {
     let patchCalls = 0
     mockFetch({
       '/crops': () => jsonResponse(CROPS),
@@ -314,8 +434,11 @@ describe('PlotDetailSheet', () => {
     await waitFor(() => expect(screen.getByText('Estado: Activo')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Registrar cosecha' }))
 
-    await waitFor(() => expect(screen.getByText('Estado: Cosechado')).toBeInTheDocument())
-    expect(screen.queryByRole('button', { name: 'Registrar cosecha' })).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Iniciar ciclo' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('Estado: Activo')).not.toBeInTheDocument()
+    expect(screen.queryByText('Estado: Cosechado')).not.toBeInTheDocument()
     expect(patchCalls).toBe(1)
   })
 })

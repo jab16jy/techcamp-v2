@@ -227,6 +227,6 @@ describe('plotsApi soil and cycle caching (T9: no GET endpoint to refetch from)'
     await act(async () => {
       await result.current.patch.mutateAsync({ cycleId: 'cycle-1', changes: { status: 'harvested' } })
     })
-    await waitFor(() => expect(result.current.cycle.data).toEqual(harvestedCycle))
+    await waitFor(() => expect(result.current.cycle.data).toBeNull())
   })
 })

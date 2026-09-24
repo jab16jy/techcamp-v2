@@ -85,10 +85,8 @@ function numberOrNull(value: string): number | null {
   return value.trim() === '' ? null : Number(value)
 }
 
-/** Shared by every action below: a 422 shows the server's own detail inline (existing
- * pattern), a 502/503 (soil autofill only, T5) gets a dedicated "try again later" message,
- * anything else goes through `describeApiError`. */
-function describeActionError(err: unknown): string {
+/** Dedicated 502/503 copy only for SoilGrids autofill (T5). */
+function describeAutofillError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 502 || err.status === 503) {
       return 'SoilGrids no está disponible en este momento. Intenta de nuevo más tarde.'
@@ -96,6 +94,14 @@ function describeActionError(err: unknown): string {
     if (err.status === 422 || err.status === 409) {
       return err.detail ?? err.title
     }
+  }
+  return describeApiError(err)
+}
+
+/** Error copy for soil PUT, cycle POST, cycle PATCH (#21 round 14): 502/503 goes to describeApiError. */
+function describeActionError(err: unknown): string {
+  if (err instanceof ApiError && (err.status === 422 || err.status === 409)) {
+    return err.detail ?? err.title
   }
   return describeApiError(err)
 }
@@ -131,7 +137,7 @@ function SoilSection({ plotId }: { plotId: string }) {
     try {
       await autofillMutation.mutateAsync()
     } catch (err) {
-      setError(describeActionError(err))
+      setError(describeAutofillError(err))
     }
   }
 
@@ -181,6 +187,7 @@ function SoilSection({ plotId }: { plotId: string }) {
           type="button"
           variant="secondary"
           onClick={handleAutofill}
+          disabled={editing}
           loading={autofillMutation.isPending}
         >
           Autocompletar desde SoilGrids
@@ -274,27 +281,18 @@ function CycleSection({ plotId }: { plotId: string }) {
   const patchMutation = usePatchCycle(plotId)
   const [cropId, setCropId] = useState('')
   const [sownOn, setSownOn] = useState('')
-  const [expectedHarvestOn, setExpectedHarvestOn] = useState('')
   const [error, setError] = useState<string | null>(null)
 
-  const cycle = cycleQuery.data
+  const cycle = cycleQuery.data?.status === 'active' ? cycleQuery.data : null
   const selectedCrop = cropsQuery.data?.find((crop) => String(crop.id) === cropId)
-  const harvestNotBeforeSowing = expectedHarvestOn === '' || expectedHarvestOn >= sownOn
-  const canSubmit = cropId !== '' && sownOn !== '' && harvestNotBeforeSowing
+  const canSubmit = cropId !== '' && sownOn !== ''
 
   async function handleStartCycle() {
     setError(null)
     try {
-      const created = await createMutation.mutateAsync({ crop_id: Number(cropId), sown_on: sownOn })
-      if (expectedHarvestOn) {
-        await patchMutation.mutateAsync({
-          cycleId: created.id,
-          changes: { expected_harvest_on: expectedHarvestOn },
-        })
-      }
+      await createMutation.mutateAsync({ crop_id: Number(cropId), sown_on: sownOn })
       setCropId('')
       setSownOn('')
-      setExpectedHarvestOn('')
     } catch (err) {
       setError(describeActionError(err))
     }
@@ -347,64 +345,66 @@ function CycleSection({ plotId }: { plotId: string }) {
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          <label className="flex flex-col gap-2 text-base" htmlFor="cycle-crop">
-            Cultivo
-            <Select value={cropId} onValueChange={setCropId}>
-              <SelectTrigger id="cycle-crop">
-                <SelectValue placeholder="Selecciona un cultivo" />
-              </SelectTrigger>
-              <SelectContent>
-                {cropsQuery.data?.map((crop) => (
-                  <SelectItem key={crop.id} value={String(crop.id)}>
-                    {crop.name_es}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
-          {selectedCrop && (
-            <p className="text-sm text-text-muted">
-              Kc ({KC_SOURCE_LABELS[selectedCrop.kc_source] ?? selectedCrop.kc_source}):{' '}
-              {selectedCrop.stages.length > 0
-                ? selectedCrop.stages
-                    .map((stage) => `${STAGE_LABELS[stage.stage] ?? stage.stage} ${stage.kc}`)
-                    .join(' · ')
-                : 'sin etapas registradas'}
-            </p>
+          {cropsQuery.isLoading && (
+            <p className="text-base text-text-muted">Cargando cultivos…</p>
           )}
-          <label className="flex flex-col gap-2 text-base" htmlFor="cycle-sown-on">
-            Fecha de siembra
-            <Input
-              id="cycle-sown-on"
-              type="date"
-              value={sownOn}
-              onChange={(event) => setSownOn(event.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-2 text-base" htmlFor="cycle-expected-harvest">
-            Cosecha esperada (opcional; si se omite, se calcula del cultivo)
-            <Input
-              id="cycle-expected-harvest"
-              type="date"
-              min={sownOn || undefined}
-              value={expectedHarvestOn}
-              onChange={(event) => setExpectedHarvestOn(event.target.value)}
-            />
-          </label>
-          {!harvestNotBeforeSowing && (
-            <p className="text-base text-severity-critical">
-              La cosecha esperada no puede ser antes de la siembra.
-            </p>
+          {cropsQuery.isError && (
+            <div className="flex flex-col gap-2">
+              <p className="text-base text-severity-critical">{describeApiError(cropsQuery.error)}</p>
+              <div>
+                <Button type="button" variant="secondary" onClick={() => cropsQuery.refetch()}>
+                  Reintentar
+                </Button>
+              </div>
+            </div>
           )}
-          <Button
-            type="button"
-            variant="primary"
-            onClick={handleStartCycle}
-            disabled={!canSubmit}
-            loading={createMutation.isPending}
-          >
-            Iniciar ciclo
-          </Button>
+          {cropsQuery.isSuccess && (
+            <>
+              <label className="flex flex-col gap-2 text-base" htmlFor="cycle-crop">
+                Cultivo
+                <Select value={cropId} onValueChange={setCropId}>
+                  <SelectTrigger id="cycle-crop">
+                    <SelectValue placeholder="Selecciona un cultivo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {cropsQuery.data.map((crop) => (
+                      <SelectItem key={crop.id} value={String(crop.id)}>
+                        {crop.name_es}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              {selectedCrop && (
+                <p className="text-sm text-text-muted">
+                  Kc ({KC_SOURCE_LABELS[selectedCrop.kc_source] ?? selectedCrop.kc_source}):{' '}
+                  {selectedCrop.stages.length > 0
+                    ? selectedCrop.stages
+                        .map((stage) => `${STAGE_LABELS[stage.stage] ?? stage.stage} ${stage.kc}`)
+                        .join(' · ')
+                    : 'sin etapas registradas'}
+                </p>
+              )}
+              <label className="flex flex-col gap-2 text-base" htmlFor="cycle-sown-on">
+                Fecha de siembra
+                <Input
+                  id="cycle-sown-on"
+                  type="date"
+                  value={sownOn}
+                  onChange={(event) => setSownOn(event.target.value)}
+                />
+              </label>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={handleStartCycle}
+                disabled={!canSubmit}
+                loading={createMutation.isPending}
+              >
+                Iniciar ciclo
+              </Button>
+            </>
+          )}
         </div>
       )}
       {error && <p className="text-base text-severity-critical">{error}</p>}
