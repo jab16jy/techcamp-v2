@@ -58,6 +58,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350 — actual 158 (map) + 701 (forms)
 - [x] T8b Fix #21 round 12: `AbortSignal.any` fallback for older WebViews; real fake-timer timeout test; test list refetch after farm/plot create; `PlotDrawMap` glue test + `invalidateSize()` in the sheet + marker icon under Vite; `errorCopy` test with `ApiError`; client lat/lng range check; ADR-0021 row for map tiles (public OSM, owner 2026-09-24) — route: delegated — forecast ~150 — actual 352
 - [x] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) ; also fix #21 round 13 (timeout test cleanup in `try/finally`, fallback test proves the timeout-only path) — route: delegated — forecast ~300 — actual 40 (round 13 fix) + 1059 (T9 feature)
+- [ ] T9b Fix #21 round 14: start-cycle form returns after harvest/loss; SoilGrids copy only for autofill errors; autofill disabled or form refreshed while the manual soil form is open; no non-atomic POST+PATCH for the harvest override (drop the override from the start form or make it recoverable); restore the fallback-test spy; `useCrops` loading/error state — route: delegated — forecast ~150
 
 ## Review (RDD)
 - `4684262..cacf2ab` (`.gitignore`, this doc): owner granted; lineage `review-d8ec7c69794659a0`, reliability lens, 0 findings, approved and acknowledged (authority burned).
@@ -101,6 +102,8 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T7c + T8 slice `0547131..7749c8f` (medium: `infra/compose.yaml`; 1388 lines, `slice_budget_reached`; standing grant, new feature): parent spot check `npm test -- --run` 70 passed, `npm run size` 155.1 kB / 200 kB (docs/07:15,149 confirm the budget is the initial bundle, so the `index-*` glob is correct). Lineage `review-528c994a56ae8f59`, reliability lens, approved and acknowledged (authority burned). Three WARNINGs (`AbortSignal.any` without fallback; vacuous timeout test; create→list refetch unproved) and four suggestions: #21 round 12, fixed by T8b. Reviewed boundary is now `7749c8f`. Owner decision (2026-09-24): map tiles come from public OpenStreetMap in every profile; T8b adds the row to ADR-0021 and checks the OSM attribution.
 - T8b slice `7749c8f..37359b2` (medium, 474 lines, `slice_budget_reached`; owner granted): parent spot check `npm test -- --run` 80 passed. Lineage `review-b01ed8d3bc48fa89`, reliability lens, approved and acknowledged (authority burned). #21 round 12 resolved in `4c1069b`. One WARNING (timeout test leaks fake timers on failure) and one suggestion (fallback test weak): #21 round 13, folded into T9. Reviewed boundary is now `37359b2`.
 - Whole-branch stop-hook candidate `a912e8f..431d75b` (owner granted): refused by `lens_context_budget_exceeded` (4451 lines), no authority created; covered by the per-slice reviews above.
+- T9 slice `37359b2..9aad907` (T9 + round 13 test fix; medium, 1277 lines, `slice_budget_reached`; standing grant, new feature): parent spot check `npm test -- --run` 93 passed. Lineage `review-4e1e5df03384cf6e`, reliability lens, approved and acknowledged (authority burned). #21 round 13 resolved in `a04e0a1`. Four WARNINGs (ended cycle blocks a new one; SoilGrids copy on every 502/503; autofill vs. open manual form; non-atomic POST+PATCH override) and two suggestions: #21 round 14, fixed by T9b. Reviewed boundary is now `9aad907`.
+- Whole-branch stop-hook candidate `a912e8f..cf8bb93` (4897 lines): owner declined (`declined_this_candidate`).
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 - T5b `47f0b83..658e5b9` (fix, no migration, 141 lines): #21 round 7 resolved in `658e5b9`. RDD
   assessment/acknowledgement for this commit not run by this writer — left to the parent
@@ -1618,4 +1621,5 @@ All slices are `size:exception` (each task is one work-unit commit).
     task instructions.
 
 ## Next step
-E3 PR slicing (stacked-to-main).
+T9b (fix #21 round 14), then E3 PR slicing (stacked-to-main), on branch
+`feat/e3-farms-web` (boundary `9aad907`).
