@@ -84,13 +84,17 @@ async def update_plot(
     )
     ensure_can_write(role)
     merged = replace(plot, **changes)
-    switching_to_irrigated = (
+    system_changed_without_efficiency = (
+        merged.irrigation_system is not plot.irrigation_system
+        and "irrigation_efficiency" not in changes
+    )
+    missing_efficiency = (
         merged.irrigation_system is not IrrigationSystem.NONE
         and merged.irrigation_efficiency is None
     )
-    if switching_to_irrigated:
-        # Same T1 rule as `create_plot`: a switch to an irrigated system with
-        # no efficiency given defaults to the system's value.
+    if system_changed_without_efficiency or missing_efficiency:
+        # Same T1 rule as `create_plot`: an efficiency not given follows the
+        # current system's default, never the previous system's value.
         merged = replace(
             merged, irrigation_efficiency=default_efficiency_for(merged.irrigation_system)
         )

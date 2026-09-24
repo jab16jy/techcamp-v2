@@ -330,6 +330,27 @@ async def test_switching_a_plot_to_irrigated_without_efficiency_uses_the_default
     assert response.json()["irrigation_efficiency"] == pytest.approx(0.90)
 
 
+async def test_switching_between_irrigated_systems_uses_the_new_default(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "drip"},
+        headers=_auth(token),
+    )
+    plot_id = created.json()["id"]
+
+    response = client.patch(
+        f"/plots/{plot_id}", json={"irrigation_system": "gravity"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["irrigation_efficiency"] == pytest.approx(0.60)
+
+
 @pytest.mark.parametrize(
     ("path_suffix", "payload"),
     [
