@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.farms.domain.models import Farm, IrrigationSystem, Plot, SoilProfile
+from techcamp.farms.domain.models import Farm, IrrigationSystem, Plot, SoilGridsSample, SoilProfile
 
 
 class FarmRepository(Protocol):
@@ -69,6 +69,21 @@ class PlotRepository(Protocol):
         system_flow_lph: float | None,
     ) -> Plot: ...
 
+    async def get_centroid(self, plot_id: UUID, org_id: UUID) -> tuple[float, float]:
+        """(lon, lat) of the plot's PostGIS centroid — the SoilGrids query
+        point (T5 task instruction: `ST_Centroid` on the org-scoped plot)."""
+        ...
+
 
 class SoilProfileRepository(Protocol):
     async def put(self, profile: SoilProfile) -> SoilProfile: ...
+
+
+class SoilGridsPort(Protocol):
+    """External I/O port (ADR-0002: a port for external I/O needing a test
+    double). Two real implementations of the single adapter class
+    (`IsricSoilGridsAdapter`): a live network transport for production, an
+    injected `httpx.MockTransport` for the seminar profile's recorded
+    fixture and for this module's own tests (ADR-0021)."""
+
+    async def fetch_sample(self, lon: float, lat: float) -> SoilGridsSample: ...

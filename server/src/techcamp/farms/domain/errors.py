@@ -64,6 +64,20 @@ class MissingIrrigationEfficiencyError(Exception):
         super().__init__(f"An irrigated plot (system={irrigation_system}) requires an efficiency")
 
 
+class SoilGridsUnavailableError(Exception):
+    """Raised when the SoilGrids adapter can't produce a sample: either the
+    request never reached ISRIC (`upstream_status=None`: timeout, DNS,
+    connection refused) or ISRIC answered with a non-200 status. Callers
+    (T5, `POST /plots/{plot_id}/soil:autofill`) map the two cases to `503`
+    and `502` respectively, never a raw `500` (docs/04-api.md conventions).
+    """
+
+    def __init__(self, *, upstream_status: int | None, detail: str) -> None:
+        self.upstream_status = upstream_status
+        self.detail = detail
+        super().__init__(detail)
+
+
 class InvalidTechnicianError(Exception):
     """Raised when `technician_id` isn't a member of the farm's org with a
     write role (T2b decision, odd/tasks/techcamp-v2-e3-farms.md: docs/03 is

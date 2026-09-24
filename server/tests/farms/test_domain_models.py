@@ -1,10 +1,15 @@
+from uuid import UUID
+
 import pytest
 
 from techcamp.farms.domain.errors import InsufficientRoleError, RainfedPlotHasIrrigationError
 from techcamp.farms.domain.models import (
     IrrigationSystem,
+    SoilGridsSample,
     SoilProfileSource,
     apply_fao56_texture_fallback,
+    build_soil_profile_from_soilgrids,
+    classify_usda_texture,
     default_efficiency_for,
     ensure_can_write,
     ensure_rainfed_has_no_irrigation,
@@ -110,3 +115,90 @@ def test_missing_texture_and_values_leaves_water_limits_unset() -> None:
     fc, wp, source = apply_fao56_texture_fallback(None, None, None)
 
     assert (fc, wp, source) == (None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("sand", "silt", "clay", "expected"),
+    [
+        (100.0, 0.0, 0.0, "sand"),
+        (0.0, 0.0, 100.0, "clay"),
+        (0.0, 100.0, 0.0, "silt"),
+        (40.0, 40.0, 20.0, "loam"),  # textbook triangle center point
+    ],
+)
+def test_classify_usda_texture_matches_uncontroversial_reference_points(
+    sand: float, silt: float, clay: float, expected: str
+) -> None:
+    assert classify_usda_texture(sand, silt, clay) == expected
+
+
+def test_classify_usda_texture_needs_all_three_fractions() -> None:
+    assert classify_usda_texture(None, 40.0, 20.0) is None
+    assert classify_usda_texture(40.0, None, 20.0) is None
+    assert classify_usda_texture(40.0, 40.0, None) is None
+
+
+def test_build_soil_profile_from_soilgrids_uses_soilgrids_water_limits_when_present() -> None:
+    plot_id = UUID("00000000-0000-7000-8000-000000000001")
+    sample = SoilGridsSample(
+        ph=6.5,
+        organic_carbon_pct=1.5,
+        sand_pct=40.0,
+        silt_pct=40.0,
+        clay_pct=20.0,
+        field_capacity_pct=25.0,
+        wilting_point_pct=12.0,
+    )
+
+    profile = build_soil_profile_from_soilgrids(plot_id, sample)
+
+    assert profile.plot_id == plot_id
+    assert profile.source is SoilProfileSource.SOILGRIDS
+    assert profile.ph == 6.5
+    assert profile.organic_matter_pct == pytest.approx(1.5 * 1.724)
+    assert profile.texture == "loam"
+    assert profile.field_capacity_pct == 25.0
+    assert profile.wilting_point_pct == 12.0
+    assert profile.root_depth_cm is None
+
+
+def test_build_soil_profile_from_soilgrids_falls_back_to_fao56_texture_means() -> None:
+    plot_id = UUID("00000000-0000-7000-8000-000000000002")
+    sample = SoilGridsSample(
+        ph=None,
+        organic_carbon_pct=None,
+        sand_pct=40.0,
+        silt_pct=40.0,
+        clay_pct=20.0,
+        field_capacity_pct=None,
+        wilting_point_pct=None,
+    )
+
+    profile = build_soil_profile_from_soilgrids(plot_id, sample)
+
+    assert profile.source is SoilProfileSource.FAO56_TEXTURE
+    assert profile.field_capacity_pct == 25.0  # loam mean, Table 19
+    assert profile.wilting_point_pct == 12.0
+    assert profile.organic_matter_pct is None
+
+
+def test_build_soil_profile_from_soilgrids_needs_both_water_limits_together() -> None:
+    """A lone `wv0033` or `wv1500` (SoilGrids has no prediction at the other
+    depth/property) isn't enough: fall back rather than storing a
+    half-SoilGrids, half-invented pair."""
+    plot_id = UUID("00000000-0000-7000-8000-000000000003")
+    sample = SoilGridsSample(
+        ph=None,
+        organic_carbon_pct=None,
+        sand_pct=40.0,
+        silt_pct=40.0,
+        clay_pct=20.0,
+        field_capacity_pct=25.0,
+        wilting_point_pct=None,
+    )
+
+    profile = build_soil_profile_from_soilgrids(plot_id, sample)
+
+    assert profile.source is SoilProfileSource.FAO56_TEXTURE
+    assert profile.field_capacity_pct == 25.0
+    assert profile.wilting_point_pct == 12.0

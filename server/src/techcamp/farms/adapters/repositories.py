@@ -243,6 +243,19 @@ class SqlAlchemyPlotRepository:
         assert plot is not None
         return plot
 
+    async def get_centroid(self, plot_id: UUID, org_id: UUID) -> tuple[float, float]:
+        """(lon, lat) of `ST_Centroid(boundary)` (T5: SoilGrids query point).
+        Callers resolve org-scoped access before calling this, so a missing
+        row here would be a caller bug, not a normal 404 path."""
+        result = await self._session.execute(
+            select(
+                func.ST_X(func.ST_Centroid(PlotRow.boundary)),
+                func.ST_Y(func.ST_Centroid(PlotRow.boundary)),
+            ).where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
+        )
+        row = result.one()
+        return float(row[0]), float(row[1])
+
 
 _STAGE_ORDER = {stage: index for index, stage in enumerate(CROP_STAGES)}
 
