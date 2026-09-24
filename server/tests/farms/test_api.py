@@ -869,7 +869,7 @@ async def test_soil_profile_without_water_limits_falls_back_to_fao56_texture(
     body = response.json()
     assert body["source"] == "fao56_texture"
     assert body["field_capacity_pct"] == pytest.approx(32.0)
-    assert body["wilting_point_pct"] == pytest.approx(15.0)
+    assert body["wilting_point_pct"] == pytest.approx(17.0)
 
 
 async def test_soil_profile_with_an_unrecognized_texture_leaves_water_limits_null(
@@ -880,7 +880,7 @@ async def test_soil_profile_with_an_unrecognized_texture_leaves_water_limits_nul
     farm_id = await _create_farm(client, org_id, token)
     plot_id = await _create_plot(client, farm_id, token)
 
-    response = client.put(f"/plots/{plot_id}/soil", json={"texture": "clay"}, headers=_auth(token))
+    response = client.put(f"/plots/{plot_id}/soil", json={"texture": "peat"}, headers=_auth(token))
 
     assert response.status_code == 200, response.text
     body = response.json()

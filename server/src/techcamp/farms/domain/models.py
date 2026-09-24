@@ -150,22 +150,19 @@ class SoilProfile:
 
 FAO56_TEXTURE_WATER_LIMITS: dict[str, tuple[float, float]] = {
     # FAO-56 (Allen, Pereira, Raes & Smith, 1998), Irrigation and Drainage
-    # Paper 56, fao.org, Chapter 8 "ETc under soil water stress conditions",
-    # Table 19 "Soil water characteristics for different soil types":
-    # field capacity (θFC) and wilting point (θWP) as volumetric water
-    # content (m3/m3), reported here as a percentage.
-    #
-    # docs gap (flagged in odd/tasks/techcamp-v2-e3-farms.md T4): the FAO
-    # HTML mirror (fao.org/4/x0490e/x0490e0e.htm) does not reproduce Table
-    # 19 itself, only Example 36's three worked values, each explicitly
-    # marked "From Table 19" in that same chapter. Those are the only three
-    # classes verified against the primary source; the other FAO-56 Table
-    # 19 classes (sand, sandy loam, loam, silt loam, silt clay loam, clay)
-    # are deliberately omitted rather than invented — add them only once
-    # independently verified against Table 19 directly.
-    "loamy_sand": (15.0, 6.0),
-    "silt": (32.0, 15.0),
-    "silty_clay": (35.0, 23.0),
+    # Paper 56, Chapter 8, Table 19 "Typical soil water characteristics for
+    # different soil types" (fao.org/4/x0490e/x0490e0c.htm). docs/03 asks for
+    # the class's mean value: the midpoint of each θFC and θWP range (m3/m3),
+    # as a percentage. Keys are USDA texture classes.
+    "sand": (12.0, 4.5),  # θFC 0.07-0.17, θWP 0.02-0.07
+    "loamy_sand": (15.0, 6.5),  # 0.11-0.19, 0.03-0.10
+    "sandy_loam": (23.0, 11.0),  # 0.18-0.28, 0.06-0.16
+    "loam": (25.0, 12.0),  # 0.20-0.30, 0.07-0.17
+    "silt_loam": (29.0, 15.0),  # 0.22-0.36, 0.09-0.21
+    "silt": (32.0, 17.0),  # 0.28-0.36, 0.12-0.22
+    "silty_clay_loam": (33.5, 20.5),  # 0.30-0.37, 0.17-0.24
+    "silty_clay": (36.0, 23.0),  # 0.30-0.42, 0.17-0.29
+    "clay": (36.0, 22.0),  # 0.32-0.40, 0.20-0.24
 }
 
 

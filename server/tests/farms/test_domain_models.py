@@ -69,33 +69,39 @@ def test_lab_values_pass_through_unchanged_with_source_lab() -> None:
 @pytest.mark.parametrize(
     ("texture", "expected_fc", "expected_wp"),
     [
-        # FAO-56 (Allen et al., 1998) Table 19, Chapter 8 Example 36 ("From
-        # Table 19"): the three classes verified against the primary source.
-        ("loamy_sand", 15.0, 6.0),
-        ("silt", 32.0, 15.0),
-        ("silty_clay", 35.0, 23.0),
-        ("Silty Clay".replace(" ", "_"), 35.0, 23.0),
+        # FAO-56 (Allen et al., 1998) Table 19, midpoint of each θFC/θWP range
+        # (fao.org/4/x0490e/x0490e0c.htm), as a percentage.
+        ("sand", 12.0, 4.5),
+        ("loamy_sand", 15.0, 6.5),
+        ("sandy_loam", 23.0, 11.0),
+        ("loam", 25.0, 12.0),
+        ("silt_loam", 29.0, 15.0),
+        ("silt", 32.0, 17.0),
+        ("silty_clay_loam", 33.5, 20.5),
+        ("silty_clay", 36.0, 23.0),
+        ("clay", 36.0, 22.0),
     ],
 )
-def test_texture_fallback_matches_fao56_table_19_verified_classes(
+def test_texture_fallback_uses_fao56_table_19_range_midpoints(
     texture: str, expected_fc: float, expected_wp: float
 ) -> None:
     fc, wp, source = apply_fao56_texture_fallback(texture, None, None)
 
-    assert (fc, wp, source) == (expected_fc, expected_wp, SoilProfileSource.FAO56_TEXTURE)
+    assert fc == pytest.approx(expected_fc)
+    assert wp == pytest.approx(expected_wp)
+    assert source is SoilProfileSource.FAO56_TEXTURE
 
 
 def test_texture_fallback_is_case_insensitive() -> None:
     fc, wp, source = apply_fao56_texture_fallback("SILT", None, None)
 
-    assert (fc, wp, source) == (32.0, 15.0, SoilProfileSource.FAO56_TEXTURE)
+    assert (fc, wp, source) == (32.0, 17.0, SoilProfileSource.FAO56_TEXTURE)
 
 
 def test_unrecognized_texture_leaves_water_limits_unset() -> None:
-    """Never invent values: an unverified or unknown texture class (e.g. the
-    FAO-56 Table 19 classes not yet verified against the primary source)
+    """Never invent values: a texture outside the FAO-56 Table 19 classes
     leaves θFC/θWP and `source` unset rather than guessing."""
-    fc, wp, source = apply_fao56_texture_fallback("sandy_loam", None, None)
+    fc, wp, source = apply_fao56_texture_fallback("peat", None, None)
 
     assert (fc, wp, source) == (None, None, None)
 
