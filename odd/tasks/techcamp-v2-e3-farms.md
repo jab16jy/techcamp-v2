@@ -55,7 +55,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T7 Web data layer, minimal OTP sign-in and plots route: API client with bearer token, phone + code sign-in, farm/plot list in the plots tab (via `impeccable`, existing design only) — route: delegated — forecast ~250 — actual 988
 - [x] T7b Align with docs and fix #21 round 10: server routers under `/api/v1` (docs/04:7), web client on generated OpenAPI types + `openapi-fetch` + TanStack Query (docs/05:179-180), document `POST /dev/auth/otp/verify` in docs/04; 401 → sign-out and redirect to sign-in, request timeout, atomic sign-in session, single proxy config, farms pagination, error copy by cause — route: delegated — forecast ~500 — actual 166 (server) + 667 (web)
 - [x] T7c Fix #21 round 11: `VITE_API_URL` only as the dev-proxy target (non-`VITE_` variable, relative browser base, test base separate); do not sign out on 401 from anonymous OTP calls (no token on them); test the 10 s timeout and `describeApiError`; per-farm plots retry — route: delegated — forecast ~150 — actual 219
-- [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
+- [x] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350 — actual 158 (map) + 701 (forms)
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
 
 ## Review (RDD)
@@ -109,8 +109,13 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   parent orchestrator; boundary not advanced here.
 
 ## Acceptance criteria
-- [ ] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
-- [ ] Rainfed plots reject irrigation efficiency and flow (DB `CHECK` and 422).
+- [x] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
+  Proved by T8: `CreateFarmSheet`/`CreatePlotSheet` never send `area_ha`; a live
+  `POST /farms/{id}/plots` smoke call returned a server-computed `area_ha` for a
+  client-supplied polygon (see T8 progress).
+- [ ] Rainfed plots reject irrigation efficiency and flow (DB `CHECK` and 422) — the DB `CHECK`
+  and 422 path were built in T2/T2b/T3b; T8's own web form never sends efficiency/flow for
+  `none`, proved live, but this checklist item is server scope, already provable before T8.
 - [x] Soil autofill fills θFC/θWP from SoilGrids, or from the FAO-56 texture table with `source = fao56_texture`.
 - [x] `GET /crops` returns stages, Kc and `kc_source`.
 - [x] A plot holds at most one active crop cycle.
@@ -1171,7 +1176,168 @@ All slices are `size:exception` (each task is one work-unit commit).
     left to the parent orchestrator; boundary not advanced here (still
     `0547131`).
 
+- 2026-09-24: T8 done by a delegated `sonnet-high` writer on branch
+  `feat/e3-farms-web` @ `1e85546` (T7c done). Two work-unit commits, split
+  by the task's own suggestion (pure geometry + map, then forms).
+
+  **Commit 1: `feat(web): add plot polygon drawing map`.**
+  `web/src/features/plots/polygon.ts` (new, pure): `Vertex`,
+  `MIN_POLYGON_VERTICES = 3`, `buildPolygonGeoJson` — closes the ring
+  (repeats the first vertex), emits `[lon, lat]` position order (matching
+  `server/src/techcamp/farms/adapters/geojson.py`'s `x, y` = lon, lat and
+  the server's `_rings_are_closed` ≥ 4 positions check), throws below the
+  minimum. `web/src/features/plots/components/PlotDrawMap.tsx` (new):
+  plain Leaflet (no draw plugin — ponytail, verified against
+  `/leaflet/leaflet` via `find-docs`/ctx7: a `map.on('click', …)` handler
+  plus `L.polygon`/`L.marker` is the whole interaction), click-to-add-vertex,
+  `React.lazy`-loaded by its caller so Leaflet stays out of the main bundle.
+  Added `leaflet` + `@types/leaflet` deps.
+  - Decisions:
+    - Tile source: docs/07-frontend-design-system.md (only names "teselas
+      del mapa… caché en tiempo de ejecución") and ADR-0021 (seminar
+      profile: emulated ports table) are both silent on which tile
+      provider to use — **doc gap**, not invented as a new ADR per this
+      task's instruction. Chose OpenStreetMap's public tile server
+      (`tile.openstreetmap.org`): no API key/account, and it's the
+      baseline example in Leaflet's own docs (confirmed via ctx7). Flagged
+      for the owner to confirm or replace before any real deployment
+      (OSM's tile usage policy disallows heavy production traffic without
+      their permission).
+    - Default map center/zoom: `[10.4, -73.25]`, zoom 8 — roughly Cesar/La
+      Guajira/Magdalena (`AGENTS.md`'s "Caribe colombiano"), a starting
+      view only; not a requirement, no doc names one.
+    - No dedicated `PlotDrawMap.test.tsx`: the task explicitly allows
+      mocking the Leaflet map in component tests: its own logic (event
+      wiring, layer add/remove) is thin glue around the Leaflet API,
+      covered indirectly by `CreatePlotSheet.test.tsx`'s mock and by a
+      live smoke call through a real browser-less proxy request (see
+      Verification) — a real-Leaflet-in-jsdom test would be brittle
+      (layout measurement) for what it would prove.
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner
+    `npm test -- --run` (web/). RED observed per file before it existed:
+    `polygon.test.ts` → `Failed to resolve import "./polygon"` (Vite
+    import-analysis). GREEN after `polygon.ts`: `4 passed`. `PlotDrawMap.tsx`
+    has no dedicated test (see Decisions above), so no separate RED/GREEN
+    for it; its wiring is proved by commit 2's tests instead.
+  - Verification (web/): `npm run lint` → clean; `npm run typecheck` →
+    clean; `npm test -- --run` → `13 files, 60 passed` (up from 56);
+    `npm run build` → succeeded, `PlotDrawMap.tsx` unreferenced yet so not
+    in the graph, main bundle unchanged (152.87 kB gzip); `npm run size` →
+    `151.66 kB` (limit 200 kB, unaffected — the module isn't imported
+    anywhere until commit 2).
+  - Commit: `3ede1ad` — `feat(web): add plot polygon drawing map`. Authored
+    lines (`git diff --stat` for this commit's files, excluding
+    `web/package-lock.json`): 158 insertions across 4 files (3 new, 1
+    modified) — under the ~350 forecast for the whole task.
+
+  **Commit 2: `feat(web): add farm and plot creation forms`.**
+  `web/src/features/plots/api/plotsApi.ts`: `useCreateFarm(orgId)` and
+  `useCreatePlot(farmId)` (`useMutation` + `queryClient.invalidateQueries`
+  on success — verified against `/tanstack/query` via ctx7), `CreateFarmInput`/
+  `CreatePlotInput` types. `web/src/features/plots/containers/
+  CreateFarmSheet.tsx` (new): `POST /farms` — name, `municipality_code`,
+  latitude/longitude number inputs building a GeoJSON `Point`; no
+  `technician_id` field (optional on the API, out of this task's named
+  scope). `CreatePlotSheet.tsx` (new): `POST /farms/{farm_id}/plots` —
+  name, the lazily-loaded `PlotDrawMap` plus Deshacer/Limpiar buttons and a
+  vertex-count hint, an irrigation-system `Select` (rainfed included),
+  efficiency/flow inputs shown only while irrigated (ADR-0023); switching
+  to rainfed clears any typed efficiency/flow from local state. Submit
+  disabled until a name and ≥3 vertices exist; `area_ha` is never part of
+  the request body (server-derived, T1 decision). Both forms follow
+  `SignInScreen`'s existing error pattern: a `422 ApiError` shows
+  `detail ?? title` inline on the form (the server's own validation
+  message — no new field-mapping infrastructure, since no endpoint
+  populates `ProblemError.errors[]` yet); anything else goes through the
+  existing `describeApiError`. `PlotsList.tsx`: new optional `onAddPlot`
+  prop renders an "Agregar parcela" button per farm section.
+  `PlotsScreen.tsx`: a header "Nueva finca" button, the empty-state's
+  action button, and the two sheets wired to local `useState`.
+  - Decisions:
+    - `web/package.json`'s `size-limit` config fixed: its glob
+      (`dist/assets/*.js`) summed every JS asset, so the first lazy chunk
+      this epic ever produced (`PlotDrawMap`'s Leaflet chunk, 43.87 kB
+      gzip) pushed the reported number to 198.54 kB — technically still
+      under 200 kB, but conflating an excluded lazy chunk with the
+      "bundle inicial" docs/07 itself defines the budget as ("Bundle
+      inicial ≤ 200 KB gzip… Mapa y gráficos se cargan de forma
+      diferida" — same table row). Narrowed the glob to
+      `dist/assets/index-*.js` (Vite's entry-chunk naming): after the
+      fix, `npm run size` reports 155.1 kB, correctly excluding the
+      lazy map chunk. A pre-existing gap this task's own lazy-loading
+      requirement exposed, not a new rule.
+    - 422 messages are shown as one form-level banner (server's `detail`,
+      already multiple validation messages joined by `; ` in
+      `parseErrorBody`), not mapped per input field: no endpoint sets
+      `ProblemError.errors[]` (grepped `server/src/techcamp` — zero call
+      sites), and FastAPI's own `RequestValidationError` shape has no
+      stable per-field key the client could bind to a specific input
+      without inventing one. "Shown sensibly" per this task's own wording
+      is met by reusing the existing, already-established pattern
+      (`SignInScreen`'s 401 handling) rather than adding new
+      infrastructure for a case the backend doesn't yet support.
+    - Farm location has no map picker: only plot boundaries got the
+      polygon-drawing map (this task's explicit scope); a single point is
+      two number inputs (ponytail: the smallest correct option, no second
+      map interaction). `municipality_code` stays free text (T1's
+      carried doc gap: no `municipality` table exists yet).
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner
+    `npm test -- --run` (web/). RED observed per new file before it
+    existed (`Failed to resolve import` for `CreateFarmSheet`/
+    `CreatePlotSheet`), then for the `PlotsScreen`/`PlotsList` wiring by
+    `git stash push` of `PlotsScreen.tsx`/`PlotsList.tsx` only (keeping
+    the two new wiring tests): `npm test -- --run
+    src/features/plots/containers/PlotsScreen.test.tsx` → `2 failed, 7
+    passed` (`Agregar parcela`/`Nueva finca` buttons not found). `git
+    stash pop` restored the implementation: GREEN, same file → `9
+    passed`. New tests: `CreateFarmSheet.test.tsx` (submits the GeoJSON
+    point body, disables submit until required fields are filled, shows
+    the 422 detail), `CreatePlotSheet.test.tsx` (submit disabled until a
+    name and 3 vertices exist — via a mocked `PlotDrawMap`, rainfed hides
+    efficiency/flow, an irrigated system shows them, submits the closed
+    `[lon, lat]` polygon plus irrigation fields and closes the sheet, 422
+    detail shown), plus two `PlotsScreen.test.tsx` wiring tests. REFACTOR:
+    none needed.
+  - Verification (web/): `npm run lint` → clean; `npm run typecheck` →
+    clean; `npm test -- --run` → `15 files, 70 passed`; `npm run build` →
+    succeeded, `PlotDrawMap` now split into its own chunk
+    (`PlotDrawMap-*.js`, 149.72 kB / gzip 43.87 kB) separate from the main
+    entry (`index-*.js`, 495.76 kB / gzip 156.34 kB); `npm run size` (after
+    the config fix above) → `155.1 kB` gzipped, under the 200 kB limit.
+  - Manual smoke check: real stack — `uv run alembic upgrade head` on the
+    (previously unmigrated) dev Postgres, `uv run uvicorn
+    techcamp.main:app` (seminar profile), `npm run dev` (Vite). Seeded one
+    organization, user and owner membership directly in Postgres. Drove
+    the OTP sign-in chain through the Vite proxy (`curl` against
+    `localhost:5173`, not the UI itself), then the two new endpoints with
+    the exact body shapes the forms send: `POST /api/v1/farms` with a
+    GeoJSON `Point` location → `201` with the farm, no `area_ha` sent;
+    `POST /api/v1/farms/{id}/plots` with a closed 4-position `[lon, lat]`
+    polygon and `irrigation_system: "drip"` → `201` with a
+    server-computed `area_ha`; a second plot with `irrigation_system:
+    "none"` and null efficiency/flow → `201`, both fields null (ADR-0023);
+    a 3-position (open) ring → `422` with the same FastAPI validation
+    shape `client.ts` already parses. All five calls returned the
+    expected status and body. Cleaned up the seeded rows, ran `uv run
+    alembic downgrade base` to restore the dev database to its
+    unmigrated state, and stopped both processes afterward.
+  - Commit: `0f7fb5a` — `feat(web): add farm and plot creation forms`.
+    Authored lines (`git diff --stat` for this commit's files, excluding
+    `web/package-lock.json`): 701 insertions, 7 deletions across 9 files
+    (4 new, 5 modified) — well above the task's ~350 forecast, same reason
+    as most tasks in this epic: two complete forms (name/location fields,
+    the map, an irrigation select with conditional fields, mutations,
+    error handling) plus their tests don't split smaller within one
+    coherent work unit without cutting tests. Flagging for the owner/
+    parent orchestrator's delivery-strategy decision, not re-split here.
+    RDD assessment/acknowledgement for both T8 commits not run by this
+    writer — left to the parent orchestrator; boundary not advanced here
+    (still `0547131`).
+  - Doc gaps: (1) tile source (see Decisions above) — new. (2) carried,
+    unchanged: `farm.municipality_code` plain `text`; `GET /me` has no
+    organization name.
+
 ## Next step
-T8 (web plot creation), on branch `feat/e3-farms-web` @ `1e85546` (T7c
-done; review boundary still `0547131`, pending the parent orchestrator's
-RDD pass over T7c).
+T9 (web soil and cycle forms), on branch `feat/e3-farms-web` @ `0f7fb5a`
+(T8 done; review boundary still `0547131`, pending the parent
+orchestrator's RDD pass over T7c and T8).
