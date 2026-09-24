@@ -39,7 +39,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - SoilGrids in the seminar profile (owner, 2026-09-23): real ISRIC HTTP adapter for production; the seminar profile serves a recorded SoilGrids response, offline and deterministic like weather. T5 adds the row to ADR-0021 in the same work unit.
 
 ## Tasks
-- [ ] T1 Farm and plot schema: `geoalchemy2` dependency, ORM rows, Alembic migration (GiST index, irrigation `CHECK`, `area_ha`), domain rules (default efficiency by system), repositories filtered by `org_id` — route: delegated — forecast ~300
+- [x] T1 Farm and plot schema: `geoalchemy2` dependency, ORM rows, Alembic migration (GiST index, irrigation `CHECK`, `area_ha`), domain rules (default efficiency by system), repositories filtered by `org_id` — route: delegated — forecast ~300 — actual ~623
 - [ ] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test — route: delegated — forecast ~300
 - [ ] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300
 - [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
@@ -60,6 +60,47 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 
 ## Progress / evidence
 - 2026-09-23: CodeGraph initialized; branch created; requirements mapped by a sonnet-high explorer (docs/01, 03, 04, 05, 07, 09, 10, ADR-0011/0021/0023).
+- 2026-09-23: T1 done by a delegated `sonnet-high` writer. `farms` module: `domain/models.py`
+  (`IrrigationSystem`, `DEFAULT_IRRIGATION_EFFICIENCY`, `default_efficiency_for`,
+  `ensure_rainfed_has_no_irrigation`, `Farm`/`Plot` dataclasses), `domain/errors.py`
+  (`RainfedPlotHasIrrigationError`), `adapters/orm.py` (`FarmRow`, `PlotRow`), `adapters/repositories.py`
+  (`SqlAlchemyFarmRepository`, `SqlAlchemyPlotRepository`, read-only, org-scoped). Migration
+  `9098dc0927a3` (chained off `b358c1328b49`): `farm` (`ix_farm_org_id`), `plot` (GiST on
+  `boundary`, `ck_plot_irrigation_system`, `ck_plot_rainfed_has_no_irrigation`).
+  - Decisions: `area_ha` is a DB **generated column** (`Computed`, `STORED`) —
+    `ST_Area(geometry)`/`geography(geometry)` are `IMMUTABLE` in this PostGIS build (verified via
+    `pg_proc.provolatile`), so Postgres accepts the generated-column expression; no insert-time
+    fallback needed. Geometry columns are typed `Mapped[Any]` in the ORM (GeoAlchemy2 accepts a
+    WKT/EWKT `str` on write, returns `WKBElement` on read); repositories select
+    `ST_AsText(...)` so the domain only ever sees WKT `str`. No `application/ports.py` for
+    farms yet: T1 has no use case depending on repository behavior through an abstraction
+    (ponytail: a port only for external I/O or two real implementations). Added
+    `tests/farms/__init__.py` and `tests/identity/__init__.py` — same-named test modules
+    (`test_domain_models.py`, `test_repositories.py`) in different module dirs collided under
+    pytest's rootless import without package markers.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by temporarily removing the four new implementation files and running
+    `uv run pytest -q tests/farms`: 2 collection errors, `ModuleNotFoundError: No module named
+    'techcamp.farms.domain.errors'` / `'techcamp.farms.adapters.orm'`. Restored the files: GREEN,
+    `16 passed in 1.82s`. REFACTOR: none needed beyond `ruff format`.
+  - Verification (server/): `uv run pytest -q` → `45 passed, 2 warnings in 3.33s`; `uv run ruff
+    check .` → `All checks passed!`; `uv run ruff format --check .` → `88 files already
+    formatted` (2 files reformatted first pass); `uv run mypy` → `Success: no issues found in 69
+    source files`; `uv run lint-imports` → `Hexagonal layers per module KEPT, 1 kept, 0 broken`;
+    `uv run alembic upgrade head` → applied `b358c1328b49` then `9098dc0927a3`; `uv run alembic
+    downgrade -1` → reverted `9098dc0927a3`; `uv run alembic upgrade head` → reapplied clean.
+  - Postgres for tests was not running; started with `uvx podman-compose -f infra/compose.yaml
+    --profile seminar up -d postgres` after removing a stale `infra_postgres_1` container left
+    over from a deleted `e2-identity` worktree (its bind-mounted `init-extensions.sql` path no
+    longer existed).
+  - Commit: `fe57f6f6f1ae36d2c887f8daa338c1b135a03392` — `feat(farms): add farm and plot schema
+    with org-scoped repositories`. Authored lines (`git diff --stat 4684262..HEAD -- . ':!server/uv.lock'`,
+    this commit's files): 623 insertions, 0 deletions across 10 new files + 2 one-line edits
+    (`server/migrations/env.py`, `server/pyproject.toml`).
+  - Doc gap: docs/03-modelo-datos.md:89 models `farm.municipality_code` as `FK "DIVIPOLA"`, but
+    no `municipality` table exists in this repo yet (not migrated from v1; that's a later epic
+    per docs/03's migration table). Implemented as plain `text`, noted in code and here; owner
+    should confirm before any epic adds the `municipality` table and a real FK.
 
 ## Next step
-T1 (delegated writer).
+T2 (delegated writer): farm/plot endpoints.
