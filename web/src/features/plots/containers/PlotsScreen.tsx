@@ -4,10 +4,11 @@ import { MapIcon } from '../../../design-system/ui/icons'
 import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useOrgId } from '../../../lib/api/session'
-import { useFarms, usePlotsByFarm } from '../api/plotsApi'
+import { useFarms, usePlotsByFarm, type PlotView } from '../api/plotsApi'
 import { PlotsList } from '../components/PlotsList'
 import { CreateFarmSheet } from './CreateFarmSheet'
 import { CreatePlotSheet } from './CreatePlotSheet'
+import { PlotDetailSheet } from './PlotDetailSheet'
 
 /** Plots tab (replaces the `PlaceholderPage`): the org's farms and each farm's plots,
  * plus farm/plot creation (T8, docs/07: the tab's own empty-state CTA and list). */
@@ -18,6 +19,7 @@ export function PlotsScreen() {
   const plotsQueries = usePlotsByFarm(farmIds)
   const [creatingFarm, setCreatingFarm] = useState(false)
   const [creatingPlotForFarmId, setCreatingPlotForFarmId] = useState<string | null>(null)
+  const [selectedPlot, setSelectedPlot] = useState<PlotView | null>(null)
 
   return (
     <div className="px-0 pt-6">
@@ -72,6 +74,7 @@ export function PlotsScreen() {
                 plotsQuery: plotsQueries[index],
               }))}
               onAddPlot={setCreatingPlotForFarmId}
+              onSelectPlot={setSelectedPlot}
             />
             {farmsQuery.data.hasMore && (
               <p className="px-4 text-base text-text-muted">
@@ -87,6 +90,14 @@ export function PlotsScreen() {
           open
           onOpenChange={(open) => !open && setCreatingPlotForFarmId(null)}
           farmId={creatingPlotForFarmId}
+        />
+      )}
+      {selectedPlot && (
+        <PlotDetailSheet
+          open
+          onOpenChange={(open) => !open && setSelectedPlot(null)}
+          plotId={selectedPlot.id}
+          plotName={selectedPlot.name}
         />
       )}
     </div>
