@@ -46,7 +46,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80 — actual ~160
 - [x] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250 — actual 590
 - [x] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250 — actual 733
-- [ ] T5b Fix #21 round 7: every malformed SoilGrids 200 body → 502 problem+json; test that the centroid reaches SoilGrids as correct lon/lat and query params — route: delegated — forecast ~100
+- [x] T5b Fix #21 round 7: every malformed SoilGrids 200 body → 502 problem+json; test that the centroid reaches SoilGrids as correct lon/lat and query params — route: delegated — forecast ~100 — actual 141
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
@@ -87,6 +87,9 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T3b + T4 slice `a337f57..111cffc` (medium, 907 lines, standing grant): lineage `review-7d6076ce2e31e46b`, approved and acknowledged. WARNING (cassava seed edited in place in `67cf2dd1f13e`) accepted: revision only on this unmerged branch. Three test-strength suggestions open in #21 round 6. Reviewed boundary is now `111cffc`.
 - T5 slice `111cffc..47f0b83` (T5 + parent USDA texture fix; medium, 851 lines, standing grant): lineage `review-23b5b52e438ac3e2`, approved and acknowledged. Two WARNINGs (nested malformed SoilGrids body → 500; centroid lon/lat query unproved) tracked in #21 round 7, fixed by task T5b. Reviewed boundary is now `47f0b83`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
+- T5b `47f0b83..658e5b9` (fix, no migration, 141 lines): #21 round 7 resolved in `658e5b9`. RDD
+  assessment/acknowledgement for this commit not run by this writer — left to the parent
+  orchestrator; boundary not advanced here.
 
 ## Acceptance criteria
 - [ ] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
@@ -533,6 +536,56 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gaps: (1) carried from T1-T4, unchanged — `farm.municipality_code` is plain `text`, not
     yet a real FK. The USDA texture gap was
     resolved in `816ef5b` (see Decisions above).
+
+- 2026-09-23: T5b done by a delegated `sonnet-high` writer. Resolves GitHub issue #21 round 7 (the
+  two T5 review WARNINGs: a nested malformed SoilGrids body could still crash to a raw 500; the
+  centroid lon/lat query was unproved).
+  - `farms/adapters/soilgrids.py` `IsricSoilGridsAdapter.fetch_sample`: the `response.json()[...]`
+    parse and the `SoilGridsSample(...)` construction now share one `try`/`except (ValueError,
+    KeyError, TypeError, AttributeError)` block — a single parsing boundary, not a per-field guard
+    (task instruction, ponytail). Root cause: `layers = response.json()["properties"]["layers"]`
+    only raised on a missing/wrong-typed `properties`/`layers` *key*; an explicit `null` or a
+    wrongly-shaped nested value (`unit_measure`, `depths`, `values`, a non-dict layer/depth entry,
+    a non-numeric `mean`/`d_factor`) passed that line without raising and then crashed later inside
+    `_extract_conventional` or `float(...)`, outside the original `try`, as an uncaught
+    `TypeError`/`AttributeError`/`ValueError` (a raw 500 through FastAPI's default handler).
+    Widening the `try` to wrap the whole parse, and adding `AttributeError` to the caught types,
+    fixes every shape at once without touching `_extract_conventional`.
+  - `tests/farms/test_soilgrids_adapter.py`: `_MALFORMED_BODIES`, a parametrized
+    `test_fetch_sample_raises_soil_grids_unavailable_on_every_malformed_shape` over 10 shapes (null
+    `layers`; `layers` as a dict; a string/number layer entry; null `unit_measure`; null `depths`;
+    a string depth entry; null `values`; a non-numeric `mean`; a non-numeric `d_factor`) — each
+    must raise `SoilGridsUnavailableError` with `upstream_status == 200`.
+  - `tests/farms/test_api.py`: `test_autofilling_soil_queries_soilgrids_at_the_plots_centroid`
+    captures the outgoing `httpx.Request` through a `MockTransport` handler and asserts
+    `lon == -74.095`, `lat == 10.905` (the axis-aligned `_POLYGON` fixture's known PostGIS
+    centroid — lon and lat are distinct enough that a swap fails the assertion), the full
+    `property` list, `depth == ["0-5cm"]`, `value == ["mean"]`.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/). RED
+    observed with `git stash push -- src/techcamp/farms/adapters/soilgrids.py` (keeping the new/
+    changed tests): `uv run pytest -q tests/farms/test_soilgrids_adapter.py tests/farms/test_api.py
+    -k "malformed or centroid"` → `10 failed, 2 passed` — each malformed-shape case failing with
+    the actual pre-fix crash (`TypeError: 'NoneType' object is not iterable`,
+    `AttributeError: 'str'/'NoneType'/'int' object has no attribute 'get'`,
+    `ValueError: could not convert string to float`), the centroid test already passing (it
+    doesn't depend on the fix). `git stash pop` restored the fix: GREEN, same selection →
+    `12 passed`. REFACTOR: `ruff format` reformatted one multi-line dict literal in the new
+    parametrize table.
+  - Decisions: no new decisions; this is a bug fix within T5's existing design (`upstream_status`
+    stays the HTTP status of the successful-but-malformed response, `200`, consistent with the
+    existing 502-vs-503 convention already documented on `SoilGridsUnavailableError`).
+  - Verification (server/): `uv run pytest -q` → `180 passed, 2 warnings`; `uv run ruff check .` →
+    `All checks passed!`; `uv run ruff format --check .` → all files formatted (1 file reformatted
+    on the first pass); `uv run mypy` → `Success: no issues found in 78 source files`; `uv run
+    lint-imports` → `Hexagonal layers per module KEPT, 1 kept, 0 broken`.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start; no migration in
+    this task, so no `alembic upgrade`/`downgrade` cycle to verify.
+  - Commit: `658e5b9` — `fix(farms): map malformed SoilGrids bodies to 502 and prove the centroid
+    query`. Authored lines (`git diff --stat` for this commit's files, excluding
+    `server/uv.lock`): 141 insertions, 13 deletions across 3 files (0 new, 3 modified) — above the
+    ~100 forecast, expected given the 10-shape parametrized table.
+  - Doc gap carried from T1-T5, unchanged: `farm.municipality_code` is plain `text`, not yet a real
+    FK.
 
 ## Next step
 T6 crop cycles (`crop_cycle` migration, one active cycle per plot,
