@@ -67,6 +67,10 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Found during T2b (not a pre-existing follow-up): the non-finite-coordinate validator turned into an unhandled `500` because FastAPI's default `RequestValidationError` handler echoes the raw invalid `input` back into the response, and Starlette's `JSONResponse` refuses to serialize `NaN`/`Infinity` (`allow_nan=False`). Fixed with a shared `RequestValidationError` handler in `shared/errors.py` that sanitizes non-finite floats before serializing.
   - Tracked separately in GitHub issue #21 (parent-managed, not closed here): `tests/farms/test_api.py`'s `_member` fixture built its unique `phone` from `uuid7().int % 100000`, a collision risk on the unique column. Fixed in this commit by switching to an `itertools.count()` sequence.
 - Reviewed boundary is now `17c3943`.
+- T2b `044fce2..e05bce8` (medium, fix + `AGENTS.md`, 519 lines; owner granted): lineage `review-2652a2e02235f811` approved and acknowledged. Findings tracked in #21:
+  - WARNING: `update_farm` re-validated a stale `technician_id` on every PATCH, blocking unrelated edits. **Resolved** in the next commit (parent, inline TDD): validate only when the PATCH sets `technician_id`; RED `assert 422 == 200` in `test_stale_technician_does_not_block_an_unrelated_patch`, GREEN `101 passed`, ruff/format/mypy/lint-imports green.
+  - SUGGESTION (open in #21): explicit `irrigation_efficiency: null` on an irrigated plot silently becomes the default; the phone counter depends on per-test cleanup of committed users.
+- Review findings are tracked in GitHub issue #21 (rule added to `AGENTS.md` in `1152a61`).
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
