@@ -1,13 +1,17 @@
+from datetime import date
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.farms.adapters.repositories import (
+    SqlAlchemyCropCycleRepository,
     SqlAlchemyFarmRepository,
     SqlAlchemyPlotRepository,
 )
-from techcamp.farms.domain.models import IrrigationSystem
+from techcamp.farms.domain.errors import ActiveCropCycleExistsError
+from techcamp.farms.domain.models import CropCycleStatus, IrrigationSystem
 from techcamp.identity.adapters.orm import AppUserRow, OrganizationRow
 from techcamp.shared.ids import uuid7
 
@@ -496,3 +500,223 @@ async def test_get_for_orgs_hides_farms_outside_the_given_orgs(db_session: Async
     assert await repo.get_for_orgs(farm_id, [org_b]) is None
     assert await repo.get_for_orgs(farm_id, []) is None
     assert await repo.get_for_orgs(farm_id, [org_a, org_b]) is not None
+
+
+_MAIZE_ID = 1
+"""Seeded by the `67cf2dd1f13e` migration (T3): FAO-56, stage lengths sum to 90 days."""
+
+
+async def _make_org_and_plot(
+    db_session: AsyncSession, org_name: str = "Finca"
+) -> tuple[object, object]:
+    org_id = await _make_org(db_session, org_name)
+    farm_id = uuid7()
+    db_session.add(
+        FarmRow(
+            id=farm_id, org_id=org_id, name=org_name, municipality_code="47001", location=_POINT
+        )
+    )
+    await db_session.commit()
+    plot_id = uuid7()
+    db_session.add(
+        PlotRow(
+            id=plot_id,
+            org_id=org_id,
+            farm_id=farm_id,
+            name="Lote 1",
+            boundary=_BOUNDARY,
+            irrigation_system="none",
+        )
+    )
+    await db_session.commit()
+    return org_id, plot_id
+
+
+async def test_crop_cycle_repository_round_trips_by_id(db_session: AsyncSession) -> None:
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+    cycle_id = uuid7()
+
+    created = await repo.create(
+        cycle_id=cycle_id,
+        plot_id=plot_id,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2026, 1, 1),
+        expected_harvest_on=date(2026, 4, 1),
+        status=CropCycleStatus.ACTIVE,
+    )
+
+    assert created.id == cycle_id
+    assert created.plot_id == plot_id
+    assert created.crop_id == _MAIZE_ID
+    assert created.sown_on == date(2026, 1, 1)
+    assert created.expected_harvest_on == date(2026, 4, 1)
+    assert created.status is CropCycleStatus.ACTIVE
+
+
+async def test_get_active_for_plot_finds_only_the_active_cycle(db_session: AsyncSession) -> None:
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+    other_plot_id = (await _make_org_and_plot(db_session, "Otra finca"))[1]
+
+    assert await repo.get_active_for_plot(plot_id) is None
+
+    active = await repo.create(
+        cycle_id=uuid7(),
+        plot_id=plot_id,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2026, 1, 1),
+        expected_harvest_on=date(2026, 4, 1),
+        status=CropCycleStatus.ACTIVE,
+    )
+    await repo.create(
+        cycle_id=uuid7(),
+        plot_id=other_plot_id,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2026, 1, 1),
+        expected_harvest_on=date(2026, 4, 1),
+        status=CropCycleStatus.ACTIVE,
+    )
+
+    found = await repo.get_active_for_plot(plot_id)
+
+    assert found is not None
+    assert found.id == active.id
+
+
+async def test_a_second_active_cycle_on_the_same_plot_raises_active_crop_cycle_exists_error(
+    db_session: AsyncSession,
+) -> None:
+    """The partial unique index `uq_crop_cycle_active_per_plot` is the DB-side
+    backstop for the one-active-cycle-per-plot rule. Calling `create` twice
+    for the same plot (bypassing `manage_cycles.create_cycle`'s precheck)
+    models the race between two concurrent creates (GitHub issue #21 round
+    8): the losing insert's `IntegrityError` must be translated to the same
+    domain conflict the precheck raises, never propagate raw."""
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+    await repo.create(
+        cycle_id=uuid7(),
+        plot_id=plot_id,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2026, 1, 1),
+        expected_harvest_on=date(2026, 4, 1),
+        status=CropCycleStatus.ACTIVE,
+    )
+
+    with pytest.raises(ActiveCropCycleExistsError) as exc_info:
+        await repo.create(
+            cycle_id=uuid7(),
+            plot_id=plot_id,
+            crop_id=_MAIZE_ID,
+            sown_on=date(2026, 2, 1),
+            expected_harvest_on=date(2026, 5, 1),
+            status=CropCycleStatus.ACTIVE,
+        )
+    assert exc_info.value.plot_id == plot_id
+
+
+async def test_creating_a_cycle_with_a_bad_crop_id_still_raises_integrity_error(
+    db_session: AsyncSession,
+) -> None:
+    """Only the `uq_crop_cycle_active_per_plot` violation is translated; any
+    other integrity error (here, `crop_id`'s FK) must still propagate."""
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+
+    with pytest.raises(IntegrityError):
+        await repo.create(
+            cycle_id=uuid7(),
+            plot_id=plot_id,
+            crop_id=999999,
+            sown_on=date(2026, 1, 1),
+            expected_harvest_on=date(2026, 4, 1),
+            status=CropCycleStatus.ACTIVE,
+        )
+
+
+async def test_a_harvest_date_before_the_sown_date_is_rejected_by_the_database(
+    db_session: AsyncSession,
+) -> None:
+    """`ck_crop_cycle_harvest_not_before_sowing` is the DB-side backstop for
+    `domain.models.ensure_harvest_not_before_sowing` (GitHub issue #21
+    round 8)."""
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+
+    with pytest.raises(IntegrityError):
+        await repo.create(
+            cycle_id=uuid7(),
+            plot_id=plot_id,
+            crop_id=_MAIZE_ID,
+            sown_on=date(2026, 1, 1),
+            expected_harvest_on=date(2025, 12, 31),
+            status=CropCycleStatus.ACTIVE,
+        )
+
+
+async def test_a_second_harvested_cycle_on_the_same_plot_is_allowed(
+    db_session: AsyncSession,
+) -> None:
+    """The partial unique index only covers `status = 'active'`: a plot may
+    have any number of harvested/lost cycles in its history."""
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+    await repo.create(
+        cycle_id=uuid7(),
+        plot_id=plot_id,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2025, 1, 1),
+        expected_harvest_on=date(2025, 4, 1),
+        status=CropCycleStatus.HARVESTED,
+    )
+
+    second = await repo.create(
+        cycle_id=uuid7(),
+        plot_id=plot_id,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2026, 1, 1),
+        expected_harvest_on=date(2026, 4, 1),
+        status=CropCycleStatus.HARVESTED,
+    )
+
+    assert second.status is CropCycleStatus.HARVESTED
+
+
+async def test_get_for_orgs_hides_cycles_outside_the_given_orgs(db_session: AsyncSession) -> None:
+    org_a, plot_a = await _make_org_and_plot(db_session, "Finca A")
+    _org_b, _plot_b = await _make_org_and_plot(db_session, "Finca B")
+    repo = SqlAlchemyCropCycleRepository(db_session)
+    cycle = await repo.create(
+        cycle_id=uuid7(),
+        plot_id=plot_a,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2026, 1, 1),
+        expected_harvest_on=date(2026, 4, 1),
+        status=CropCycleStatus.ACTIVE,
+    )
+
+    assert await repo.get_for_orgs(cycle.id, [org_a]) is not None
+    assert await repo.get_for_orgs(cycle.id, []) is None
+    found_in_other_org = await repo.get_for_orgs(cycle.id, [uuid7()])
+    assert found_in_other_org is None
+
+
+async def test_update_replaces_status_and_expected_harvest_on(db_session: AsyncSession) -> None:
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+    cycle = await repo.create(
+        cycle_id=uuid7(),
+        plot_id=plot_id,
+        crop_id=_MAIZE_ID,
+        sown_on=date(2026, 1, 1),
+        expected_harvest_on=date(2026, 4, 1),
+        status=CropCycleStatus.ACTIVE,
+    )
+
+    updated = await repo.update(
+        cycle.id, status=CropCycleStatus.HARVESTED, expected_harvest_on=date(2026, 3, 28)
+    )
+
+    assert updated.status is CropCycleStatus.HARVESTED
+    assert updated.expected_harvest_on == date(2026, 3, 28)

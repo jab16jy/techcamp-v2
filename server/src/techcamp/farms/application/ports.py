@@ -10,10 +10,20 @@ test double: writes go through the same real-Postgres fixtures as reads
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.farms.domain.models import Farm, IrrigationSystem, Plot, SoilGridsSample, SoilProfile
+from techcamp.farms.domain.models import (
+    Crop,
+    CropCycle,
+    CropCycleStatus,
+    Farm,
+    IrrigationSystem,
+    Plot,
+    SoilGridsSample,
+    SoilProfile,
+)
 
 
 class FarmRepository(Protocol):
@@ -87,3 +97,39 @@ class SoilGridsPort(Protocol):
     fixture and for this module's own tests (ADR-0021)."""
 
     async def fetch_sample(self, lon: float, lat: float) -> SoilGridsSample: ...
+
+
+class CropRepository(Protocol):
+    """T6: `create_cycle` needs one crop's stages (to derive
+    `expected_harvest_on`) and to validate `crop_id`, neither served by the
+    read-all-rows `list_all` the T3 catalog endpoint uses."""
+
+    async def get(self, crop_id: int) -> Crop | None: ...
+
+
+class CropCycleRepository(Protocol):
+    async def create(
+        self,
+        *,
+        cycle_id: UUID,
+        plot_id: UUID,
+        crop_id: int,
+        sown_on: date,
+        expected_harvest_on: date | None,
+        status: CropCycleStatus,
+    ) -> CropCycle: ...
+
+    async def get_active_for_plot(self, plot_id: UUID) -> CropCycle | None:
+        """The plot's active cycle, if any (T6: the application-layer
+        precheck backing the DB partial unique index — see
+        `manage_cycles.create_cycle`)."""
+        ...
+
+    async def get_for_orgs(self, cycle_id: UUID, org_ids: Sequence[UUID]) -> CropCycle | None:
+        """Look up a cycle across every org the caller belongs to, joined
+        through its plot (`crop_cycle` has no `org_id` column, docs/03)."""
+        ...
+
+    async def update(
+        self, cycle_id: UUID, *, status: CropCycleStatus, expected_harvest_on: date | None
+    ) -> CropCycle: ...

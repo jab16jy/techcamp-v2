@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from techcamp.identity.domain.models import Role
@@ -87,3 +88,63 @@ class InvalidTechnicianError(Exception):
     def __init__(self, technician_id: UUID) -> None:
         self.technician_id = technician_id
         super().__init__(f"{technician_id} is not an owner or technician of this organization")
+
+
+class CropCycleNotFoundError(Exception):
+    """Raised when a crop cycle doesn't exist or its plot isn't in one of
+    the caller's orgs (`crop_cycle` has no `org_id` column, docs/03; access
+    is resolved through the plot, same as `soil_profile`, T4)."""
+
+    def __init__(self, cycle_id: UUID) -> None:
+        self.cycle_id = cycle_id
+        super().__init__(f"Crop cycle {cycle_id} not found")
+
+
+class CropNotFoundError(Exception):
+    """Raised when `crop_id` doesn't reference an existing crop (T6
+    decision: `422`, the same treatment as `InvalidTechnicianError` — a bad
+    referenced id on an input field, not the endpoint's own resource).
+    """
+
+    def __init__(self, crop_id: int) -> None:
+        self.crop_id = crop_id
+        super().__init__(f"Crop {crop_id} not found")
+
+
+class ActiveCropCycleExistsError(Exception):
+    """Raised when a plot already has an active crop cycle
+    (docs/00-glosario.md: "Una parcela tiene como máximo un ciclo activo").
+    docs/04-api.md is silent on the status code for this conflict; T6
+    decision: `409` — an existing resource state conflicts with the
+    request, not a malformed request (`422`).
+    """
+
+    def __init__(self, plot_id: UUID) -> None:
+        self.plot_id = plot_id
+        super().__init__(f"Plot {plot_id} already has an active crop cycle")
+
+
+class InvalidCropCycleTransitionError(Exception):
+    """Raised by a `PATCH /cycles/{cycle_id}` status change other than
+    `active` -> `harvested|lost` (T6 decision, odd/tasks/techcamp-v2-e3-farms.md:
+    docs are silent, so that's the whole transition table)."""
+
+    def __init__(self, current: str, target: str) -> None:
+        self.current = current
+        self.target = target
+        super().__init__(f"Cannot transition a crop cycle from {current} to {target}")
+
+
+class HarvestBeforeSowingError(Exception):
+    """Raised when `expected_harvest_on` is earlier than `sown_on` (GitHub
+    issue #21 round 8, odd/tasks/techcamp-v2-e3-farms.md T6b). The DB `CHECK`
+    (`ck_crop_cycle_harvest_not_before_sowing`) mirrors this rule as a second
+    line of defense, same pattern as `RainfedPlotHasIrrigationError`.
+    """
+
+    def __init__(self, sown_on: date, expected_harvest_on: date) -> None:
+        self.sown_on = sown_on
+        self.expected_harvest_on = expected_harvest_on
+        super().__init__(
+            f"expected_harvest_on ({expected_harvest_on}) cannot be before sown_on ({sown_on})"
+        )
