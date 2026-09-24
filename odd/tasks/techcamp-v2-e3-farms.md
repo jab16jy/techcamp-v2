@@ -1637,4 +1637,3 @@ All slices are `size:exception` (each task is one work-unit commit).
 
 ## Next step
 E3 PR slicing (stacked-to-main), on branch `feat/e3-farms-web`.
-
