@@ -132,6 +132,36 @@ def test_classify_usda_texture_matches_uncontroversial_reference_points(
     assert classify_usda_texture(sand, silt, clay) == expected
 
 
+@pytest.mark.parametrize(
+    ("sand", "silt", "clay", "expected"),
+    [
+        # One interior point per USDA class, chosen near the class lines the
+        # NRCS rules define (silt + 1.5 clay = 15, silt + 2 clay = 30, clay
+        # 7/12/20/27/35/40, silt 28/50/80, sand 45/52).
+        (88.0, 8.0, 4.0, "sand"),
+        (82.0, 12.0, 6.0, "loamy_sand"),
+        (60.0, 25.0, 15.0, "sandy_loam"),
+        (40.0, 40.0, 20.0, "loam"),
+        (20.0, 65.0, 15.0, "silt_loam"),
+        (5.0, 88.0, 7.0, "silt"),
+        (60.0, 15.0, 25.0, "sandy_clay_loam"),
+        (33.0, 34.0, 33.0, "clay_loam"),
+        (10.0, 55.0, 35.0, "silty_clay_loam"),
+        (50.0, 10.0, 40.0, "sandy_clay"),
+        (5.0, 45.0, 50.0, "silty_clay"),
+        (30.0, 20.0, 50.0, "clay"),
+        # Former axis-aligned bands misclassified these:
+        (86.0, 11.0, 3.0, "loamy_sand"),  # silt + 1.5 clay = 15.5
+        (66.0, 12.0, 22.0, "sandy_clay_loam"),  # clay 20-27, not sandy loam
+        (50.0, 12.0, 38.0, "sandy_clay"),  # clay 35-40, sand > 45
+    ],
+)
+def test_classify_usda_texture_follows_the_nrcs_class_rules(
+    sand: float, silt: float, clay: float, expected: str
+) -> None:
+    assert classify_usda_texture(sand, silt, clay) == expected
+
+
 def test_classify_usda_texture_needs_all_three_fractions() -> None:
     assert classify_usda_texture(None, 40.0, 20.0) is None
     assert classify_usda_texture(40.0, None, 20.0) is None

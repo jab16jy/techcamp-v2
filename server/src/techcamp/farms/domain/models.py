@@ -217,47 +217,41 @@ documented for this project, so it's applied as-is, not invented."""
 def classify_usda_texture(
     sand_pct: float | None, silt_pct: float | None, clay_pct: float | None
 ) -> str | None:
-    """USDA soil texture triangle, reduced to axis-aligned bands (T5 decision,
-    odd/tasks/techcamp-v2-e3-farms.md): this task could not fetch the
-    triangle's definitive polygon boundary table (the NRCS Soil Texture
-    Calculator page and the USDA Soil Survey Manual page both failed to load
-    via WebFetch); these bands are a best-effort reproduction of the
-    standard 12-class triangle (USDA Soil Survey Manual, 1993, Ch. 3, Fig.
-    3-14), not verified against a fetched primary numeric source.
-    ponytail: axis-aligned approximation, not a validated point-in-polygon
-    triangle; the three classes with no FAO-56 Table 19 fallback row
-    (clay_loam, silty_clay_loam's near neighbors excluded — sandy_clay_loam,
-    sandy_clay) only affect the descriptive `texture` string, never θFC/θWP,
-    since `apply_fao56_texture_fallback` already returns `None` for any
-    class it doesn't recognize. Upgrade to a verified vertex table if
-    texture-only reporting accuracy matters.
+    """USDA soil texture class from sand/silt/clay percentages.
+
+    Uses the NRCS class rules (USDA Soil Survey Manual, Handbook 18, ch. 3;
+    NRCS Soil Texture Calculator). They were cross-checked against the USDA
+    triangle vertex table in the `soiltexture` R package (Moeys, CRAN,
+    `USDA.TT`): for example sand is bounded by silt + 1.5 clay = 15 (P15-P20)
+    and loamy sand by silt + 2 clay = 30 (P14-P21).
     """
     if sand_pct is None or silt_pct is None or clay_pct is None:
         return None
     sand, silt, clay = sand_pct, silt_pct, clay_pct
+    if silt + 1.5 * clay < 15:
+        return "sand"
+    if silt + 2 * clay < 30:
+        return "loamy_sand"
     if clay >= 40:
         if silt >= 40:
             return "silty_clay"
-        if sand > 45:
-            return "sandy_clay"
-        return "clay"
+        return "sandy_clay" if sand > 45 else "clay"
+    if clay >= 35 and sand > 45:
+        return "sandy_clay"
     if clay >= 27:
         if sand <= 20:
             return "silty_clay_loam"
         if sand <= 45:
             return "clay_loam"
+    if clay >= 20 and silt < 28 and sand > 45:
         return "sandy_clay_loam"
     if silt >= 80 and clay < 12:
         return "silt"
-    if silt >= 50 and clay < 27:
+    if silt >= 50:
         return "silt_loam"
-    if sand >= 70 and clay < 15:
-        return "sand" if sand >= 90 else "loamy_sand"
-    if clay >= 7 and sand <= 52 and silt >= 28:
+    if clay >= 7 and silt >= 28 and sand <= 52:
         return "loam"
-    if sand > 52:
-        return "sandy_loam"
-    return "loam"
+    return "sandy_loam"
 
 
 def build_soil_profile_from_soilgrids(plot_id: UUID, sample: SoilGridsSample) -> SoilProfile:
