@@ -13,7 +13,7 @@ from uuid import UUID
 
 from techcamp.farms.application.manage_farms import resolve_farm_access
 from techcamp.farms.application.ports import FarmRepository, PlotRepository
-from techcamp.farms.domain.errors import PlotNotFoundError
+from techcamp.farms.domain.errors import MissingIrrigationEfficiencyError, PlotNotFoundError
 from techcamp.farms.domain.models import (
     IrrigationSystem,
     Plot,
@@ -84,6 +84,13 @@ async def update_plot(
     )
     ensure_can_write(role)
     merged = replace(plot, **changes)
+    explicit_null_efficiency = (
+        "irrigation_efficiency" in changes and changes["irrigation_efficiency"] is None
+    )
+    if explicit_null_efficiency and merged.irrigation_system is not IrrigationSystem.NONE:
+        # An explicit `null` is a client error, not "no preference": the
+        # default below applies only when the field is omitted (#21 round 4).
+        raise MissingIrrigationEfficiencyError(merged.irrigation_system.value)
     system_changed_without_efficiency = (
         merged.irrigation_system is not plot.irrigation_system
         and "irrigation_efficiency" not in changes
@@ -98,6 +105,17 @@ async def update_plot(
         merged = replace(
             merged, irrigation_efficiency=default_efficiency_for(merged.irrigation_system)
         )
+    system_changed_to_rainfed = (
+        merged.irrigation_system is IrrigationSystem.NONE
+        and plot.irrigation_system is not IrrigationSystem.NONE
+    )
+    if system_changed_to_rainfed and "system_flow_lph" not in changes:
+        # ADR-0023: a rainfed plot has neither efficiency nor flow. Leftover
+        # flow from the previous system must be cleared automatically, not
+        # left to trip `ensure_rainfed_has_no_irrigation` below into a 422
+        # (GitHub issue #21 round 4) — mirrors efficiency's own clearing via
+        # `default_efficiency_for(NONE)` above.
+        merged = replace(merged, system_flow_lph=None)
     ensure_rainfed_has_no_irrigation(
         merged.irrigation_system, merged.irrigation_efficiency, merged.system_flow_lph
     )

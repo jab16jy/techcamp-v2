@@ -65,7 +65,7 @@ _STAGES = ("initial", "development", "mid", "late")
 _CROPS: list[tuple[int, str, str, str, tuple[float, float, float, float, float] | None, tuple[int, int, int, int] | None]] = [
     (1, "maize", "Maíz", "fao56", (0.30, 0.75, 1.20, 0.35, 0.55), (18, 27, 31, 14)),
     # FAO-56 Table 12, Cereals: Maize (grain).
-    (2, "cassava", "Yuca", "approximate", (0.30, 0.55, 0.80, 0.30, 0.35), (54, 80, 95, 41)),
+    (2, "cassava", "Yuca", "approximate", (0.30, 0.55, 0.80, 0.30, 0.35), (54, 81, 94, 41)),
     # FAO-56 Table 12, Roots and Tubers: Cassava, year 1 (closest entry; the
     # v1 dataset doesn't record plant age to choose year 1 vs. year 2 canopy).
     (3, "rice", "Arroz", "fao56", (1.05, 1.13, 1.20, 0.90, 0.20), (24, 36, 42, 18)),

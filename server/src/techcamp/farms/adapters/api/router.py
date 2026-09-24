@@ -28,6 +28,7 @@ from techcamp.farms.domain.errors import (
     FarmNotFoundError,
     InsufficientRoleError,
     InvalidTechnicianError,
+    MissingIrrigationEfficiencyError,
     PlotNotFoundError,
     RainfedPlotHasIrrigationError,
 )
@@ -323,6 +324,8 @@ async def patch_plot(
         raise ProblemError(status=403, title="Role cannot update this plot") from exc
     except RainfedPlotHasIrrigationError as exc:
         raise ProblemError(status=422, title="Rainfed plot cannot have efficiency or flow") from exc
+    except MissingIrrigationEfficiencyError as exc:
+        raise ProblemError(status=422, title="Irrigated plot requires an efficiency") from exc
     return _plot_view(plot)
 
 
