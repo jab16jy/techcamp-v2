@@ -12,6 +12,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
@@ -450,6 +451,39 @@ async def test_technician_id_of_a_technician_is_accepted(db_session: AsyncSessio
     )
 
     assert response.status_code == 201, response.text
+
+
+async def test_stale_technician_does_not_block_an_unrelated_patch(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    _org2, tech_id, _token2 = await _member(db_session, role="technician", org_name="Finca A")
+    db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
+    await db_session.commit()
+    client = TestClient(app)
+    created = client.post(
+        "/farms",
+        json={
+            "org_id": str(org_id),
+            "name": "Finca A",
+            "municipality_code": "47001",
+            "location": _POINT,
+            "technician_id": str(tech_id),
+        },
+        headers=_auth(token),
+    )
+    await db_session.execute(
+        update(MembershipRow)
+        .where(MembershipRow.org_id == org_id, MembershipRow.user_id == tech_id)
+        .values(role="producer")
+    )
+    await db_session.commit()
+
+    response = client.patch(
+        f"/farms/{created.json()['id']}", json={"name": "Finca B"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 200, response.text
 
 
 async def test_technician_can_write_a_plot(db_session: AsyncSession) -> None:

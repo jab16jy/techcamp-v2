@@ -91,7 +91,10 @@ async def update_farm(
     )
     ensure_can_write(role)
     merged = replace(farm, **changes)
-    await _ensure_valid_technician(merged.technician_id, farm.org_id, memberships)
+    # Only a technician the caller is assigning now is checked: a stale one
+    # (left the org, role changed) must not block unrelated edits.
+    if "technician_id" in changes:
+        await _ensure_valid_technician(merged.technician_id, farm.org_id, memberships)
     return await farms.update(
         farm_id, farm.org_id, name=merged.name, technician_id=merged.technician_id
     )
