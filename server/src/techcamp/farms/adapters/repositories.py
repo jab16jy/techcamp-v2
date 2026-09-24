@@ -17,6 +17,7 @@ from uuid import UUID
 
 from sqlalchemy import Row, func, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import (
@@ -27,6 +28,7 @@ from techcamp.farms.adapters.orm import (
     PlotRow,
     SoilProfileRow,
 )
+from techcamp.farms.domain.errors import ActiveCropCycleExistsError
 from techcamp.farms.domain.models import (
     CROP_STAGES,
     Crop,
@@ -366,7 +368,29 @@ class SqlAlchemyCropCycleRepository:
                 status=status.value,
             )
         )
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            # GitHub issue #21 round 8: `create_cycle`'s precheck
+            # (`get_active_for_plot`) still leaves a race window between two
+            # concurrent creates on the same plot; the losing insert hits
+            # `uq_crop_cycle_active_per_plot` here and must surface as the
+            # same domain conflict the precheck raises, never a raw 500.
+            # asyncpg's driver-level exception carries no `constraint_name`
+            # attribute by the time SQLAlchemy's asyncpg dialect re-wraps it
+            # (only `sqlstate`/`pgcode` survive) — `23505` is the generic
+            # `unique_violation` SQLSTATE, so the constraint name is matched
+            # in the message text to scope the translation to this one
+            # constraint. Any other integrity error (e.g. a bad
+            # `crop_id`/`plot_id` FK) still propagates unchanged.
+            orig = exc.orig
+            is_active_cycle_conflict = getattr(
+                orig, "sqlstate", None
+            ) == "23505" and "uq_crop_cycle_active_per_plot" in str(orig)
+            if is_active_cycle_conflict:
+                raise ActiveCropCycleExistsError(plot_id) from exc
+            raise
         cycle = await self._get(cycle_id)
         assert cycle is not None
         return cycle

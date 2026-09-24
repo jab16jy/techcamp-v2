@@ -31,6 +31,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "status in ('active','harvested','lost')", name="ck_crop_cycle_status"
         ),
+        sa.CheckConstraint(
+            "expected_harvest_on is null or expected_harvest_on >= sown_on",
+            name="ck_crop_cycle_harvest_not_before_sowing",
+        ),
     )
     op.create_index(
         "uq_crop_cycle_active_per_plot",

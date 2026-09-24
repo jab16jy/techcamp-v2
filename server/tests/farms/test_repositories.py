@@ -10,6 +10,7 @@ from techcamp.farms.adapters.repositories import (
     SqlAlchemyFarmRepository,
     SqlAlchemyPlotRepository,
 )
+from techcamp.farms.domain.errors import ActiveCropCycleExistsError
 from techcamp.farms.domain.models import CropCycleStatus, IrrigationSystem
 from techcamp.identity.adapters.orm import AppUserRow, OrganizationRow
 from techcamp.shared.ids import uuid7
@@ -583,11 +584,15 @@ async def test_get_active_for_plot_finds_only_the_active_cycle(db_session: Async
     assert found.id == active.id
 
 
-async def test_a_second_active_cycle_on_the_same_plot_is_rejected_by_the_database(
+async def test_a_second_active_cycle_on_the_same_plot_raises_active_crop_cycle_exists_error(
     db_session: AsyncSession,
 ) -> None:
     """The partial unique index `uq_crop_cycle_active_per_plot` is the DB-side
-    backstop for the one-active-cycle-per-plot rule."""
+    backstop for the one-active-cycle-per-plot rule. Calling `create` twice
+    for the same plot (bypassing `manage_cycles.create_cycle`'s precheck)
+    models the race between two concurrent creates (GitHub issue #21 round
+    8): the losing insert's `IntegrityError` must be translated to the same
+    domain conflict the precheck raises, never propagate raw."""
     _org_id, plot_id = await _make_org_and_plot(db_session)
     repo = SqlAlchemyCropCycleRepository(db_session)
     await repo.create(
@@ -599,13 +604,53 @@ async def test_a_second_active_cycle_on_the_same_plot_is_rejected_by_the_databas
         status=CropCycleStatus.ACTIVE,
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ActiveCropCycleExistsError) as exc_info:
         await repo.create(
             cycle_id=uuid7(),
             plot_id=plot_id,
             crop_id=_MAIZE_ID,
             sown_on=date(2026, 2, 1),
             expected_harvest_on=date(2026, 5, 1),
+            status=CropCycleStatus.ACTIVE,
+        )
+    assert exc_info.value.plot_id == plot_id
+
+
+async def test_creating_a_cycle_with_a_bad_crop_id_still_raises_integrity_error(
+    db_session: AsyncSession,
+) -> None:
+    """Only the `uq_crop_cycle_active_per_plot` violation is translated; any
+    other integrity error (here, `crop_id`'s FK) must still propagate."""
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+
+    with pytest.raises(IntegrityError):
+        await repo.create(
+            cycle_id=uuid7(),
+            plot_id=plot_id,
+            crop_id=999999,
+            sown_on=date(2026, 1, 1),
+            expected_harvest_on=date(2026, 4, 1),
+            status=CropCycleStatus.ACTIVE,
+        )
+
+
+async def test_a_harvest_date_before_the_sown_date_is_rejected_by_the_database(
+    db_session: AsyncSession,
+) -> None:
+    """`ck_crop_cycle_harvest_not_before_sowing` is the DB-side backstop for
+    `domain.models.ensure_harvest_not_before_sowing` (GitHub issue #21
+    round 8)."""
+    _org_id, plot_id = await _make_org_and_plot(db_session)
+    repo = SqlAlchemyCropCycleRepository(db_session)
+
+    with pytest.raises(IntegrityError):
+        await repo.create(
+            cycle_id=uuid7(),
+            plot_id=plot_id,
+            crop_id=_MAIZE_ID,
+            sown_on=date(2026, 1, 1),
+            expected_harvest_on=date(2025, 12, 31),
             status=CropCycleStatus.ACTIVE,
         )
 

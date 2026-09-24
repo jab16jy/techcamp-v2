@@ -93,8 +93,12 @@ async def test_fetch_sample_raises_on_a_malformed_response_body() -> None:
 
     adapter = IsricSoilGridsAdapter(transport=httpx.MockTransport(_handler))
 
-    with pytest.raises(SoilGridsUnavailableError):
+    with pytest.raises(SoilGridsUnavailableError) as exc_info:
         await adapter.fetch_sample(lon=-74.0, lat=10.0)
+
+    # GitHub issue #21 round 8: the `raise ... from exc` chain must be kept,
+    # not swallowed, so the original parse error stays in the traceback.
+    assert exc_info.value.__cause__ is not None
 
 
 _MALFORMED_BODIES: dict[str, object] = {

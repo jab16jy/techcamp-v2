@@ -162,6 +162,10 @@ class CropCycleRow(Base):
     __tablename__ = "crop_cycle"
     __table_args__ = (
         CheckConstraint("status in ('active','harvested','lost')", name="ck_crop_cycle_status"),
+        CheckConstraint(
+            "expected_harvest_on is null or expected_harvest_on >= sown_on",
+            name="ck_crop_cycle_harvest_not_before_sowing",
+        ),
         Index(
             "uq_crop_cycle_active_per_plot",
             "plot_id",

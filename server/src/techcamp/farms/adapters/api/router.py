@@ -39,6 +39,7 @@ from techcamp.farms.domain.errors import (
     CropCycleNotFoundError,
     CropNotFoundError,
     FarmNotFoundError,
+    HarvestBeforeSowingError,
     InsufficientRoleError,
     InvalidCropCycleTransitionError,
     InvalidTechnicianError,
@@ -590,4 +591,8 @@ async def patch_cycle(
         raise ProblemError(status=403, title="Role cannot update this crop cycle") from exc
     except InvalidCropCycleTransitionError as exc:
         raise ProblemError(status=422, title="Invalid crop cycle status transition") from exc
+    except HarvestBeforeSowingError as exc:
+        raise ProblemError(
+            status=422, title="expected_harvest_on cannot be before sown_on"
+        ) from exc
     return _cycle_view(cycle)

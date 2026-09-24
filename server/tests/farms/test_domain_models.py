@@ -4,6 +4,7 @@ from uuid import UUID
 import pytest
 
 from techcamp.farms.domain.errors import (
+    HarvestBeforeSowingError,
     InsufficientRoleError,
     InvalidCropCycleTransitionError,
     RainfedPlotHasIrrigationError,
@@ -22,6 +23,7 @@ from techcamp.farms.domain.models import (
     compute_expected_harvest_on,
     default_efficiency_for,
     ensure_can_write,
+    ensure_harvest_not_before_sowing,
     ensure_rainfed_has_no_irrigation,
     ensure_valid_cycle_status_transition,
 )
@@ -297,3 +299,22 @@ def test_ensure_valid_cycle_status_transition_rejects_everything_else(
 ) -> None:
     with pytest.raises(InvalidCropCycleTransitionError):
         ensure_valid_cycle_status_transition(current, target)
+
+
+def test_ensure_harvest_not_before_sowing_allows_none_or_on_or_after_sowing() -> None:
+    sown_on = date(2026, 1, 1)
+
+    ensure_harvest_not_before_sowing(sown_on, None)  # does not raise
+    ensure_harvest_not_before_sowing(sown_on, sown_on)  # does not raise
+    ensure_harvest_not_before_sowing(sown_on, date(2026, 4, 1))  # does not raise
+
+
+def test_ensure_harvest_not_before_sowing_rejects_a_harvest_date_before_sowing() -> None:
+    sown_on = date(2026, 1, 1)
+    expected_harvest_on = date(2025, 12, 31)
+
+    with pytest.raises(HarvestBeforeSowingError) as exc_info:
+        ensure_harvest_not_before_sowing(sown_on, expected_harvest_on)
+
+    assert exc_info.value.sown_on == sown_on
+    assert exc_info.value.expected_harvest_on == expected_harvest_on

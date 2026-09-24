@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from techcamp.identity.domain.models import Role
@@ -132,3 +133,18 @@ class InvalidCropCycleTransitionError(Exception):
         self.current = current
         self.target = target
         super().__init__(f"Cannot transition a crop cycle from {current} to {target}")
+
+
+class HarvestBeforeSowingError(Exception):
+    """Raised when `expected_harvest_on` is earlier than `sown_on` (GitHub
+    issue #21 round 8, odd/tasks/techcamp-v2-e3-farms.md T6b). The DB `CHECK`
+    (`ck_crop_cycle_harvest_not_before_sowing`) mirrors this rule as a second
+    line of defense, same pattern as `RainfedPlotHasIrrigationError`.
+    """
+
+    def __init__(self, sown_on: date, expected_harvest_on: date) -> None:
+        self.sown_on = sown_on
+        self.expected_harvest_on = expected_harvest_on
+        super().__init__(
+            f"expected_harvest_on ({expected_harvest_on}) cannot be before sown_on ({sown_on})"
+        )

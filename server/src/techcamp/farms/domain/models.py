@@ -13,6 +13,7 @@ from enum import StrEnum
 from uuid import UUID
 
 from techcamp.farms.domain.errors import (
+    HarvestBeforeSowingError,
     InsufficientRoleError,
     InvalidCropCycleTransitionError,
     RainfedPlotHasIrrigationError,
@@ -150,6 +151,14 @@ def ensure_valid_cycle_status_transition(current: CropCycleStatus, target: CropC
     """Reject any status change other than `active` -> `harvested|lost`."""
     if target not in _VALID_CYCLE_TRANSITIONS.get(current, frozenset()):
         raise InvalidCropCycleTransitionError(current.value, target.value)
+
+
+def ensure_harvest_not_before_sowing(sown_on: date, expected_harvest_on: date | None) -> None:
+    """Reject `expected_harvest_on` earlier than `sown_on` (GitHub issue #21
+    round 8): mirrors the DB `ck_crop_cycle_harvest_not_before_sowing` CHECK
+    added in the same migration."""
+    if expected_harvest_on is not None and expected_harvest_on < sown_on:
+        raise HarvestBeforeSowingError(sown_on, expected_harvest_on)
 
 
 @dataclass(frozen=True, slots=True)

@@ -29,12 +29,15 @@ Verified against docs.isric.org/rest.isric.org (2026-09-23):
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
 from techcamp.farms.domain.errors import SoilGridsUnavailableError
 from techcamp.farms.domain.models import SoilGridsSample
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "https://rest.isric.org/soilgrids/v2.0"
 _TIMEOUT_SECONDS = 10.0
@@ -129,6 +132,7 @@ class IsricSoilGridsAdapter:
                 wilting_point_pct=_extract_conventional(layers, "wv1500", _DEPTH_LABEL),
             )
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            logger.warning("malformed SoilGrids response body: %s", exc)
             raise SoilGridsUnavailableError(
                 upstream_status=response.status_code, detail="malformed SoilGrids response"
             ) from exc

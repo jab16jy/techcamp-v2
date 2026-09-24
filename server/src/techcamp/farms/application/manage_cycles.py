@@ -28,6 +28,7 @@ from techcamp.farms.domain.models import (
     CropCycleStatus,
     compute_expected_harvest_on,
     ensure_can_write,
+    ensure_harvest_not_before_sowing,
     ensure_valid_cycle_status_transition,
 )
 from techcamp.identity.application.ports import MembershipRepository
@@ -107,6 +108,8 @@ async def update_cycle(
     if "status" in changes:
         ensure_valid_cycle_status_transition(cycle.status, changes["status"])
     merged = replace(cycle, **changes)
+    if "expected_harvest_on" in changes:
+        ensure_harvest_not_before_sowing(merged.sown_on, merged.expected_harvest_on)
     return await cycles.update(
         cycle_id, status=merged.status, expected_harvest_on=merged.expected_harvest_on
     )

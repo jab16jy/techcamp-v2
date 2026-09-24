@@ -1164,6 +1164,7 @@ async def _create_cycle(
         json={"crop_id": crop_id, "sown_on": sown_on},
         headers=_auth(token),
     )
+    assert created.status_code == 201, created.text
     body: dict[str, object] = created.json()
     return body
 
@@ -1336,6 +1337,25 @@ async def test_patching_a_cycle_can_change_expected_harvest_on_without_a_status(
     body = response.json()
     assert body["expected_harvest_on"] == "2026-05-01"
     assert body["status"] == "active"
+
+
+async def test_patching_a_cycles_expected_harvest_on_before_sown_on_is_422(
+    db_session: AsyncSession,
+) -> None:
+    """GitHub issue #21 round 8: `sown_on` ("2026-01-01" per `_create_cycle`'s
+    default) is the earliest a cycle's `expected_harvest_on` may be."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+    cycle = await _create_cycle(client, plot_id, token)
+
+    response = client.patch(
+        f"/cycles/{cycle['id']}", json={"expected_harvest_on": "2025-12-31"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.headers["content-type"] == "application/problem+json"
 
 
 async def test_patching_a_harvested_cycle_back_to_active_is_422(db_session: AsyncSession) -> None:
