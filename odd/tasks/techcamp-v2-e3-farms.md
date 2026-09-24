@@ -54,7 +54,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T6b Fix #21 round 8: map the partial-unique-index `IntegrityError` on cycle create to 409; reject `expected_harvest_on` < `sown_on` (422 + DB `CHECK`); assert 201 in `_create_cycle`; chain and log the original SoilGrids parse exception — route: delegated — forecast ~120 — actual 164
 - [x] T7 Web data layer, minimal OTP sign-in and plots route: API client with bearer token, phone + code sign-in, farm/plot list in the plots tab (via `impeccable`, existing design only) — route: delegated — forecast ~250 — actual 988
 - [x] T7b Align with docs and fix #21 round 10: server routers under `/api/v1` (docs/04:7), web client on generated OpenAPI types + `openapi-fetch` + TanStack Query (docs/05:179-180), document `POST /dev/auth/otp/verify` in docs/04; 401 → sign-out and redirect to sign-in, request timeout, atomic sign-in session, single proxy config, farms pagination, error copy by cause — route: delegated — forecast ~500 — actual 166 (server) + 667 (web)
-- [ ] T7c Fix #21 round 11: `VITE_API_URL` only as the dev-proxy target (non-`VITE_` variable, relative browser base, test base separate); do not sign out on 401 from anonymous OTP calls (no token on them); test the 10 s timeout and `describeApiError`; per-farm plots retry — route: delegated — forecast ~150
+- [x] T7c Fix #21 round 11: `VITE_API_URL` only as the dev-proxy target (non-`VITE_` variable, relative browser base, test base separate); do not sign out on 401 from anonymous OTP calls (no token on them); test the 10 s timeout and `describeApiError`; per-farm plots retry — route: delegated — forecast ~150 — actual 219
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
 
@@ -1072,6 +1072,105 @@ All slices are `size:exception` (each task is one work-unit commit).
 
 - CI fix (2026-09-24): every PR failed in CI with `type "geometry" does not exist`, because CI's Postgres service does not run `infra/postgres/init-extensions.sql`. Root fix `c0edf39` (on #22): the farm migration runs `CREATE EXTENSION IF NOT EXISTS postgis`. Reproduced on a fresh database without PostGIS (alembic failed), then 212 passed at the chain tip on a fresh database. The chain was restacked with `git rebase --update-refs` and force-pushed, so the commit hashes above changed. CI is green on #22–#27.
 
+- 2026-09-24: T7c done by a delegated `sonnet-high` writer. Resolves GitHub
+  issue #21 round 11 (four T7b review WARNINGs; three of the five
+  suggestions).
+  - `web/src/lib/api/client.ts`: `API_BASE_URL` now reads
+    `VITE_API_TEST_BASE_URL` (never `VITE_API_URL`) — the browser base is
+    always the relative `''`, only Vitest's `test.env` sets that variable.
+    New `isAnonymousRequest`/`ANONYMOUS_PATH_SUFFIXES`: `onRequest` no
+    longer attaches a stored bearer token to `/dev/auth/otp` or
+    `/dev/auth/otp/verify`, so a stale token can no longer make a wrong-code
+    401 look like an expired session (`onResponse`'s existing `hadSession`
+    check now sees no `Authorization` header on those calls, same as an
+    always-anonymous caller). `onRequest`'s timeout now combines the
+    caller's own `request.signal` with `AbortSignal.timeout(10_000)` via
+    `AbortSignal.any` instead of discarding it. Comments corrected to match
+    (dual-use `VITE_API_URL` comment, `DOMException TimeoutError` instead of
+    "`TypeError`-like").
+  - `web/vite.config.ts`: the dev-proxy target reads `API_PROXY_TARGET`
+    (`process.env`, not `VITE_`-prefixed, so Vite never exposes it to the
+    browser bundle) instead of `VITE_API_URL`. `test.env` sets
+    `VITE_API_TEST_BASE_URL` instead, a variable of its own — the test base
+    no longer reuses the proxy variable.
+  - `infra/compose.yaml`: the `web` service's env var renamed
+    `VITE_API_URL` → `API_PROXY_TARGET` to match.
+  - `web/src/lib/api/errorCopy.ts`: comment corrected — a 401 from an
+    anonymous call now legitimately reaches `describeApiError` as a plain
+    `ApiError` (round 11), not only network/timeout failures.
+  - `web/src/features/plots/components/PlotsList.tsx`: the per-farm error
+    state now renders a `Button` (`variant="secondary"`, "Reintentar",
+    reused from `design-system/ui/button`) that calls `plotsQuery.refetch()`
+    — only that farm's query retries, the rest of the list is untouched.
+  - `web/package.json`: `gen:api` now writes to `$(mktemp)` instead of a
+    fixed `/tmp` path, and forces `TECHCAMP_PROFILE=seminar` so the
+    generated schema always includes the seminar-only `/dev/auth/*` routes
+    `authApi.ts` depends on (round 11 suggestions).
+  - Decisions:
+    - Anonymous-path matching is by `pathname.endsWith(...)` on
+      `request.url` (`/dev/auth/otp`, `/dev/auth/otp/verify`), not a request
+      method or body sniff: cheapest correct check, matches how
+      `authApi.ts`'s two callers are the only source of anonymous requests
+      today.
+    - `AbortSignal.any` (Node 22 / evergreen browsers, no new dependency)
+      over a manual `addEventListener` relay: openapi-fetch already forwards
+      `fetchOptions.signal` straight into the `Request` `onRequest` receives
+      (verified in `openapi-fetch`'s `coreFetch`, `node_modules/openapi-fetch/src/index.js`),
+      so `request.signal` is already the caller's signal (or a permanently-open
+      one) and combining it is a one-liner.
+    - Left as notes, not fixed (task's own "skip unless trivial" for the
+      remaining two suggestions): the dead `if (error)` branches in the API
+      wrapper functions (`authApi.ts`, `plotsApi.ts` — `error` is already
+      thrown by `sessionMiddleware.onResponse` before openapi-fetch would
+      ever return `{data: undefined}` for a non-2xx response, so those
+      branches are unreachable but harmless); unprefixed old PWA bundles
+      get a hard 404 on the next deploy (a Workbox precache-naming concern,
+      out of scope for this round).
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner
+    `npm test -- --run` (web/). RED observed by `git stash push` of the six
+    implementation files (`client.ts`, `errorCopy.ts`, `PlotsList.tsx`,
+    `vite.config.ts`, `infra/compose.yaml`, `package.json`), keeping the
+    new/changed tests: `npm test -- --run` → 5 failed: `does not attach a
+    stale stored token to an anonymous OTP verify call` /
+    `...request call` (`AssertionError: expected true to be false`, the
+    stale token's `Authorization` header was still attached), `does not
+    sign out or clear a stale session when a wrong code 401s`
+    (`AssertionError: expected null to be 'stale-token'`, the stale session
+    was cleared), `preserves a caller-supplied abort signal alongside the
+    timeout` (`AssertionError: promise resolved ... instead of rejecting`,
+    the caller's pre-aborted signal was discarded), `retries only the
+    failed farm's plots when its Reintentar button is clicked`
+    (`TestingLibraryElementError: Unable to find an accessible element with
+    the role "button" and name "Reintentar"`, no per-farm retry existed).
+    The new `errorCopy.test.ts` and the "forwards a request that carries an
+    abort signal" test passed unchanged in this RED run — genuinely new
+    coverage of already-correct behavior, not a behavior change, per the
+    task's own list (`describeApiError`'s classification and the "request
+    carries a signal" timeout mechanism both predate this task). `git stash
+    pop` restored the implementation: GREEN, `npm test -- --run` → `56
+    passed` (was 47 before this task). REFACTOR: none needed.
+  - Verification (web/): `npm run lint` → clean, no output; `npm run
+    typecheck` → clean, no output; `npm test -- --run` → `Test Files 12
+    passed (12)`, `Tests 56 passed (56)`; `npm run build` → `tsc -b && vite
+    build` succeeded, `dist/assets/index-Bt3SW5-1.js 481.18 kB │ gzip:
+    152.87 kB`; `npm run size` → `Size: 151.66 kB gzipped` under the `200
+    kB` limit.
+  - Commit: `1e85546` — `fix(web): resolve review round 11 findings`.
+    Authored lines (`git diff --stat` for this commit's 9 files, 8 modified
+    + 1 new `errorCopy.test.ts`): 189 insertions, 30 deletions — above the
+    ~150 forecast, mainly the four new/expanded test files the task
+    required (stale-token, timeout/signal, retry, `describeApiError`
+    coverage); not trimmed to fit the heuristic, per the ponytail/ODD
+    instruction to never omit tests for a line-count budget.
+  - #21 round 11 resolved in `1e85546`: all four WARNINGs, plus the
+    `gen:api` and stale-comment suggestions. Not resolved (see Decisions
+    above, both are the round's own "skip unless trivial" carve-out): the
+    dead `if (error)` branches, the PWA old-bundle 404.
+  - RDD assessment/acknowledgement for this commit not run by this writer —
+    left to the parent orchestrator; boundary not advanced here (still
+    `0547131`).
+
 ## Next step
-T7c (fix #21 round 11), then T8 (web plot creation), on branch
-`feat/e3-farms-web` @ `0547131` (T7b reviewed).
+T8 (web plot creation), on branch `feat/e3-farms-web` @ `1e85546` (T7c
+done; review boundary still `0547131`, pending the parent orchestrator's
+RDD pass over T7c).
