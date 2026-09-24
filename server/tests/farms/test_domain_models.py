@@ -1,11 +1,13 @@
 import pytest
 
-from techcamp.farms.domain.errors import RainfedPlotHasIrrigationError
+from techcamp.farms.domain.errors import InsufficientRoleError, RainfedPlotHasIrrigationError
 from techcamp.farms.domain.models import (
     IrrigationSystem,
     default_efficiency_for,
+    ensure_can_write,
     ensure_rainfed_has_no_irrigation,
 )
+from techcamp.identity.domain.models import Role
 
 
 def test_irrigation_system_matches_the_documented_values() -> None:
@@ -43,3 +45,14 @@ def test_rainfed_plot_rejects_flow() -> None:
 
 def test_irrigated_plot_accepts_efficiency_and_flow() -> None:
     ensure_rainfed_has_no_irrigation(IrrigationSystem.DRIP, 0.9, 500.0)
+
+
+@pytest.mark.parametrize("role", [Role.OWNER, Role.TECHNICIAN])
+def test_owner_and_technician_can_write(role: Role) -> None:
+    ensure_can_write(role)
+
+
+@pytest.mark.parametrize("role", [Role.PRODUCER, Role.VIEWER])
+def test_producer_and_viewer_cannot_write(role: Role) -> None:
+    with pytest.raises(InsufficientRoleError):
+        ensure_can_write(role)

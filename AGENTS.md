@@ -96,6 +96,9 @@ cover irrigation math. Vitest for web units; Playwright for e2e and scenarios ar
 - Organic Driven Development: one feature doc per epic at `odd/tasks/<feature>.md`, in the build
   order of docs/10. Branch per epic.
 - Conventional Commits, no AI attribution. Work-unit commits, receipt-driven review per commit.
+- Review findings of severity WARNING or blocking go to the GitHub issue tracker: one issue per
+  epic review round, labels `review-follow-up`, `epic:eN`, `area:*`, `type:*`, linked from the
+  feature doc's "Review (RDD)" section and referenced (`Refs #N`) by the fixing commit.
 - Delivery: stacked-to-main chained PRs of about 400 authored lines, merged in order.
 - Skills: the Agent Teams Lite registry `.atl/skill-registry.md` (local, gitignored; rebuild with
   `gentle-ai skill-registry refresh`) is the skill index. Delegators pick matching skills there

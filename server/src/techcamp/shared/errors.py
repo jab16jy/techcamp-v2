@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import math
+from typing import Any
+
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
@@ -42,5 +47,27 @@ async def _problem_exception_handler(request: Request, exc: Exception) -> JSONRe
     return _problem_response(exc)
 
 
+def _sanitize_non_finite_floats(value: Any) -> Any:
+    """A rejected non-finite coordinate (`nan`/`inf`) echoes back as the
+    validation error's `input`; Starlette's `JSONResponse` refuses to
+    serialize those (`allow_nan=False`), which would otherwise turn our 422
+    into an unhandled 500 (T2b review follow-up).
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _sanitize_non_finite_floats(v) for key, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_non_finite_floats(v) for v in value]
+    return value
+
+
+async def _validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, RequestValidationError)
+    content = _sanitize_non_finite_floats(jsonable_encoder({"detail": exc.errors()}))
+    return JSONResponse(status_code=422, content=content)
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ProblemError, _problem_exception_handler)
+    app.add_exception_handler(RequestValidationError, _validation_exception_handler)
