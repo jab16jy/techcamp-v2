@@ -103,7 +103,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T8b slice `7749c8f..37359b2` (medium, 474 lines, `slice_budget_reached`; owner granted): parent spot check `npm test -- --run` 80 passed. Lineage `review-b01ed8d3bc48fa89`, reliability lens, approved and acknowledged (authority burned). #21 round 12 resolved in `4c1069b`. One WARNING (timeout test leaks fake timers on failure) and one suggestion (fallback test weak): #21 round 13, folded into T9. Reviewed boundary is now `37359b2`.
 - Whole-branch stop-hook candidate `a912e8f..431d75b` (owner granted): refused by `lens_context_budget_exceeded` (4451 lines), no authority created; covered by the per-slice reviews above.
 - T9 slice `37359b2..9aad907` (T9 + round 13 test fix; medium, 1277 lines, `slice_budget_reached`; standing grant, new feature): parent spot check `npm test -- --run` 93 passed. Lineage `review-4e1e5df03384cf6e`, reliability lens, approved and acknowledged (authority burned). #21 round 13 resolved in `a04e0a1`. Four WARNINGs (ended cycle blocks a new one; SoilGrids copy on every 502/503; autofill vs. open manual form; non-atomic POST+PATCH override) and two suggestions: #21 round 14, fixed by T9b. Reviewed boundary is now `9aad907`.
-- T9b `9aad907..65e8a02` (fix, 351 lines): parent spot check `npm test -- --run` 99 passed, typecheck/lint clean, size limit 157.54 kB. RDD review deferred per user instruction (to be initiated in opencode). Boundary stays `9aad907`. #21 round 14 resolved in `65e8a02`.
+- T9b `9aad907..65e8a02` (fix, 351 lines): parent spot check `npm test -- --run` 99 passed, typecheck/lint clean, size limit 157.54 kB. RDD review completed: lineage `review-f49c367345109778`, reliability lens, approved and acknowledged (authority burned). One non-blocking WARNING: `describeAutofillError` no longer preserves server-specific 422/409 copy; no correction was offered and it remains separate follow-up work. Boundary is now `65e8a02`; #21 round 14 resolved in `65e8a02`.
 - Whole-branch stop-hook candidate `a912e8f..cf8bb93` (4897 lines): owner declined (`declined_this_candidate`).
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 - T5b `47f0b83..658e5b9` (fix, no migration, 141 lines): #21 round 7 resolved in `658e5b9`. RDD
@@ -1633,8 +1633,8 @@ All slices are `size:exception` (each task is one work-unit commit).
     - Timeout spy restore: wrapped assertions in `try/finally` with `timeoutSpy.mockRestore()` in `client.test.ts`.
   - Verification: `npm test -- --run` (99 passed across 18 files), `npm run typecheck` (clean), `npm run lint` (clean), `npm run size` (157.54 kB / 200 kB).
   - Commit: `65e8a02` (`fix(web): resolve #21 round 14 plot detail issues`, `Refs #21`), 351 authored lines (240 additions, 111 deletions across 5 files).
-  - RDD review deferred per user instruction to opencode.
+  - RDD review completed: lineage `review-f49c367345109778`, reliability lens, approved and acknowledged (authority burned). One non-blocking WARNING: `describeAutofillError` no longer preserves server-specific 422/409 copy; it is separate follow-up work and did not open a correction. Boundary is now `65e8a02`.
 
 ## Next step
-RDD review workflow for T9b (boundary `9aad907` → candidate `65e8a02`), then E3 PR slicing (stacked-to-main), on branch `feat/e3-farms-web`.
+E3 PR slicing (stacked-to-main), on branch `feat/e3-farms-web`.
 
