@@ -40,7 +40,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 
 ## Tasks
 - [x] T1 Farm and plot schema: `geoalchemy2` dependency, ORM rows, Alembic migration (GiST index, irrigation `CHECK`, `area_ha`), domain rules (default efficiency by system), repositories filtered by `org_id` — route: delegated — forecast ~300 — actual ~623
-- [ ] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test; T1 review follow-ups (see Review) — route: delegated — forecast ~350
+- [x] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test; T1 review follow-ups (see Review) — route: delegated — forecast ~350 — actual ~1519
 - [ ] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300
 - [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
@@ -52,9 +52,9 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 ## Review (RDD)
 - `4684262..cacf2ab` (`.gitignore`, this doc): owner granted; lineage `review-d8ec7c69794659a0`, reliability lens, 0 findings, approved and acknowledged (authority burned).
 - T1 `cacf2ab..1d44cf8` (medium, `server/migrations/env.py`, 668 lines, `slice_budget_reached`): owner granted; lineage `review-6371844322cab237`, reliability lens, approved and acknowledged. 0 blocking; follow-ups folded into T2:
-  - WARNING: `plot.org_id` and `plot.farm_id` are independent FKs, so a plot can point to another org's farm. Enforce with a composite FK `(farm_id, org_id)` → unique `farm(id, org_id)`.
-  - WARNING: `list_for_org` / `list_for_farm` untested and unordered; add tests and a deterministic `ORDER BY`.
-  - SUGGESTION: range `CHECK`s (0 < efficiency ≤ 1, flow > 0); index on `plot(org_id, farm_id)`; assert WKT round-trip and the rainfed `system_flow_lph` `CHECK` in tests.
+  - WARNING: `plot.org_id` and `plot.farm_id` are independent FKs, so a plot can point to another org's farm. Enforce with a composite FK `(farm_id, org_id)` → unique `farm(id, org_id)`. **Resolved in T2**: migration `6628f7c0aa3b` adds `uq_farm_id_org_id` on `farm` and `fk_plot_farm_id_org_id` on `plot`; `test_plot_of_a_different_orgs_farm_is_rejected_by_the_database` covers it.
+  - WARNING: `list_for_org` / `list_for_farm` untested and unordered; add tests and a deterministic `ORDER BY`. **Resolved in T2**: both repositories now `ORDER BY id` (uuid7 is time-ordered); `test_list_for_org_filters_by_org_and_orders_deterministically` and `test_list_for_farm_orders_deterministically`, plus empty-result tests for both.
+  - SUGGESTION: range `CHECK`s (0 < efficiency ≤ 1, flow > 0); index on `plot(org_id, farm_id)`; assert WKT round-trip and the rainfed `system_flow_lph` `CHECK` in tests. **Resolved in T2**: migration `6628f7c0aa3b` adds `ck_plot_irrigation_efficiency_range`, `ck_plot_system_flow_positive`, `ix_plot_org_farm`; `test_out_of_range_efficiency_is_rejected_by_the_database`, `test_non_positive_flow_is_rejected_by_the_database`, `test_boundary_round_trips_as_wkt`.
 - Owner standing decision (2026-09-23): consent is granted by default for new-feature candidates. Reviewed boundary is now `1d44cf8`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
@@ -111,5 +111,64 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     per docs/03's migration table). Implemented as plain `text`, noted in code and here; owner
     should confirm before any epic adds the `municipality` table and a real FK.
 
+- 2026-09-23: T2 done by a delegated `sonnet-high` writer. `farms` module additions: `domain/models.py`
+  (`WRITE_ROLES`, `ensure_can_write`), `domain/errors.py` (`FarmNotFoundError`, `PlotNotFoundError`,
+  `InsufficientRoleError`), `adapters/geojson.py` (WKT <-> GeoJSON conversion, no shapely
+  dependency), `adapters/repositories.py` (`create`/`update`/`get_for_orgs` on both repositories,
+  cursor-paginated `list_for_org`, deterministic `ORDER BY id` on both list methods),
+  `application/ports.py` (`FarmRepository`/`PlotRepository` protocols — needed for the hexagonal
+  layering rule itself, not for a test double: writes still hit real Postgres per
+  `server/tests/conftest.py`), `application/manage_farms.py` (`resolve_farm_access`,
+  `create_farm`, `update_farm`), `application/manage_plots.py` (`resolve_plot_access`,
+  `create_plot`, `update_plot`), `adapters/api/router.py` + `deps.py` (six endpoints registered
+  in `main.py`). Migration `6628f7c0aa3b` (chained off `9098dc0927a3`, T1 review follow-ups):
+  `uq_farm_id_org_id`, composite FK `fk_plot_farm_id_org_id`, `ck_plot_irrigation_efficiency_range`,
+  `ck_plot_system_flow_positive`, `ix_plot_org_farm`.
+  - Decisions:
+    - Write roles: docs/04-api.md is silent on which membership roles may write farms/plots.
+      Applied owner and technician write, producer and viewer read only (`ensure_can_write`),
+      mapped to `403` — a same-org member who can't write is a different case from cross-org
+      access, which stays `404` per docs/09.
+    - Page<Farm>: docs/04-api.md's endpoint signature doesn't list query params for `GET
+      /farms`, but its general pagination convention (`?limit=&cursor=` → `{items, next_cursor}`)
+      applies generically. Implemented cursor pagination ordered by `id` (uuid7 is time-ordered):
+      `limit` (default 50, max 200) and an opaque `cursor` that is the last item's `id`.
+    - A farm-id-only or plot-id-only route (no `org_id` in the path) can't call
+      `resolve_org_membership` with a known org. `resolve_farm_access`/`resolve_plot_access`
+      fetch the caller's memberships first, then query the repository with
+      `org_id IN (<the caller's org ids>)` (`get_for_orgs`) — still an org_id-filtered query
+      (docs/09), never an unscoped lookup by id alone.
+    - PATCH is a true partial update: `payload.model_dump(exclude_unset=True)` distinguishes an
+      omitted field (unchanged) from an explicit `null` (cleared), then `dataclasses.replace`
+      merges onto the current entity before re-validating the rainfed rule on the *merged*
+      state — so switching `irrigation_system` to `none` while leaving old efficiency/flow
+      unset is rejected as `422`, not left inconsistent or leaked as a `500` from the DB `CHECK`.
+    - `Idempotency-Key` (docs/04 conventions): deliberately deferred, not implemented. Storing
+      and replaying keyed responses per org isn't a small addition, and no task in this epic
+      depends on it yet; noted in the router module docstring.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed via collection errors before implementation: `uv run pytest -q tests/farms` →
+    `ImportError: cannot import name 'InsufficientRoleError' from 'techcamp.farms.domain.errors'`
+    and `ModuleNotFoundError: No module named 'techcamp.farms.adapters.geojson'` (2 errors during
+    collection, interrupted). Implemented across domain/adapters/application/API layers: GREEN,
+    `uv run pytest -q tests/farms` → `48 passed`. REFACTOR: switched FastAPI query params from
+    `Query(...)` defaults to `Annotated[..., Query()]` to satisfy ruff B008; widened `changes`
+    dict type to `dict[str, Any]` to satisfy mypy strict against `dataclasses.replace`.
+  - Verification (server/): `uv run pytest -q` → `77 passed, 2 warnings`; `uv run ruff check .` →
+    `All checks passed!`; `uv run ruff format --check .` → `97 files already formatted`; `uv run
+    mypy` → `Success: no issues found in 76 source files`; `uv run lint-imports` → `Hexagonal
+    layers per module KEPT, 1 kept, 0 broken`; `uv run alembic upgrade head` → applied
+    `6628f7c0aa3b`; `uv run alembic downgrade -1` → reverted it; `uv run alembic upgrade head` →
+    reapplied clean.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `f823f1e` — `feat(farms): add farm and plot endpoints with org isolation`. Authored
+    lines (`git diff --stat` for this commit's files, excluding `server/uv.lock`): 1509
+    insertions, 10 deletions across 17 files (7 modified, 10 new). This is well over the ~350
+    forecast and the ~400-line delivery heuristic in a single commit — flagging for the owner/
+    parent orchestrator's delivery-strategy decision (stacked-to-main slicing) before merge;
+    not re-split here since the task specified one work-unit commit for T2.
+  - Doc gap carried from T1, unchanged: `farm.municipality_code` is plain `text`, not yet a real
+    FK (docs/03-modelo-datos.md:89 models a `municipality` table that isn't migrated from v1).
+
 ## Next step
-T2 (delegated writer): farm/plot endpoints.
+T3 (delegated writer): crop catalog (`crop` + `crop_stage` migration, FAO-56 Table 12 seed, `GET /crops`).
