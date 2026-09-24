@@ -46,6 +46,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80 — actual ~160
 - [x] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250 — actual 590
 - [x] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250 — actual 733
+- [ ] T5b Fix #21 round 7: every malformed SoilGrids 200 body → 502 problem+json; test that the centroid reaches SoilGrids as correct lon/lat and query params — route: delegated — forecast ~100
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
@@ -84,6 +85,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   assessment/acknowledgement not run by this writer — left to the parent orchestrator; boundary
   not advanced here.
 - T3b + T4 slice `a337f57..111cffc` (medium, 907 lines, standing grant): lineage `review-7d6076ce2e31e46b`, approved and acknowledged. WARNING (cassava seed edited in place in `67cf2dd1f13e`) accepted: revision only on this unmerged branch. Three test-strength suggestions open in #21 round 6. Reviewed boundary is now `111cffc`.
+- T5 slice `111cffc..47f0b83` (T5 + parent USDA texture fix; medium, 851 lines, standing grant): lineage `review-23b5b52e438ac3e2`, approved and acknowledged. Two WARNINGs (nested malformed SoilGrids body → 500; centroid lon/lat query unproved) tracked in #21 round 7, fixed by task T5b. Reviewed boundary is now `47f0b83`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
