@@ -759,6 +759,14 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gap carried from T1-T6, unchanged: `farm.municipality_code` is plain `text`, not yet a
     real FK.
 
+## PR plan (stacked-to-main, one PR per task; owner 2026-09-23)
+All slices are `size:exception` (each task is one work-unit commit).
+- #22 `feat/e3-farms-01-schema` T1 `4684262..8f7c472` (724)
+- #23 `feat/e3-farms-02-endpoints` T2 + T2b `..55fbec2` (2163)
+- #24 `feat/e3-farms-03-crops` T3 + T3b `..33d7b99` (748)
+- #25 `feat/e3-farms-04-soil` T4 `..3fe79d9` (670)
+- #26 `feat/e3-farms-05-soilgrids` T5 + T5b `..907bde2` (1033)
+- #27 `feat/e3-farms-06-cycles` T6 + T6b `..9c8243e` (1410)
+
 ## Next step
-T7 web data layer and plots route (API client, farm/plot list in the plots tab, via
-`impeccable`).
+Owner reviews and merges #22–#27 in order (retarget each child to `main` after its parent merges). Then T7–T9 (web, through `impeccable`) on a new branch from `main`.
