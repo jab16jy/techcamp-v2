@@ -396,22 +396,12 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   table (`plot_id` PK/FK to `plot.id`, range `CHECK`s, `θWP < θFC` `CHECK`, `source` `CHECK`
   restricted to `soilgrids|lab|fao56_texture`).
   - Decisions:
-    - **FAO-56 Table 19 doc gap (flag for the owner)**: the task asked for the full Table 19
-      texture-class fallback (sand, loamy sand, sandy loam, loam, silt loam, silt, silt clay
-      loam, silty clay, clay). After an extensive good-faith search (direct fetch of
-      `fao.org/4/x0490e/x0490e0e.htm`'s raw HTML via `curl`, its PDF mirrors, academic
-      reproductions, and an R/Python FAO-56 package), Table 19 itself is **not reproduced** in
-      the accessible FAO HTML mirror or in any secondary source found — only three worked
-      values inside that same chapter's Example 36 ("Estimate RAW for a full-grown onion,
-      tomato and maize crop... loamy sand, silt and silty clay soils", each row explicitly
-      marked "From Table 19"): loamy sand θFC≈0.15/θWP≈0.06, silt θFC≈0.32/θWP≈0.15, silty clay
-      θFC≈0.35/θWP≈0.23 m³/m³. Per "never invent values" (this task's own instruction, and the
-      precedent T3 set for yam/`kc_source=none`), `apply_fao56_texture_fallback` implements
-      **only these three verified classes**; any other texture (including the other six Table 19
-      classes) leaves θFC/θWP and `source` unset rather than guessing. This is a real,
-      undecided gap: the owner should either supply/point to a verified copy of the full Table
-      19, or accept the three-class scope, before T5 (SoilGrids autofill) or E6 (irrigation
-      balance, which consumes θFC/θWP) ship depending on unset values for the other six classes.
+    - FAO-56 Table 19 texture fallback: the writer found only Example 36's three values and
+      scoped the fallback to three classes. **Superseded by the parent in `57ae49a`**: Table 19 is
+      published in full at fao.org/4/x0490e/x0490e0c.htm (verified 2026-09-23). docs/03:445 asks
+      for the class mean, so all nine USDA classes use the midpoint of each θFC/θWP range (e.g.
+      silt 32/17 %, not Example 36's 32/15). TDD: RED 11 failed, GREEN `133 passed`; ruff, format,
+      mypy, lint-imports green.
     - `soil_profile` has no `org_id` column, matching docs/03-modelo-datos.md:106's field list
       exactly (only `plot_id PK, FK`): access is gated once through
       `manage_plots.resolve_plot_access` (org-scoped) before the soil repository is ever
@@ -455,9 +445,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     two test files (~20 new tests) don't split smaller within a single task. Flagging for the
     owner/parent orchestrator's delivery-strategy decision, not re-split here.
   - Doc gap carried from T1/T2/T3: `farm.municipality_code` is plain `text`, not yet a real FK.
-    New doc gap: FAO-56 Table 19's other six texture classes, see Decisions above.
 
 ## Next step
 T5 soil autofill (SoilGrids port + adapter + test double,
-`POST /plots/{id}/soil:autofill`, seminar recorded fixture, ADR-0021 row) — and resolve the T4
-FAO-56 Table 19 doc gap above before T5 or E6 ship on it.
+`POST /plots/{id}/soil:autofill`, seminar recorded fixture, ADR-0021 row).
