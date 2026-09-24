@@ -21,6 +21,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    # ADR-0003: the schema must not depend on the compose init script (CI's
+    # Postgres service has none). Not dropped on downgrade: other schemas share it.
+    op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
     op.create_table(
         'farm',
         sa.Column('id', sa.Uuid(), nullable=False),
