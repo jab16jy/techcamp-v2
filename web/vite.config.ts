@@ -4,8 +4,19 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// The api process has no common path prefix (`main.py` registers `/me`,
+// `/organizations`, `/farms`, `/crops`, `/plots`, `/cycles`, `/health`, and
+// `/dev` in the seminar profile, directly — no `/api/v1` yet, unlike
+// docs/04-api.md's convention). Proxying each one avoids a CORS setup the
+// backend doesn't have (`infra/compose.yaml`: api on API_PORT, default 8000).
+const API_PROXY_TARGET = process.env.VITE_API_URL ?? 'http://localhost:8000'
+const API_PATH_PREFIXES = ['/me', '/organizations', '/farms', '/crops', '/plots', '/cycles', '/dev', '/health']
+
 // https://vite.dev/config/
 export default defineConfig({
+  server: {
+    proxy: Object.fromEntries(API_PATH_PREFIXES.map((prefix) => [prefix, API_PROXY_TARGET])),
+  },
   plugins: [
     tailwindcss(),
     react(),

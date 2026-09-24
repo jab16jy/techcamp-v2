@@ -1,13 +1,24 @@
 import type { RouteObject } from 'react-router'
 import { AppShell } from '../design-system/patterns/AppShell'
+import { SignInScreen } from '../features/auth/containers/SignInScreen'
+import { SignOutButton } from '../features/auth/components/SignOutButton'
+import { requireAuthLoader } from '../features/auth/guard'
+import { PlotsScreen } from '../features/plots/containers/PlotsScreen'
 import { PlaceholderPage } from './PlaceholderPage'
 
 const tabRoutes: RouteObject[] = [
   { index: true, element: <PlaceholderPage title="Inicio" /> },
   { path: 'alertas', element: <PlaceholderPage title="Alertas" /> },
   { path: 'bitacora', element: <PlaceholderPage title="Bitácora" /> },
-  { path: 'parcelas', element: <PlaceholderPage title="Parcelas" /> },
-  { path: 'mas', element: <PlaceholderPage title="Más" /> },
+  { path: 'parcelas', element: <PlotsScreen /> },
+  {
+    path: 'mas',
+    element: (
+      <PlaceholderPage title="Más">
+        <SignOutButton />
+      </PlaceholderPage>
+    ),
+  },
 ]
 
 /**
@@ -24,7 +35,9 @@ export function buildRoutes(devRoute: RouteObject | null): RouteObject[] {
     {
       path: '/',
       Component: AppShell,
+      loader: requireAuthLoader,
       children: devRoute ? [...tabRoutes, devRoute] : tabRoutes,
     },
+    { path: '/ingreso', Component: SignInScreen },
   ]
 }
