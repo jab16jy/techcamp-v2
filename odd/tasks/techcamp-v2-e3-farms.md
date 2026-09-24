@@ -57,7 +57,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T7c Fix #21 round 11: `VITE_API_URL` only as the dev-proxy target (non-`VITE_` variable, relative browser base, test base separate); do not sign out on 401 from anonymous OTP calls (no token on them); test the 10 s timeout and `describeApiError`; per-farm plots retry — route: delegated — forecast ~150 — actual 219
 - [x] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350 — actual 158 (map) + 701 (forms)
 - [x] T8b Fix #21 round 12: `AbortSignal.any` fallback for older WebViews; real fake-timer timeout test; test list refetch after farm/plot create; `PlotDrawMap` glue test + `invalidateSize()` in the sheet + marker icon under Vite; `errorCopy` test with `ApiError`; client lat/lng range check; ADR-0021 row for map tiles (public OSM, owner 2026-09-24) — route: delegated — forecast ~150 — actual 352
-- [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) ; also fix #21 round 13 (timeout test cleanup in `try/finally`, fallback test proves the timeout-only path) — route: delegated — forecast ~300
+- [x] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) ; also fix #21 round 13 (timeout test cleanup in `try/finally`, fallback test proves the timeout-only path) — route: delegated — forecast ~300 — actual 40 (round 13 fix) + 1059 (T9 feature)
 
 ## Review (RDD)
 - `4684262..cacf2ab` (`.gitignore`, this doc): owner granted; lineage `review-d8ec7c69794659a0`, reliability lens, 0 findings, approved and acknowledged (authority burned).
@@ -1455,7 +1455,167 @@ All slices are `size:exception` (each task is one work-unit commit).
     T2b, unrelated to round 12); `VITE_API_URL` dual-use note already closed
     in T7c; no new doc gaps beyond the ones carried forward.
 
+- 2026-09-24: T9 done by a delegated `sonnet-high` writer on branch
+  `feat/e3-farms-web` @ `4c1069b` (T8b done). Two work-unit commits: the round
+  13 test-hardening fix, then the T9 feature.
+
+  **Commit 1: `test(web): harden timeout tests`.** Resolves GitHub issue #21
+  round 13 (both items from the T8b review). `web/src/lib/api/client.test.ts`:
+  the fake-timer timeout test's `timeoutSpy.mockRestore()`/`vi.useRealTimers()`
+  cleanup moved into `finally`, so a failed assertion can't leak fake timers
+  into later tests (WARNING). The `AbortSignal.any`-unavailable fallback test
+  now spies on `AbortSignal.timeout` and asserts it was called with
+  `REQUEST_TIMEOUT_MS`, proving the timeout-only path itself instead of only
+  that the request didn't throw (SUGGESTION).
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner `npm
+    test -- --run` (web/). No production behavior changed by this commit, so
+    RED was observed by mutation testing instead of a pre-existing bug: with
+    `client.ts`'s `combineWithTimeout` temporarily changed to drop the
+    timeout signal in its fallback branch (returning the caller's signal
+    unchanged), the new fallback test failed —
+    `AssertionError: expected "timeout" to be called with arguments: [ 10000
+    ]`, `Number of calls: 0`. Reverted the probe: GREEN, `npm test -- --run
+    src/lib/api/client.test.ts` → `13 passed`.
+  - Verification (web/): `npm run lint` → clean; `npm run typecheck` →
+    clean; `npm test -- --run` → `17 files, 80 passed`; `npm run build` →
+    succeeded; `npm run size` → unaffected (test-only change).
+  - Commit: `a04e0a1` — `test(web): harden timeout tests`. Authored lines
+    (`git diff --stat` for this commit's one file): 25 insertions, 15
+    deletions. #21 round 13 resolved in `a04e0a1`.
+
+  **Commit 2: `feat(web): add plot soil and crop cycle forms with Kc`.**
+  New `web/src/features/plots/containers/PlotDetailSheet.tsx`: a plot-detail
+  sheet (docs/07 mapa de pantallas: `plots --> plotd[Parcela: polígono,
+  suelo, ciclo]`) with two sections built from existing primitives only
+  (`Sheet`, `Select`, `Input`, `Button`, no new design-system code, design
+  frozen per the epic's owner decision):
+  - **Soil**: `Autocompletar desde SoilGrids` (`POST
+    /plots/{id}/soil:autofill`) with a dedicated "SoilGrids no está
+    disponible en este momento. Intenta de nuevo más tarde." message for a
+    502/503 upstream failure, and `Editar manualmente` opens a full-document
+    `PUT /plots/{id}/soil` form for every field docs/04-api.md's
+    `SoilProfilePutRequest` defines. The FAO-56 Table 19 texture fallback
+    stays server-side (T4); `texture` is a fixed `Select` built from the
+    nine keys `FAO56_TEXTURE_WATER_LIMITS` (server, `domain/models.py`)
+    actually recognizes, not free text — a Spanish-speaking user typing
+    "arcilla" instead of `clay` would otherwise silently miss the fallback
+    (`source` stays `null`).
+  - **Crop cycle**: a start-cycle form (`POST /plots/{id}/cycles`) with a
+    crop `Select` from `GET /crops` showing that crop's Kc by stage and
+    `kc_source` once selected, a sowing date, and an *optional* expected-
+    harvest override. `POST`'s own request body only ever carries `{crop_id,
+    sown_on}` (docs/04-api.md:56, `CropCycleCreateRequest` has no
+    `expected_harvest_on` field — T6 decision: the server derives it from
+    the crop's stage lengths) — when the override field is filled, a
+    follow-up `PATCH /cycles/{id} { expected_harvest_on }` applies it, and
+    the client rejects (disables submit, shows a message) an override
+    earlier than the sowing date before either call runs. An active cycle
+    shows crop/dates/status with `Registrar cosecha`/`Registrar pérdida`
+    (`PATCH { status }`). 409 (`ActiveCropCycleExistsError`) and 422 show the
+    server's own title/detail inline, same pattern as `err.status === 422`
+    in `CreateFarmSheet`/`CreatePlotSheet`.
+  - **Entry point**: `PlotsList.tsx`'s per-plot `<li>` (previously inert
+    text) is now a full-width `<button>` calling a new `onSelectPlot` prop;
+    `PlotsScreen.tsx` wires it to a `selectedPlot` state and renders
+    `PlotDetailSheet`, the same open/close pattern `creatingPlotForFarmId`
+    already established for `CreatePlotSheet`.
+  - `plotsApi.ts` additions: `useSoilProfile`/`useActiveCycle` (queries with
+    `enabled: false`, `useCrops` (`GET /crops`), `usePutSoil`/
+    `useAutofillSoil`/`useCreateCycle`/`usePatchCycle` (mutations that
+    `setQueryData` the plot-scoped cache key on success).
+  - Decisions:
+    - **No GET endpoint for a plot's soil profile or active cycle**:
+      docs/04-api.md:43-56 lists only `PUT`/`POST .../soil:autofill` for
+      soil (T4's own carried decision) and only `POST`/`PATCH` for cycles —
+      no read endpoint for either exists to refetch from. `useSoilProfile`/
+      `useActiveCycle` are TanStack Query reads with `queryFn` that reject
+      and `enabled: false` (never actually fetch); every write mutation
+      (`usePutSoil`, `useAutofillSoil`, `useCreateCycle`, `usePatchCycle`)
+      calls `queryClient.setQueryData` on success so the sheet can display
+      the result of whatever it just did. This persists across closing and
+      reopening the sheet within the same app session (the `QueryClient` is
+      a module singleton), but a genuinely fresh session (page reload) shows
+      no soil/cycle data until the user acts again — a real, disclosed gap
+      the docs already have (not invented or worked around here, e.g. no
+      speculative `localStorage` cache).
+    - Texture `Select` values/keys (`sand`, `loamy_sand`, `sandy_loam`,
+      `loam`, `silt_loam`, `silt`, `silty_clay_loam`, `silty_clay`, `clay`)
+      are copied from the server's own `FAO56_TEXTURE_WATER_LIMITS` dict
+      keys (`server/src/techcamp/farms/domain/models.py`), with Spanish
+      labels — this is a label list, not the FAO-56 math itself (which the
+      task explicitly keeps server-side); flagged as a coupling to watch if
+      that dict's keys ever change.
+    - `Select`'s options loading asynchronously (the crop catalog, unlike
+      every prior Select in this epic, whose options are static arrays)
+      surfaced a pre-existing jsdom gap: `Element.scrollIntoView` doesn't
+      exist in jsdom, and Radix's `Select` calls it when it highlights the
+      candidate item on open. Stubbed once in `src/test/setup.ts` (global,
+      benefits every Select-based test, not just this feature's).
+    - No dedicated screen route for plot detail: docs/07 names the
+      navigation node (`plots --> plotd`) but not its layout; a sheet
+      reuses the same composition pattern `CreateFarmSheet`/`CreatePlotSheet`
+      already established instead of adding routing/a new screen shell
+      (ponytail, ADR-0006/docs/07 frozen-design instruction).
+  - TDD: mode on, source `AGENTS.md`/owner decision 2026-09-22, runner `npm
+    test -- --run` (web/). RED observed by moving the new
+    `PlotDetailSheet.tsx` aside and `git stash push` of the three modified
+    implementation files (`plotsApi.ts`, `PlotsList.tsx`, `PlotsScreen.tsx`),
+    keeping every new/changed test: `npm test -- --run` → `3 failed | 15
+    passed (18)` — `PlotDetailSheet.test.tsx` failed to collect (`Failed to
+    resolve import "./PlotDetailSheet"`), `plotsApi.test.tsx`'s two new
+    caching tests failed (`useSoilProfile`/`useActiveCycle`/etc. not
+    exported), `PlotsScreen.test.tsx`'s new entry-point test failed (no
+    `button` with an accessible name matching the plot row). Restored the
+    implementation: GREEN, `npm test -- --run` → `18 files, 93 passed`.
+    REFACTOR: none needed beyond what was written directly.
+  - Verification (web/): `npm run lint` → clean; `npm run typecheck` →
+    clean; `npm test -- --run` → `Test Files 18 passed (18)`, `Tests 93
+    passed (93)`; `npm run build` → succeeded (`index-*.js` 506.46 kB / gzip
+    158.80 kB, `PlotDrawMap-*.js` still its own lazy chunk); `npm run size` →
+    `157.54 kB` gzipped (limit 200 kB, up from T8b's 155.22 kB).
+  - Manual smoke check: real stack — `uv run alembic upgrade head` on the
+    (previously unmigrated) dev Postgres, `TECHCAMP_PROFILE=seminar uv run
+    uvicorn techcamp.main:app`, `npm run dev`. Seeded one organization, user,
+    owner membership, farm and a rainfed plot directly in Postgres. Drove
+    the OTP sign-in chain, then every T9 endpoint through the Vite proxy
+    (`curl` against `localhost:5173`, not the UI itself): `PUT
+    /api/v1/plots/{id}/soil` with the manual-edit body shape → `200`,
+    `source: "lab"`; `POST /api/v1/plots/{id}/soil:autofill` → `200`,
+    `source: "soilgrids"` (the live ISRIC call succeeded from this
+    environment); `GET /api/v1/crops` → `200`, stages/Kc/`kc_source`
+    present; `POST /api/v1/plots/{id}/cycles {crop_id: 1, sown_on:
+    "2026-06-01"}` → `201`, `expected_harvest_on` server-derived
+    (`2026-08-30`); a second `POST .../cycles` on the same plot → `409`,
+    `title: "Plot already has an active crop cycle"` (confirms the client's
+    `err.detail ?? err.title` fallback is exercised for real — this
+    `ProblemError` carries no `detail`); `PATCH /api/v1/cycles/{id}
+    {status: "harvested"}` → `200`, `status: "harvested"`. All six calls
+    matched the shapes `plotsApi.ts`/`PlotDetailSheet.tsx` send and parse.
+    Cleaned up the seeded rows, ran `uv run alembic downgrade base` to
+    restore the dev database to the unmigrated state it was found in, and
+    stopped both processes afterward.
+  - Commit: `31690d2` — `feat(web): add plot soil and crop cycle forms with
+    Kc`. Authored lines (`git diff --stat` for this commit's files): 1059
+    insertions, 8 deletions across 8 files (2 new, 6 modified) — well above
+    the ~300 forecast, same reason as almost every task in this epic: two
+    complete forms (soil autofill/edit, crop-cycle start/end) plus a new
+    entry point and full test coverage (data-layer caching tests, sheet
+    interaction tests, an entry-point wiring test) don't split smaller
+    within one coherent work unit without cutting tests. Flagging for the
+    owner/parent orchestrator's delivery-strategy decision, not re-split
+    here. RDD assessment/acknowledgement not run by this writer (task
+    instruction: do not run `gentle-ai review` commands) — left to the
+    parent orchestrator; boundary stays `7749c8f`.
+  - Doc gaps: (1) new — no `GET` endpoint for a plot's soil profile or
+    active cycle (see Decisions above); the plot-detail screen's layout
+    itself is also unspecified beyond docs/07's navigation node. (2)
+    carried, unchanged from T1-T8b: `farm.municipality_code` plain `text`;
+    `GET /me` has no organization name; OSM public tiles (ADR-0021, T8b).
+  - Skipped/open items: cross-org 404 for soil/cycles and rainfed
+    efficiency/flow rejection are server-scope acceptance criteria already
+    provable before this task (T2/T2b/T3b/T4/T6), untouched here. This
+    writer did not run `gentle-ai review` or edit the GitHub issue, per the
+    task instructions.
+
 ## Next step
-T9 (web soil and cycle forms), on branch `feat/e3-farms-web` @ `4c1069b`
-(T8b done; RDD review of the `4c1069b` slice still pending — boundary stays
-`7749c8f` until the parent orchestrator runs it).
+E3 PR slicing (stacked-to-main).
