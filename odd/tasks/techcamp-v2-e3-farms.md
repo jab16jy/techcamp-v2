@@ -54,6 +54,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T6b Fix #21 round 8: map the partial-unique-index `IntegrityError` on cycle create to 409; reject `expected_harvest_on` < `sown_on` (422 + DB `CHECK`); assert 201 in `_create_cycle`; chain and log the original SoilGrids parse exception — route: delegated — forecast ~120 — actual 164
 - [x] T7 Web data layer, minimal OTP sign-in and plots route: API client with bearer token, phone + code sign-in, farm/plot list in the plots tab (via `impeccable`, existing design only) — route: delegated — forecast ~250 — actual 988
 - [x] T7b Align with docs and fix #21 round 10: server routers under `/api/v1` (docs/04:7), web client on generated OpenAPI types + `openapi-fetch` + TanStack Query (docs/05:179-180), document `POST /dev/auth/otp/verify` in docs/04; 401 → sign-out and redirect to sign-in, request timeout, atomic sign-in session, single proxy config, farms pagination, error copy by cause — route: delegated — forecast ~500 — actual 166 (server) + 667 (web)
+- [ ] T7c Fix #21 round 11: `VITE_API_URL` only as the dev-proxy target (non-`VITE_` variable, relative browser base, test base separate); do not sign out on 401 from anonymous OTP calls (no token on them); test the 10 s timeout and `describeApiError`; per-farm plots retry — route: delegated — forecast ~150
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
 
@@ -94,6 +95,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T5b + T6 slice `47f0b83..b0c3b55` (medium, 1367 lines, standing grant): lineage `review-fb8c246391433103`, approved and acknowledged. Two WARNINGs (concurrent cycle create → 500 instead of 409; harvest date before sowing accepted) and two suggestions, tracked in #21 round 8, fixed by task T6b. Reviewed boundary is now `b0c3b55`.
 - T6b slice `b0c3b55..e40baf0` (medium, 259 lines; owner granted): lineage `review-19c63dde7b4661fe`, approved and acknowledged; two suggestions in #21 round 9. Reviewed boundary is now `e40baf0` (backend complete).
 - T7 `7d79b19..77bb7ad` (high: auth; 1132 lines; standing grant): lineage `review-030667a3008ca044`, 4 lenses, approved and acknowledged. Six WARNINGs (no 401 recovery, no fetch timeout, token persisted before `/me`, `VITE_API_URL` dual use, farms pagination ignored, 401 shown as connection error) plus the docs drift found by the parent (`/api/v1` prefix, docs/04:7; TanStack Query + `openapi-typescript`/`openapi-fetch`, docs/05:179-180): #21 round 10, fixed by T7b. Reviewed boundary is now `77bb7ad`.
+- T7b slice `77bb7ad..0547131` (high: auth tests; 2472 lines, 27 files; owner granted): lineage `review-11b41042685dc827`, 4 lenses, approved and acknowledged (authority burned). Parent spot check: web `npm test -- --run` 47 passed, typecheck clean; server `uv run pytest -q` 212 passed. Round 10 resolved except `VITE_API_URL` dual use (still open, comment claims the opposite). Four WARNINGs (`VITE_API_URL` dual use; stale token makes an OTP 401 sign out; timeout and error copy untested; per-farm plots no retry) and five suggestions: #21 round 11, fixed by T7c. Reviewed boundary is now `0547131`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 - T5b `47f0b83..658e5b9` (fix, no migration, 141 lines): #21 round 7 resolved in `658e5b9`. RDD
   assessment/acknowledgement for this commit not run by this writer — left to the parent
@@ -1071,5 +1073,5 @@ All slices are `size:exception` (each task is one work-unit commit).
 - CI fix (2026-09-24): every PR failed in CI with `type "geometry" does not exist`, because CI's Postgres service does not run `infra/postgres/init-extensions.sql`. Root fix `c0edf39` (on #22): the farm migration runs `CREATE EXTENSION IF NOT EXISTS postgis`. Reproduced on a fresh database without PostGIS (alembic failed), then 212 passed at the chain tip on a fresh database. The chain was restacked with `git rebase --update-refs` and force-pushed, so the commit hashes above changed. CI is green on #22–#27.
 
 ## Next step
-T8 (web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot
-forms) on branch `feat/e3-farms-web` @ `c7d30f3` (T7b done).
+T7c (fix #21 round 11), then T8 (web plot creation), on branch
+`feat/e3-farms-web` @ `0547131` (T7b reviewed).
