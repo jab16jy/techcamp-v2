@@ -11,7 +11,7 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest",
     "size": "size-limit",
-    "gen:api": "cd ../server && uv run python -c \"import json; from techcamp.main import app; print(json.dumps(app.openapi()))\" > /tmp/techcamp-openapi.json && cd ../web && openapi-typescript /tmp/techcamp-openapi.json -o src/lib/api/schema.d.ts && rm /tmp/techcamp-openapi.json"
+    "gen:api": "tmp=$(mktemp) && cd ../server && TECHCAMP_PROFILE=seminar uv run python -c \"import json; from techcamp.main import app; print(json.dumps(app.openapi()))\" > \"$tmp\" && cd ../web && openapi-typescript \"$tmp\" -o src/lib/api/schema.d.ts && rm \"$tmp\""
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",

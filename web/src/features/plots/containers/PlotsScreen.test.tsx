@@ -141,4 +141,48 @@ describe('PlotsScreen', () => {
     expect(screen.getByText('Finca Dos')).toBeInTheDocument()
     expect(screen.getByText('Lote Sur')).toBeInTheDocument()
   })
+
+  it("retries only the failed farm's plots when its Reintentar button is clicked", async () => {
+    setSession('token-abc', 'org-1')
+    let plotsFor1Calls = 0
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/farms/farm-1/plots')) {
+        plotsFor1Calls += 1
+        if (plotsFor1Calls === 1) {
+          return jsonResponse({ type: 'about:blank', title: 'Server error', status: 500 }, 500)
+        }
+        return jsonResponse([
+          { id: 'plot-1', farm_id: 'farm-1', name: 'Lote Norte', area_ha: 1, irrigation_system: 'none' },
+        ])
+      }
+      if (url.includes('/farms/farm-2/plots')) {
+        return jsonResponse([
+          { id: 'plot-2', farm_id: 'farm-2', name: 'Lote Sur', area_ha: 1, irrigation_system: 'none' },
+        ])
+      }
+      return jsonResponse({
+        items: [
+          { id: 'farm-1', org_id: 'org-1', name: 'Finca Uno' },
+          { id: 'farm-2', org_id: 'org-1', name: 'Finca Dos' },
+        ],
+        next_cursor: null,
+      })
+    })
+
+    renderPlotsScreen()
+
+    await waitFor(() =>
+      expect(screen.getByText('No se pudieron cargar las parcelas de esta finca.')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Lote Sur')).toBeInTheDocument()
+
+    screen.getByRole('button', { name: 'Reintentar' }).click()
+
+    await waitFor(() => expect(screen.getByText('Lote Norte')).toBeInTheDocument())
+    expect(
+      screen.queryByText('No se pudieron cargar las parcelas de esta finca.'),
+    ).not.toBeInTheDocument()
+    expect(plotsFor1Calls).toBe(2)
+  })
 })

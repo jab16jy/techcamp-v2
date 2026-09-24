@@ -3,19 +3,30 @@ import type { paths } from './schema'
 import { clearSession, getToken } from './session'
 
 /**
- * Base URL for API requests. Empty by default: the browser always calls the
- * relative `/api/v1` (docs/04-api.md: "Versionado: por ruta"), and
- * `vite.config.ts`'s dev proxy forwards that one prefix to the `api` service
- * (see `infra/compose.yaml`); docs/05's production diagram has Caddy proxy
- * the same way, so same-origin relative requests work in both. `VITE_API_URL`
- * only retargets the dev proxy (see `vite.config.ts`) — it never changes what
- * the browser itself calls, so there is exactly one place that decides where
- * `/api/v1` actually goes.
+ * Base URL for API requests. Always relative in the browser: it calls the
+ * same-origin `/api/v1` (docs/04-api.md: "Versionado: por ruta"), which
+ * `vite.config.ts`'s dev proxy forwards to the `api` service (see
+ * `infra/compose.yaml`); docs/05's production diagram has Caddy proxy the
+ * same way. The proxy's own target is a separate, non-`VITE_` variable
+ * (`API_PROXY_TARGET`) read only in `vite.config.ts` — it never reaches the
+ * browser bundle. `VITE_API_TEST_BASE_URL` is the one exception: Vitest's
+ * `test.env` sets it because Node's `fetch`/`Request` need an absolute URL
+ * (see that file's comment), and it is never set outside tests.
  */
-const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? ''
+const API_BASE_URL: string = import.meta.env.VITE_API_TEST_BASE_URL ?? ''
 
-/** Requests are aborted after this long, surfacing as a `TypeError`-like abort error. */
+/** Requests are aborted after this long, surfacing as a `DOMException` `TimeoutError`. */
 const REQUEST_TIMEOUT_MS = 10_000
+
+/** `/dev/auth/*` (seminar-only) is called before any session exists; a stale stored
+ * token must never ride along, or a wrong code's 401 would sign the user out
+ * instead of showing the in-flow "wrong code" error (#21 round 11). */
+const ANONYMOUS_PATH_SUFFIXES = ['/dev/auth/otp', '/dev/auth/otp/verify']
+
+function isAnonymousRequest(url: string): boolean {
+  const { pathname } = new URL(url)
+  return ANONYMOUS_PATH_SUFFIXES.some((suffix) => pathname.endsWith(suffix))
+}
 
 /**
  * Raised for a non-2xx response. `title`/`detail` come from the server's
@@ -84,10 +95,17 @@ async function parseErrorBody(response: Response): Promise<{ title: string; deta
 const sessionMiddleware: Middleware = {
   async onRequest({ request }) {
     const token = getToken()
-    if (token) request.headers.set('Authorization', `Bearer ${token}`)
+    if (token && !isAnonymousRequest(request.url)) {
+      request.headers.set('Authorization', `Bearer ${token}`)
+    }
     // Request bodies aren't consumed by re-wrapping like this (verified: a
-    // POST's JSON body and headers both survive the copy).
-    return new Request(request, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+    // POST's JSON body and headers both survive the copy). `request.signal`
+    // already carries a caller-supplied signal (openapi-fetch forwards
+    // `fetchOptions.signal` straight into the `Request` it builds); combine
+    // it with the timeout instead of overwriting it (#21 round 11).
+    return new Request(request, {
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+    })
   },
   async onResponse({ request, response }) {
     if (response.ok) return response
