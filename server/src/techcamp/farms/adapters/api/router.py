@@ -7,7 +7,8 @@ in this epic depends on it yet (noted in odd/tasks/techcamp-v2-e3-farms.md).
 
 from __future__ import annotations
 
-from typing import Annotated
+import math
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query
@@ -26,6 +27,7 @@ from techcamp.farms.application.manage_plots import create_plot, update_plot
 from techcamp.farms.domain.errors import (
     FarmNotFoundError,
     InsufficientRoleError,
+    InvalidTechnicianError,
     PlotNotFoundError,
     RainfedPlotHasIrrigationError,
 )
@@ -38,9 +40,29 @@ from techcamp.shared.errors import ProblemError
 router = APIRouter(tags=["farms"])
 
 
+def _validate_position(position: Position) -> Position:
+    """Reject a non-finite or out-of-range GeoJSON position (T2b review
+    follow-up). Self-intersection (`ST_IsValid`) needs a DB round trip from
+    this pydantic-layer validator, so it's deferred, not a one-liner here.
+    """
+    x, y = position
+    if not (math.isfinite(x) and math.isfinite(y)):
+        raise ValueError("coordinates must be finite numbers")
+    if not (-180 <= x <= 180):
+        raise ValueError("longitude must be within [-180, 180]")
+    if not (-90 <= y <= 90):
+        raise ValueError("latitude must be within [-90, 90]")
+    return position
+
+
 class GeoJSONPoint(BaseModel):
     type: str = Field(pattern="^Point$")
     coordinates: Position
+
+    @field_validator("coordinates")
+    @classmethod
+    def _coordinates_in_range(cls, value: Position) -> Position:
+        return _validate_position(value)
 
 
 class GeoJSONPolygon(BaseModel):
@@ -55,6 +77,8 @@ class GeoJSONPolygon(BaseModel):
         for ring in rings:
             if len(ring) < 4:
                 raise ValueError("a polygon ring needs at least 4 positions")
+            for position in ring:
+                _validate_position(position)
             if ring[0] != ring[-1]:
                 raise ValueError("a polygon ring must be closed (first position = last)")
         return rings
@@ -128,6 +152,19 @@ def _farm_view(farm: Farm) -> FarmView:
     )
 
 
+def _reject_explicit_null(raw: dict[str, Any], nullable_fields: frozenset[str]) -> None:
+    """422, not the DB `IntegrityError` 500 or the `boundary`-conversion crash
+    (T2b review follow-up): an explicit JSON `null` on a field the domain
+    requires is a client error, distinct from the field being merely omitted
+    (`exclude_unset=True` already tells the two apart before this runs).
+    """
+    nulled = sorted(
+        key for key, value in raw.items() if value is None and key not in nullable_fields
+    )
+    if nulled:
+        raise ProblemError(status=422, title=f"{', '.join(nulled)} cannot be null")
+
+
 def _plot_view(plot: Plot) -> PlotView:
     return PlotView(
         id=plot.id,
@@ -183,6 +220,8 @@ async def post_farm(
         raise ProblemError(status=404, title="Organization not found") from exc
     except InsufficientRoleError as exc:
         raise ProblemError(status=403, title="Role cannot create farms") from exc
+    except InvalidTechnicianError as exc:
+        raise ProblemError(status=422, title="technician_id is not a valid technician") from exc
     return _farm_view(farm)
 
 
@@ -195,6 +234,7 @@ async def patch_farm(
     memberships: MembershipRepoDep,
 ) -> FarmView:
     changes = payload.model_dump(exclude_unset=True)
+    _reject_explicit_null(changes, nullable_fields=frozenset({"technician_id"}))
     try:
         farm = await update_farm(
             user_id=user_id, farm_id=farm_id, changes=changes, farms=farms, memberships=memberships
@@ -203,6 +243,8 @@ async def patch_farm(
         raise ProblemError(status=404, title="Farm not found") from exc
     except InsufficientRoleError as exc:
         raise ProblemError(status=403, title="Role cannot update this farm") from exc
+    except InvalidTechnicianError as exc:
+        raise ProblemError(status=422, title="technician_id is not a valid technician") from exc
     return _farm_view(farm)
 
 
@@ -264,6 +306,9 @@ async def patch_plot(
     memberships: MembershipRepoDep,
 ) -> PlotView:
     raw = payload.model_dump(exclude_unset=True)
+    _reject_explicit_null(
+        raw, nullable_fields=frozenset({"irrigation_efficiency", "system_flow_lph"})
+    )
     changes: dict[str, object] = {
         key: (polygon_to_wkt(value["coordinates"]) if key == "boundary" else value)
         for key, value in raw.items()

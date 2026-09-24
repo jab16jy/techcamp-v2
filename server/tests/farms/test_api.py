@@ -6,6 +6,8 @@ another organization responds 404, never 403.
 
 from __future__ import annotations
 
+import json as jsonlib
+from itertools import count
 from uuid import UUID
 
 import pytest
@@ -27,13 +29,18 @@ _POLYGON = {
 }
 _POINT = {"type": "Point", "coordinates": [-74.1, 10.9]}
 
+# A counter, not `uuid7().int % 100000`: the modulo could collide on the
+# unique `phone` column between two `uuid7()`s generated close together
+# (GitHub issue #21).
+_phone_seq = count()
+
 
 async def _member(
     db_session: AsyncSession, *, role: str, org_name: str = "Finca"
 ) -> tuple[UUID, UUID, str]:
     org_id, user_id = uuid7(), uuid7()
     db_session.add(OrganizationRow(id=org_id, name=org_name, kind="individual"))
-    db_session.add(AppUserRow(id=user_id, phone=f"+5730077{user_id.int % 100000:05d}"))
+    db_session.add(AppUserRow(id=user_id, phone=f"+5730077{next(_phone_seq):05d}"))
     await db_session.commit()
     db_session.add(MembershipRow(org_id=org_id, user_id=user_id, role=role))
     await db_session.commit()
@@ -296,6 +303,330 @@ async def test_patching_a_plot_to_rainfed_with_leftover_flow_is_422(
 
     response = client.patch(
         f"/plots/{plot_id}", json={"irrigation_system": "none"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 422
+
+
+async def test_switching_a_plot_to_irrigated_without_efficiency_uses_the_default(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(token),
+    )
+    plot_id = created.json()["id"]
+
+    response = client.patch(
+        f"/plots/{plot_id}", json={"irrigation_system": "drip"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["irrigation_efficiency"] == pytest.approx(0.90)
+
+
+@pytest.mark.parametrize(
+    ("path_suffix", "payload"),
+    [
+        ("/farms/{farm_id}", {"name": None}),
+    ],
+)
+async def test_explicit_null_on_farm_name_is_422(
+    db_session: AsyncSession, path_suffix: str, payload: dict[str, object]
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+
+    response = client.patch(path_suffix.format(farm_id=farm_id), json=payload, headers=_auth(token))
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": None},
+        {"boundary": None},
+        {"irrigation_system": None},
+    ],
+)
+async def test_explicit_null_on_non_nullable_plot_fields_is_422(
+    db_session: AsyncSession, payload: dict[str, object]
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(token),
+    )
+    plot_id = created.json()["id"]
+
+    response = client.patch(f"/plots/{plot_id}", json=payload, headers=_auth(token))
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_explicit_null_on_technician_id_still_clears_it(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+
+    response = client.patch(f"/farms/{farm_id}", json={"technician_id": None}, headers=_auth(token))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["technician_id"] is None
+
+
+async def test_foreign_technician_id_is_422_not_500(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+
+    response = client.post(
+        "/farms",
+        json={
+            "org_id": str(org_id),
+            "name": "Finca A",
+            "municipality_code": "47001",
+            "location": _POINT,
+            "technician_id": str(uuid7()),
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_technician_id_of_a_producer_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    _org2, producer_id, _token2 = await _member(db_session, role="producer", org_name="Finca A")
+    client = TestClient(app)
+    db_session.add(MembershipRow(org_id=org_id, user_id=producer_id, role="producer"))
+    await db_session.commit()
+
+    response = client.post(
+        "/farms",
+        json={
+            "org_id": str(org_id),
+            "name": "Finca A",
+            "municipality_code": "47001",
+            "location": _POINT,
+            "technician_id": str(producer_id),
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 422
+
+
+async def test_technician_id_of_a_technician_is_accepted(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    _org2, tech_id, _token2 = await _member(db_session, role="technician", org_name="Finca A")
+    db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
+    await db_session.commit()
+    client = TestClient(app)
+
+    response = client.post(
+        "/farms",
+        json={
+            "org_id": str(org_id),
+            "name": "Finca A",
+            "municipality_code": "47001",
+            "location": _POINT,
+            "technician_id": str(tech_id),
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 201, response.text
+
+
+async def test_technician_can_write_a_plot(db_session: AsyncSession) -> None:
+    org_id, _user_id, owner_token = await _member(db_session, role="owner")
+    _org2, tech_id, tech_token = await _member(db_session, role="technician", org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+
+    response = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(tech_token),
+    )
+
+    assert response.status_code == 201, response.text
+
+
+@pytest.mark.parametrize("role", ["producer", "viewer"])
+async def test_non_writer_roles_cannot_patch_a_farm(db_session: AsyncSession, role: str) -> None:
+    org_id, _owner_id, owner_token = await _member(db_session, role="owner")
+    _user_id, member_id, member_token = await _member(db_session, role=role, org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=member_id, role=role))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+
+    response = client.patch(
+        f"/farms/{farm_id}", json={"name": "renamed"}, headers=_auth(member_token)
+    )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+@pytest.mark.parametrize("role", ["producer", "viewer"])
+async def test_non_writer_roles_cannot_create_a_plot(db_session: AsyncSession, role: str) -> None:
+    org_id, _owner_id, owner_token = await _member(db_session, role="owner")
+    _user_id, member_id, member_token = await _member(db_session, role=role, org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=member_id, role=role))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+
+    response = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(member_token),
+    )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+@pytest.mark.parametrize("role", ["producer", "viewer"])
+async def test_non_writer_roles_cannot_patch_a_plot(db_session: AsyncSession, role: str) -> None:
+    org_id, _owner_id, owner_token = await _member(db_session, role="owner")
+    _user_id, member_id, member_token = await _member(db_session, role=role, org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=member_id, role=role))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(owner_token),
+    )
+    plot_id = created.json()["id"]
+
+    response = client.patch(
+        f"/plots/{plot_id}", json={"name": "renamed"}, headers=_auth(member_token)
+    )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_patching_a_plot_of_a_foreign_org_is_404(db_session: AsyncSession) -> None:
+    _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
+    org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_b, token_b)
+    created = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": _POLYGON, "irrigation_system": "none"},
+        headers=_auth(token_b),
+    )
+    plot_id = created.json()["id"]
+
+    response = client.patch(f"/plots/{plot_id}", json={"name": "renamed"}, headers=_auth(token_a))
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_get_farms_pages_by_cursor(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    for i in range(3):
+        client.post(
+            "/farms",
+            json={
+                "org_id": str(org_id),
+                "name": f"Finca {i}",
+                "municipality_code": "47001",
+                "location": _POINT,
+            },
+            headers=_auth(token),
+        )
+
+    first_page = client.get(f"/farms?org_id={org_id}&limit=2", headers=_auth(token))
+    assert first_page.status_code == 200
+    first_body = first_page.json()
+    assert len(first_body["items"]) == 2
+    assert first_body["next_cursor"] is not None
+
+    second_page = client.get(
+        f"/farms?org_id={org_id}&limit=2&cursor={first_body['next_cursor']}", headers=_auth(token)
+    )
+    assert second_page.status_code == 200
+    second_body = second_page.json()
+    assert len(second_body["items"]) == 1
+    assert second_body["next_cursor"] is None
+    assert {f["name"] for f in first_body["items"] + second_body["items"]} == {
+        "Finca 0",
+        "Finca 1",
+        "Finca 2",
+    }
+
+
+@pytest.mark.parametrize(
+    "coordinates",
+    [
+        [-181.0, 10.9],
+        [-74.1, 91.0],
+        [float("nan"), 10.9],
+        [-74.1, float("inf")],
+    ],
+)
+async def test_point_with_invalid_coordinates_is_422(
+    db_session: AsyncSession, coordinates: list[float]
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    # httpx's `json=` param rejects NaN/Infinity client-side (allow_nan=False);
+    # `json.dumps` defaults to allow_nan=True, so send the raw body instead —
+    # pydantic-core accepts NaN/Infinity floats by default (allow_inf_nan=True),
+    # which is exactly the wire case the server-side validator must reject.
+    payload = {
+        "org_id": str(org_id),
+        "name": "Finca A",
+        "municipality_code": "47001",
+        "location": {"type": "Point", "coordinates": coordinates},
+    }
+    headers = {**_auth(token), "Content-Type": "application/json"}
+
+    response = client.post("/farms", content=jsonlib.dumps(payload), headers=headers)
+
+    assert response.status_code == 422
+
+
+async def test_polygon_with_out_of_range_coordinates_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    bad_polygon = {
+        "type": "Polygon",
+        "coordinates": [
+            [[-181.0, 10.90], [-74.10, 10.91], [-74.09, 10.91], [-74.09, 10.90], [-181.0, 10.90]]
+        ],
+    }
+
+    response = client.post(
+        f"/farms/{farm_id}/plots",
+        json={"name": "Lote 1", "boundary": bad_polygon, "irrigation_system": "none"},
+        headers=_auth(token),
     )
 
     assert response.status_code == 422

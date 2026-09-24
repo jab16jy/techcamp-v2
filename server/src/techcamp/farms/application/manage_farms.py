@@ -13,12 +13,27 @@ from typing import Any
 from uuid import UUID
 
 from techcamp.farms.application.ports import FarmRepository
-from techcamp.farms.domain.errors import FarmNotFoundError
-from techcamp.farms.domain.models import Farm, ensure_can_write
+from techcamp.farms.domain.errors import FarmNotFoundError, InvalidTechnicianError
+from techcamp.farms.domain.models import WRITE_ROLES, Farm, ensure_can_write
 from techcamp.identity.application.ports import MembershipRepository
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.identity.domain.models import Role
 from techcamp.shared.ids import uuid7
+
+
+async def _ensure_valid_technician(
+    technician_id: UUID | None, org_id: UUID, memberships: MembershipRepository
+) -> None:
+    """`technician_id` must be a member of the org with a write role (T2b
+    decision: docs/04-api.md is silent, so owner or technician — same as
+    `WRITE_ROLES`). An unknown or wrong-org id must be `422`, never the
+    `IntegrityError` 500 the FK would otherwise raise.
+    """
+    if technician_id is None:
+        return
+    membership = await memberships.get(technician_id, org_id)
+    if membership is None or membership.role not in WRITE_ROLES:
+        raise InvalidTechnicianError(technician_id)
 
 
 async def resolve_farm_access(
@@ -52,6 +67,7 @@ async def create_farm(
         user_id=user_id, org_id=org_id, memberships=memberships
     )
     ensure_can_write(membership.role)
+    await _ensure_valid_technician(technician_id, org_id, memberships)
     return await farms.create(
         farm_id=uuid7(),
         org_id=org_id,
@@ -75,6 +91,7 @@ async def update_farm(
     )
     ensure_can_write(role)
     merged = replace(farm, **changes)
+    await _ensure_valid_technician(merged.technician_id, farm.org_id, memberships)
     return await farms.update(
         farm_id, farm.org_id, name=merged.name, technician_id=merged.technician_id
     )

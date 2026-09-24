@@ -49,3 +49,14 @@ class InsufficientRoleError(Exception):
     def __init__(self, role: Role) -> None:
         self.role = role
         super().__init__(f"Role '{role}' cannot write farms or plots")
+
+
+class InvalidTechnicianError(Exception):
+    """Raised when `technician_id` isn't a member of the farm's org with a
+    write role (T2b decision, odd/tasks/techcamp-v2-e3-farms.md: docs/03 is
+    silent on which role, so owner or technician — same as `WRITE_ROLES`).
+    """
+
+    def __init__(self, technician_id: UUID) -> None:
+        self.technician_id = technician_id
+        super().__init__(f"{technician_id} is not an owner or technician of this organization")
