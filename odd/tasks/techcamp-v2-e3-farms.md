@@ -56,6 +56,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T7b Align with docs and fix #21 round 10: server routers under `/api/v1` (docs/04:7), web client on generated OpenAPI types + `openapi-fetch` + TanStack Query (docs/05:179-180), document `POST /dev/auth/otp/verify` in docs/04; 401 → sign-out and redirect to sign-in, request timeout, atomic sign-in session, single proxy config, farms pagination, error copy by cause — route: delegated — forecast ~500 — actual 166 (server) + 667 (web)
 - [x] T7c Fix #21 round 11: `VITE_API_URL` only as the dev-proxy target (non-`VITE_` variable, relative browser base, test base separate); do not sign out on 401 from anonymous OTP calls (no token on them); test the 10 s timeout and `describeApiError`; per-farm plots retry — route: delegated — forecast ~150 — actual 219
 - [x] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350 — actual 158 (map) + 701 (forms)
+- [ ] T8b Fix #21 round 12: `AbortSignal.any` fallback for older WebViews; real fake-timer timeout test; test list refetch after farm/plot create; `PlotDrawMap` glue test + `invalidateSize()` in the sheet + marker icon under Vite; `errorCopy` test with `ApiError`; client lat/lng range check — route: delegated — forecast ~150
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
 
 ## Review (RDD)
@@ -97,6 +98,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T7 `7d79b19..77bb7ad` (high: auth; 1132 lines; standing grant): lineage `review-030667a3008ca044`, 4 lenses, approved and acknowledged. Six WARNINGs (no 401 recovery, no fetch timeout, token persisted before `/me`, `VITE_API_URL` dual use, farms pagination ignored, 401 shown as connection error) plus the docs drift found by the parent (`/api/v1` prefix, docs/04:7; TanStack Query + `openapi-typescript`/`openapi-fetch`, docs/05:179-180): #21 round 10, fixed by T7b. Reviewed boundary is now `77bb7ad`.
 - T7b slice `77bb7ad..0547131` (high: auth tests; 2472 lines, 27 files; owner granted): lineage `review-11b41042685dc827`, 4 lenses, approved and acknowledged (authority burned). Parent spot check: web `npm test -- --run` 47 passed, typecheck clean; server `uv run pytest -q` 212 passed. Round 10 resolved except `VITE_API_URL` dual use (still open, comment claims the opposite). Four WARNINGs (`VITE_API_URL` dual use; stale token makes an OTP 401 sign out; timeout and error copy untested; per-farm plots no retry) and five suggestions: #21 round 11, fixed by T7c. Reviewed boundary is now `0547131`.
 - T7c `0547131..71445d9` (fix, medium: `infra/compose.yaml` configuration change; 324 lines): parent spot check `npm test -- --run` 56 passed; `review assess` → `review_due: false`, `under_budget`, pending in the slice until a later commit reaches the budget. Boundary stays `0547131`. #21 round 11 resolved in `1e85546`, except two notes (dead `if (error)` branches, old-bundle 404s).
+- T7c + T8 slice `0547131..7749c8f` (medium: `infra/compose.yaml`; 1388 lines, `slice_budget_reached`; standing grant, new feature): parent spot check `npm test -- --run` 70 passed, `npm run size` 155.1 kB / 200 kB (docs/07:15,149 confirm the budget is the initial bundle, so the `index-*` glob is correct). Lineage `review-528c994a56ae8f59`, reliability lens, approved and acknowledged (authority burned). Three WARNINGs (`AbortSignal.any` without fallback; vacuous timeout test; create→list refetch unproved) and four suggestions: #21 round 12, fixed by T8b. Reviewed boundary is now `7749c8f`. Open owner decision: map tile source in the seminar profile (docs/07 and ADR-0021 silent; T8 uses public OSM tiles).
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 - T5b `47f0b83..658e5b9` (fix, no migration, 141 lines): #21 round 7 resolved in `658e5b9`. RDD
   assessment/acknowledgement for this commit not run by this writer — left to the parent
@@ -1338,6 +1340,6 @@ All slices are `size:exception` (each task is one work-unit commit).
     organization name.
 
 ## Next step
-T9 (web soil and cycle forms), on branch `feat/e3-farms-web` @ `0f7fb5a`
-(T8 done; review boundary still `0547131`, pending the parent
-orchestrator's RDD pass over T7c and T8).
+Owner decides the seminar map tile source; then T8b (fix #21 round 12), then T9
+(web soil and cycle forms), on branch `feat/e3-farms-web` @ `7749c8f`
+(T7c + T8 reviewed; boundary `7749c8f`).
