@@ -41,6 +41,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 ## Tasks
 - [x] T1 Farm and plot schema: `geoalchemy2` dependency, ORM rows, Alembic migration (GiST index, irrigation `CHECK`, `area_ha`), domain rules (default efficiency by system), repositories filtered by `org_id` — route: delegated — forecast ~300 — actual ~623
 - [x] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test; T1 review follow-ups (see Review) — route: delegated — forecast ~350 — actual ~1519
+- [ ] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150
 - [ ] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300
 - [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
@@ -56,6 +57,12 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - WARNING: `list_for_org` / `list_for_farm` untested and unordered; add tests and a deterministic `ORDER BY`. **Resolved in T2**: both repositories now `ORDER BY id` (uuid7 is time-ordered); `test_list_for_org_filters_by_org_and_orders_deterministically` and `test_list_for_farm_orders_deterministically`, plus empty-result tests for both.
   - SUGGESTION: range `CHECK`s (0 < efficiency ≤ 1, flow > 0); index on `plot(org_id, farm_id)`; assert WKT round-trip and the rainfed `system_flow_lph` `CHECK` in tests. **Resolved in T2**: migration `6628f7c0aa3b` adds `ck_plot_irrigation_efficiency_range`, `ck_plot_system_flow_positive`, `ix_plot_org_farm`; `test_out_of_range_efficiency_is_rejected_by_the_database`, `test_non_positive_flow_is_rejected_by_the_database`, `test_boundary_round_trips_as_wkt`.
 - Owner standing decision (2026-09-23): consent is granted by default for new-feature candidates. Reviewed boundary is now `1d44cf8`.
+- Whole branch `4684262..8f7c472` (stop-hook candidate, standing grant): lineage `review-276fecec5c5794cf`, approved and acknowledged; same five T1 findings, already resolved in T2.
+- T2 `8f7c472..17c3943` (medium, new migration, 1588 lines, `slice_budget_reached`, standing grant): lineage `review-3bf23165586f9cfb`, reliability lens, approved and acknowledged. 0 blocking; follow-ups become task T2b:
+  - WARNING: explicit JSON `null` in `PATCH /plots` (`boundary`, `irrigation_system`, `name`) and `PATCH /farms` (`name`) reaches the DB or `polygon_to_wkt` and returns 500 instead of 422.
+  - WARNING: `technician_id` on `POST`/`PATCH /farms` is not checked to be a member of the farm's org; an unknown id gives an `IntegrityError` 500.
+  - SUGGESTION: `update_plot` does not apply the default efficiency when switching a rainfed plot to an irrigated system; GeoJSON coordinates accept out-of-range and non-finite values; API tests miss 403 for producer/viewer writes, cross-org `PATCH /plots` 404, technician write, cursor paging and null-body cases.
+- Reviewed boundary is now `17c3943`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
@@ -171,4 +178,4 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     FK (docs/03-modelo-datos.md:89 models a `municipality` table that isn't migrated from v1).
 
 ## Next step
-T3 (delegated writer): crop catalog (`crop` + `crop_stage` migration, FAO-56 Table 12 seed, `GET /crops`).
+T2b (delegated writer): T2 review follow-ups; then T3 crop catalog (`crop` + `crop_stage` migration, FAO-56 Table 12 seed, `GET /crops`).
