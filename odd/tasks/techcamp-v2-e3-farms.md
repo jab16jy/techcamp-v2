@@ -83,6 +83,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T4 `81f57e3..3703cbe` (new migration, 590 lines, likely `slice_budget_reached`): RDD
   assessment/acknowledgement not run by this writer — left to the parent orchestrator; boundary
   not advanced here.
+- T3b + T4 slice `a337f57..111cffc` (medium, 907 lines, standing grant): lineage `review-7d6076ce2e31e46b`, approved and acknowledged. WARNING (cassava seed edited in place in `67cf2dd1f13e`) accepted: revision only on this unmerged branch. Three test-strength suggestions open in #21 round 6. Reviewed boundary is now `111cffc`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
