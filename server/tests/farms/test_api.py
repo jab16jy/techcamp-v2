@@ -685,3 +685,36 @@ async def test_polygon_with_out_of_range_coordinates_is_422(db_session: AsyncSes
     )
 
     assert response.status_code == 422
+
+
+async def test_get_crops_returns_the_catalog_with_stages_kc_and_kc_source(
+    db_session: AsyncSession,
+) -> None:
+    """docs/04-api.md:53: `GET /crops` -> `Crop[]` with stages, Kc and kc_source.
+    Global reference data (docs/03-modelo-datos.md:115-127): any authenticated
+    member can read it, with no `org_id` involved.
+    """
+    _org_id, _user_id, token = await _member(db_session, role="viewer")
+    client = TestClient(app)
+
+    response = client.get("/crops", headers=_auth(token))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body) == 12
+    maize = next(c for c in body if c["code"] == "maize")
+    assert maize["kc_source"] == "fao56"
+    assert {s["stage"] for s in maize["stages"]} == {"initial", "development", "mid", "late"}
+    assert next(s for s in maize["stages"] if s["stage"] == "mid")["kc"] == pytest.approx(1.20)
+    yam = next(c for c in body if c["code"] == "yam")
+    assert yam["kc_source"] == "none"
+    assert yam["stages"] == []
+
+
+async def test_get_crops_without_a_token_is_401(db_session: AsyncSession) -> None:
+    await _member(db_session, role="viewer")
+    client = TestClient(app)
+
+    response = client.get("/crops")
+
+    assert response.status_code == 401

@@ -6,7 +6,11 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from techcamp.farms.adapters.repositories import SqlAlchemyFarmRepository, SqlAlchemyPlotRepository
+from techcamp.farms.adapters.repositories import (
+    SqlAlchemyCropRepository,
+    SqlAlchemyFarmRepository,
+    SqlAlchemyPlotRepository,
+)
 from techcamp.shared.db import SessionDep
 
 
@@ -18,5 +22,10 @@ async def get_plot_repository(session: SessionDep) -> SqlAlchemyPlotRepository:
     return SqlAlchemyPlotRepository(session)
 
 
+async def get_crop_repository(session: SessionDep) -> SqlAlchemyCropRepository:
+    return SqlAlchemyCropRepository(session)
+
+
 FarmRepoDep = Annotated[SqlAlchemyFarmRepository, Depends(get_farm_repository)]
 PlotRepoDep = Annotated[SqlAlchemyPlotRepository, Depends(get_plot_repository)]
+CropRepoDep = Annotated[SqlAlchemyCropRepository, Depends(get_crop_repository)]

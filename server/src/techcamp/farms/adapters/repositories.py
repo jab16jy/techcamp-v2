@@ -9,6 +9,7 @@ external I/O or two real implementations, docs/adr per `farms` T1 task).
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
@@ -16,8 +17,16 @@ from uuid import UUID
 from sqlalchemy import Row, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from techcamp.farms.adapters.orm import FarmRow, PlotRow
-from techcamp.farms.domain.models import Farm, IrrigationSystem, Plot
+from techcamp.farms.adapters.orm import CropRow, CropStageRow, FarmRow, PlotRow
+from techcamp.farms.domain.models import (
+    CROP_STAGES,
+    Crop,
+    CropStage,
+    Farm,
+    IrrigationSystem,
+    KcSource,
+    Plot,
+)
 
 
 def _farm_from_row(row: Row[Any]) -> Farm:
@@ -230,3 +239,46 @@ class SqlAlchemyPlotRepository:
         plot = await self.get(plot_id, org_id)
         assert plot is not None
         return plot
+
+
+_STAGE_ORDER = {stage: index for index, stage in enumerate(CROP_STAGES)}
+
+
+def _crop_stage_from_row(row: CropStageRow) -> CropStage:
+    return CropStage(
+        stage=row.stage,
+        length_days=row.length_days,
+        kc=float(row.kc),
+        depletion_fraction_p=float(row.depletion_fraction_p),
+    )
+
+
+def _crop_from_rows(row: CropRow, stage_rows: list[CropStageRow]) -> Crop:
+    stages = sorted(
+        (_crop_stage_from_row(s) for s in stage_rows), key=lambda s: _STAGE_ORDER[s.stage]
+    )
+    return Crop(
+        id=row.id,
+        code=row.code,
+        name_es=row.name_es,
+        kc_source=KcSource(row.kc_source),
+        stages=tuple(stages),
+    )
+
+
+class SqlAlchemyCropRepository:
+    """Global crop catalog (docs/03-modelo-datos.md:115-127): no `org_id`,
+    the same rows for every organization."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_all(self) -> list[Crop]:
+        crop_rows = (
+            (await self._session.execute(select(CropRow).order_by(CropRow.id))).scalars().all()
+        )
+        stage_rows = (await self._session.execute(select(CropStageRow))).scalars().all()
+        stages_by_crop: dict[int, list[CropStageRow]] = defaultdict(list)
+        for stage_row in stage_rows:
+            stages_by_crop[stage_row.crop_id].append(stage_row)
+        return [_crop_from_rows(row, stages_by_crop[row.id]) for row in crop_rows]

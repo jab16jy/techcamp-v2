@@ -105,3 +105,42 @@ class PlotRow(Base):
     """Null in secano (docs/03-modelo-datos.md:102)."""
     system_flow_lph: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
     """Null in secano (docs/03-modelo-datos.md:103)."""
+
+
+class CropRow(Base):
+    """Global reference data (docs/03-modelo-datos.md:115-120): no `org_id`,
+    seeded by the `67cf2dd1f13e` migration, not written through the API."""
+
+    __tablename__ = "crop"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_crop_code"),
+        CheckConstraint(
+            "kc_source in ('fao56','local','approximate','none')", name="ck_crop_kc_source"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    code: Mapped[str] = mapped_column(String, nullable=False)
+    name_es: Mapped[str] = mapped_column(String, nullable=False)
+    kc_source: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class CropStageRow(Base):
+    __tablename__ = "crop_stage"
+    __table_args__ = (
+        CheckConstraint(
+            "stage in ('initial','development','mid','late')", name="ck_crop_stage_name"
+        ),
+        CheckConstraint("length_days > 0", name="ck_crop_stage_length_positive"),
+        CheckConstraint("kc > 0", name="ck_crop_stage_kc_positive"),
+        CheckConstraint(
+            "depletion_fraction_p > 0 and depletion_fraction_p < 1",
+            name="ck_crop_stage_depletion_fraction_range",
+        ),
+    )
+
+    crop_id: Mapped[int] = mapped_column(ForeignKey("crop.id"), primary_key=True)
+    stage: Mapped[str] = mapped_column(String, primary_key=True)
+    length_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    kc: Mapped[decimal.Decimal] = mapped_column(Numeric, nullable=False)
+    depletion_fraction_p: Mapped[decimal.Decimal] = mapped_column(Numeric, nullable=False)
