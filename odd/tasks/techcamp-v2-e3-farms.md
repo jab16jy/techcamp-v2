@@ -43,7 +43,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T2 Farm and plot endpoints: `GET/POST /farms`, `PATCH /farms/{id}`, `GET/POST /farms/{id}/plots`, `PATCH /plots/{id}`; GeoJSON Polygon validation; org isolation test; T1 review follow-ups (see Review) — route: delegated — forecast ~350 — actual ~1519
 - [x] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150 — actual ~445
 - [x] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300 — actual 428
-- [ ] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80
+- [x] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80 — actual ~160
 - [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
@@ -74,6 +74,12 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - Review findings are tracked in GitHub issue #21 (rule added to `AGENTS.md` in `1152a61`).
 - Whole branch `4684262..a23d6cf` (stop-hook, standing grant): lineage `review-8c6a346f3ac1752e`, approved and acknowledged. WARNING: switching between irrigated systems kept the previous efficiency; **resolved** in `799f6d8` (parent, inline TDD: RED `comparison failed` in `test_switching_between_irrigated_systems_uses_the_new_default`, GREEN `102 passed`, all checks green). Two suggestions open in #21 (validation 422 not problem+json; multi-ring polygon round trip untested).
 - T3 slice `e05bce8..a337f57` (T3 + parent fixes `1f4efde`, `799f6d8`; medium, new migration, 589 lines, `slice_budget_reached`, standing grant): lineage `review-576ae0774ec7ef76`, approved and acknowledged. WARNING: switching to rainfed clears efficiency but keeps flow (untested path); suggestions: cassava stage split, missing 201 assert. All tracked in #21 round 4; fixed by task T3b. Reviewed boundary is now `a337f57`.
+- T3b `a337f57..81f57e3` (fix, no migration, 160 lines): resolves #21 round 4
+  — the T3 slice's WARNING and both suggestions above, plus two items the
+  parent orchestrator added mid-task (see T3b progress below for all five).
+  #21 round 4 resolved in `81f57e3`. RDD assessment/acknowledgement for this
+  commit not run by this writer — left to the parent orchestrator; boundary
+  not advanced here.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
@@ -306,6 +312,73 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
     insertions, 5 deletions across 8 files (2 new, 6 modified) — within the ~400-line delivery
     heuristic.
   - Doc gap carried from T1/T2, unchanged: `farm.municipality_code` is plain `text`, not yet a
+    real FK.
+
+- 2026-09-23: T3b done by a delegated `sonnet-high` writer. Resolves GitHub issue #21 round 4
+  (T3 review WARNING and two suggestions) plus two items the parent orchestrator added mid-task.
+  - `farms/application/manage_plots.py` `update_plot`:
+    - Switching to `irrigation_system: none` without sending `system_flow_lph` now clears it
+      too (mirrors the existing efficiency-clearing via `default_efficiency_for(NONE)`), instead
+      of leaking the old system's flow into `ensure_rainfed_has_no_irrigation` and wrongly
+      raising `422`. New `system_changed_to_rainfed` guard, flow cleared only when the field is
+      omitted from the request.
+    - An explicit JSON `null` on `irrigation_efficiency` while the resulting plot stays or
+      becomes irrigated is now a `422` (`MissingIrrigationEfficiencyError`, new domain error in
+      `farms/domain/errors.py`), instead of silently applying the system default. The default
+      still applies when the field is omitted (unchanged `system_changed_without_efficiency` /
+      `missing_efficiency` branches, now reached only after the explicit-null guard).
+  - `farms/adapters/api/router.py` `patch_plot`: maps `MissingIrrigationEfficiencyError` → `422`
+    problem+json ("Irrigated plot requires an efficiency"), same pattern as
+    `RainfedPlotHasIrrigationError`.
+  - `migrations/versions/67cf2dd1f13e_add_crop_catalog.py`: cassava's stage-length tuple was
+    `(54, 80, 95, 41)`, not the documented 20/30/35/15 split of its 270-day cycle (`0.30 * 270 =
+    81` exactly, not 80); fixed to `(54, 81, 94, 41)` — `initial`/`development`/`late` at
+    round-half-up 20/30/15%, `mid` absorbing the remainder, sum unchanged at 270.
+  - `tests/farms/test_api.py`: renamed/fixed `test_patching_a_plot_to_rainfed_with_leftover_flow_is_422`
+    to `test_patching_a_plot_to_rainfed_clears_leftover_efficiency_and_flow` (now asserts `200`
+    and both fields `null`, since the old `422` was the bug); added
+    `test_patching_a_plot_to_rainfed_with_explicit_flow_is_422` (explicit non-null `system_flow_lph`
+    with `none` still `422`); added `test_explicit_null_efficiency_on_a_plot_that_stays_irrigated_is_422`;
+    added `test_patching_a_plots_boundary_recomputes_area_ha` (patches `boundary` to a larger
+    polygon, asserts `area_ha` changes — proves the DB-generated column recomputes on `UPDATE`,
+    not only on `INSERT`); added `assert created.status_code == 201, created.text` to
+    `test_stale_technician_does_not_block_an_unrelated_patch`'s setup POST.
+  - `tests/farms/test_crop_seed.py`: `test_stage_lengths_follow_the_20_30_35_15_split` asserts,
+    for every seeded crop with stages, that `initial`/`development`/`late` are round-half-up
+    20/30/15% of the summed cycle (`sum` of the four stored stage lengths — `length_days` isn't
+    stored elsewhere) and `mid` is the exact remainder.
+  - Decisions:
+    - Scope added mid-task by the parent orchestrator, both folded into this commit (still
+      `Refs #21`, no new task): (a) `test_patching_a_plots_boundary_recomputes_area_ha` above;
+      (b) explicit-null-efficiency now `422` instead of silently defaulted — see
+      `MissingIrrigationEfficiencyError` above. This decision applies to `update_plot` (`PATCH`)
+      only: `create_plot` (`POST`) can't distinguish an omitted `irrigation_efficiency` from an
+      explicit `null` (both arrive as `None` on a Pydantic field with `default=None`, no
+      `exclude_unset` payload there), so its existing default-on-`None` behavior is unchanged.
+    - `MissingIrrigationEfficiencyError.irrigation_system` is typed `str`, not `IrrigationSystem`:
+      `domain/errors.py` must not import `domain/models.py` (`models.py` already imports
+      `errors.py`; importing back would cycle).
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by `git stash push` of the four implementation files only (migration, router,
+    manage_plots, errors), keeping the new/changed tests: `uv run pytest -q
+    tests/farms/test_api.py -k "rainfed_clears or explicit_flow_is_422 or explicit_null_efficiency
+    or recomputes_area_ha or stale_technician" tests/farms/test_crop_seed.py::test_stage_lengths_follow_the_20_30_35_15_split`
+    → 2 failed (`422` where `200` was expected for the rainfed-clears case; `200` where `422` was
+    expected for explicit-null-efficiency), the other three already passing (unrelated to this
+    bug or the `-k` filter dropped the crop-seed test from that combined run); the crop-seed
+    split test run alone → 1 failed, `cassava: assert 80 == 81`. `git stash pop` restored the
+    implementation: GREEN, `uv run pytest -q` → `111 passed`. REFACTOR: none needed.
+  - Verification (server/): `uv run pytest -q` → `111 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!`; `uv run ruff format --check .` → `98 files already formatted`;
+    `uv run mypy` → `Success: no issues found in 76 source files`; `uv run lint-imports` →
+    `Hexagonal layers per module KEPT, 1 kept, 0 broken`.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `81f57e3` — `fix(farms): clear irrigation fields on switch to rainfed and fix cassava
+    stages`. Authored lines (`git diff --stat` for this commit's files, excluding
+    `server/uv.lock`): 160 insertions, 3 deletions across 6 files (0 new, 6 modified). Above the
+    ~80 forecast, expected: the parent orchestrator added two more items mid-task after the
+    forecast was set.
+  - Doc gap carried from T1/T2/T3, unchanged: `farm.municipality_code` is plain `text`, not yet a
     real FK.
 
 ## Next step
