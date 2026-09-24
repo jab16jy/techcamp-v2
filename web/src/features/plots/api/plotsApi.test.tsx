@@ -3,7 +3,18 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GeoJsonPolygon } from '../polygon'
-import { useCreateFarm, useCreatePlot, useFarms, usePlotsByFarm } from './plotsApi'
+import {
+  useActiveCycle,
+  useAutofillSoil,
+  useCreateCycle,
+  useCreateFarm,
+  useCreatePlot,
+  useFarms,
+  usePatchCycle,
+  usePlotsByFarm,
+  usePutSoil,
+  useSoilProfile,
+} from './plotsApi'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -123,5 +134,99 @@ describe('plotsApi list refetch after create (#21 round 12)', () => {
 
     await waitFor(() => expect(result.current.plots[0]?.data).toHaveLength(1))
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('plotsApi soil and cycle caching (T9: no GET endpoint to refetch from)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('caches a PUT and an autofill soil response for useSoilProfile to read', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const putProfile = {
+      plot_id: 'plot-1',
+      source: 'lab',
+      ph: 6.5,
+      organic_matter_pct: 3,
+      texture: 'loam',
+      field_capacity_pct: 25,
+      wilting_point_pct: 12,
+      root_depth_cm: 40,
+    }
+    const autofilledProfile = { ...putProfile, source: 'soilgrids', ph: 6.8 }
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(putProfile))
+      .mockResolvedValueOnce(jsonResponse(autofilledProfile))
+
+    const { result } = renderHook(
+      () => ({
+        soil: useSoilProfile('plot-1'),
+        put: usePutSoil('plot-1'),
+        autofill: useAutofillSoil('plot-1'),
+      }),
+      { wrapper: wrapper(queryClient) },
+    )
+
+    expect(result.current.soil.data).toBeUndefined()
+    expect(result.current.soil.fetchStatus).toBe('idle')
+
+    await act(async () => {
+      await result.current.put.mutateAsync({
+        texture: 'loam',
+        ph: 6.5,
+        organic_matter_pct: 3,
+        field_capacity_pct: 25,
+        wilting_point_pct: 12,
+        root_depth_cm: 40,
+      })
+    })
+    await waitFor(() => expect(result.current.soil.data).toEqual(putProfile))
+
+    await act(async () => {
+      await result.current.autofill.mutateAsync()
+    })
+    await waitFor(() => expect(result.current.soil.data).toEqual(autofilledProfile))
+  })
+
+  it('caches a created cycle for useActiveCycle, and a patch updates it', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const createdCycle = {
+      id: 'cycle-1',
+      plot_id: 'plot-1',
+      crop_id: 1,
+      sown_on: '2026-06-01',
+      expected_harvest_on: '2026-09-15',
+      status: 'active',
+    }
+    const harvestedCycle = { ...createdCycle, status: 'harvested' }
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(createdCycle, 201))
+      .mockResolvedValueOnce(jsonResponse(harvestedCycle))
+
+    const { result } = renderHook(
+      () => ({
+        cycle: useActiveCycle('plot-1'),
+        create: useCreateCycle('plot-1'),
+        patch: usePatchCycle('plot-1'),
+      }),
+      { wrapper: wrapper(queryClient) },
+    )
+
+    expect(result.current.cycle.data).toBeUndefined()
+
+    await act(async () => {
+      await result.current.create.mutateAsync({ crop_id: 1, sown_on: '2026-06-01' })
+    })
+    await waitFor(() => expect(result.current.cycle.data).toEqual(createdCycle))
+
+    await act(async () => {
+      await result.current.patch.mutateAsync({ cycleId: 'cycle-1', changes: { status: 'harvested' } })
+    })
+    await waitFor(() => expect(result.current.cycle.data).toEqual(harvestedCycle))
   })
 })

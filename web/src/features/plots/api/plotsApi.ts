@@ -7,6 +7,12 @@ export type FarmView = components['schemas']['FarmView']
 export type PlotView = components['schemas']['PlotView']
 export type IrrigationSystem = components['schemas']['IrrigationSystem']
 export type GeoJsonPoint = components['schemas']['GeoJSONPoint']
+export type SoilProfileView = components['schemas']['SoilProfileView']
+export type SoilProfilePutRequest = components['schemas']['SoilProfilePutRequest']
+export type CropView = components['schemas']['CropView']
+export type CropCycleView = components['schemas']['CropCycleView']
+export type CropCycleCreateRequest = components['schemas']['CropCycleCreateRequest']
+export type CropCyclePatchRequest = components['schemas']['CropCyclePatchRequest']
 
 export interface FarmsPage {
   farms: FarmView[]
@@ -111,5 +117,137 @@ export function useCreatePlot(farmId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['plots', farmId] })
     },
+  })
+}
+
+function soilQueryKey(plotId: string) {
+  return ['soil', plotId] as const
+}
+
+/**
+ * docs/04-api.md:43-56 lists no `GET /plots/{plot_id}/soil` (T4 decision, same
+ * gap noted there): this query never fetches, it only reads back whatever a
+ * `PUT` or autofill response already cached this session via `setQueryData`
+ * (T9). A fresh app session shows no soil data until one of those runs once.
+ */
+export function useSoilProfile(plotId: string) {
+  return useQuery({
+    queryKey: soilQueryKey(plotId),
+    queryFn: (): Promise<SoilProfileView> =>
+      Promise.reject(new Error('no GET /plots/{plot_id}/soil endpoint')),
+    enabled: false,
+    retry: false,
+  })
+}
+
+async function putSoil(plotId: string, input: SoilProfilePutRequest): Promise<SoilProfileView> {
+  const { data, error } = await apiClient.PUT('/api/v1/plots/{plot_id}/soil', {
+    params: { path: { plot_id: plotId } },
+    body: input,
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from PUT /plots/{plot_id}/soil')
+  return data
+}
+
+/** docs/04-api.md: `PUT /plots/{plot_id}/soil` (full-document replace, T4). Caches the
+ * returned profile under this plot's `soilQueryKey` (T9: no GET endpoint to refetch from). */
+export function usePutSoil(plotId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: SoilProfilePutRequest) => putSoil(plotId, input),
+    onSuccess: (profile) => queryClient.setQueryData(soilQueryKey(plotId), profile),
+  })
+}
+
+async function autofillSoil(plotId: string): Promise<SoilProfileView> {
+  const { data, error } = await apiClient.POST('/api/v1/plots/{plot_id}/soil:autofill', {
+    params: { path: { plot_id: plotId } },
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from POST /plots/{plot_id}/soil:autofill')
+  return data
+}
+
+/** docs/04-api.md: `POST /plots/{plot_id}/soil:autofill` (RF-03, SoilGrids, T5). */
+export function useAutofillSoil(plotId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => autofillSoil(plotId),
+    onSuccess: (profile) => queryClient.setQueryData(soilQueryKey(plotId), profile),
+  })
+}
+
+async function fetchCrops(): Promise<CropView[]> {
+  const { data, error } = await apiClient.GET('/api/v1/crops', {})
+  if (error) throw error
+  if (!data) throw new Error('empty response from /crops')
+  return data
+}
+
+/** docs/04-api.md: `GET /crops → Crop[]` (con etapas, Kc y kc_source, T3). Global reference
+ * data (no org scoping), same query for every plot. */
+export function useCrops() {
+  return useQuery({ queryKey: ['crops'], queryFn: fetchCrops })
+}
+
+function activeCycleQueryKey(plotId: string) {
+  return ['activeCycle', plotId] as const
+}
+
+/** Same gap as `useSoilProfile`: docs/04-api.md:43-56 has no `GET` to list or read a plot's
+ * cycles, only `POST`/`PATCH` (T6 decision). Reads back whatever those cached this session. */
+export function useActiveCycle(plotId: string) {
+  return useQuery({
+    queryKey: activeCycleQueryKey(plotId),
+    queryFn: (): Promise<CropCycleView> =>
+      Promise.reject(new Error('no GET endpoint for a plot’s crop cycles')),
+    enabled: false,
+    retry: false,
+  })
+}
+
+async function createCycle(plotId: string, input: CropCycleCreateRequest): Promise<CropCycleView> {
+  const { data, error } = await apiClient.POST('/api/v1/plots/{plot_id}/cycles', {
+    params: { path: { plot_id: plotId } },
+    body: input,
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from POST /plots/{plot_id}/cycles')
+  return data
+}
+
+/** docs/04-api.md: `POST /plots/{plot_id}/cycles`. Caches the created cycle as this plot's
+ * active cycle (T9: no GET endpoint to refetch from). */
+export function useCreateCycle(plotId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CropCycleCreateRequest) => createCycle(plotId, input),
+    onSuccess: (cycle) => queryClient.setQueryData(activeCycleQueryKey(plotId), cycle),
+  })
+}
+
+async function patchCycle(cycleId: string, input: CropCyclePatchRequest): Promise<CropCycleView> {
+  const { data, error } = await apiClient.PATCH('/api/v1/cycles/{cycle_id}', {
+    params: { path: { cycle_id: cycleId } },
+    body: input,
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from PATCH /cycles/{cycle_id}')
+  return data
+}
+
+export interface PatchCycleInput {
+  cycleId: string
+  changes: CropCyclePatchRequest
+}
+
+/** docs/04-api.md: `PATCH /cycles/{cycle_id}`. Updates this plot's cached active cycle
+ * (T9: ending a cycle, or overriding its expected harvest date). */
+export function usePatchCycle(plotId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ cycleId, changes }: PatchCycleInput) => patchCycle(cycleId, changes),
+    onSuccess: (cycle) => queryClient.setQueryData(activeCycleQueryKey(plotId), cycle),
   })
 }

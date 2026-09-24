@@ -227,4 +227,29 @@ describe('PlotsScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
     await waitFor(() => expect(screen.queryByText('Nueva parcela')).not.toBeInTheDocument())
   })
+
+  it('opens the plot-detail sheet for the clicked plot row', async () => {
+    setSession('token-abc', 'org-1')
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/crops')) return jsonResponse([])
+      if (url.includes('/farms/farm-1/plots')) {
+        return jsonResponse([
+          { id: 'plot-1', farm_id: 'farm-1', name: 'Lote Norte', area_ha: 1, irrigation_system: 'none' },
+        ])
+      }
+      return jsonResponse({
+        items: [{ id: 'farm-1', org_id: 'org-1', name: 'Finca La Esperanza' }],
+        next_cursor: null,
+      })
+    })
+
+    renderPlotsScreen()
+
+    await waitFor(() => expect(screen.getByText('Lote Norte')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /Lote Norte/ }))
+
+    expect(screen.getByText('Suelo y ciclo de cultivo de esta parcela.')).toBeInTheDocument()
+    expect(screen.getAllByText('Lote Norte')).toHaveLength(2)
+  })
 })

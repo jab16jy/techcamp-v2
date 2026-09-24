@@ -9,3 +9,9 @@ import { afterEach } from 'vitest'
 afterEach(() => {
   cleanup()
 })
+
+// jsdom doesn't implement `Element.scrollIntoView` (Radix's `Select` calls it
+// when it highlights the selected/candidate item on open); stubbed so a
+// Select whose options load asynchronously (T9: the crop catalog) doesn't
+// crash with `scrollIntoView is not a function`.
+Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {})
