@@ -1,22 +1,30 @@
-import { getToken } from './session'
+import createClient, { type Middleware } from 'openapi-fetch'
+import type { paths } from './schema'
+import { clearSession, getToken } from './session'
 
 /**
- * Base URL for API requests. Empty by default: in dev, `vite.config.ts`
- * proxies the known API path prefixes to the `api` service (see
- * `infra/compose.yaml`), and docs/05's production diagram has Caddy proxy
+ * Base URL for API requests. Empty by default: the browser always calls the
+ * relative `/api/v1` (docs/04-api.md: "Versionado: por ruta"), and
+ * `vite.config.ts`'s dev proxy forwards that one prefix to the `api` service
+ * (see `infra/compose.yaml`); docs/05's production diagram has Caddy proxy
  * the same way, so same-origin relative requests work in both. `VITE_API_URL`
- * overrides it for a standalone/cross-origin setup.
+ * only retargets the dev proxy (see `vite.config.ts`) — it never changes what
+ * the browser itself calls, so there is exactly one place that decides where
+ * `/api/v1` actually goes.
  */
 const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? ''
+
+/** Requests are aborted after this long, surfacing as a `TypeError`-like abort error. */
+const REQUEST_TIMEOUT_MS = 10_000
 
 /**
  * Raised for a non-2xx response. `title`/`detail` come from the server's
  * `application/problem+json` body (docs/04-api.md) when the endpoint raised
  * a `ProblemError`. FastAPI's own default `RequestValidationError` handler
- * (`shared/errors.py`) instead returns `{"detail": [{msg, loc, type}, ...]}`
- * with a plain `application/json` content type — not the documented
- * problem+json shape — so this also recognizes that shape (a doc/code gap,
- * see the T7 progress notes).
+ * (`shared/errors.py`) instead returns `{"detail": [{msg, ...}]}` with a
+ * plain `application/json` content type — not the documented problem+json
+ * shape — so this also recognizes that shape (a doc/code gap, see the T7
+ * progress notes).
  */
 export class ApiError extends Error {
   readonly status: number
@@ -63,29 +71,49 @@ async function parseErrorBody(response: Response): Promise<{ title: string; deta
   return { title: response.statusText || 'Request failed' }
 }
 
-export interface ApiFetchInit extends Omit<RequestInit, 'body'> {
-  body?: unknown
-}
-
-/** Small fetch wrapper: base URL, bearer token, JSON body/response, problem+json errors. */
-export async function apiFetch<T>(path: string, init: ApiFetchInit = {}): Promise<T> {
-  const token = getToken()
-  const headers = new Headers(init.headers)
-  headers.set('Accept', 'application/json')
-  const hasBody = init.body !== undefined
-  if (hasBody) headers.set('Content-Type', 'application/json')
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-    body: hasBody ? JSON.stringify(init.body) : undefined,
-  })
-
-  if (!response.ok) {
+/**
+ * Bearer token, request timeout, and error handling in one middleware (a
+ * single object so `onResponse` sees exactly the `Request` `onRequest`
+ * produced, with no ordering question between separate middlewares).
+ *
+ * A 401 only signs the session out when the *failing* request itself carried
+ * a token: an anonymous call (OTP request/verify, before any session exists)
+ * returning 401 is a normal in-flow error the caller handles (wrong code),
+ * not an expired session (#21 round 10).
+ */
+const sessionMiddleware: Middleware = {
+  async onRequest({ request }) {
+    const token = getToken()
+    if (token) request.headers.set('Authorization', `Bearer ${token}`)
+    // Request bodies aren't consumed by re-wrapping like this (verified: a
+    // POST's JSON body and headers both survive the copy).
+    return new Request(request, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+  },
+  async onResponse({ request, response }) {
+    if (response.ok) return response
+    const hadSession = request.headers.has('Authorization')
     const { title, detail } = await parseErrorBody(response)
+    if (response.status === 401 && hadSession) {
+      clearSession()
+      if (typeof window !== 'undefined') window.location.assign('/ingreso')
+    }
     throw new ApiError(response.status, title, detail)
-  }
-  if (response.status === 204) return undefined as T
-  return (await response.json()) as T
+  },
 }
+
+/**
+ * Generated, type-safe client (docs/05-arquitectura.md: `openapi-typescript`
+ * + `openapi-fetch`). `npm run gen:api` regenerates `./schema.d.ts` from the
+ * FastAPI app's own OpenAPI schema.
+ *
+ * `fetch` is a thin indirection to `globalThis.fetch`, looked up fresh on
+ * every call, instead of `createClient`'s own default (which captures
+ * whatever `globalThis.fetch` is *once*, at module import time — before a
+ * test's `vi.stubGlobal('fetch', ...)` ever runs, since `apiClient` is a
+ * module-level singleton). No behavior change outside tests.
+ */
+export const apiClient = createClient<paths>({
+  baseUrl: API_BASE_URL,
+  fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
+})
+apiClient.use(sessionMiddleware)

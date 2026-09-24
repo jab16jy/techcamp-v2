@@ -1,22 +1,17 @@
-import { useCallback, useState } from 'react'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
 import { MapIcon } from '../../../design-system/ui/icons'
 import { Button } from '../../../design-system/ui/button'
-import { useApiResource } from '../../../lib/api/useApiResource'
+import { describeApiError } from '../../../lib/api/errorCopy'
 import { useOrgId } from '../../../lib/api/session'
-import { loadFarmsWithPlots } from '../api/plotsApi'
+import { useFarms, usePlotsByFarm } from '../api/plotsApi'
 import { PlotsList } from '../components/PlotsList'
 
 /** Plots tab (replaces the `PlaceholderPage`): the org's farms and each farm's plots. */
 export function PlotsScreen() {
   const orgId = useOrgId()
-  const [retryCount, setRetryCount] = useState(0)
-
-  const load = useCallback(() => {
-    if (!orgId) return Promise.resolve([])
-    return loadFarmsWithPlots(orgId)
-  }, [orgId])
-  const state = useApiResource(load, [orgId, retryCount])
+  const farmsQuery = useFarms(orgId)
+  const farmIds = farmsQuery.data?.farms.map((farm) => farm.id) ?? []
+  const plotsQueries = usePlotsByFarm(farmIds)
 
   return (
     <div className="px-0 pt-6">
@@ -29,30 +24,42 @@ export function PlotsScreen() {
             description="Vuelve a ingresar para elegir la organización de tu cuenta."
           />
         )}
-        {orgId && state.status === 'loading' && (
+        {orgId && farmsQuery.isPending && (
           <p className="px-4 text-base text-text-muted">Cargando parcelas…</p>
         )}
-        {orgId && state.status === 'error' && (
+        {orgId && farmsQuery.isError && (
           <EmptyState
             icon={<MapIcon className="size-10" />}
             title="No se pudieron cargar las parcelas"
-            description="Revisa tu conexión e intenta de nuevo."
+            description={describeApiError(farmsQuery.error)}
             action={
-              <Button variant="secondary" onClick={() => setRetryCount((count) => count + 1)}>
+              <Button variant="secondary" onClick={() => farmsQuery.refetch()}>
                 Reintentar
               </Button>
             }
           />
         )}
-        {orgId && state.status === 'success' && state.data.length === 0 && (
+        {orgId && farmsQuery.isSuccess && farmsQuery.data.farms.length === 0 && (
           <EmptyState
             icon={<MapIcon className="size-10" />}
             title="Todavía no hay fincas"
             description="Las fincas y parcelas de tu organización aparecerán aquí."
           />
         )}
-        {orgId && state.status === 'success' && state.data.length > 0 && (
-          <PlotsList farms={state.data} />
+        {orgId && farmsQuery.isSuccess && farmsQuery.data.farms.length > 0 && (
+          <>
+            <PlotsList
+              rows={farmsQuery.data.farms.map((farm, index) => ({
+                farm,
+                plotsQuery: plotsQueries[index],
+              }))}
+            />
+            {farmsQuery.data.hasMore && (
+              <p className="px-4 text-base text-text-muted">
+                Tu organización tiene más fincas de las que se muestran aquí.
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>

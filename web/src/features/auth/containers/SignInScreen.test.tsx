@@ -19,6 +19,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
 
+function requestUrl(input: Request | string | URL): string {
+  return input instanceof Request ? input.url : String(input)
+}
+
 describe('orgLabel', () => {
   it('shows a shortened org id and the Spanish role label', () => {
     expect(orgLabel({ org_id: '3f9a2c1b-aaaa-bbbb-cccc-000000000000', role: 'owner' })).toBe(
@@ -51,15 +55,14 @@ describe('SignInScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
 
     await waitFor(() => expect(screen.getByLabelText('Código')).toBeInTheDocument())
-    expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/dev/auth/otp'),
-      expect.objectContaining({ method: 'POST' }),
-    )
+    const [request] = vi.mocked(fetch).mock.calls[0]
+    expect(requestUrl(request as Request)).toContain('/api/v1/dev/auth/otp')
+    expect((request as Request).method).toBe('POST')
   })
 
   it('verifies the code, stores the session and navigates home for a single membership', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
-      const url = String(input)
+      const url = requestUrl(input as Request)
       if (url.includes('/otp/verify')) {
         return jsonResponse({ access_token: 'token-abc', token_type: 'bearer' })
       }
@@ -93,7 +96,7 @@ describe('SignInScreen', () => {
 
   it('shows an error and does not navigate when the code is invalid', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
-      const url = String(input)
+      const url = requestUrl(input as Request)
       if (url.includes('/otp/verify')) {
         return jsonResponse(
           { type: 'about:blank', title: 'Invalid or expired code', status: 401 },
@@ -120,7 +123,7 @@ describe('SignInScreen', () => {
 
   it('shows an org picker when the user has more than one membership', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
-      const url = String(input)
+      const url = requestUrl(input as Request)
       if (url.includes('/otp/verify')) {
         return jsonResponse({ access_token: 'token-abc', token_type: 'bearer' })
       }
@@ -153,5 +156,32 @@ describe('SignInScreen', () => {
     await waitFor(() => expect(screen.getByText('Elige tu organización.')).toBeInTheDocument())
     expect(screen.getByRole('combobox', { name: 'Organización' })).toBeInTheDocument()
     expect(getOrgId()).toBeNull()
+  })
+
+  it('clears the error and the code when changing the phone number', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/otp/verify')) {
+        return jsonResponse({ type: 'about:blank', title: 'Invalid or expired code', status: 401 }, 401)
+      }
+      return new Response(null, { status: 204 })
+    })
+    renderSignIn()
+
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '3001234567' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
+    await waitFor(() => expect(screen.getByLabelText('Código')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText('Código'), { target: { value: '000000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Verificar' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cambiar número' }))
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '3001234567' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
+    await waitFor(() => expect(screen.getByLabelText('Código')).toBeInTheDocument())
+    expect(screen.getByLabelText('Código')).toHaveValue('')
   })
 })
