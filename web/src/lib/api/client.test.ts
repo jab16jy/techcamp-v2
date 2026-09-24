@@ -173,28 +173,37 @@ describe('apiClient', () => {
       )
       return controller.signal
     })
-    // A stalled fetch: it only ever settles if its request signal aborts.
-    vi.mocked(fetch).mockImplementation(
-      (input: RequestInfo | URL) =>
-        new Promise((_resolve, reject) => {
-          const request = input as Request
-          request.signal.addEventListener('abort', () => reject(request.signal.reason as Error))
-        }),
-    )
+    // Cleanup lives in `finally`: a failed assertion above must not leak
+    // fake timers or the spy into later tests (#21 round 13 WARNING).
+    try {
+      // A stalled fetch: it only ever settles if its request signal aborts.
+      vi.mocked(fetch).mockImplementation(
+        (input: RequestInfo | URL) =>
+          new Promise((_resolve, reject) => {
+            const request = input as Request
+            request.signal.addEventListener('abort', () => reject(request.signal.reason as Error))
+          }),
+      )
 
-    const pending = apiClient.GET('/api/v1/me', {})
-    const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
-    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS)
-    await assertion
-
-    timeoutSpy.mockRestore()
-    vi.useRealTimers()
+      const pending = apiClient.GET('/api/v1/me', {})
+      const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS)
+      await assertion
+    } finally {
+      timeoutSpy.mockRestore()
+      vi.useRealTimers()
+    }
   })
 
   it('falls back to a timeout-only signal when AbortSignal.any is unavailable (older WebViews)', async () => {
     const originalAny = AbortSignal.any
     // @ts-expect-error simulating a WebView without AbortSignal.any (#21 round 12)
     delete AbortSignal.any
+    // Proves the timeout-only path itself, not just "the request didn't throw"
+    // (#21 round 13 SUGGESTION): the fallback must still build its signal from
+    // `AbortSignal.timeout(REQUEST_TIMEOUT_MS)`, the same call the combined
+    // (`AbortSignal.any`) path makes.
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'u1', memberships: [] }))
 
     try {
@@ -203,6 +212,7 @@ describe('apiClient', () => {
       AbortSignal.any = originalAny
     }
 
+    expect(timeoutSpy).toHaveBeenCalledWith(REQUEST_TIMEOUT_MS)
     const [request] = vi.mocked(fetch).mock.calls[0]
     expect((request as Request).signal).toBeInstanceOf(AbortSignal)
     expect((request as Request).signal.aborted).toBe(false)
