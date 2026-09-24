@@ -8,6 +8,7 @@ in this epic depends on it yet (noted in odd/tasks/techcamp-v2-e3-farms.md).
 from __future__ import annotations
 
 import math
+from datetime import date
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from techcamp.farms.adapters.api.deps import (
+    CropCycleRepoDep,
     CropRepoDep,
     FarmRepoDep,
     PlotRepoDep,
@@ -28,19 +30,32 @@ from techcamp.farms.adapters.geojson import (
     wkt_to_point,
     wkt_to_polygon,
 )
+from techcamp.farms.application.manage_cycles import create_cycle, update_cycle
 from techcamp.farms.application.manage_farms import create_farm, resolve_farm_access, update_farm
 from techcamp.farms.application.manage_plots import create_plot, update_plot
 from techcamp.farms.application.manage_soil import autofill_soil_profile, put_soil_profile
 from techcamp.farms.domain.errors import (
+    ActiveCropCycleExistsError,
+    CropCycleNotFoundError,
+    CropNotFoundError,
     FarmNotFoundError,
     InsufficientRoleError,
+    InvalidCropCycleTransitionError,
     InvalidTechnicianError,
     MissingIrrigationEfficiencyError,
     PlotNotFoundError,
     RainfedPlotHasIrrigationError,
     SoilGridsUnavailableError,
 )
-from techcamp.farms.domain.models import Crop, Farm, IrrigationSystem, Plot, SoilProfile
+from techcamp.farms.domain.models import (
+    Crop,
+    CropCycle,
+    CropCycleStatus,
+    Farm,
+    IrrigationSystem,
+    Plot,
+    SoilProfile,
+)
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.identity.domain.errors import NotAMemberError
@@ -481,3 +496,98 @@ async def list_crops(user_id: CurrentUserId, crops: CropRepoDep) -> list[CropVie
     """
     _ = user_id  # authentication only; the catalog has no per-org data
     return [_crop_view(c) for c in await crops.list_all()]
+
+
+class CropCycleCreateRequest(BaseModel):
+    crop_id: int
+    sown_on: date
+
+
+class CropCyclePatchRequest(BaseModel):
+    status: CropCycleStatus | None = None
+    expected_harvest_on: date | None = None
+
+
+class CropCycleView(BaseModel):
+    id: UUID
+    plot_id: UUID
+    crop_id: int
+    sown_on: date
+    expected_harvest_on: date | None
+    status: CropCycleStatus
+
+
+def _cycle_view(cycle: CropCycle) -> CropCycleView:
+    return CropCycleView(
+        id=cycle.id,
+        plot_id=cycle.plot_id,
+        crop_id=cycle.crop_id,
+        sown_on=cycle.sown_on,
+        expected_harvest_on=cycle.expected_harvest_on,
+        status=cycle.status,
+    )
+
+
+@router.post("/plots/{plot_id}/cycles", response_model=CropCycleView, status_code=201)
+async def post_cycle(
+    plot_id: UUID,
+    payload: CropCycleCreateRequest,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    crops: CropRepoDep,
+    cycles: CropCycleRepoDep,
+    memberships: MembershipRepoDep,
+) -> CropCycleView:
+    """docs/04-api.md:56; docs/00-glosario.md: at most one active cycle per
+    plot. `expected_harvest_on` isn't in the request body: it's derived
+    from the crop's FAO-56 stage lengths (T6 decision, `compute_expected_harvest_on`).
+    """
+    try:
+        cycle = await create_cycle(
+            user_id=user_id,
+            plot_id=plot_id,
+            crop_id=payload.crop_id,
+            sown_on=payload.sown_on,
+            plots=plots,
+            crops=crops,
+            cycles=cycles,
+            memberships=memberships,
+        )
+    except PlotNotFoundError as exc:
+        raise ProblemError(status=404, title="Plot not found") from exc
+    except InsufficientRoleError as exc:
+        raise ProblemError(status=403, title="Role cannot create crop cycles") from exc
+    except CropNotFoundError as exc:
+        raise ProblemError(status=422, title="crop_id is not a valid crop") from exc
+    except ActiveCropCycleExistsError as exc:
+        raise ProblemError(status=409, title="Plot already has an active crop cycle") from exc
+    return _cycle_view(cycle)
+
+
+@router.patch("/cycles/{cycle_id}", response_model=CropCycleView)
+async def patch_cycle(
+    cycle_id: UUID,
+    payload: CropCyclePatchRequest,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    cycles: CropCycleRepoDep,
+    memberships: MembershipRepoDep,
+) -> CropCycleView:
+    changes = payload.model_dump(exclude_unset=True)
+    _reject_explicit_null(changes, nullable_fields=frozenset({"expected_harvest_on"}))
+    try:
+        cycle = await update_cycle(
+            user_id=user_id,
+            cycle_id=cycle_id,
+            changes=changes,
+            cycles=cycles,
+            plots=plots,
+            memberships=memberships,
+        )
+    except CropCycleNotFoundError as exc:
+        raise ProblemError(status=404, title="Crop cycle not found") from exc
+    except InsufficientRoleError as exc:
+        raise ProblemError(status=403, title="Role cannot update this crop cycle") from exc
+    except InvalidCropCycleTransitionError as exc:
+        raise ProblemError(status=422, title="Invalid crop cycle status transition") from exc
+    return _cycle_view(cycle)

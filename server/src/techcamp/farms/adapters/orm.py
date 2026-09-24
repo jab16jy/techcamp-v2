@@ -9,6 +9,7 @@ domain layer only ever sees the WKT text a repository extracts with
 
 from __future__ import annotations
 
+import datetime
 import decimal
 import uuid
 from typing import Any
@@ -17,6 +18,7 @@ from geoalchemy2 import Geometry
 from sqlalchemy import (
     CheckConstraint,
     Computed,
+    Date,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -24,6 +26,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -144,6 +147,35 @@ class CropStageRow(Base):
     length_days: Mapped[int] = mapped_column(Integer, nullable=False)
     kc: Mapped[decimal.Decimal] = mapped_column(Numeric, nullable=False)
     depletion_fraction_p: Mapped[decimal.Decimal] = mapped_column(Numeric, nullable=False)
+
+
+class CropCycleRow(Base):
+    """docs/03-modelo-datos.md:128-135; docs/00-glosario.md: a plot has at
+    most one active cycle. No `org_id` column (matches docs/03's field
+    list): access is gated through the plot, same reasoning as
+    `SoilProfileRow` (T4). The one-active-cycle rule is enforced by a
+    partial unique index, not only in application code (docs/03's modeling
+    rules) — `manage_cycles.create_cycle`'s repository precheck is the
+    normal path; this index is the DB-side backstop.
+    """
+
+    __tablename__ = "crop_cycle"
+    __table_args__ = (
+        CheckConstraint("status in ('active','harvested','lost')", name="ck_crop_cycle_status"),
+        Index(
+            "uq_crop_cycle_active_per_plot",
+            "plot_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    plot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("plot.id"), nullable=False)
+    crop_id: Mapped[int] = mapped_column(ForeignKey("crop.id"), nullable=False)
+    sown_on: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    expected_harvest_on: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class SoilProfileRow(Base):

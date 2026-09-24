@@ -1142,3 +1142,263 @@ async def test_autofilling_soil_queries_soilgrids_at_the_plots_centroid(
     assert set(params.get_list("property")) == set(SOILGRIDS_PROPERTIES)
     assert params.get_list("depth") == ["0-5cm"]
     assert params.get_list("value") == ["mean"]
+
+
+# T6: crop cycles. `_MAIZE_ID = 1` (FAO-56, stages sum to 90 days) and
+# `_YAM_ID = 5` (`kc_source = none`, no `crop_stage` rows) are seeded by the
+# `67cf2dd1f13e` migration (T3).
+_MAIZE_ID = 1
+_YAM_ID = 5
+
+
+async def _create_cycle(
+    client: TestClient,
+    plot_id: str,
+    token: str,
+    *,
+    crop_id: int = _MAIZE_ID,
+    sown_on: str = "2026-01-01",
+) -> dict[str, object]:
+    created = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": crop_id, "sown_on": sown_on},
+        headers=_auth(token),
+    )
+    body: dict[str, object] = created.json()
+    return body
+
+
+async def test_owner_creates_a_crop_cycle_and_derives_expected_harvest_on(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": _MAIZE_ID, "sown_on": "2026-01-01"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["plot_id"] == plot_id
+    assert body["crop_id"] == _MAIZE_ID
+    assert body["sown_on"] == "2026-01-01"
+    assert body["expected_harvest_on"] == "2026-04-01"  # 18+27+31+14 = 90 days
+    assert body["status"] == "active"
+
+
+async def test_creating_a_cycle_for_a_crop_with_no_stages_leaves_expected_harvest_on_null(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": _YAM_ID, "sown_on": "2026-01-01"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["expected_harvest_on"] is None
+
+
+async def test_creating_a_second_active_cycle_on_the_same_plot_is_409(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+    first = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": _MAIZE_ID, "sown_on": "2026-01-01"},
+        headers=_auth(token),
+    )
+    assert first.status_code == 201, first.text
+
+    response = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": _MAIZE_ID, "sown_on": "2026-02-01"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_creating_a_cycle_with_an_unknown_crop_id_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": 9999, "sown_on": "2026-01-01"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_viewer_cannot_create_a_crop_cycle(db_session: AsyncSession) -> None:
+    org_id, _user_id, owner_token = await _member(db_session, role="owner")
+    _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+    plot_id = await _create_plot(client, farm_id, owner_token)
+    viewer_token = issue_token(str(viewer_id))
+
+    response = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": _MAIZE_ID, "sown_on": "2026-01-01"},
+        headers=_auth(viewer_token),
+    )
+
+    assert response.status_code == 403
+
+
+async def test_technician_can_create_a_crop_cycle(db_session: AsyncSession) -> None:
+    org_id, _user_id, owner_token = await _member(db_session, role="owner")
+    _org2, tech_id, _tech_token = await _member(db_session, role="technician", org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=tech_id, role="technician"))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+    plot_id = await _create_plot(client, farm_id, owner_token)
+    tech_token = issue_token(str(tech_id))
+
+    response = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": _MAIZE_ID, "sown_on": "2026-01-01"},
+        headers=_auth(tech_token),
+    )
+
+    assert response.status_code == 201, response.text
+
+
+async def test_creating_a_cycle_on_a_foreign_org_plot_is_404(db_session: AsyncSession) -> None:
+    _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
+    org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_b, token_b)
+    plot_id = await _create_plot(client, farm_id, token_b)
+
+    response = client.post(
+        f"/plots/{plot_id}/cycles",
+        json={"crop_id": _MAIZE_ID, "sown_on": "2026-01-01"},
+        headers=_auth(token_a),
+    )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_owner_patches_a_cycle_to_harvested(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+    cycle = await _create_cycle(client, plot_id, token)
+
+    response = client.patch(
+        f"/cycles/{cycle['id']}", json={"status": "harvested"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "harvested"
+
+
+async def test_patching_a_cycle_can_change_expected_harvest_on_without_a_status(
+    db_session: AsyncSession,
+) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+    cycle = await _create_cycle(client, plot_id, token)
+
+    response = client.patch(
+        f"/cycles/{cycle['id']}", json={"expected_harvest_on": "2026-05-01"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["expected_harvest_on"] == "2026-05-01"
+    assert body["status"] == "active"
+
+
+async def test_patching_a_harvested_cycle_back_to_active_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+    cycle = await _create_cycle(client, plot_id, token)
+    harvested = client.patch(
+        f"/cycles/{cycle['id']}", json={"status": "harvested"}, headers=_auth(token)
+    )
+    assert harvested.status_code == 200, harvested.text
+
+    response = client.patch(
+        f"/cycles/{cycle['id']}", json={"status": "active"}, headers=_auth(token)
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_patching_a_cycle_with_explicit_null_status_is_422(db_session: AsyncSession) -> None:
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+    cycle = await _create_cycle(client, plot_id, token)
+
+    response = client.patch(f"/cycles/{cycle['id']}", json={"status": None}, headers=_auth(token))
+
+    assert response.status_code == 422, response.text
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_viewer_cannot_patch_a_crop_cycle(db_session: AsyncSession) -> None:
+    org_id, _user_id, owner_token = await _member(db_session, role="owner")
+    _org2, viewer_id, _viewer_token = await _member(db_session, role="viewer", org_name="Other")
+    db_session.add(MembershipRow(org_id=org_id, user_id=viewer_id, role="viewer"))
+    await db_session.commit()
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, owner_token)
+    plot_id = await _create_plot(client, farm_id, owner_token)
+    cycle = await _create_cycle(client, plot_id, owner_token)
+    viewer_token = issue_token(str(viewer_id))
+
+    response = client.patch(
+        f"/cycles/{cycle['id']}", json={"status": "harvested"}, headers=_auth(viewer_token)
+    )
+
+    assert response.status_code == 403
+
+
+async def test_patching_a_cycle_of_a_foreign_org_plot_is_404(db_session: AsyncSession) -> None:
+    _org_a, _user_a, token_a = await _member(db_session, role="owner", org_name="Finca A")
+    org_b, _user_b, token_b = await _member(db_session, role="owner", org_name="Finca B")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_b, token_b)
+    plot_id = await _create_plot(client, farm_id, token_b)
+    cycle = await _create_cycle(client, plot_id, token_b)
+
+    response = client.patch(
+        f"/cycles/{cycle['id']}", json={"status": "harvested"}, headers=_auth(token_a)
+    )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"

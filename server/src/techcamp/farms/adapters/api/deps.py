@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from techcamp.farms.adapters.repositories import (
+    SqlAlchemyCropCycleRepository,
     SqlAlchemyCropRepository,
     SqlAlchemyFarmRepository,
     SqlAlchemyPlotRepository,
@@ -33,6 +34,10 @@ async def get_soil_profile_repository(session: SessionDep) -> SqlAlchemySoilProf
     return SqlAlchemySoilProfileRepository(session)
 
 
+async def get_crop_cycle_repository(session: SessionDep) -> SqlAlchemyCropCycleRepository:
+    return SqlAlchemyCropCycleRepository(session)
+
+
 def get_soilgrids_port() -> IsricSoilGridsAdapter:
     """ADR-0021: the seminar profile's recorded fixture, or the real ISRIC
     adapter in production."""
@@ -46,3 +51,4 @@ SoilProfileRepoDep = Annotated[
     SqlAlchemySoilProfileRepository, Depends(get_soil_profile_repository)
 ]
 SoilGridsPortDep = Annotated[IsricSoilGridsAdapter, Depends(get_soilgrids_port)]
+CropCycleRepoDep = Annotated[SqlAlchemyCropCycleRepository, Depends(get_crop_cycle_repository)]

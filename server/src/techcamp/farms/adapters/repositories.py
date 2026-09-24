@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -18,10 +19,19 @@ from sqlalchemy import Row, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from techcamp.farms.adapters.orm import CropRow, CropStageRow, FarmRow, PlotRow, SoilProfileRow
+from techcamp.farms.adapters.orm import (
+    CropCycleRow,
+    CropRow,
+    CropStageRow,
+    FarmRow,
+    PlotRow,
+    SoilProfileRow,
+)
 from techcamp.farms.domain.models import (
     CROP_STAGES,
     Crop,
+    CropCycle,
+    CropCycleStatus,
     CropStage,
     Farm,
     IrrigationSystem,
@@ -298,6 +308,102 @@ class SqlAlchemyCropRepository:
         for stage_row in stage_rows:
             stages_by_crop[stage_row.crop_id].append(stage_row)
         return [_crop_from_rows(row, stages_by_crop[row.id]) for row in crop_rows]
+
+    async def get(self, crop_id: int) -> Crop | None:
+        """One crop with its stages (T6: `create_cycle` validates `crop_id`
+        and derives `expected_harvest_on` from it)."""
+        crop_row = await self._session.get(CropRow, crop_id)
+        if crop_row is None:
+            return None
+        stmt = select(CropStageRow).where(CropStageRow.crop_id == crop_id)
+        stage_rows = (await self._session.execute(stmt)).scalars().all()
+        return _crop_from_rows(crop_row, list(stage_rows))
+
+
+def _crop_cycle_from_row(row: CropCycleRow) -> CropCycle:
+    return CropCycle(
+        id=row.id,
+        plot_id=row.plot_id,
+        crop_id=row.crop_id,
+        sown_on=row.sown_on,
+        expected_harvest_on=row.expected_harvest_on,
+        status=CropCycleStatus(row.status),
+    )
+
+
+class SqlAlchemyCropCycleRepository:
+    """docs/03-modelo-datos.md:128-135. No `org_id` column: access is gated
+    through the plot, same reasoning as `SqlAlchemySoilProfileRepository`
+    (T4)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def _get(self, cycle_id: UUID) -> CropCycle | None:
+        result = await self._session.execute(
+            select(CropCycleRow).where(CropCycleRow.id == cycle_id)
+        )
+        row = result.scalar_one_or_none()
+        return _crop_cycle_from_row(row) if row is not None else None
+
+    async def create(
+        self,
+        *,
+        cycle_id: UUID,
+        plot_id: UUID,
+        crop_id: int,
+        sown_on: date,
+        expected_harvest_on: date | None,
+        status: CropCycleStatus,
+    ) -> CropCycle:
+        self._session.add(
+            CropCycleRow(
+                id=cycle_id,
+                plot_id=plot_id,
+                crop_id=crop_id,
+                sown_on=sown_on,
+                expected_harvest_on=expected_harvest_on,
+                status=status.value,
+            )
+        )
+        await self._session.commit()
+        cycle = await self._get(cycle_id)
+        assert cycle is not None
+        return cycle
+
+    async def get_active_for_plot(self, plot_id: UUID) -> CropCycle | None:
+        result = await self._session.execute(
+            select(CropCycleRow).where(
+                CropCycleRow.plot_id == plot_id,
+                CropCycleRow.status == CropCycleStatus.ACTIVE.value,
+            )
+        )
+        row = result.scalar_one_or_none()
+        return _crop_cycle_from_row(row) if row is not None else None
+
+    async def get_for_orgs(self, cycle_id: UUID, org_ids: Sequence[UUID]) -> CropCycle | None:
+        if not org_ids:
+            return None
+        result = await self._session.execute(
+            select(CropCycleRow)
+            .join(PlotRow, PlotRow.id == CropCycleRow.plot_id)
+            .where(CropCycleRow.id == cycle_id, PlotRow.org_id.in_(org_ids))
+        )
+        row = result.scalar_one_or_none()
+        return _crop_cycle_from_row(row) if row is not None else None
+
+    async def update(
+        self, cycle_id: UUID, *, status: CropCycleStatus, expected_harvest_on: date | None
+    ) -> CropCycle:
+        await self._session.execute(
+            update(CropCycleRow)
+            .where(CropCycleRow.id == cycle_id)
+            .values(status=status.value, expected_harvest_on=expected_harvest_on)
+        )
+        await self._session.commit()
+        cycle = await self._get(cycle_id)
+        assert cycle is not None
+        return cycle
 
 
 def _soil_profile_from_row(row: SoilProfileRow) -> SoilProfile:

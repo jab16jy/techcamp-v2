@@ -8,10 +8,15 @@ exists as a well-known-text value; adapters own the spatial conversions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 from enum import StrEnum
 from uuid import UUID
 
-from techcamp.farms.domain.errors import InsufficientRoleError, RainfedPlotHasIrrigationError
+from techcamp.farms.domain.errors import (
+    InsufficientRoleError,
+    InvalidCropCycleTransitionError,
+    RainfedPlotHasIrrigationError,
+)
 from techcamp.identity.domain.models import Role
 
 
@@ -122,6 +127,50 @@ class Crop:
     stages: tuple[CropStage, ...]
     """Empty when `kc_source` is `none` (docs/03-modelo-datos.md:446): no
     validated Kc blocks the irrigation depth recommendation."""
+
+
+class CropCycleStatus(StrEnum):
+    ACTIVE = "active"
+    HARVESTED = "harvested"
+    LOST = "lost"
+
+
+_VALID_CYCLE_TRANSITIONS: dict[CropCycleStatus, frozenset[CropCycleStatus]] = {
+    CropCycleStatus.ACTIVE: frozenset({CropCycleStatus.HARVESTED, CropCycleStatus.LOST}),
+}
+"""T6 decision (odd/tasks/techcamp-v2-e3-farms.md): docs/04-api.md's `PATCH
+/cycles/{cycle_id} { status? }` doesn't enumerate allowed transitions; the
+task instruction is "only active -> harvested|lost unless docs say
+otherwise" — docs are silent, so that's the whole table. `harvested`/`lost`
+are terminal (no entry here), and re-sending the same `active` status is
+also rejected (not listed as a no-op exception)."""
+
+
+def ensure_valid_cycle_status_transition(current: CropCycleStatus, target: CropCycleStatus) -> None:
+    """Reject any status change other than `active` -> `harvested|lost`."""
+    if target not in _VALID_CYCLE_TRANSITIONS.get(current, frozenset()):
+        raise InvalidCropCycleTransitionError(current.value, target.value)
+
+
+@dataclass(frozen=True, slots=True)
+class CropCycle:
+    id: UUID
+    plot_id: UUID
+    crop_id: int
+    sown_on: date
+    expected_harvest_on: date | None
+    status: CropCycleStatus
+
+
+def compute_expected_harvest_on(sown_on: date, crop: Crop) -> date | None:
+    """`POST /plots/{plot_id}/cycles`'s body (docs/04-api.md:56) has no
+    `expected_harvest_on` field, so it's derived: `sown_on` plus the sum of
+    the crop's `crop_stage.length_days` (T3's FAO-56 stage-length split).
+    `None` when the crop has no stages (`kc_source = none`, e.g. yam — T3
+    decision): nothing to sum, same as its missing Kc."""
+    if not crop.stages:
+        return None
+    return sown_on + timedelta(days=sum(stage.length_days for stage in crop.stages))
 
 
 class SoilProfileSource(StrEnum):
