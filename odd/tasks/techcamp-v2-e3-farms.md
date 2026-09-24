@@ -47,7 +47,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250 — actual 590
 - [x] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250 — actual 733
 - [x] T5b Fix #21 round 7: every malformed SoilGrids 200 body → 502 problem+json; test that the centroid reaches SoilGrids as correct lon/lat and query params — route: delegated — forecast ~100 — actual 141
-- [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
+- [x] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250 — actual 1063
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
 - [ ] T8 Web plot creation: lazy-loaded Leaflet map, draw polygon, farm and plot forms (via `impeccable`) — route: delegated — forecast ~350
 - [ ] T9 Web soil and cycle: soil autofill/edit and crop cycle forms with Kc shown (via `impeccable`) — route: delegated — forecast ~300
@@ -90,13 +90,16 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - T5b `47f0b83..658e5b9` (fix, no migration, 141 lines): #21 round 7 resolved in `658e5b9`. RDD
   assessment/acknowledgement for this commit not run by this writer — left to the parent
   orchestrator; boundary not advanced here.
+- T6 `907bde2..97127e2` (new migration, 1063 lines, likely `slice_budget_reached`): RDD
+  assessment/acknowledgement not run by this writer — left to the parent orchestrator; boundary
+  not advanced here.
 
 ## Acceptance criteria
 - [ ] A user creates a farm and a plot from a drawn polygon; `area_ha` comes from the geometry.
 - [ ] Rainfed plots reject irrigation efficiency and flow (DB `CHECK` and 422).
 - [x] Soil autofill fills θFC/θWP from SoilGrids, or from the FAO-56 texture table with `source = fao56_texture`.
 - [x] `GET /crops` returns stages, Kc and `kc_source`.
-- [ ] A plot holds at most one active crop cycle.
+- [x] A plot holds at most one active crop cycle.
 - [ ] Cross-org access to farms, plots, soil and cycles returns 404.
 - [ ] All server and web checks green locally and in CI.
 
@@ -587,6 +590,84 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gap carried from T1-T5, unchanged: `farm.municipality_code` is plain `text`, not yet a real
     FK.
 
+- 2026-09-23: T6 done by a delegated `sonnet-high` writer. `farms` module additions:
+  `domain/models.py` (`CropCycleStatus`, `CropCycle`, `compute_expected_harvest_on`,
+  `ensure_valid_cycle_status_transition`), `domain/errors.py` (`CropCycleNotFoundError`,
+  `CropNotFoundError`, `ActiveCropCycleExistsError`, `InvalidCropCycleTransitionError`),
+  `adapters/orm.py` (`CropCycleRow`: `ck_crop_cycle_status`, partial unique index
+  `uq_crop_cycle_active_per_plot` on `plot_id` `WHERE status = 'active'`), `adapters/repositories.py`
+  (`SqlAlchemyCropRepository.get`, new `SqlAlchemyCropCycleRepository`: `create`,
+  `get_active_for_plot`, `get_for_orgs` joined through `plot.org_id`, `update`),
+  `application/ports.py` (`CropRepository`, `CropCycleRepository`), `application/manage_cycles.py`
+  (new: `create_cycle`, `resolve_cycle_access`, `update_cycle`), `adapters/api/deps.py`
+  (`CropCycleRepoDep`), `adapters/api/router.py` (`POST /plots/{plot_id}/cycles`,
+  `PATCH /cycles/{cycle_id}`). Migration `ff21853418b8` (chained off `7f9c1b3cae7f`).
+  - Decisions:
+    - `expected_harvest_on` is derived, not accepted from the client: `POST
+      /plots/{plot_id}/cycles`'s body (docs/04-api.md:56) only lists `{crop_id, sown_on}`, so
+      `compute_expected_harvest_on` sums the crop's `crop_stage.length_days` (T3's FAO-56 split)
+      from `sown_on`. `None` for a crop with no stages (`kc_source = none`, e.g. yam) — nothing to
+      sum, same as its missing Kc. `PATCH /cycles/{cycle_id}` can still set/override it explicitly
+      (its own documented field), same partial-update convention as `patch_plot`/`patch_farm`
+      (`exclude_unset` + `dataclasses.replace`).
+    - One active cycle per plot: docs/00-glosario.md states the rule; enforced by a DB partial
+      unique index (`uq_crop_cycle_active_per_plot`, `WHERE status = 'active'`) as the source of
+      truth, per docs/03's "invariants are CHECK constraints, not only application code" rule.
+      `create_cycle` also runs an application-layer precheck
+      (`cycles.get_active_for_plot`) so the conflict surfaces as `409`, not a raw `IntegrityError`
+      500 — a small, accepted race window between two concurrent creates on the same plot
+      (ponytail: no existing pattern in this module for translating a DB constraint violation into
+      a domain error at the adapter layer, so the precheck is the shorter diff).
+    - Conflict status code: docs/04-api.md is silent on 409 vs. 422 for this case. T6 decision:
+      `409` — an existing resource state conflicts with the request, not a malformed request.
+    - `crop_id` validity: docs/04-api.md doesn't say what happens for an unknown `crop_id`. T6
+      decision: `422` (`CropNotFoundError`), the same treatment as `InvalidTechnicianError` — a bad
+      referenced id on an input field, not the endpoint's own resource (which stays `404` for the
+      plot).
+    - Status transitions: docs/04-api.md's `PATCH { status? }` doesn't enumerate allowed
+      transitions. Task instruction: "only active -> harvested|lost unless docs say otherwise" —
+      docs are silent, so that's the whole table (`ensure_valid_cycle_status_transition`).
+      `harvested`/`lost` are terminal, and re-sending the same `active` status is rejected too (no
+      no-op exception documented). An explicit `null` on `status` is `422` via the existing
+      `_reject_explicit_null` helper (reused, not reimplemented); `expected_harvest_on` is the only
+      nullable field on the patch.
+    - `crop_cycle` has no `org_id` column (matches docs/03's field list exactly): access is gated
+      through the plot everywhere, same reasoning as `soil_profile` (T4). `resolve_cycle_access`
+      mirrors `resolve_farm_access`/`resolve_plot_access`: fetch the caller's memberships, look up
+      the cycle by `org_ids` (joined through `plot.org_id` in the repository), then resolve its
+      role through the plot's own org.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/). RED
+    observed by moving the new `application/manage_cycles.py` aside and `git stash`-ing the seven
+    modified implementation files (domain/errors.py, domain/models.py, adapters/orm.py,
+    adapters/repositories.py, adapters/api/deps.py, adapters/api/router.py, application/ports.py),
+    keeping the new migration and the new/changed tests: `uv run pytest -q
+    tests/farms/test_domain_models.py tests/farms/test_repositories.py` → 2 collection errors
+    (`ImportError: cannot import name 'InvalidCropCycleTransitionError'`; `ImportError: cannot
+    import name 'SqlAlchemyCropCycleRepository'`); `uv run pytest -q tests/farms/test_api.py -k
+    cycle` → `13 failed` (404 "Not Found" — the routes didn't exist — where 201/200/409/422/403
+    were expected, and a `KeyError: 'id'` in every `PATCH` test's setup once `POST` stopped
+    returning a cycle). Restored the implementation: GREEN, same selections → `24 passed`; full
+    `uv run pytest -q` → `207 passed`. REFACTOR: three `ruff format`/E501 line-length fixes (a
+    `SqlAlchemyCropRepository.get` query split onto two statements, two test helper signatures
+    wrapped).
+  - Verification (server/): `uv run pytest -q` → `207 passed, 2 warnings`; `uv run ruff check .` →
+    `All checks passed!`; `uv run ruff format --check .` → `102 files already formatted`; `uv run
+    mypy` → `Success: no issues found in 79 source files`; `uv run lint-imports` → `Hexagonal
+    layers per module KEPT, 1 kept, 0 broken`; `uv run alembic upgrade head` → applied
+    `ff21853418b8`; `uv run alembic downgrade -1` → reverted it; `uv run alembic upgrade head` →
+    reapplied clean.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `97127e2` — `feat(farms): add crop cycles with one active cycle per plot`. Authored
+    lines (`git diff --stat --cached -- . ':!server/uv.lock'`): 1063 insertions, 6 deletions
+    across 12 files (2 new, 10 modified) — well above the ~250 forecast and the ~400-line delivery
+    heuristic in a single commit, same reason as T2/T2b/T3b/T4/T5: one work-unit commit was
+    specified for this task, and the full port+repository+application+router stack plus three test
+    files (~24 new tests across domain/repository/API layers) don't split smaller within a single
+    task. Flagging for the owner/parent orchestrator's delivery-strategy decision, not re-split
+    here.
+  - Doc gap carried from T1-T5, unchanged: `farm.municipality_code` is plain `text`, not yet a
+    real FK.
+
 ## Next step
-T6 crop cycles (`crop_cycle` migration, one active cycle per plot,
-`POST /plots/{id}/cycles`, `PATCH /cycles/{id}`).
+T7 web data layer and plots route (API client, farm/plot list in the plots tab, via
+`impeccable`).
