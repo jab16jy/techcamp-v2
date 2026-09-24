@@ -122,3 +122,62 @@ class Crop:
     stages: tuple[CropStage, ...]
     """Empty when `kc_source` is `none` (docs/03-modelo-datos.md:446): no
     validated Kc blocks the irrigation depth recommendation."""
+
+
+class SoilProfileSource(StrEnum):
+    SOILGRIDS = "soilgrids"
+    LAB = "lab"
+    FAO56_TEXTURE = "fao56_texture"
+
+
+@dataclass(frozen=True, slots=True)
+class SoilProfile:
+    plot_id: UUID
+    source: SoilProfileSource | None
+    """`None` when neither lab/SoilGrids values nor a recognized FAO-56
+    texture class were available to fill θFC/θWP (T4 decision: docs/03
+    doesn't mark `source` `NOT NULL`, and inventing a source for missing
+    data would misrepresent it)."""
+    ph: float | None
+    organic_matter_pct: float | None
+    texture: str | None
+    field_capacity_pct: float | None
+    """θFC, as a percentage (docs/03-modelo-datos.md:106)."""
+    wilting_point_pct: float | None
+    """θWP, as a percentage (docs/03-modelo-datos.md:107)."""
+    root_depth_cm: float | None
+
+
+FAO56_TEXTURE_WATER_LIMITS: dict[str, tuple[float, float]] = {
+    # FAO-56 (Allen, Pereira, Raes & Smith, 1998), Irrigation and Drainage
+    # Paper 56, Chapter 8, Table 19 "Typical soil water characteristics for
+    # different soil types" (fao.org/4/x0490e/x0490e0c.htm). docs/03 asks for
+    # the class's mean value: the midpoint of each θFC and θWP range (m3/m3),
+    # as a percentage. Keys are USDA texture classes.
+    "sand": (12.0, 4.5),  # θFC 0.07-0.17, θWP 0.02-0.07
+    "loamy_sand": (15.0, 6.5),  # 0.11-0.19, 0.03-0.10
+    "sandy_loam": (23.0, 11.0),  # 0.18-0.28, 0.06-0.16
+    "loam": (25.0, 12.0),  # 0.20-0.30, 0.07-0.17
+    "silt_loam": (29.0, 15.0),  # 0.22-0.36, 0.09-0.21
+    "silt": (32.0, 17.0),  # 0.28-0.36, 0.12-0.22
+    "silty_clay_loam": (33.5, 20.5),  # 0.30-0.37, 0.17-0.24
+    "silty_clay": (36.0, 23.0),  # 0.30-0.42, 0.17-0.29
+    "clay": (36.0, 22.0),  # 0.32-0.40, 0.20-0.24
+}
+
+
+def apply_fao56_texture_fallback(
+    texture: str | None, field_capacity_pct: float | None, wilting_point_pct: float | None
+) -> tuple[float | None, float | None, SoilProfileSource | None]:
+    """FAO-56 Table 19 texture fallback (docs/03-modelo-datos.md:445): when a
+    soil profile has neither lab nor SoilGrids θFC/θWP, fill the texture
+    class's mean values and mark `source = fao56_texture`. Given values pass
+    through unchanged as `source = lab` (SoilGrids has its own endpoint,
+    `POST /plots/{plot_id}/soil:autofill`, T5, out of scope here).
+    """
+    if field_capacity_pct is not None and wilting_point_pct is not None:
+        return field_capacity_pct, wilting_point_pct, SoilProfileSource.LAB
+    means = FAO56_TEXTURE_WATER_LIMITS.get(texture.lower()) if texture else None
+    if means is None:
+        return None, None, None
+    return means[0], means[1], SoilProfileSource.FAO56_TEXTURE

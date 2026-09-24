@@ -44,7 +44,7 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
 - [x] T2b Fix T2 review follow-ups: 422 on explicit nulls, validate `technician_id` membership, default efficiency on system switch, coordinate bounds, missing API tests — route: delegated — forecast ~150 — actual ~445
 - [x] T3 Crop catalog: `crop` + `crop_stage` migration, seed with FAO-56 Table 12 Kc and `kc_source`, `GET /crops` — route: delegated — forecast ~300 — actual 428
 - [x] T3b Fix #21 round 4: switching to rainfed clears efficiency and flow (ADR-0023) with a test; cassava stage split + seed test that stage lengths follow the rule and sum to the cycle; assert setup 201 — route: delegated — forecast ~80 — actual ~160
-- [ ] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250
+- [x] T4 Soil profile: `soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture fallback — route: delegated — forecast ~250 — actual 590
 - [ ] T5 Soil autofill: SoilGrids port + adapter + test double, `POST /plots/{id}/soil:autofill` (seminar: recorded fixture; ADR-0021 row) — route: delegated — forecast ~250
 - [ ] T6 Crop cycles: `crop_cycle` migration (one active cycle per plot), `POST /plots/{id}/cycles`, `PATCH /cycles/{id}` — route: delegated — forecast ~250
 - [ ] T7 Web data layer and plots route: API client, farm/plot list in the plots tab (via `impeccable`) — route: delegated — forecast ~250
@@ -80,6 +80,10 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   #21 round 4 resolved in `81f57e3`. RDD assessment/acknowledgement for this
   commit not run by this writer — left to the parent orchestrator; boundary
   not advanced here.
+- T4 `81f57e3..3703cbe` (new migration, 590 lines, likely `slice_budget_reached`): RDD
+  assessment/acknowledgement not run by this writer — left to the parent orchestrator; boundary
+  not advanced here.
+- T3b + T4 slice `a337f57..111cffc` (medium, 907 lines, standing grant): lineage `review-7d6076ce2e31e46b`, approved and acknowledged. WARNING (cassava seed edited in place in `67cf2dd1f13e`) accepted: revision only on this unmerged branch. Three test-strength suggestions open in #21 round 6. Reviewed boundary is now `111cffc`.
 - Local only: `.impeccable/surfaces/config.local.json` is listed in `.git/info/exclude` so RDD candidate selection ignores it.
 
 ## Acceptance criteria
@@ -381,6 +385,68 @@ E3 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E4, E5 
   - Doc gap carried from T1/T2/T3, unchanged: `farm.municipality_code` is plain `text`, not yet a
     real FK.
 
+- 2026-09-23: T4 done by a delegated `sonnet-high` writer. `farms` module additions:
+  `domain/models.py` (`SoilProfileSource`, `SoilProfile`, `FAO56_TEXTURE_WATER_LIMITS`,
+  `apply_fao56_texture_fallback` — pure), `adapters/orm.py` (`SoilProfileRow`, no `org_id`:
+  access gated through the plot), `adapters/repositories.py` (`SqlAlchemySoilProfileRepository.put`,
+  Postgres `INSERT ... ON CONFLICT (plot_id) DO UPDATE`), `application/ports.py`
+  (`SoilProfileRepository`), `application/manage_soil.py` (`put_soil_profile`, reuses
+  `manage_plots.resolve_plot_access` + `ensure_can_write`), `adapters/api/deps.py`
+  (`SoilProfileRepoDep`), `adapters/api/router.py` (`PUT /plots/{plot_id}/soil` →
+  `SoilProfileView`). Migration `7f9c1b3cae7f` (chained off `67cf2dd1f13e`): `soil_profile`
+  table (`plot_id` PK/FK to `plot.id`, range `CHECK`s, `θWP < θFC` `CHECK`, `source` `CHECK`
+  restricted to `soilgrids|lab|fao56_texture`).
+  - Decisions:
+    - FAO-56 Table 19 texture fallback: the writer found only Example 36's three values and
+      scoped the fallback to three classes. **Superseded by the parent in `57ae49a`**: Table 19 is
+      published in full at fao.org/4/x0490e/x0490e0c.htm (verified 2026-09-23). docs/03:445 asks
+      for the class mean, so all nine USDA classes use the midpoint of each θFC/θWP range (e.g.
+      silt 32/17 %, not Example 36's 32/15). TDD: RED 11 failed, GREEN `133 passed`; ruff, format,
+      mypy, lint-imports green.
+    - `soil_profile` has no `org_id` column, matching docs/03-modelo-datos.md:106's field list
+      exactly (only `plot_id PK, FK`): access is gated once through
+      `manage_plots.resolve_plot_access` (org-scoped) before the soil repository is ever
+      touched, the same defense-in-depth boundary the read-only `crop`/`crop_stage` tables use
+      for a different reason (global data, T3).
+    - `source` is nullable (docs/03 doesn't mark it `NOT NULL`): set to `lab` when the client
+      sends both θFC and θWP, `fao56_texture` when the pure fallback fills them from a verified
+      texture class, and left `null` when neither is available (no lab values, no recognized
+      texture) — an honest "not yet determined" state, not an invented third source.
+    - `PUT` is a full-document upsert (docs/04-api.md:49: `SoilProfile → SoilProfile`, no
+      separate create endpoint), not a `PATCH`-style partial merge: a second `PUT` replaces every
+      field, including clearing ones the first call set and the second omits (test
+      `test_putting_a_soil_profile_twice_replaces_it`).
+    - Router-level validation (pydantic, same layer as the existing GeoJSON/explicit-null
+      checks): `ph` in [0, 14], `organic_matter_pct`/`field_capacity_pct` in (0, 100],
+      `wilting_point_pct` in [0, 100), `root_depth_cm` > 0, θFC and θWP must be given together
+      (not just one), and θWP must be strictly less than θFC when both are given — all `422`.
+    - No `GET /plots/{plot_id}/soil`: docs/04-api.md:43-56 lists only `PUT` and
+      `POST .../soil:autofill` (T5) for this resource, per the task's explicit instruction.
+  - TDD: mode on, source AGENTS.md/owner decision 2026-09-22, runner `uv run pytest` (server/).
+    RED observed by moving the two new files aside (migration, `manage_soil.py`) and
+    `git stash`-ing the six modified implementation files, keeping the new/changed tests:
+    `uv run pytest -q tests/farms/test_domain_models.py` → 1 collection error,
+    `ImportError: cannot import name 'SoilProfileSource'`; `uv run pytest -q
+    tests/farms/test_api.py -k soil` → 8 failed (404 "Not Found" — the route didn't exist —
+    where 200/403/422 were expected, and 404 with the wrong `content-type` where problem+json
+    was expected). Restored the implementation: GREEN, `uv run pytest -q` → `128 passed`.
+    REFACTOR: `ruff format` wrapped three long `client.put(...)` calls in the new API tests.
+  - Verification (server/): `uv run pytest -q` → `128 passed, 2 warnings`; `uv run ruff check .`
+    → `All checks passed!`; `uv run ruff format --check .` → `99 files already formatted` (1
+    file reformatted first pass); `uv run mypy` → `Success: no issues found in 77 source files`;
+    `uv run lint-imports` → `Hexagonal layers per module KEPT, 1 kept, 0 broken`; `uv run alembic
+    upgrade head` → applied `7f9c1b3cae7f`; `uv run alembic downgrade -1` → reverted it; `uv run
+    alembic upgrade head` → reapplied clean.
+  - Postgres was already running (`infra_postgres_1`, healthy) at session start.
+  - Commit: `3703cbe` — `feat(farms): add soil profile with FAO-56 texture fallback`. Authored
+    lines (`git diff --stat --cached` for this commit's files, excluding `server/uv.lock`): 590
+    insertions, 5 deletions across 10 files (2 new, 8 modified). Above the ~250 forecast, for the
+    same reason as T2/T2b/T3b: one work-unit commit was specified for this task, and the full
+    CRUD stack (domain + orm + repository + port + application + deps + router + migration) plus
+    two test files (~20 new tests) don't split smaller within a single task. Flagging for the
+    owner/parent orchestrator's delivery-strategy decision, not re-split here.
+  - Doc gap carried from T1/T2/T3: `farm.municipality_code` is plain `text`, not yet a real FK.
+
 ## Next step
-T4 soil profile (`soil_profile` migration, `PUT /plots/{id}/soil`, FAO-56 Table 19 texture
-fallback).
+T5 soil autofill (SoilGrids port + adapter + test double,
+`POST /plots/{id}/soil:autofill`, seminar recorded fixture, ADR-0021 row).

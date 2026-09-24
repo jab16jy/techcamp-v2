@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.farms.domain.models import Farm, IrrigationSystem, Plot
+from techcamp.farms.domain.models import Farm, IrrigationSystem, Plot, SoilProfile
 
 
 class FarmRepository(Protocol):
@@ -68,3 +68,7 @@ class PlotRepository(Protocol):
         irrigation_efficiency: float | None,
         system_flow_lph: float | None,
     ) -> Plot: ...
+
+
+class SoilProfileRepository(Protocol):
+    async def put(self, profile: SoilProfile) -> SoilProfile: ...

@@ -144,3 +144,47 @@ class CropStageRow(Base):
     length_days: Mapped[int] = mapped_column(Integer, nullable=False)
     kc: Mapped[decimal.Decimal] = mapped_column(Numeric, nullable=False)
     depletion_fraction_p: Mapped[decimal.Decimal] = mapped_column(Numeric, nullable=False)
+
+
+class SoilProfileRow(Base):
+    """docs/03-modelo-datos.md:106-113. No `org_id` column: access is always
+    gated through the plot (`plot_id` PK/FK), which is itself org-scoped
+    (T4 decision, odd/tasks/techcamp-v2-e3-farms.md)."""
+
+    __tablename__ = "soil_profile"
+    __table_args__ = (
+        CheckConstraint(
+            "source is null or source in ('soilgrids','lab','fao56_texture')",
+            name="ck_soil_profile_source",
+        ),
+        CheckConstraint("ph is null or (ph >= 0 and ph <= 14)", name="ck_soil_profile_ph_range"),
+        CheckConstraint(
+            "organic_matter_pct is null or (organic_matter_pct >= 0 and organic_matter_pct <= 100)",
+            name="ck_soil_profile_organic_matter_range",
+        ),
+        CheckConstraint(
+            "field_capacity_pct is null or (field_capacity_pct > 0 and field_capacity_pct <= 100)",
+            name="ck_soil_profile_field_capacity_range",
+        ),
+        CheckConstraint(
+            "wilting_point_pct is null or (wilting_point_pct >= 0 and wilting_point_pct < 100)",
+            name="ck_soil_profile_wilting_point_range",
+        ),
+        CheckConstraint(
+            "root_depth_cm is null or root_depth_cm > 0", name="ck_soil_profile_root_depth_positive"
+        ),
+        CheckConstraint(
+            "field_capacity_pct is null or wilting_point_pct is null "
+            "or wilting_point_pct < field_capacity_pct",
+            name="ck_soil_profile_wilting_point_lt_field_capacity",
+        ),
+    )
+
+    plot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("plot.id"), primary_key=True)
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
+    ph: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    organic_matter_pct: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    texture: Mapped[str | None] = mapped_column(String, nullable=True)
+    field_capacity_pct: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    wilting_point_pct: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    root_depth_cm: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
