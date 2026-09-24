@@ -114,4 +114,70 @@ describe('apiClient', () => {
 
     expect(assign).not.toHaveBeenCalled()
   })
+
+  it('does not attach a stale stored token to an anonymous OTP verify call', async () => {
+    setSession('stale-token', 'org-1')
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'u1', memberships: [] }))
+
+    await apiClient.POST('/api/v1/dev/auth/otp/verify', { body: { phone: '3001234567', code: '000000' } })
+
+    const [request] = vi.mocked(fetch).mock.calls[0]
+    expect((request as Request).headers.has('Authorization')).toBe(false)
+  })
+
+  it('does not attach a stale stored token to an anonymous OTP request call', async () => {
+    setSession('stale-token', 'org-1')
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }))
+
+    await apiClient.POST('/api/v1/dev/auth/otp', { body: { phone: '3001234567' } })
+
+    const [request] = vi.mocked(fetch).mock.calls[0]
+    expect((request as Request).headers.has('Authorization')).toBe(false)
+  })
+
+  it('does not sign out or clear a stale session when a wrong code 401s', async () => {
+    setSession('stale-token', 'org-1')
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign })
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        {
+          type: 'about:blank',
+          title: 'Invalid or expired code',
+          status: 401,
+          detail: 'El código es incorrecto o venció.',
+        },
+        401,
+      ),
+    )
+
+    await expect(
+      apiClient.POST('/api/v1/dev/auth/otp/verify', { body: { phone: '3001234567', code: '000000' } }),
+    ).rejects.toMatchObject({ status: 401, detail: 'El código es incorrecto o venció.' })
+
+    expect(getToken()).toBe('stale-token')
+    expect(assign).not.toHaveBeenCalled()
+  })
+
+  it('forwards a request that carries an abort signal (the 10s timeout)', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ id: 'u1', memberships: [] }))
+
+    await apiClient.GET('/api/v1/me', {})
+
+    const [request] = vi.mocked(fetch).mock.calls[0]
+    expect((request as Request).signal).toBeInstanceOf(AbortSignal)
+    expect((request as Request).signal.aborted).toBe(false)
+  })
+
+  it('preserves a caller-supplied abort signal alongside the timeout', async () => {
+    const controller = new AbortController()
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const request = input as Request
+      if (request.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      return jsonResponse({ id: 'u1', memberships: [] })
+    })
+
+    controller.abort()
+    await expect(apiClient.GET('/api/v1/me', { signal: controller.signal })).rejects.toThrow()
+  })
 })

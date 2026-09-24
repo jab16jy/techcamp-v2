@@ -6,10 +6,11 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // The browser always calls the relative /api/v1 (docs/04-api.md's
 // convention, `main.py` mounts every router there — #21 round 10).
-// `VITE_API_URL` is this dev proxy's only job: it picks where that one
-// prefix is forwarded (`infra/compose.yaml`: api on API_PORT, default 8000)
-// and never changes what the browser itself requests.
-const API_PROXY_TARGET = process.env.VITE_API_URL ?? 'http://localhost:8000'
+// `API_PROXY_TARGET` is this dev proxy's only job: it picks where that one
+// prefix is forwarded (`infra/compose.yaml`: api on API_PORT, default 8000).
+// Deliberately not `VITE_`-prefixed: that prefix is for values Vite exposes
+// to the browser bundle, and this one must never reach it (#21 round 11).
+const API_PROXY_TARGET = process.env.API_PROXY_TARGET ?? 'http://localhost:8000'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -56,8 +57,9 @@ export default defineConfig({
     // Node's native `fetch`/`Request` (unlike a real browser's) require an
     // absolute URL — a bare page origin never exists under Vitest — so
     // `openapi-fetch`'s internal `new Request(path)` throws for the app's
-    // real relative `''` base. Tests only; the browser always resolves the
-    // relative `/api/v1` fine (see `client.ts`).
-    env: { VITE_API_URL: 'http://localhost' },
+    // real relative `''` base. Tests only, and a variable of its own (not
+    // `API_PROXY_TARGET`, which never reaches the browser bundle); the
+    // browser always resolves the relative `/api/v1` fine (see `client.ts`).
+    env: { VITE_API_TEST_BASE_URL: 'http://localhost' },
   },
 })

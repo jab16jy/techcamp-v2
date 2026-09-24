@@ -1,4 +1,5 @@
 import type { UseQueryResult } from '@tanstack/react-query'
+import { Button } from '../../../design-system/ui/button'
 import type { FarmView, IrrigationSystem, PlotView } from '../api/plotsApi'
 
 const IRRIGATION_LABELS: Record<IrrigationSystem, string> = {
@@ -34,9 +35,14 @@ export function PlotsList({ rows }: PlotsListProps) {
             <p className="mt-2 text-base text-text-muted">Cargando parcelas…</p>
           )}
           {plotsQuery.isError && (
-            <p className="mt-2 text-base text-severity-critical">
-              No se pudieron cargar las parcelas de esta finca.
-            </p>
+            <div className="mt-2 flex flex-col items-start gap-2">
+              <p className="text-base text-severity-critical">
+                No se pudieron cargar las parcelas de esta finca.
+              </p>
+              <Button variant="secondary" onClick={() => plotsQuery.refetch()}>
+                Reintentar
+              </Button>
+            </div>
           )}
           {plotsQuery.isSuccess && plotsQuery.data.length === 0 && (
             <p className="mt-2 text-base text-text-muted">Esta finca todavía no tiene parcelas.</p>
