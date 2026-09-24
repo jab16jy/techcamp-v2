@@ -17,7 +17,11 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.api.deps import get_soilgrids_port
-from techcamp.farms.adapters.soilgrids import IsricSoilGridsAdapter
+from techcamp.farms.adapters.soilgrids import (
+    SEMINAR_FIXTURE_RESPONSE,
+    SOILGRIDS_PROPERTIES,
+    IsricSoilGridsAdapter,
+)
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.main import app
@@ -1102,3 +1106,39 @@ async def test_autofilling_soil_maps_a_soilgrids_error_status_to_502(
 
     assert response.status_code == 502
     assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_autofilling_soil_queries_soilgrids_at_the_plots_centroid(
+    db_session: AsyncSession,
+) -> None:
+    """GitHub issue #21 round 7: proves the plot's actual PostGIS centroid
+    reaches SoilGrids as `lon`/`lat`, not swapped. `_POLYGON` is an
+    axis-aligned square with a known centroid, `(-74.095, 10.905)`: lon and
+    lat are distinct enough that a swap would fail this assertion."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app)
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    captured: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=SEMINAR_FIXTURE_RESPONSE)
+
+    app.dependency_overrides[get_soilgrids_port] = lambda: IsricSoilGridsAdapter(
+        transport=httpx.MockTransport(_handler)
+    )
+    try:
+        response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(token))
+    finally:
+        del app.dependency_overrides[get_soilgrids_port]
+
+    assert response.status_code == 200, response.text
+    assert len(captured) == 1
+    params = captured[0].url.params
+    assert float(params["lon"]) == pytest.approx(-74.095)
+    assert float(params["lat"]) == pytest.approx(10.905)
+    assert set(params.get_list("property")) == set(SOILGRIDS_PROPERTIES)
+    assert params.get_list("depth") == ["0-5cm"]
+    assert params.get_list("value") == ["mean"]

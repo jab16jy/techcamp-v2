@@ -97,6 +97,88 @@ async def test_fetch_sample_raises_on_a_malformed_response_body() -> None:
         await adapter.fetch_sample(lon=-74.0, lat=10.0)
 
 
+_MALFORMED_BODIES: dict[str, object] = {
+    "null layers": {"properties": {"layers": None}},
+    "layers is a dict, not a list": {"properties": {"layers": {"name": "soc"}}},
+    "layer entry is a string": {"properties": {"layers": ["not-a-layer-dict"]}},
+    "layer entry is a number": {"properties": {"layers": [1]}},
+    "null unit_measure": {
+        "properties": {
+            "layers": [
+                {
+                    "name": "soc",
+                    "unit_measure": None,
+                    "depths": [{"label": "0-5cm", "values": {"mean": 150}}],
+                }
+            ]
+        }
+    },
+    "null depths": {
+        "properties": {
+            "layers": [{"name": "soc", "unit_measure": {"d_factor": 10}, "depths": None}]
+        }
+    },
+    "depth entry is a string": {
+        "properties": {
+            "layers": [{"name": "soc", "unit_measure": {"d_factor": 10}, "depths": ["0-5cm"]}]
+        }
+    },
+    "null values": {
+        "properties": {
+            "layers": [
+                {
+                    "name": "soc",
+                    "unit_measure": {"d_factor": 10},
+                    "depths": [{"label": "0-5cm", "values": None}],
+                }
+            ]
+        }
+    },
+    "non-numeric mean": {
+        "properties": {
+            "layers": [
+                {
+                    "name": "soc",
+                    "unit_measure": {"d_factor": 10},
+                    "depths": [{"label": "0-5cm", "values": {"mean": "not-a-number"}}],
+                }
+            ]
+        }
+    },
+    "non-numeric d_factor": {
+        "properties": {
+            "layers": [
+                {
+                    "name": "soc",
+                    "unit_measure": {"d_factor": "not-a-number"},
+                    "depths": [{"label": "0-5cm", "values": {"mean": 150}}],
+                }
+            ]
+        }
+    },
+}
+
+
+@pytest.mark.parametrize("body", _MALFORMED_BODIES.values(), ids=list(_MALFORMED_BODIES))
+async def test_fetch_sample_raises_soil_grids_unavailable_on_every_malformed_shape(
+    body: object,
+) -> None:
+    """GitHub issue #21 round 7: a malformed 200 body must raise
+    `SoilGridsUnavailableError` (-> 502), never an uncaught `TypeError`/
+    `AttributeError`/`ValueError` from deep inside `_extract_conventional`
+    (-> a raw 500)."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    adapter = IsricSoilGridsAdapter(transport=httpx.MockTransport(_handler))
+
+    with pytest.raises(SoilGridsUnavailableError) as exc_info:
+        await adapter.fetch_sample(lon=-74.0, lat=10.0)
+
+    assert exc_info.value.upstream_status == 200
+
+
 def test_seminar_fixture_matches_the_documented_v2_schema() -> None:
     """The fixture wasn't captured live (`/properties/query` returned 503
     during this task): pin its documented shape so a refactor can't drift

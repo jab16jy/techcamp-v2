@@ -110,23 +110,29 @@ class IsricSoilGridsAdapter:
                 upstream_status=response.status_code,
                 detail=f"SoilGrids returned status {response.status_code}",
             )
+        # Single parsing boundary (GitHub issue #21 round 7): every malformed
+        # 200 body — null or wrongly shaped `layers`, layer entries,
+        # `unit_measure`, `depths`, `values`, or a non-numeric value — must
+        # become a 502, never an uncaught 500 from a `.get`/`float()` call
+        # deep inside `_extract_conventional`. One try/except around the
+        # whole parse, not a per-field guard.
         try:
             layers = response.json()["properties"]["layers"]
-        except (ValueError, KeyError, TypeError) as exc:
+            soc_g_per_kg = _extract_conventional(layers, "soc", _DEPTH_LABEL)
+            sample = SoilGridsSample(
+                ph=_extract_conventional(layers, "phh2o", _DEPTH_LABEL),
+                organic_carbon_pct=(soc_g_per_kg / 10 if soc_g_per_kg is not None else None),
+                sand_pct=_extract_conventional(layers, "sand", _DEPTH_LABEL),
+                silt_pct=_extract_conventional(layers, "silt", _DEPTH_LABEL),
+                clay_pct=_extract_conventional(layers, "clay", _DEPTH_LABEL),
+                field_capacity_pct=_extract_conventional(layers, "wv0033", _DEPTH_LABEL),
+                wilting_point_pct=_extract_conventional(layers, "wv1500", _DEPTH_LABEL),
+            )
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
             raise SoilGridsUnavailableError(
                 upstream_status=response.status_code, detail="malformed SoilGrids response"
             ) from exc
-
-        soc_g_per_kg = _extract_conventional(layers, "soc", _DEPTH_LABEL)
-        return SoilGridsSample(
-            ph=_extract_conventional(layers, "phh2o", _DEPTH_LABEL),
-            organic_carbon_pct=(soc_g_per_kg / 10 if soc_g_per_kg is not None else None),
-            sand_pct=_extract_conventional(layers, "sand", _DEPTH_LABEL),
-            silt_pct=_extract_conventional(layers, "silt", _DEPTH_LABEL),
-            clay_pct=_extract_conventional(layers, "clay", _DEPTH_LABEL),
-            field_capacity_pct=_extract_conventional(layers, "wv0033", _DEPTH_LABEL),
-            wilting_point_pct=_extract_conventional(layers, "wv1500", _DEPTH_LABEL),
-        )
+        return sample
 
 
 def _fixture_layer(name: str, *, mean: float, d_factor: float = 10) -> dict[str, Any]:
