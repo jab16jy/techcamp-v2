@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
-from techcamp.farms.domain.errors import RainfedPlotHasIrrigationError
+from techcamp.farms.domain.errors import InsufficientRoleError, RainfedPlotHasIrrigationError
+from techcamp.identity.domain.models import Role
 
 
 class IrrigationSystem(StrEnum):
@@ -43,6 +44,21 @@ def ensure_rainfed_has_no_irrigation(
     """Reject an efficiency or flow on a rainfed plot (ADR-0023)."""
     if system is IrrigationSystem.NONE and (efficiency is not None or flow_lph is not None):
         raise RainfedPlotHasIrrigationError(efficiency=efficiency, flow_lph=flow_lph)
+
+
+WRITE_ROLES: frozenset[Role] = frozenset({Role.OWNER, Role.TECHNICIAN})
+"""Membership roles that may create or edit farms and plots.
+
+docs/04-api.md is silent on which roles may write; T2 decision
+(odd/tasks/techcamp-v2-e3-farms.md): owner and technician write, producer
+and viewer read only.
+"""
+
+
+def ensure_can_write(role: Role) -> None:
+    """Reject a write from a role outside `WRITE_ROLES`."""
+    if role not in WRITE_ROLES:
+        raise InsufficientRoleError(role)
 
 
 @dataclass(frozen=True, slots=True)

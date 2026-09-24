@@ -14,7 +14,17 @@ import uuid
 from typing import Any
 
 from geoalchemy2 import Geometry
-from sqlalchemy import CheckConstraint, Computed, ForeignKey, Index, Integer, Numeric, String
+from sqlalchemy import (
+    CheckConstraint,
+    Computed,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from techcamp.shared.db import Base
@@ -22,7 +32,13 @@ from techcamp.shared.db import Base
 
 class FarmRow(Base):
     __tablename__ = "farm"
-    __table_args__ = (Index("ix_farm_org_id", "org_id"),)
+    __table_args__ = (
+        Index("ix_farm_org_id", "org_id"),
+        UniqueConstraint("id", "org_id", name="uq_farm_id_org_id"),
+        # T1 review follow-up: a composite unique key lets `plot` carry a
+        # composite FK to `(farm.id, farm.org_id)`, so a plot can never point
+        # at a farm belonging to a different organization.
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
@@ -50,12 +66,29 @@ class PlotRow(Base):
             "or (irrigation_efficiency is null and system_flow_lph is null)",
             name="ck_plot_rainfed_has_no_irrigation",
         ),
+        CheckConstraint(
+            "irrigation_efficiency is null "
+            "or (irrigation_efficiency > 0 and irrigation_efficiency <= 1)",
+            name="ck_plot_irrigation_efficiency_range",
+        ),
+        CheckConstraint(
+            "system_flow_lph is null or system_flow_lph > 0",
+            name="ck_plot_system_flow_positive",
+        ),
+        ForeignKeyConstraint(
+            ["farm_id", "org_id"],
+            ["farm.id", "farm.org_id"],
+            name="fk_plot_farm_id_org_id",
+        ),
         Index("ix_plot_boundary", "boundary", postgresql_using="gist"),
+        Index("ix_plot_org_farm", "org_id", "farm_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
-    farm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("farm.id"), nullable=False)
+    farm_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    """No column-level FK: the composite `fk_plot_farm_id_org_id` below ties
+    it to `farm.id` together with `org_id` (T1 review follow-up)."""
     name: Mapped[str] = mapped_column(String, nullable=False)
     boundary: Mapped[Any] = mapped_column(
         Geometry(geometry_type="POLYGON", srid=4326, spatial_index=False), nullable=False

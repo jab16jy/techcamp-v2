@@ -9,10 +9,11 @@ external I/O or two real implementations, docs/adr per `farms` T1 task).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, func, select
+from sqlalchemy import Row, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
@@ -81,9 +82,67 @@ class SqlAlchemyFarmRepository:
         row = result.one_or_none()
         return _farm_from_row(row) if row is not None else None
 
-    async def list_for_org(self, org_id: UUID) -> list[Farm]:
-        result = await self._session.execute(select(*_FARM_COLUMNS).where(FarmRow.org_id == org_id))
+    async def get_for_orgs(self, farm_id: UUID, org_ids: Sequence[UUID]) -> Farm | None:
+        """Look up a farm across every org the caller belongs to (docs/04-api.md:
+        a farm-id-only route has no org_id in the path, but the query still
+        filters by org_id, docs/09-cuellos-de-botella.md#seguridad)."""
+        if not org_ids:
+            return None
+        result = await self._session.execute(
+            select(*_FARM_COLUMNS).where(FarmRow.id == farm_id, FarmRow.org_id.in_(org_ids))
+        )
+        row = result.one_or_none()
+        return _farm_from_row(row) if row is not None else None
+
+    async def list_for_org(
+        self, org_id: UUID, *, limit: int = 50, cursor: UUID | None = None
+    ) -> list[Farm]:
+        """Cursor page ordered by `id` (uuid7 is time-ordered, docs/04-api.md
+        pagination convention)."""
+        stmt = select(*_FARM_COLUMNS).where(FarmRow.org_id == org_id)
+        if cursor is not None:
+            stmt = stmt.where(FarmRow.id > cursor)
+        stmt = stmt.order_by(FarmRow.id).limit(limit)
+        result = await self._session.execute(stmt)
         return [_farm_from_row(row) for row in result]
+
+    async def create(
+        self,
+        *,
+        farm_id: UUID,
+        org_id: UUID,
+        name: str,
+        municipality_code: str,
+        location_wkt: str,
+        technician_id: UUID | None,
+    ) -> Farm:
+        self._session.add(
+            FarmRow(
+                id=farm_id,
+                org_id=org_id,
+                name=name,
+                municipality_code=municipality_code,
+                location=location_wkt,
+                technician_id=technician_id,
+            )
+        )
+        await self._session.commit()
+        farm = await self.get(farm_id, org_id)
+        assert farm is not None
+        return farm
+
+    async def update(
+        self, farm_id: UUID, org_id: UUID, *, name: str, technician_id: UUID | None
+    ) -> Farm:
+        await self._session.execute(
+            update(FarmRow)
+            .where(FarmRow.id == farm_id, FarmRow.org_id == org_id)
+            .values(name=name, technician_id=technician_id)
+        )
+        await self._session.commit()
+        farm = await self.get(farm_id, org_id)
+        assert farm is not None
+        return farm
 
 
 class SqlAlchemyPlotRepository:
@@ -97,8 +156,77 @@ class SqlAlchemyPlotRepository:
         row = result.one_or_none()
         return _plot_from_row(row) if row is not None else None
 
+    async def get_for_orgs(self, plot_id: UUID, org_ids: Sequence[UUID]) -> Plot | None:
+        """Look up a plot across every org the caller belongs to (see
+        `SqlAlchemyFarmRepository.get_for_orgs`)."""
+        if not org_ids:
+            return None
+        result = await self._session.execute(
+            select(*_PLOT_COLUMNS).where(PlotRow.id == plot_id, PlotRow.org_id.in_(org_ids))
+        )
+        row = result.one_or_none()
+        return _plot_from_row(row) if row is not None else None
+
     async def list_for_farm(self, farm_id: UUID, org_id: UUID) -> list[Plot]:
         result = await self._session.execute(
-            select(*_PLOT_COLUMNS).where(PlotRow.farm_id == farm_id, PlotRow.org_id == org_id)
+            select(*_PLOT_COLUMNS)
+            .where(PlotRow.farm_id == farm_id, PlotRow.org_id == org_id)
+            .order_by(PlotRow.id)
         )
         return [_plot_from_row(row) for row in result]
+
+    async def create(
+        self,
+        *,
+        plot_id: UUID,
+        org_id: UUID,
+        farm_id: UUID,
+        name: str,
+        boundary_wkt: str,
+        irrigation_system: IrrigationSystem,
+        irrigation_efficiency: float | None,
+        system_flow_lph: float | None,
+    ) -> Plot:
+        self._session.add(
+            PlotRow(
+                id=plot_id,
+                org_id=org_id,
+                farm_id=farm_id,
+                name=name,
+                boundary=boundary_wkt,
+                irrigation_system=irrigation_system.value,
+                irrigation_efficiency=irrigation_efficiency,
+                system_flow_lph=system_flow_lph,
+            )
+        )
+        await self._session.commit()
+        plot = await self.get(plot_id, org_id)
+        assert plot is not None
+        return plot
+
+    async def update(
+        self,
+        plot_id: UUID,
+        org_id: UUID,
+        *,
+        name: str,
+        boundary_wkt: str,
+        irrigation_system: IrrigationSystem,
+        irrigation_efficiency: float | None,
+        system_flow_lph: float | None,
+    ) -> Plot:
+        await self._session.execute(
+            update(PlotRow)
+            .where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
+            .values(
+                name=name,
+                boundary=boundary_wkt,
+                irrigation_system=irrigation_system.value,
+                irrigation_efficiency=irrigation_efficiency,
+                system_flow_lph=system_flow_lph,
+            )
+        )
+        await self._session.commit()
+        plot = await self.get(plot_id, org_id)
+        assert plot is not None
+        return plot
