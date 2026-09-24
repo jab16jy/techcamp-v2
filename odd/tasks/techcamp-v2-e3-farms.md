@@ -768,5 +768,7 @@ All slices are `size:exception` (each task is one work-unit commit).
 - #26 `feat/e3-farms-05-soilgrids` T5 + T5b `..907bde2` (1033)
 - #27 `feat/e3-farms-06-cycles` T6 + T6b `..9c8243e` (1410)
 
+- CI fix (2026-09-24): every PR failed in CI with `type "geometry" does not exist`, because CI's Postgres service does not run `infra/postgres/init-extensions.sql`. Root fix `c0edf39` (on #22): the farm migration runs `CREATE EXTENSION IF NOT EXISTS postgis`. Reproduced on a fresh database without PostGIS (alembic failed), then 212 passed at the chain tip on a fresh database. The chain was restacked with `git rebase --update-refs` and force-pushed, so the commit hashes above changed. CI is green on #22–#27.
+
 ## Next step
 Owner reviews and merges #22–#27 in order (retarget each child to `main` after its parent merges). Then T7–T9 (web, through `impeccable`) on a new branch from `main`.
