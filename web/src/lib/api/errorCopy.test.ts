@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ApiError } from './client'
 import { describeApiError } from './errorCopy'
 
 describe('describeApiError', () => {
@@ -14,7 +15,13 @@ describe('describeApiError', () => {
     )
   })
 
-  it('returns generic copy for anything else, including an ApiError', () => {
+  it('returns generic copy for anything else, including a plain Error', () => {
     expect(describeApiError(new Error('boom'))).toBe('Ocurrió un error. Intenta de nuevo.')
+  })
+
+  it('returns generic copy for a real ApiError (a server-side problem+json failure, not a connection issue)', () => {
+    expect(describeApiError(new ApiError(422, 'Validation error', 'name: Field required'))).toBe(
+      'Ocurrió un error. Intenta de nuevo.',
+    )
   })
 })

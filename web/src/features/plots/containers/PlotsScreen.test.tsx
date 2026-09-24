@@ -1,8 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../../../lib/api/session'
 import { PlotsScreen } from './PlotsScreen'
+
+// The Leaflet map is mocked (task instruction): these wiring tests only care
+// that the creation sheets open with the right farm, not about map drawing.
+vi.mock('../components/PlotDrawMap', () => ({
+  default: () => <div>mock plot draw map</div>,
+}))
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -184,5 +190,41 @@ describe('PlotsScreen', () => {
       screen.queryByText('No se pudieron cargar las parcelas de esta finca.'),
     ).not.toBeInTheDocument()
     expect(plotsFor1Calls).toBe(2)
+  })
+
+  it('opens the create-farm sheet from the header button and the empty-state action', async () => {
+    setSession('token-abc', 'org-1')
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ items: [], next_cursor: null }))
+
+    renderPlotsScreen()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Nueva finca' }))
+    expect(screen.getByLabelText('Nombre')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    await waitFor(() => expect(screen.getByText('Todavía no hay fincas')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Crear finca' }))
+    expect(screen.getByLabelText('Nombre')).toBeInTheDocument()
+  })
+
+  it('opens the create-plot sheet for the right farm via Agregar parcela', async () => {
+    setSession('token-abc', 'org-1')
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/plots')) return jsonResponse([])
+      return jsonResponse({
+        items: [{ id: 'farm-1', org_id: 'org-1', name: 'Finca La Esperanza' }],
+        next_cursor: null,
+      })
+    })
+
+    renderPlotsScreen()
+
+    await waitFor(() => expect(screen.getByText('Finca La Esperanza')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar parcela' }))
+
+    expect(screen.getByText('Nueva parcela')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+    await waitFor(() => expect(screen.queryByText('Nueva parcela')).not.toBeInTheDocument())
   })
 })

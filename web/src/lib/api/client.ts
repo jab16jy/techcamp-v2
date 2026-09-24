@@ -15,8 +15,9 @@ import { clearSession, getToken } from './session'
  */
 const API_BASE_URL: string = import.meta.env.VITE_API_TEST_BASE_URL ?? ''
 
-/** Requests are aborted after this long, surfacing as a `DOMException` `TimeoutError`. */
-const REQUEST_TIMEOUT_MS = 10_000
+/** Requests are aborted after this long, surfacing as a `DOMException` `TimeoutError`.
+ * Exported so `client.test.ts` asserts against the same constant, not a duplicated number. */
+export const REQUEST_TIMEOUT_MS = 10_000
 
 /** `/dev/auth/*` (seminar-only) is called before any session exists; a stale stored
  * token must never ride along, or a wrong code's 401 would sign the user out
@@ -83,6 +84,23 @@ async function parseErrorBody(response: Response): Promise<{ title: string; deta
 }
 
 /**
+ * Combines the caller's own abort signal with the request timeout.
+ * `AbortSignal.any` (Chrome 116+, Safari 17.4+) has no polyfill on older
+ * field WebViews, where it is simply `undefined`; calling it there throws
+ * and every request — OTP included — would show as a connection error
+ * (#21 round 12). Feature-detected instead: when unavailable, the timeout
+ * alone wins and a caller-initiated abort (e.g. on unmount) no longer
+ * cancels the request, an accepted tradeoff on those older runtimes.
+ */
+function combineWithTimeout(callerSignal: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  if (typeof AbortSignal.any === 'function') {
+    return AbortSignal.any([callerSignal, timeoutSignal])
+  }
+  return timeoutSignal
+}
+
+/**
  * Bearer token, request timeout, and error handling in one middleware (a
  * single object so `onResponse` sees exactly the `Request` `onRequest`
  * produced, with no ordering question between separate middlewares).
@@ -103,9 +121,7 @@ const sessionMiddleware: Middleware = {
     // already carries a caller-supplied signal (openapi-fetch forwards
     // `fetchOptions.signal` straight into the `Request` it builds); combine
     // it with the timeout instead of overwriting it (#21 round 11).
-    return new Request(request, {
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
-    })
+    return new Request(request, { signal: combineWithTimeout(request.signal) })
   },
   async onResponse({ request, response }) {
     if (response.ok) return response
