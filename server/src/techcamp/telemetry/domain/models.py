@@ -14,7 +14,9 @@ from enum import IntEnum, StrEnum
 from typing import Any
 from uuid import UUID
 
+from techcamp.identity.domain.models import Role
 from techcamp.telemetry.domain.errors import (
+    InsufficientRoleError,
     InvalidCalibrationParamsError,
     MalformedUplinkPayloadError,
     UnsupportedUplinkVersionError,
@@ -32,6 +34,21 @@ class NodeStatus(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
     RETIRED = "retired"
+
+
+WRITE_ROLES: frozenset[Role] = frozenset({Role.OWNER, Role.TECHNICIAN})
+"""Membership roles that may claim, patch, rotate or calibrate nodes/sensors.
+
+docs/04-api.md is silent on which roles may write; T3 decision mirrors
+farms' `WRITE_ROLES` (`farms/domain/models.py`): owner and technician write,
+producer and viewer read only.
+"""
+
+
+def ensure_can_write(role: Role) -> None:
+    """Reject a write from a role outside `WRITE_ROLES`."""
+    if role not in WRITE_ROLES:
+        raise InsufficientRoleError(role)
 
 
 @dataclass(frozen=True, slots=True)

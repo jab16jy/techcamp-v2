@@ -2,24 +2,25 @@
 
 `sensor` and `calibration` carry no `org_id` column, so their queries join
 through `node` to filter by it, same pattern as farms' `crop_cycle`/
-`soil_profile` (`server/src/techcamp/farms/adapters/repositories.py`). No
-application-layer port exists yet: T1 has no use case that depends on
-repository behavior through an abstraction (ponytail: a port only for
-external I/O or two real implementations, same reasoning as farms' T1).
+`soil_profile` (`server/src/techcamp/farms/adapters/repositories.py`). T3
+adds `telemetry/application/ports.py` (the layering-rule abstraction farms'
+own T1 docstring anticipated) now that write use cases depend on this
+module's repository behavior.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Row, select
+from sqlalchemy import CursorResult, Row, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.shared.ids import uuid7
-from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, SensorRow
+from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, ReadingRow, SensorRow
 from techcamp.telemetry.domain.models import (
     Calibration,
     CalibrationKind,
@@ -108,17 +109,107 @@ class SqlAlchemyNodeRepository:
         row = result.one_or_none()
         return _node_from_row(row) if row is not None else None
 
+    async def get_for_orgs(self, node_id: UUID, org_ids: Sequence[UUID]) -> Node | None:
+        """Look up a node across every org the caller belongs to (a node-id-
+        only route has no `org_id` in the path, docs/09-cuellos-de-
+        botella.md#seguridad). `NodeRow.org_id.in_(org_ids)` never matches an
+        unclaimed node: `org_id` is `NULL` there, and SQL `IN` never matches
+        `NULL`."""
+        if not org_ids:
+            return None
+        result = await self._session.execute(
+            select(*_NODE_COLUMNS).where(NodeRow.id == node_id, NodeRow.org_id.in_(org_ids))
+        )
+        row = result.one_or_none()
+        return _node_from_row(row) if row is not None else None
+
     async def list_for_org(
-        self, org_id: UUID, *, plot_id: UUID | None = None, status: NodeStatus | None = None
+        self,
+        org_id: UUID,
+        *,
+        plot_id: UUID | None = None,
+        status: NodeStatus | None = None,
+        limit: int = 50,
+        cursor: UUID | None = None,
     ) -> list[Node]:
+        """Cursor page ordered by `id` (uuid7 is time-ordered, docs/04-api.md
+        pagination convention, same as `SqlAlchemyFarmRepository.list_for_org`)."""
         stmt = select(*_NODE_COLUMNS).where(NodeRow.org_id == org_id)
         if plot_id is not None:
             stmt = stmt.where(NodeRow.plot_id == plot_id)
         if status is not None:
             stmt = stmt.where(NodeRow.status == status.value)
-        stmt = stmt.order_by(NodeRow.id)
+        if cursor is not None:
+            stmt = stmt.where(NodeRow.id > cursor)
+        stmt = stmt.order_by(NodeRow.id).limit(limit)
         result = await self._session.execute(stmt)
         return [_node_from_row(row) for row in result]
+
+    async def claim(
+        self,
+        node_id: UUID,
+        *,
+        org_id: UUID,
+        plot_id: UUID,
+        credential_hash: str,
+        claimed_at: datetime,
+    ) -> Node | None:
+        """Assigns org/plot/credentials to a still-unclaimed node
+        (docs/06-diseno-detallado.md §2). `None` when the node was claimed by
+        a concurrent request between the caller's check and this update: the
+        `org_id IS NULL` guard mirrors `ck_node_ownership_all_or_nothing`."""
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                update(NodeRow)
+                .where(NodeRow.id == node_id, NodeRow.org_id.is_(None))
+                .values(
+                    org_id=org_id,
+                    plot_id=plot_id,
+                    credential_hash=credential_hash,
+                    claimed_at=claimed_at,
+                )
+            ),
+        )
+        if result.rowcount == 0:
+            await self._session.rollback()
+            return None
+        await self._session.commit()
+        return await self.get(node_id, org_id)
+
+    async def update(
+        self, node_id: UUID, org_id: UUID, *, plot_id: UUID | None, status: NodeStatus
+    ) -> Node:
+        await self._session.execute(
+            update(NodeRow)
+            .where(NodeRow.id == node_id, NodeRow.org_id == org_id)
+            .values(plot_id=plot_id, status=status.value)
+        )
+        await self._session.commit()
+        node = await self.get(node_id, org_id)
+        assert node is not None
+        return node
+
+    async def set_credential_hash(self, node_id: UUID, org_id: UUID, credential_hash: str) -> None:
+        await self._session.execute(
+            update(NodeRow)
+            .where(NodeRow.id == node_id, NodeRow.org_id == org_id)
+            .values(credential_hash=credential_hash)
+        )
+        await self._session.commit()
+
+    async def count_readings_since(self, node_id: UUID, org_id: UUID, since: datetime) -> int:
+        """Distinct uplink timestamps in the window, not raw row count: every
+        sensor on the node shares one `time` per uplink (docs/11-
+        metricas.md: `lecturas recibidas / esperadas por nodo y día`)."""
+        result = await self._session.execute(
+            select(func.count(func.distinct(ReadingRow.time)))
+            .select_from(ReadingRow)
+            .join(SensorRow, SensorRow.id == ReadingRow.sensor_id)
+            .join(NodeRow, NodeRow.id == SensorRow.node_id)
+            .where(NodeRow.id == node_id, NodeRow.org_id == org_id, ReadingRow.time >= since)
+        )
+        return result.scalar_one()
 
 
 _SENSOR_COLUMNS = (
@@ -144,6 +235,17 @@ class SqlAlchemySensorRepository:
         )
         result = await self._session.execute(stmt)
         return [_sensor_from_row(row) for row in result]
+
+    async def get_org_id(self, sensor_id: int) -> UUID | None:
+        """`sensor` carries no `org_id` column, so this joins through `node`
+        (see the module docstring); `None` when `sensor_id` doesn't exist."""
+        result = await self._session.execute(
+            select(NodeRow.org_id)
+            .select_from(SensorRow)
+            .join(NodeRow, NodeRow.id == SensorRow.node_id)
+            .where(SensorRow.id == sensor_id)
+        )
+        return result.scalar_one_or_none()
 
 
 _CALIBRATION_COLUMNS = (
@@ -182,6 +284,20 @@ class SqlAlchemyCalibrationRepository:
         result = await self._session.execute(stmt)
         row = result.one_or_none()
         return _calibration_from_row(row) if row is not None else None
+
+    async def next_version(self, sensor_id: int, org_id: UUID) -> int:
+        """`MAX(version) + 1`, scoped by org through the sensor→node join
+        (docs/03-modelo-datos.md:461: never edited in place, always a new
+        version). `1` for a sensor's first calibration."""
+        result = await self._session.execute(
+            select(func.max(CalibrationRow.version))
+            .select_from(CalibrationRow)
+            .join(SensorRow, SensorRow.id == CalibrationRow.sensor_id)
+            .join(NodeRow, NodeRow.id == SensorRow.node_id)
+            .where(CalibrationRow.sensor_id == sensor_id, NodeRow.org_id == org_id)
+        )
+        highest = result.scalar_one_or_none()
+        return 1 if highest is None else highest + 1
 
     async def add_version(
         self,
