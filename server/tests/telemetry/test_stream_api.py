@@ -24,12 +24,15 @@ import httpx
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow
 from techcamp.main import app
 from techcamp.shared.config import database_url
+from techcamp.shared.db import engine
 from techcamp.shared.ids import uuid7
+from techcamp.telemetry.adapters import sse_hub
 
 from .test_api import _auth, _member
 
@@ -135,7 +138,11 @@ async def test_stream_delivers_reading_event_for_the_subscribed_farm(
 
             lines = await _read_until_data(response)
 
-    assert "id: 1" in lines
+    # Not `id: 1`: `plot_events` is one shared Postgres channel, so a
+    # concurrently running test's NOTIFY can bump this hub's counter first
+    # (R3-id-assertion-shared-channel). Monotonic increase is covered at the
+    # hub level by `test_hub_event_id_is_monotonic_per_process`.
+    assert any(line.startswith("id: ") for line in lines)
     assert "event: reading" in lines
     data = json.loads(next(line for line in lines if line.startswith("data:"))[len("data: ") :])
     assert data == {
@@ -184,3 +191,61 @@ async def test_stream_filters_out_events_for_other_farms(
     assert "event: node.status" in lines
     data = json.loads(next(line for line in lines if line.startswith("data:"))[len("data: ") :])
     assert data["status"] == "offline"  # the other farm's reading never arrives first
+
+
+async def test_stream_releases_db_session_before_streaming(
+    db_session: AsyncSession, live_base_url: str
+) -> None:
+    """R3-stream-holds-db-session: a yield-scoped `SessionDep` stays checked
+    out for FastAPI's dependency teardown, which for a `StreamingResponse`
+    only runs after the whole (never-ending) response finishes. The access
+    check must instead run in its own short-lived session, closed before the
+    stream starts, so open streams never starve REST endpoints of pool
+    connections."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    farm_id = await _make_farm(db_session, org_id)
+
+    checked_out = 0
+
+    def _on_checkout(*_args: object) -> None:
+        nonlocal checked_out
+        checked_out += 1
+
+    def _on_checkin(*_args: object) -> None:
+        nonlocal checked_out
+        checked_out -= 1
+
+    event.listen(engine.sync_engine, "checkout", _on_checkout)
+    event.listen(engine.sync_engine, "checkin", _on_checkin)
+    try:
+        async with httpx.AsyncClient(base_url=live_base_url, timeout=10.0) as client:
+            async with client.stream(
+                "GET", "/api/v1/stream", params={"farm_id": str(farm_id)}, headers=_auth(token)
+            ) as response:
+                assert response.status_code == 200
+                await asyncio.sleep(0.05)  # let dependency teardown run
+                assert checked_out == 0, "the stream must not hold a checked-out db session"
+
+                rest_response = await client.get(
+                    "/api/v1/farms", params={"org_id": str(org_id)}, headers=_auth(token)
+                )
+                assert rest_response.status_code == 200
+    finally:
+        event.remove(engine.sync_engine, "checkout", _on_checkout)
+        event.remove(engine.sync_engine, "checkin", _on_checkin)
+
+
+def test_app_boots_when_listener_connect_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R3-lifespan-coupling: the API must boot even when the `LISTEN`
+    connection can't be established yet; the connect/retry runs in the
+    background instead of failing `lifespan()`."""
+
+    async def _always_fails(*, dsn: str) -> asyncpg.Connection[object]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sse_hub.asyncpg, "connect", _always_fails)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200

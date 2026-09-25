@@ -11,14 +11,52 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 import pytest
 
 from techcamp.shared.ids import uuid7
+from techcamp.telemetry.adapters import sse_hub
 from techcamp.telemetry.adapters.api.stream import stream_plot_events
 from techcamp.telemetry.adapters.sse_hub import PlotEventsHub
 
 pytestmark = pytest.mark.anyio
+
+
+class _FakeConnection:
+    """A `asyncpg.Connection` double: records what the hub registers on it
+    and lets a test fire the termination listener to simulate a dropped
+    `LISTEN` connection."""
+
+    def __init__(self) -> None:
+        self.listener_added = False
+        self.closed = False
+        self._termination_cb: Callable[[object], None] | None = None
+
+    async def add_listener(self, _channel: str, _callback: object) -> None:
+        self.listener_added = True
+
+    def add_termination_listener(self, callback: Callable[[object], None]) -> None:
+        self._termination_cb = callback
+
+    async def remove_listener(self, _channel: str, _callback: object) -> None:
+        pass
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def simulate_loss(self) -> None:
+        assert self._termination_cb is not None
+        self._termination_cb(self)
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> None:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.001)
 
 
 def _reading_payload(*, farm_id: object, plot_id: object) -> str:
@@ -121,6 +159,53 @@ def test_hub_ignores_malformed_and_unknown_payloads() -> None:
     assert queue.qsize() == 0
 
 
+def test_hub_drops_non_object_json_payload() -> None:
+    """A JSON array or scalar has no `.get` (AttributeError today) — dropped,
+    not raised (R3-partial-payload-unhandled)."""
+    hub = PlotEventsHub()
+    farm_id = uuid7()
+    _client_id, queue = hub.subscribe(farm_id)
+
+    hub.dispatch(json.dumps(["not", "an", "object"]))
+
+    assert queue.qsize() == 0
+
+
+def test_hub_drops_payload_missing_required_fields() -> None:
+    """A `reading` missing `plot_id`/`metric`/`value`/`at` raises `KeyError`
+    today — dropped, not raised (R3-partial-payload-unhandled)."""
+    hub = PlotEventsHub()
+    farm_id = uuid7()
+    _client_id, queue = hub.subscribe(farm_id)
+
+    hub.dispatch(json.dumps({"type": "reading", "farm_id": str(farm_id)}))
+
+    assert queue.qsize() == 0
+
+
+def test_hub_drops_payload_with_invalid_farm_id() -> None:
+    """A non-UUID `farm_id` raises `ValueError` today — dropped, not raised
+    (R3-partial-payload-unhandled)."""
+    hub = PlotEventsHub()
+    farm_id = uuid7()
+    _client_id, queue = hub.subscribe(farm_id)
+
+    hub.dispatch(
+        json.dumps(
+            {
+                "type": "reading",
+                "farm_id": "not-a-uuid",
+                "plot_id": str(uuid7()),
+                "metric": "soil_moisture",
+                "value": 1.0,
+                "at": "2026-03-01T12:00:00+00:00",
+            }
+        )
+    )
+
+    assert queue.qsize() == 0
+
+
 def test_hub_drops_slow_client_without_blocking_others() -> None:
     hub = PlotEventsHub()
     farm_id = uuid7()
@@ -188,3 +273,115 @@ async def test_stream_plot_events_stops_once_unsubscribed() -> None:
 
     with pytest.raises(StopAsyncIteration):
         await anext(gen)
+
+
+async def test_stream_plot_events_ends_on_none_sentinel() -> None:
+    """The hub pushes `None` to end a stream on connection loss or `stop()`
+    (R3-listener-no-reconnect, R3-lifespan-coupling); the generator must end
+    instead of yielding it as an event."""
+    hub = PlotEventsHub()
+    client_id, queue = hub.subscribe(uuid7())
+
+    queue.put_nowait(None)
+    gen = stream_plot_events(hub, client_id, queue, keepalive_interval=5.0)
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(gen)
+
+
+# -- PlotEventsHub: connection loss, reconnect, lifespan (E4 T6b) --
+
+
+async def test_hub_start_never_raises_when_connect_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`start()` must not block API boot on Postgres being reachable
+    (R3-lifespan-coupling): it retries in the background instead."""
+
+    async def _always_fails(*, dsn: str) -> _FakeConnection:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sse_hub.asyncpg, "connect", _always_fails)
+    hub = PlotEventsHub(backoff_initial=0.001, backoff_max=0.002)
+
+    await hub.start()  # must return promptly, not raise
+
+    await hub.stop()
+
+
+async def test_hub_reconnects_after_connect_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+    fake = _FakeConnection()
+
+    async def _fake_connect(*, dsn: str) -> _FakeConnection:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise OSError("connection refused")
+        return fake
+
+    monkeypatch.setattr(sse_hub.asyncpg, "connect", _fake_connect)
+    hub = PlotEventsHub(backoff_initial=0.001, backoff_max=0.002)
+
+    await hub.start()
+    await _wait_until(lambda: fake.listener_added)
+
+    assert attempts == 3
+    await hub.stop()
+
+
+async def test_hub_ends_client_streams_on_connection_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeConnection()
+
+    async def _fake_connect(*, dsn: str) -> _FakeConnection:
+        return fake
+
+    monkeypatch.setattr(sse_hub.asyncpg, "connect", _fake_connect)
+    hub = PlotEventsHub(backoff_initial=0.001, backoff_max=0.002)
+    await hub.start()
+    await _wait_until(lambda: fake.listener_added)
+
+    _client_id, queue = hub.subscribe(uuid7())
+
+    fake.simulate_loss()
+
+    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+    assert event is None
+
+    await hub.stop()
+
+
+async def test_hub_reconnects_after_connection_loss(monkeypatch: pytest.MonkeyPatch) -> None:
+    connects = 0
+    fakes = [_FakeConnection(), _FakeConnection()]
+
+    async def _fake_connect(*, dsn: str) -> _FakeConnection:
+        nonlocal connects
+        fake = fakes[connects]
+        connects += 1
+        return fake
+
+    monkeypatch.setattr(sse_hub.asyncpg, "connect", _fake_connect)
+    hub = PlotEventsHub(backoff_initial=0.001, backoff_max=0.002)
+    await hub.start()
+    await _wait_until(lambda: fakes[0].listener_added)
+
+    fakes[0].simulate_loss()
+    await _wait_until(lambda: fakes[1].listener_added)
+
+    assert connects == 2
+    await hub.stop()
+
+
+async def test_hub_stop_ends_every_open_stream() -> None:
+    """`stop()` must wake streams blocked in `queue.get()`, not just close
+    the `LISTEN` connection (R3-lifespan-coupling)."""
+    hub = PlotEventsHub()
+    _client_id, queue = hub.subscribe(uuid7())
+
+    await hub.stop()
+
+    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+    assert event is None
