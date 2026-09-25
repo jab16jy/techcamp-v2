@@ -17,7 +17,11 @@ from techcamp.telemetry.domain.models import (
     CalibrationKind,
     CalibrationMethod,
     Node,
+    NodeSeenUpdate,
     NodeStatus,
+    NodeStatusEvent,
+    ReadingEvent,
+    ReadingRecord,
     Sensor,
 )
 
@@ -28,6 +32,13 @@ class NodeRepository(Protocol):
     async def get_for_orgs(self, node_id: UUID, org_ids: Sequence[UUID]) -> Node | None: ...
 
     async def get_by_claim_code(self, claim_code: str) -> Node | None: ...
+
+    async def get_by_id(self, node_id: UUID) -> Node | None:
+        """Any node regardless of org/claim state — the ingestor knows only
+        `node_id` from the MQTT topic, before it knows which org (or whether
+        one) claims it. Same before-org-is-known reasoning as
+        `get_by_claim_code`."""
+        ...
 
     async def list_for_org(
         self,
@@ -58,6 +69,11 @@ class NodeRepository(Protocol):
     ) -> None: ...
 
     async def count_readings_since(self, node_id: UUID, org_id: UUID, since: datetime) -> int: ...
+
+    async def mark_seen_batch(self, updates: Sequence[NodeSeenUpdate]) -> None:
+        """Sets `last_seen_at`/`status` for every node touched by one ingest
+        flush (docs/06-diseno-detallado.md §1), one commit for the batch."""
+        ...
 
 
 class SensorRepository(Protocol):
@@ -93,3 +109,21 @@ class CalibrationRepository(Protocol):
         rmse_pct: float | None,
         valid_from: datetime,
     ) -> Calibration | None: ...
+
+
+class ReadingRepository(Protocol):
+    async def insert_batch(self, records: Sequence[ReadingRecord]) -> int:
+        """Bulk `INSERT ... ON CONFLICT (sensor_id, time) DO NOTHING`
+        (docs/06-diseno-detallado.md §1): duplicate QoS-1 redeliveries are
+        idempotent. Returns the number of rows actually inserted."""
+        ...
+
+
+class PlotEventsPort(Protocol):
+    async def publish(
+        self, *, readings: Sequence[ReadingEvent], statuses: Sequence[NodeStatusEvent]
+    ) -> None:
+        """`NOTIFY plot_events` with one minimal JSON payload per event
+        (docs/04-api.md:180-189, ADR-0015: payload stays small), for T6's
+        SSE fan-out. One commit for the whole flush."""
+        ...

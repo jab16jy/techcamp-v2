@@ -10,12 +10,14 @@ module's repository behavior.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Row, func, select, update
+from sqlalchemy import CursorResult, Row, func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +28,12 @@ from techcamp.telemetry.domain.models import (
     CalibrationKind,
     CalibrationMethod,
     Node,
+    NodeSeenUpdate,
     NodeStatus,
+    NodeStatusEvent,
     NodeTransport,
+    ReadingEvent,
+    ReadingRecord,
     Sensor,
 )
 
@@ -106,6 +112,14 @@ class SqlAlchemyNodeRepository:
         result = await self._session.execute(
             select(*_NODE_COLUMNS).where(NodeRow.claim_code == claim_code)
         )
+        row = result.one_or_none()
+        return _node_from_row(row) if row is not None else None
+
+    async def get_by_id(self, node_id: UUID) -> Node | None:
+        """The ingestor knows only `node_id` from the MQTT topic (T4), before
+        it knows which org — same before-org-is-known reasoning as
+        `get_by_claim_code`."""
+        result = await self._session.execute(select(*_NODE_COLUMNS).where(NodeRow.id == node_id))
         row = result.one_or_none()
         return _node_from_row(row) if row is not None else None
 
@@ -210,6 +224,19 @@ class SqlAlchemyNodeRepository:
             .where(NodeRow.id == node_id, NodeRow.org_id == org_id, ReadingRow.time >= since)
         )
         return result.scalar_one()
+
+    async def mark_seen_batch(self, updates: Sequence[NodeSeenUpdate]) -> None:
+        """One `UPDATE` per node touched by an ingest flush (T4), one commit
+        for the whole batch (docs/06-diseno-detallado.md §1)."""
+        if not updates:
+            return
+        for u in updates:
+            await self._session.execute(
+                update(NodeRow)
+                .where(NodeRow.id == u.node_id, NodeRow.org_id == u.org_id)
+                .values(last_seen_at=u.last_seen_at, status=u.status.value)
+            )
+        await self._session.commit()
 
 
 _SENSOR_COLUMNS = (
@@ -350,3 +377,84 @@ class SqlAlchemyCalibrationRepository:
             select(*_CALIBRATION_COLUMNS).where(CalibrationRow.id == calibration_id)
         )
         return _calibration_from_row(result.one())
+
+
+class SqlAlchemyReadingRepository:
+    """T4: `reading` has no domain model of its own beyond `ReadingRecord`
+    (see `telemetry/domain/models.py`'s module docstring), only this batched
+    insert."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert_batch(self, records: Sequence[ReadingRecord]) -> int:
+        """`INSERT ... ON CONFLICT (time, sensor_id) DO NOTHING`
+        (docs/06-diseno-detallado.md §1): idempotent under QoS-1 redelivery,
+        `reading`'s composite primary key is the conflict target."""
+        if not records:
+            return 0
+        stmt = (
+            pg_insert(ReadingRow)
+            .values(
+                [
+                    {
+                        "time": r.time,
+                        "sensor_id": r.sensor_id,
+                        "raw_value": r.raw_value,
+                        "value": r.value,
+                        "received_at": r.received_at,
+                        "quality": int(r.quality),
+                    }
+                    for r in records
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=["time", "sensor_id"])
+        )
+        result = cast(CursorResult[Any], await self._session.execute(stmt))
+        await self._session.commit()
+        return result.rowcount
+
+
+class SqlAlchemyPlotEventsNotifier:
+    """`NOTIFY plot_events` for T6's SSE fan-out (docs/04-api.md:180-189,
+    ADR-0015). `pg_notify()` (not a literal `NOTIFY channel, 'payload'`)
+    because the payload is dynamic and needs bind-parameter escaping."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def publish(
+        self, *, readings: Sequence[ReadingEvent], statuses: Sequence[NodeStatusEvent]
+    ) -> None:
+        if not readings and not statuses:
+            return
+        for reading in readings:
+            payload = json.dumps(
+                {
+                    "type": "reading",
+                    "org_id": str(reading.org_id),
+                    "farm_id": str(reading.farm_id),
+                    "plot_id": str(reading.plot_id),
+                    "metric": reading.metric,
+                    "value": reading.value,
+                    "at": reading.at.isoformat(),
+                }
+            )
+            await self._session.execute(
+                text("SELECT pg_notify('plot_events', :payload)"), {"payload": payload}
+            )
+        for status in statuses:
+            payload = json.dumps(
+                {
+                    "type": "node.status",
+                    "org_id": str(status.org_id),
+                    "farm_id": str(status.farm_id),
+                    "node_id": str(status.node_id),
+                    "status": status.status.value,
+                    "at": status.at.isoformat(),
+                }
+            )
+            await self._session.execute(
+                text("SELECT pg_notify('plot_events', :payload)"), {"payload": payload}
+            )
+        await self._session.commit()

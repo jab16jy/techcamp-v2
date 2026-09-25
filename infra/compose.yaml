@@ -52,6 +52,22 @@ services:
       postgres:
         condition: service_healthy
 
+  ingestor:
+    build:
+      context: ../server
+    profiles: [seminar]
+    command: ["python", "-m", "techcamp.telemetry.adapters.ingestor"]
+    environment:
+      TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-techcamp}:${POSTGRES_PASSWORD:-techcamp}@postgres:5432/${POSTGRES_DB:-techcamp}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: ${MQTT_PORT:-1883}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+
   web:
     build:
       context: ../web

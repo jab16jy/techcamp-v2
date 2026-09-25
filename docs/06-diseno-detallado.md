@@ -45,6 +45,8 @@ sequenceDiagram
 | Validación | Si `v` es desconocida, el `channel_key` no existe o el payload está mal formado, el mensaje se descarta, se cuenta en `ingest_rejected_total{reason}` y se guarda en `ingest_dead_letter` para diagnosticar. |
 | Tiempo | Si `ts` está en el futuro (> 10 min) o falta, se usa `received_at` con `quality = 1`. Si es anterior a 30 días, se descarta. |
 | Rango físico | Un valor calibrado fuera del rango de la variable (por ejemplo, humedad > 100 %) se guarda con `quality = 2` y no dispara alertas. |
+| Precedencia de `quality` (T4, gap) | Si una lectura cae en ambos casos (`ts` corregido y fuera de rango), se guarda `quality = 2`: fuera de rango es la señal más fuerte. Los docs no especificaban la precedencia. |
+| Sin calibración vigente (T4, gap) | Si no hay `calibration` con `valid_from <= time` para el sensor, se guarda la lectura con `raw_value` y `value = null` (no se descarta). Los docs no cubrían este caso; el esquema ya modela `value` como nullable. |
 | Lote | Inserción en lote cada 500 mensajes o 1 s. Con 110 msg/s de pico (año 3) queda muy lejos del límite. |
 | Duplicados | La restricción `UNIQUE (sensor_id, time)` más `ON CONFLICT DO NOTHING` hace idempotente la entrega "al menos una vez" de QoS 1. |
 | Huecos | Un salto en `seq` incrementa `ingest_gap_total`. La completitud diaria por nodo es un SLI ([11-metricas](11-metricas.md)). |
