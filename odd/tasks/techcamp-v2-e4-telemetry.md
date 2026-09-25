@@ -40,6 +40,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - RDD: on (global). One `gentle-ai review assess --committed-only` per work-unit commit; first boundary is the branch point `e79d542`.
 
 ## Decisions
+- Readings query (T5): docs/04:93 uses one `[t, value]` point shape for every resolution, so `hour`/`day` points carry the bucket average. Readings with a null `value` and buckets without a calibrated average are excluded.
 - Ingest (T4, recorded in docs/06 §1): out-of-range (quality 2) wins over timestamp-corrected (1); a reading with no valid calibration is stored raw with `value` null. Only claimed nodes are ingested. `ingest_uplinks` resolves `farm_id` through the farms `PlotRepository` for SSE fan-out.
 - Claim (T3): unknown claim code → 404; already claimed → 409; PATCH `plot_id` in another org → 422. `GET /nodes` takes the required `org_id` query parameter like `GET /farms` (docs/04 omits it). Sensors come pre-provisioned with the unclaimed node, and the claim leaves them untouched: docs/06 §2 mentions a "hardware model" that the schema doesn't have (doc gap). `battery_v`/`rssi` in health return null until T4 turns the `bat`/`rssi` channels into readings. `completeness_24h` = distinct reading timestamps in 24 h ÷ (86400 / `interval_s`), capped at 1 (docs/11). The one-time password uses stdlib `scrypt` in `shared/credentials.py`. `Idempotency-Key` stays deferred, as in E3.
 - Alert evaluation during ingest is a no-op hook until E7 (dependency direction E4 → E7).
@@ -52,7 +53,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T2 Pure domain: calibration methods (linear, two_point, polynomial), uplink payload validation, quality rules — route: delegated (sonnet-high) — forecast ~600 — actual 411 (`04fe5b2`)
 - [x] T3 Node API: claim (one-time password), list, patch, rotate, health, sensors, calibrations; org isolation test — route: delegated (sonnet-high) — forecast ~1,200 — actual 1,535 (`d11c578`)
 - [x] T4 Ingestor: `aiomqtt` subscriber, batching, idempotent insert, status/LWT, `NOTIFY`, `ingestor` compose service; discard messages with `ts` older than 30 days (docs/06 §1); decide quality precedence when a reading is both timestamp-corrected and out of range — route: delegated (sonnet-high) — forecast ~1,000 — actual 1,464 (`3c116c2`) + review correction 86 (`8e3038c`)
-- [ ] T5 Readings query: `raw|hour|day`, 2-day and 60-day limits — route: delegated (sonnet-high) — forecast ~600
+- [x] T5 Readings query: `raw|hour|day`, 2-day and 60-day limits — route: delegated (sonnet-high) — forecast ~600 — actual 735 (`511480b`)
 - [ ] T6 SSE stream: `LISTEN` fan-out, farm filter + org check, keepalive, `Last-Event-ID` — route: delegated (sonnet-high) — forecast ~700
 - [ ] T7 Recalibration job: procrastinate setup, `worker` compose service, recompute `value` — route: delegated (sonnet-high) — forecast ~500
 - [ ] T8 Basic simulator CLI: claim or create node, backfill N days, 5 s live loop, raw ADC values — route: delegated (sonnet) — forecast ~550
@@ -71,6 +72,8 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - T3 (`e231efd..d11c578`, 1,535 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-6de842485f32f243`, one reliability lens, APPROVED and acknowledged. 4 WARNING + 2 SUGGESTION, non-blocking → issue #35, deferred. Boundary → `d11c578`.
 - `a3ae810` (doc): passive, boundary → `a3ae810`.
 - T4 (`a3ae810..3c116c2`, 1,464 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-3382490048a23b13`. CRITICAL `R3-flush-failure-kills-ingestor` (a flush exception killed `run()` and lost the drained QoS-1 batch; no compose restart policy) → correction plan of 150 lines → bounded correction `8e3038c` (86 lines: `_flush_with_retry` requeues the batch, `restart: unless-stopped`) → provider targeted validation APPROVED and acknowledged. 3 WARNING + 1 SUGGESTION, non-blocking → issue #36, deferred. Boundary → `8e3038c`.
+- `5285624` (doc): passive, boundary → `5285624`.
+- T5 (`5285624..511480b`, 735 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-c462c8ae0e2f8bca`, one reliability lens, APPROVED and acknowledged. 1 WARNING + 2 SUGGESTION, non-blocking → issue #37, deferred. Boundary → `511480b`.
 
 ## Acceptance criteria
 - The simulator publishes over MQTT, the ingestor stores calibrated `reading` rows (raw and calibrated), duplicates are ignored.
@@ -82,10 +85,11 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 ## Progress / evidence
 - 2026-09-24: branch `feat/e4-telemetry` created from `main` @ `e79d542`; feature doc created.
 - 2026-09-24: T1 done (`9b5dd96`): server pytest 227 passed, ruff, format, mypy, lint-imports green (writer). T1b (`1df9981`): pytest 234 passed, all server checks green (writer); parent spot check `uv run pytest tests/telemetry` 22 passed. Writer disclosed partial Read-before-CodeGraph during T1 exploration.
+- 2026-09-25: T5 (`511480b`): RED observed per behavior group; pytest 338 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_readings_api.py tests/telemetry/test_reading_repository.py` 14 passed.
 - 2026-09-25: T4 (`3c116c2`): RED observed per behavior group; pytest 316 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_ingest.py tests/telemetry/test_ingestor.py` 23 passed. Correction `8e3038c`: pytest 318 passed (writer); parent spot check `test_ingestor.py` 10 passed. PENDING: compose validation (`podman-compose` is not installed on this machine; the writer only parsed the YAML) and a live-broker check of the `$share/ingestors/` subscription — both covered by the E4 end-to-end demo.
 - 2026-09-24: T3 (`d11c578`): pytest 283 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_api.py` 20 passed. TDD DEVIATION: the writer wrote the tests alongside the implementation, so no RED was observed, which departs from the project TDD rule. Recorded here, not hidden; the next writers get a stricter RED-evidence requirement.
 - 2026-09-24: T2 (`04fe5b2`): pytest 263 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_domain_models.py` 26 passed. Linear params use the documented names `scale`/`offset` (docs/03:465). Out-of-range rule only for `%` units: docs/06 §1 gives no other ranges.
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-T5 readings query.
+T6 SSE stream.
