@@ -13,10 +13,12 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from techcamp.farms.adapters.api.deps import PlotRepoDep
-from techcamp.farms.domain.errors import PlotNotFoundError
+from techcamp.farms.adapters.api.deps import FarmRepoDep, PlotRepoDep
+from techcamp.farms.application.manage_farms import resolve_farm_access
+from techcamp.farms.domain.errors import FarmNotFoundError, PlotNotFoundError
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.identity.domain.errors import NotAMemberError
@@ -24,9 +26,11 @@ from techcamp.shared.errors import ProblemError
 from techcamp.telemetry.adapters.api.deps import (
     CalibrationRepoDep,
     NodeRepoDep,
+    PlotEventsHubDep,
     ReadingRepoDep,
     SensorRepoDep,
 )
+from techcamp.telemetry.adapters.api.stream import stream_plot_events
 from techcamp.telemetry.application.add_calibration import add_calibration
 from techcamp.telemetry.application.get_node_health import get_node_health
 from techcamp.telemetry.application.manage_nodes import (
@@ -420,3 +424,32 @@ async def get_plot_readings(
     except InvalidReadingRangeError as exc:
         raise ProblemError(status=422, title="Invalid reading range", detail=str(exc)) from exc
     return ReadingsResponse(series=[_reading_series_view(s) for s in series])
+
+
+@router.get("/stream")
+async def stream_events(
+    user_id: CurrentUserId,
+    farms: FarmRepoDep,
+    memberships: MembershipRepoDep,
+    hub: PlotEventsHubDep,
+    farm_id: Annotated[UUID, Query()],
+) -> StreamingResponse:
+    """docs/04-api.md:180-189, ADR-0015: one `LISTEN plot_events` fan-out per
+    api process, filtered by `farm_id`.
+
+    `Last-Event-ID` (E4 T6 gap, docs are silent on replay): the browser sends
+    it automatically on reconnect; it is accepted and simply ignored here,
+    no replay is built.
+    """
+    try:
+        await resolve_farm_access(
+            user_id=user_id, farm_id=farm_id, farms=farms, memberships=memberships
+        )
+    except FarmNotFoundError as exc:
+        raise ProblemError(status=404, title="Farm not found") from exc
+    client_id, queue = hub.subscribe(farm_id)
+    return StreamingResponse(
+        stream_plot_events(hub, client_id, queue),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
