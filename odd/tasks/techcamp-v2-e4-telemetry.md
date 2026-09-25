@@ -44,7 +44,9 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - The simulator covers one basic node; the scenario machinery is E16.
 
 ## Tasks
-- [ ] T1 Schema: `node`/`sensor`/`calibration`/`reading` migrations, hypertable, compression, continuous aggregates, ORM, repositories filtered by `org_id` — route: delegated (sonnet-high) — forecast ~850
+- [x] T1 Schema: `node`/`sensor`/`calibration`/`reading` migrations, hypertable, compression, continuous aggregates, ORM, repositories filtered by `org_id` — route: delegated (sonnet-high) — forecast ~850 — actual 1,063 (`9b5dd96`)
+- [x] T1b Unclaimed nodes: `node.org_id`/`plot_id` nullable with all-or-nothing ownership CHECK (docs/06 §2: claim assigns org and plot) — route: delegated (sonnet) — forecast ~100 — actual 152 (`1df9981`)
+- [ ] T1c Fix #33: org-scope `add_version`, `version DESC` tiebreaker, isolate status CHECK test, idempotent Timescale DDL, declare `ix_reading_sensor_time` in ORM — route: delegated (sonnet-high) — forecast ~150
 - [ ] T2 Pure domain: calibration methods (linear, two_point, polynomial), uplink payload validation, quality rules — route: delegated (sonnet-high) — forecast ~600
 - [ ] T3 Node API: claim (one-time password), list, patch, rotate, health, sensors, calibrations; org isolation test — route: delegated (sonnet-high) — forecast ~1,200
 - [ ] T4 Ingestor: `aiomqtt` subscriber, batching, idempotent insert, status/LWT, `NOTIFY`, `ingestor` compose service — route: delegated (sonnet-high) — forecast ~1,000
@@ -58,6 +60,8 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 
 ## Review (RDD)
 - Boundary: `e79d542`.
+- `fe85ae7` (feature doc): assessed passive, no review; boundary → `fe85ae7`.
+- T1 + T1b (`fe85ae7..1df9981`, 1,215 lines): assessed medium, `slice_budget_reached`; standing grant applied; lineage `review-99634a0063c7e89e`, one reliability lens, APPROVED and acknowledged. 4 WARNING + 1 SUGGESTION, non-blocking → issue #33 (fixed by T1c). Boundary → `1df9981`.
 
 ## Acceptance criteria
 - The simulator publishes over MQTT, the ingestor stores calibrated `reading` rows (raw and calibrated), duplicates are ignored.
@@ -68,6 +72,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 
 ## Progress / evidence
 - 2026-09-24: branch `feat/e4-telemetry` created from `main` @ `e79d542`; feature doc created.
+- 2026-09-24: T1 done (`9b5dd96`): server pytest 227 passed, ruff, format, mypy, lint-imports green (writer). T1b (`1df9981`): pytest 234 passed, all server checks green (writer); parent spot check `uv run pytest tests/telemetry` 22 passed. Writer disclosed partial Read-before-CodeGraph during T1 exploration.
 
 ## Next step
-T1 schema.
+T1c (fix #33), then T2 pure domain.
