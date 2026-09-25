@@ -40,6 +40,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - RDD: on (global). One `gentle-ai review assess --committed-only` per work-unit commit; first boundary is the branch point `e79d542`.
 
 ## Decisions
+- Claim (T3): unknown claim code → 404; already claimed → 409; PATCH `plot_id` in another org → 422. `GET /nodes` takes the required `org_id` query parameter like `GET /farms` (docs/04 omits it). Sensors come pre-provisioned with the unclaimed node, and the claim leaves them untouched: docs/06 §2 mentions a "hardware model" that the schema doesn't have (doc gap). `battery_v`/`rssi` in health return null until T4 turns the `bat`/`rssi` channels into readings. `completeness_24h` = distinct reading timestamps in 24 h ÷ (86400 / `interval_s`), capped at 1 (docs/11). The one-time password uses stdlib `scrypt` in `shared/credentials.py`. `Idempotency-Key` stays deferred, as in E3.
 - Alert evaluation during ingest is a no-op hook until E7 (dependency direction E4 → E7).
 - The simulator covers one basic node; the scenario machinery is E16.
 
@@ -48,7 +49,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T1b Unclaimed nodes: `node.org_id`/`plot_id` nullable with all-or-nothing ownership CHECK (docs/06 §2: claim assigns org and plot) — route: delegated (sonnet) — forecast ~100 — actual 152 (`1df9981`)
 - [x] T1c Fix #33: org-scope `add_version`, `version DESC` tiebreaker, isolate status CHECK test, idempotent Timescale DDL, declare `ix_reading_sensor_time` in ORM — route: delegated (sonnet-high) — forecast ~150 — actual 170 (`8ba6fa7`). Last immediate follow-up fix: from now on non-blocking findings stay in the issue tracker for later (owner, 2026-09-24)
 - [x] T2 Pure domain: calibration methods (linear, two_point, polynomial), uplink payload validation, quality rules — route: delegated (sonnet-high) — forecast ~600 — actual 411 (`04fe5b2`)
-- [ ] T3 Node API: claim (one-time password), list, patch, rotate, health, sensors, calibrations; org isolation test — route: delegated (sonnet-high) — forecast ~1,200
+- [x] T3 Node API: claim (one-time password), list, patch, rotate, health, sensors, calibrations; org isolation test — route: delegated (sonnet-high) — forecast ~1,200 — actual 1,535 (`d11c578`)
 - [ ] T4 Ingestor: `aiomqtt` subscriber, batching, idempotent insert, status/LWT, `NOTIFY`, `ingestor` compose service; discard messages with `ts` older than 30 days (docs/06 §1); decide quality precedence when a reading is both timestamp-corrected and out of range — route: delegated (sonnet-high) — forecast ~1,000
 - [ ] T5 Readings query: `raw|hour|day`, 2-day and 60-day limits — route: delegated (sonnet-high) — forecast ~600
 - [ ] T6 SSE stream: `LISTEN` fan-out, farm filter + org check, keepalive, `Last-Event-ID` — route: delegated (sonnet-high) — forecast ~700
@@ -65,6 +66,8 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - `43d2abe` (doc): passive, boundary → `43d2abe`.
 - T1c `8ba6fa7`: medium, `under_budget` (170 lines); pending in the next slice.
 - T1c + T2 (`43d2abe..04fe5b2`, 588 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-d326a92df3ebed8d`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 2 SUGGESTION, non-blocking → issue #34, deferred (no immediate fix task). Boundary → `04fe5b2`.
+- `e231efd` (doc): passive, boundary → `e231efd`.
+- T3 (`e231efd..d11c578`, 1,535 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-6de842485f32f243`, one reliability lens, APPROVED and acknowledged. 4 WARNING + 2 SUGGESTION, non-blocking → issue #35, deferred. Boundary → `d11c578`.
 
 ## Acceptance criteria
 - The simulator publishes over MQTT, the ingestor stores calibrated `reading` rows (raw and calibrated), duplicates are ignored.
@@ -76,8 +79,9 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 ## Progress / evidence
 - 2026-09-24: branch `feat/e4-telemetry` created from `main` @ `e79d542`; feature doc created.
 - 2026-09-24: T1 done (`9b5dd96`): server pytest 227 passed, ruff, format, mypy, lint-imports green (writer). T1b (`1df9981`): pytest 234 passed, all server checks green (writer); parent spot check `uv run pytest tests/telemetry` 22 passed. Writer disclosed partial Read-before-CodeGraph during T1 exploration.
+- 2026-09-24: T3 (`d11c578`): pytest 283 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_api.py` 20 passed. TDD DEVIATION: the writer wrote the tests alongside the implementation, so no RED was observed, which departs from the project TDD rule. Recorded here, not hidden; the next writers get a stricter RED-evidence requirement.
 - 2026-09-24: T2 (`04fe5b2`): pytest 263 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_domain_models.py` 26 passed. Linear params use the documented names `scale`/`offset` (docs/03:465). Out-of-range rule only for `%` units: docs/06 §1 gives no other ranges.
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-T3 node API.
+T4 ingestor.
