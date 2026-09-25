@@ -32,10 +32,10 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - Library docs via `find-docs` (ctx7). English code.
 
 ## Route and checks
-- TDD: on (owner decision 2026-09-22, `AGENTS.md`). RED → GREEN → REFACTOR. Runners: `uv run pytest` (server/), `npm test -- --run` (web/).
+- TDD: on (owner decision 2026-09-22, `AGENTS.md`), run by the ODD workflow itself; no `tdd` skill (owner, 2026-09-25). RED → GREEN → REFACTOR. Runners: `uv run pytest` (server/), `npm test -- --run` (web/).
 - Other checks: server `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`, `uv run lint-imports`; web `npm run lint`, `npm run typecheck`, `npm run build`, `npm run size`.
 - Route: delegated direct. Sonnet 5 only: `sonnet-high` for technical tasks, standard Sonnet for exploration and easy tasks. Triggers fired: mapping (10+ docs, mapped by one standard Sonnet explorer), writer (every task touches 2+ non-trivial files), preparation.
-- Skills forwarded: `fastapi`, `pydantic`, `tdd`, `find-docs`, `impeccable` (web), `work-unit-commits`, `chained-pr`.
+- Skills forwarded: `fastapi`, `pydantic`, `find-docs`, `impeccable` (web), `work-unit-commits`, `chained-pr`.
 - Delivery: `stacked-to-main`, about 400 authored lines per PR, merged in order. Forecast ≈ 10,000–10,500 authored code lines (calibrated on E3: forecast 2,400, actual ~10,700). Branch `feat/e4-telemetry` from `main` @ `e79d542`.
 - RDD: on (global). One `gentle-ai review assess --committed-only` per work-unit commit; first boundary is the branch point `e79d542`.
 
@@ -54,7 +54,8 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T3 Node API: claim (one-time password), list, patch, rotate, health, sensors, calibrations; org isolation test — route: delegated (sonnet-high) — forecast ~1,200 — actual 1,535 (`d11c578`)
 - [x] T4 Ingestor: `aiomqtt` subscriber, batching, idempotent insert, status/LWT, `NOTIFY`, `ingestor` compose service; discard messages with `ts` older than 30 days (docs/06 §1); decide quality precedence when a reading is both timestamp-corrected and out of range — route: delegated (sonnet-high) — forecast ~1,000 — actual 1,464 (`3c116c2`) + review correction 86 (`8e3038c`)
 - [x] T5 Readings query: `raw|hour|day`, 2-day and 60-day limits — route: delegated (sonnet-high) — forecast ~600 — actual 735 (`511480b`)
-- [ ] T6 SSE stream: `LISTEN` fan-out, farm filter + org check, keepalive, `Last-Event-ID` — route: delegated (sonnet-high) — forecast ~700
+- [x] T6 SSE stream: `LISTEN` fan-out, farm filter + org check, keepalive, `Last-Event-ID` — route: delegated (sonnet-high, essentials-only brief) — forecast ~700 — actual 617 (`7e50442`)
+- [ ] T6b Fix T6 review findings (CRITICAL `R3-stream-holds-db-session` plus all WARNING/SUGGESTION, owner 2026-09-25) — route: delegated (sonnet-high) — forecast ~250
 - [ ] T7 Recalibration job: procrastinate setup, `worker` compose service, recompute `value` — route: delegated (sonnet-high) — forecast ~500
 - [ ] T8 Basic simulator CLI: claim or create node, backfill N days, 5 s live loop, raw ADC values — route: delegated (sonnet) — forecast ~550
 - [ ] T9 Web nodes: QR scan + manual fallback, claim sheet (password once), node list + health, calibration form (via `impeccable`) — route: delegated (sonnet-high) — forecast ~2,100
@@ -74,6 +75,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - T4 (`a3ae810..3c116c2`, 1,464 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-3382490048a23b13`. CRITICAL `R3-flush-failure-kills-ingestor` (a flush exception killed `run()` and lost the drained QoS-1 batch; no compose restart policy) → correction plan of 150 lines → bounded correction `8e3038c` (86 lines: `_flush_with_retry` requeues the batch, `restart: unless-stopped`) → provider targeted validation APPROVED and acknowledged. 3 WARNING + 1 SUGGESTION, non-blocking → issue #36, deferred. Boundary → `8e3038c`.
 - `5285624` (doc): passive, boundary → `5285624`.
 - T5 (`5285624..511480b`, 735 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-c462c8ae0e2f8bca`, one reliability lens, APPROVED and acknowledged. 1 WARNING + 2 SUGGESTION, non-blocking → issue #37, deferred. Boundary → `511480b`.
+- T6 (`f9e9e1f..7e50442`, 626 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-8d4dc4757b571a56`, one reliability lens → `correction_required`: CRITICAL `R3-stream-holds-db-session` (the stream holds a pooled `AsyncSession` for the whole connection; refuter inconclusive), WARNING `R3-listener-no-reconnect`, `R3-lifespan-coupling`, `R3-partial-payload-unhandled`, SUGGESTION `R3-id-assertion-shared-channel`. The provider-issued continuation then stopped terminally with `corrupted_or_unverifiable_authority` (gentle-ai 3.7.0, repair unsupported); the owner chose not to report it. The lineage stays as is; T6b fixes every finding in a new commit that gets a fresh review.
 
 ## Acceptance criteria
 - The simulator publishes over MQTT, the ingestor stores calibrated `reading` rows (raw and calibrated), duplicates are ignored.
@@ -85,6 +87,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 ## Progress / evidence
 - 2026-09-24: branch `feat/e4-telemetry` created from `main` @ `e79d542`; feature doc created.
 - 2026-09-24: T1 done (`9b5dd96`): server pytest 227 passed, ruff, format, mypy, lint-imports green (writer). T1b (`1df9981`): pytest 234 passed, all server checks green (writer); parent spot check `uv run pytest tests/telemetry` 22 passed. Writer disclosed partial Read-before-CodeGraph during T1 exploration.
+- 2026-09-25: T6 (`7e50442`): RED observed (`ModuleNotFoundError` for the stream module); pytest 351 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_sse_stream.py tests/telemetry/test_stream_api.py` 13 passed. FastAPI's native `EventSourceResponse` pings `: ping` every 15 s (hardcoded), so T6 uses `StreamingResponse` to match docs/04's `:keepalive` every 20 s. Vite's proxy streams SSE unbuffered (unchanged). Gaps: stream auth for `EventSource` (T10 decides), `Last-Event-ID` accepted but not replayed (docs silent).
 - 2026-09-25: T5 (`511480b`): RED observed per behavior group; pytest 338 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_readings_api.py tests/telemetry/test_reading_repository.py` 14 passed.
 - 2026-09-25: T4 (`3c116c2`): RED observed per behavior group; pytest 316 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_ingest.py tests/telemetry/test_ingestor.py` 23 passed. Correction `8e3038c`: pytest 318 passed (writer); parent spot check `test_ingestor.py` 10 passed. PENDING: compose validation (`podman-compose` is not installed on this machine; the writer only parsed the YAML) and a live-broker check of the `$share/ingestors/` subscription — both covered by the E4 end-to-end demo.
 - 2026-09-24: T3 (`d11c578`): pytest 283 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_api.py` 20 passed. TDD DEVIATION: the writer wrote the tests alongside the implementation, so no RED was observed, which departs from the project TDD rule. Recorded here, not hidden; the next writers get a stricter RED-evidence requirement.
