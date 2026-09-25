@@ -9,10 +9,16 @@ need.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from enum import StrEnum
+from datetime import UTC, datetime, timedelta
+from enum import IntEnum, StrEnum
 from typing import Any
 from uuid import UUID
+
+from techcamp.telemetry.domain.errors import (
+    InvalidCalibrationParamsError,
+    MalformedUplinkPayloadError,
+    UnsupportedUplinkVersionError,
+)
 
 
 class NodeTransport(StrEnum):
@@ -86,3 +92,130 @@ class Calibration:
     rmse_pct: float | None
     """Calibration error, when measured (docs/03-modelo-datos.md:165)."""
     valid_from: datetime
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _require_number(params: dict[str, Any], key: str, method: CalibrationMethod) -> float:
+    value = params.get(key)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise InvalidCalibrationParamsError(method.value, f"'{key}' must be a number")
+    return float(value)
+
+
+def apply_calibration(calibration: Calibration, raw: float) -> float:
+    """Map a raw ADC value to its calibrated value (docs/03-modelo-datos.md:463-467)."""
+    params = calibration.params
+    method = calibration.method
+    if method is CalibrationMethod.LINEAR:
+        scale = _require_number(params, "scale", method)
+        offset = _require_number(params, "offset", method)
+        return scale * raw + offset
+    if method is CalibrationMethod.TWO_POINT:
+        raw_dry = _require_number(params, "raw_dry", method)
+        raw_wet = _require_number(params, "raw_wet", method)
+        vwc_dry = _require_number(params, "vwc_dry", method)
+        vwc_wet = _require_number(params, "vwc_wet", method)
+        if raw_dry == raw_wet:
+            raise InvalidCalibrationParamsError(method.value, "raw_dry and raw_wet must differ")
+        fraction = (raw - raw_dry) / (raw_wet - raw_dry)
+        return vwc_dry + fraction * (vwc_wet - vwc_dry)
+    if method is CalibrationMethod.POLYNOMIAL:
+        coeffs = params.get("coeffs")
+        if not isinstance(coeffs, list) or not coeffs or not all(_is_number(c) for c in coeffs):
+            raise InvalidCalibrationParamsError(
+                method.value, "coeffs must be a non-empty list of numbers"
+            )
+        return sum(float(c) * raw**i for i, c in enumerate(coeffs))
+    raise AssertionError(f"unhandled calibration method: {method}")
+
+
+SUPPORTED_UPLINK_VERSION = 1
+"""docs/04-api.md:216: the only uplink payload schema version this server
+understands; any other `v` is discarded by the ingestor and counted."""
+
+
+@dataclass(frozen=True, slots=True)
+class UplinkPayload:
+    """A validated uplink payload (docs/04-api.md:202-220)."""
+
+    version: int
+    seq: int
+    ts: int | None
+    """Epoch seconds from the node's clock; `None` when absent from the payload."""
+    firmware: str
+    channels: dict[str, float]
+    """`channel_key -> raw_value` (docs/04-api.md:219)."""
+
+
+def parse_uplink(payload: dict[str, Any]) -> UplinkPayload:
+    """Validate and parse a raw uplink payload into `UplinkPayload`.
+
+    Unknown/missing `v` is rejected with `UnsupportedUplinkVersionError`
+    (distinct from other shape errors) so the ingestor can discard and count
+    it separately (docs/04-api.md:216)."""
+    version = payload.get("v")
+    if version != SUPPORTED_UPLINK_VERSION:
+        raise UnsupportedUplinkVersionError(version)
+
+    seq = payload.get("seq")
+    if not _is_number(seq) or not isinstance(seq, int):
+        raise MalformedUplinkPayloadError("'seq' must be an integer")
+
+    ts = payload.get("ts")
+    if ts is not None and (not _is_number(ts) or not isinstance(ts, int)):
+        raise MalformedUplinkPayloadError("'ts' must be an integer epoch or absent")
+
+    firmware = payload.get("fw")
+    if not isinstance(firmware, str):
+        raise MalformedUplinkPayloadError("'fw' must be a string")
+
+    channels = payload.get("m")
+    if not isinstance(channels, dict) or not channels:
+        raise MalformedUplinkPayloadError("'m' must be a non-empty object")
+    for key, value in channels.items():
+        if not isinstance(key, str) or not _is_number(value):
+            raise MalformedUplinkPayloadError(f"channel '{key}' must map to a number")
+
+    return UplinkPayload(
+        version=version,
+        seq=seq,
+        ts=ts,
+        firmware=firmware,
+        channels={key: float(value) for key, value in channels.items()},
+    )
+
+
+class ReadingQuality(IntEnum):
+    """docs/03-modelo-datos.md:174: `0 ok, 1 ts corregido, 2 fuera de rango`."""
+
+    OK = 0
+    TIMESTAMP_CORRECTED = 1
+    OUT_OF_RANGE = 2
+
+
+_FUTURE_TOLERANCE = timedelta(minutes=10)
+
+
+def resolve_reading_time(ts: int | None, received_at: datetime) -> tuple[datetime, ReadingQuality]:
+    """docs/04-api.md:218: a missing or more-than-10-minutes-future `ts`
+    falls back to `received_at` with `quality = 1`."""
+    if ts is not None:
+        at = datetime.fromtimestamp(ts, tz=UTC)
+        if at <= received_at + _FUTURE_TOLERANCE:
+            return at, ReadingQuality.OK
+    return received_at, ReadingQuality.TIMESTAMP_CORRECTED
+
+
+def classify_reading_range(unit: str, value: float) -> ReadingQuality:
+    """docs/06-diseno-detallado.md §1: "Un valor calibrado fuera del rango de
+    la variable ... se guarda con quality = 2". The only range docs document
+    is implicit in a percentage (its example: humidity > 100%), so a `%`
+    reading outside `[0, 100]` is the one rule enforced here. No other unit
+    has a documented range (flagged gap): those always come back OK rather
+    than an invented threshold."""
+    if unit == "%" and not 0 <= value <= 100:
+        return ReadingQuality.OUT_OF_RANGE
+    return ReadingQuality.OK
