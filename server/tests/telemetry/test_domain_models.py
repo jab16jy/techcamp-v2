@@ -20,6 +20,7 @@ from techcamp.telemetry.domain.models import (
     classify_reading_range,
     is_reading_too_old,
     parse_uplink,
+    recalibrate_reading,
     resolve_reading_time,
     validate_reading_range,
 )
@@ -236,6 +237,46 @@ def test_classify_reading_range_has_no_documented_range_for_other_units() -> Non
     """docs give no plausible range for °C, V or dBm — flagged as a gap
     rather than an invented threshold; these always come back OK."""
     assert classify_reading_range("°C", 999.0) == ReadingQuality.OK
+
+
+# -- T7 recalibration (docs/03-modelo-datos.md:461): recomputing `value`/
+# `quality` for an already-stored reading under a (new) calibration version.
+
+
+def test_recalibrate_reading_applies_the_new_calibration() -> None:
+    calibration = _calibration(CalibrationMethod.LINEAR, {"scale": 2.0, "offset": 1.0})
+    value, quality = recalibrate_reading(calibration, 10.0, "°C", ReadingQuality.OK)
+    assert value == 21.0
+    assert quality == ReadingQuality.OK
+
+
+def test_recalibrate_reading_reclassifies_out_of_range_under_the_new_calibration() -> None:
+    calibration = _calibration(CalibrationMethod.LINEAR, {"scale": 2.0, "offset": 0.0})
+    value, quality = recalibrate_reading(calibration, 60.0, "%", ReadingQuality.OK)
+    assert value == 120.0
+    assert quality == ReadingQuality.OUT_OF_RANGE
+
+
+def test_recalibrate_reading_preserves_a_timestamp_corrected_flag() -> None:
+    """A previously `TIMESTAMP_CORRECTED` reading keeps that signal even when
+    the recalibrated value is back in range (max(ts, range) ordering, same as
+    `ingest_uplinks`)."""
+    calibration = _calibration(CalibrationMethod.LINEAR, {"scale": 1.0, "offset": 0.0})
+    value, quality = recalibrate_reading(calibration, 50.0, "%", ReadingQuality.TIMESTAMP_CORRECTED)
+    assert value == 50.0
+    assert quality == ReadingQuality.TIMESTAMP_CORRECTED
+
+
+def test_recalibrate_reading_treats_a_previous_out_of_range_as_conservatively_corrected() -> None:
+    """T7 decision, flagged doc gap: `quality` merges two independent signals
+    into one column, so a previous `OUT_OF_RANGE` can't tell whether the
+    timestamp was also corrected underneath it. Recomputing with a calibration
+    that brings the value back in range conservatively keeps
+    `TIMESTAMP_CORRECTED` rather than silently claiming a clean `OK`."""
+    calibration = _calibration(CalibrationMethod.LINEAR, {"scale": 1.0, "offset": 0.0})
+    value, quality = recalibrate_reading(calibration, 50.0, "%", ReadingQuality.OUT_OF_RANGE)
+    assert value == 50.0
+    assert quality == ReadingQuality.TIMESTAMP_CORRECTED
 
 
 # -- ingest: 30-day discard (docs/06-diseno-detallado.md §1: "Si es anterior

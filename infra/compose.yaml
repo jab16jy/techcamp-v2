@@ -69,6 +69,19 @@ services:
       mosquitto:
         condition: service_started
 
+  worker:
+    build:
+      context: ../server
+    profiles: [seminar]
+    restart: unless-stopped
+    command: ["python", "-m", "techcamp.worker"]
+    environment:
+      TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-techcamp}:${POSTGRES_PASSWORD:-techcamp}@postgres:5432/${POSTGRES_DB:-techcamp}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   web:
     build:
       context: ../web
