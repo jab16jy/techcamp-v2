@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
@@ -230,6 +231,7 @@ async def test_calibration_repository_add_version_and_get_latest_valid_at(
     repo = SqlAlchemyCalibrationRepository(db_session)
 
     created = await repo.add_version(
+        org_id=org_id,
         sensor_id=sensor_id,
         version=1,
         method=CalibrationMethod.TWO_POINT,
@@ -239,6 +241,7 @@ async def test_calibration_repository_add_version_and_get_latest_valid_at(
         valid_from=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
+    assert created is not None
     assert created.sensor_id == sensor_id
     assert created.version == 1
     assert created.method is CalibrationMethod.TWO_POINT
@@ -258,6 +261,7 @@ async def test_get_latest_valid_at_picks_the_most_recent_version_not_after_the_g
     sensor_id = await _make_sensor(db_session, node_id)
     repo = SqlAlchemyCalibrationRepository(db_session)
     v1 = await repo.add_version(
+        org_id=org_id,
         sensor_id=sensor_id,
         version=1,
         method=CalibrationMethod.LINEAR,
@@ -267,6 +271,7 @@ async def test_get_latest_valid_at_picks_the_most_recent_version_not_after_the_g
         valid_from=datetime(2026, 1, 1, tzinfo=UTC),
     )
     v2 = await repo.add_version(
+        org_id=org_id,
         sensor_id=sensor_id,
         version=2,
         method=CalibrationMethod.LINEAR,
@@ -275,12 +280,110 @@ async def test_get_latest_valid_at_picks_the_most_recent_version_not_after_the_g
         rmse_pct=2.5,
         valid_from=datetime(2026, 6, 1, tzinfo=UTC),
     )
+    assert v1 is not None
+    assert v2 is not None
 
     before_v2 = await repo.get_latest_valid_at(sensor_id, org_id, datetime(2026, 3, 1, tzinfo=UTC))
     after_v2 = await repo.get_latest_valid_at(sensor_id, org_id, datetime(2026, 12, 1, tzinfo=UTC))
 
     assert before_v2 is not None and before_v2.id == v1.id
     assert after_v2 is not None and after_v2.id == v2.id
+
+
+async def test_get_latest_valid_at_breaks_valid_from_ties_by_highest_version(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+    same_valid_from = datetime(2026, 1, 1, tzinfo=UTC)
+    await repo.add_version(
+        org_id=org_id,
+        sensor_id=sensor_id,
+        version=1,
+        method=CalibrationMethod.LINEAR,
+        kind=CalibrationKind.LAB,
+        params={"scale": 1.0, "offset": 0.0},
+        rmse_pct=None,
+        valid_from=same_valid_from,
+    )
+    v2 = await repo.add_version(
+        org_id=org_id,
+        sensor_id=sensor_id,
+        version=2,
+        method=CalibrationMethod.LINEAR,
+        kind=CalibrationKind.FIELD,
+        params={"scale": 1.1, "offset": 0.2},
+        rmse_pct=2.5,
+        valid_from=same_valid_from,
+    )
+    assert v2 is not None
+
+    found = await repo.get_latest_valid_at(sensor_id, org_id, datetime(2026, 6, 1, tzinfo=UTC))
+
+    assert found is not None
+    assert found.id == v2.id
+
+
+async def test_add_version_is_scoped_to_the_sensors_org(db_session: AsyncSession) -> None:
+    org_a, plot_a = await _make_org_and_plot(db_session, "Finca A")
+    org_b, _plot_b = await _make_org_and_plot(db_session, "Finca B")
+    node_id = await _make_node(db_session, org_a, plot_a)
+    sensor_id = await _make_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+
+    result = await repo.add_version(
+        org_id=org_b,
+        sensor_id=sensor_id,
+        version=1,
+        method=CalibrationMethod.LINEAR,
+        kind=CalibrationKind.LAB,
+        params={"scale": 1.0, "offset": 0.0},
+        rmse_pct=None,
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    assert result is None
+    assert (
+        await repo.get_latest_valid_at(sensor_id, org_a, datetime(2026, 6, 1, tzinfo=UTC)) is None
+    )
+
+
+async def test_add_version_duplicate_sensor_and_version_raises_and_keeps_session_usable(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+    await repo.add_version(
+        org_id=org_id,
+        sensor_id=sensor_id,
+        version=1,
+        method=CalibrationMethod.LINEAR,
+        kind=CalibrationKind.LAB,
+        params={"scale": 1.0, "offset": 0.0},
+        rmse_pct=None,
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    with pytest.raises(IntegrityError):
+        await repo.add_version(
+            org_id=org_id,
+            sensor_id=sensor_id,
+            version=1,
+            method=CalibrationMethod.LINEAR,
+            kind=CalibrationKind.LAB,
+            params={"scale": 2.0, "offset": 0.0},
+            rmse_pct=None,
+            valid_from=datetime(2026, 2, 1, tzinfo=UTC),
+        )
+
+    # the session stays usable after the repository rolls back
+    found = await repo.get_latest_valid_at(sensor_id, org_id, datetime(2026, 6, 1, tzinfo=UTC))
+    assert found is not None
+    assert found.version == 1
 
 
 async def test_get_latest_valid_at_hides_calibrations_of_other_orgs(
@@ -292,6 +395,7 @@ async def test_get_latest_valid_at_hides_calibrations_of_other_orgs(
     sensor_id = await _make_sensor(db_session, node_id)
     repo = SqlAlchemyCalibrationRepository(db_session)
     await repo.add_version(
+        org_id=org_a,
         sensor_id=sensor_id,
         version=1,
         method=CalibrationMethod.LINEAR,

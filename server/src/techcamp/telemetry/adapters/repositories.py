@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Row, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.shared.ids import uuid7
@@ -175,7 +176,7 @@ class SqlAlchemyCalibrationRepository:
                 NodeRow.org_id == org_id,
                 CalibrationRow.valid_from <= at,
             )
-            .order_by(CalibrationRow.valid_from.desc())
+            .order_by(CalibrationRow.valid_from.desc(), CalibrationRow.version.desc())
             .limit(1)
         )
         result = await self._session.execute(stmt)
@@ -185,6 +186,7 @@ class SqlAlchemyCalibrationRepository:
     async def add_version(
         self,
         *,
+        org_id: UUID,
         sensor_id: int,
         version: int,
         method: CalibrationMethod,
@@ -192,9 +194,19 @@ class SqlAlchemyCalibrationRepository:
         params: dict[str, Any],
         rmse_pct: float | None,
         valid_from: datetime,
-    ) -> Calibration:
+    ) -> Calibration | None:
         """Calibration is versioned and never edited in place
-        (docs/03-modelo-datos.md:461): always an insert, never an update."""
+        (docs/03-modelo-datos.md:461): always an insert, never an update.
+        `None` when `sensor_id` doesn't belong to `org_id` (same convention
+        as the read methods above), joined the same way as
+        `get_latest_valid_at`."""
+        owned = await self._session.execute(
+            select(SensorRow.id)
+            .join(NodeRow, NodeRow.id == SensorRow.node_id)
+            .where(SensorRow.id == sensor_id, NodeRow.org_id == org_id)
+        )
+        if owned.scalar_one_or_none() is None:
+            return None
         calibration_id = uuid7()
         self._session.add(
             CalibrationRow(
@@ -208,7 +220,16 @@ class SqlAlchemyCalibrationRepository:
                 valid_from=valid_from,
             )
         )
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            # No domain error to map a duplicate (sensor_id, version) to yet
+            # (no use case depends on this repository through a port, see
+            # the module docstring); just keep the session usable for the
+            # caller, same rollback-then-reraise shape as
+            # `SqlAlchemyCropCycleRepository.create`.
+            await self._session.rollback()
+            raise
         result = await self._session.execute(
             select(*_CALIBRATION_COLUMNS).where(CalibrationRow.id == calibration_id)
         )

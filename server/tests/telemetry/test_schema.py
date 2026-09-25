@@ -187,14 +187,19 @@ async def test_node_status_check_rejects_an_unknown_value(db_session: AsyncSessi
             credential_hash="hash",
             firmware=None,
             interval_s=300,
-            claimed_at=None,
+            # all-or-nothing ownership (org_id/plot_id/claimed_at) must hold
+            # here so the only violation is `ck_node_status`, not
+            # `ck_node_ownership_all_or_nothing` too.
+            claimed_at=datetime(2026, 1, 1, tzinfo=UTC),
             last_seen_at=None,
             status="not-a-status",
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError) as exc_info:
         await db_session.commit()
+
+    assert "ck_node_status" in str(exc_info.value.orig)
 
 
 async def test_unclaimed_node_inserts_with_null_org_plot_claimed_at(

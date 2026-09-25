@@ -117,10 +117,18 @@ def upgrade() -> None:
     # the compression setup don't strictly need it, but the whole block runs
     # in Alembic's `autocommit_block()` for one simple, uniform escape hatch
     # — the same one Alembic's own docs use for `ALTER TYPE ... ADD VALUE`.
+    # GitHub issue #33: `autocommit_block()` escapes the migration's
+    # transaction and commits `node`/`sensor`/`calibration`/`reading` before
+    # the Timescale statements below run; a failure here leaves those tables
+    # committed without the alembic stamp, so a retried upgrade re-runs
+    # `op.create_table` above and fails on "already exists" — recover by
+    # dropping those four tables (the seminar profile's local Postgres is
+    # disposable) before retrying. The statements below are made idempotent
+    # so the retry itself, once past `create_table`, is safe to repeat.
     with op.get_context().autocommit_block():
         op.execute(
             "SELECT create_hypertable('reading', 'time', "
-            "chunk_time_interval => INTERVAL '7 days')"
+            "chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE)"
         )
         op.execute(
             "ALTER TABLE reading SET ("
@@ -129,11 +137,13 @@ def upgrade() -> None:
             "timescaledb.compress_orderby = 'time DESC'"
             ")"
         )
-        op.execute("SELECT add_compression_policy('reading', INTERVAL '7 days')")
+        op.execute(
+            "SELECT add_compression_policy('reading', INTERVAL '7 days', if_not_exists => true)"
+        )
 
         op.execute(
             """
-            CREATE MATERIALIZED VIEW reading_hourly
+            CREATE MATERIALIZED VIEW IF NOT EXISTS reading_hourly
             WITH (timescaledb.continuous) AS
             SELECT
                 sensor_id,
@@ -151,12 +161,12 @@ def upgrade() -> None:
             "SELECT add_continuous_aggregate_policy('reading_hourly', "
             "start_offset => INTERVAL '3 hours', "
             "end_offset => INTERVAL '1 hour', "
-            "schedule_interval => INTERVAL '1 hour')"
+            "schedule_interval => INTERVAL '1 hour', if_not_exists => true)"
         )
 
         op.execute(
             """
-            CREATE MATERIALIZED VIEW reading_daily
+            CREATE MATERIALIZED VIEW IF NOT EXISTS reading_daily
             WITH (timescaledb.continuous) AS
             SELECT
                 sensor_id,
@@ -174,7 +184,7 @@ def upgrade() -> None:
             "SELECT add_continuous_aggregate_policy('reading_daily', "
             "start_offset => INTERVAL '3 days', "
             "end_offset => INTERVAL '1 hour', "
-            "schedule_interval => INTERVAL '1 hour')"
+            "schedule_interval => INTERVAL '1 hour', if_not_exists => true)"
         )
 
 

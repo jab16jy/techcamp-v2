@@ -25,6 +25,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -106,7 +107,10 @@ class ReadingRow(Base):
     aggregates, none of which this mapping expresses."""
 
     __tablename__ = "reading"
-    __table_args__ = (CheckConstraint("quality in (0,1,2)", name="ck_reading_quality"),)
+    __table_args__ = (
+        CheckConstraint("quality in (0,1,2)", name="ck_reading_quality"),
+        Index("ix_reading_sensor_time", "sensor_id", text("time DESC")),
+    )
 
     time: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), primary_key=True, nullable=False
