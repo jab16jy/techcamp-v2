@@ -92,4 +92,11 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-T6 SSE stream.
+Paused 2026-09-25 by the owner after T5. The T6 writer was stopped before any write (tree clean at `0e2d628`, review boundary `0e2d628`).
+
+Resume T6 (SSE stream) in the next session:
+1. Read this doc and the Engram mirror, then `git log --oneline e79d542..HEAD` on `feat/e4-telemetry`; Postgres: `podman start infra_postgres_1`.
+2. Relaunch one `sonnet-high` writer with the same T6 brief: `GET /api/v1/stream?farm_id=`, one `LISTEN plot_events` per api process in the FastAPI lifespan, fan-out through bounded per-client queues, reuse the T4 NOTIFY payload (`SqlAlchemyPlotEventsNotifier`), farm filter plus org check (404), 20 s keepalive, event `id` for `Last-Event-ID`, `alert.*` no-op until E7, check the Vite proxy for unbuffered SSE (ADR-0015, ADR-0021). Verify the FastAPI/Starlette SSE API with find-docs (ctx7) and prefer built-ins over `sse-starlette`. Mandatory: CodeGraph first, Ponytail full, strict TDD with RED evidence.
+3. Open doc gaps the writer must flag, not invent: EventSource can't send a bearer header (docs silent on stream auth); whether `Last-Event-ID` requires replaying missed events. Known #36: duplicate `reading` events on redelivery (not T6's to fix).
+4. After the commit: parent spot check, `gentle-ai review assess --base-ref 0e2d628 --committed-only`, standing grant for feature candidates, non-blocking findings → one GitHub issue, no immediate fix task.
+Then T7 (recalibration job), T8 (simulator), T9–T10 (web), end-to-end demo (also validates compose and the MQTT shared subscription), then stacked-to-main PRs.
