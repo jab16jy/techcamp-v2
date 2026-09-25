@@ -15,7 +15,7 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -94,6 +94,18 @@ class Batcher[T]:
         self._opened_at = None
         return items
 
+    def requeue(self, items: list[T]) -> int:
+        """Puts a drained batch back after a failed flush, so the next flush
+        retries it, without losing whatever arrived since the drain. Bounded
+        by `max_size`: on overflow, the oldest items are dropped and their
+        count returned so the caller can log it."""
+        combined = items + self._items
+        dropped = max(0, len(combined) - self._max_size)
+        self._items = combined[dropped:]
+        if self._opened_at is None and self._items:
+            self._opened_at = self._clock()
+        return dropped
+
 
 def node_id_from_topic(topic: str) -> UUID | None:
     """`tc/v1/{node_id}/up` or `tc/v1/{node_id}/status` (docs/04-api.md:192-
@@ -136,6 +148,27 @@ async def _flush_status(batch: list[RawStatusMessage]) -> None:
     logger.info("ingest: %d status messages, discarded=%s", len(batch), dict(stats.counts))
 
 
+async def _flush_with_retry[T](
+    batch: list[T],
+    batcher: Batcher[T],
+    flush: Callable[[list[T]], Awaitable[None]],
+    label: str,
+) -> None:
+    """A flush failure (Postgres down, a bad row, ...) must not kill `run()`
+    and must not silently drop the already-drained batch (the broker already
+    acked these QoS-1 messages): log it and put the items back for the next
+    flush attempt."""
+    try:
+        await flush(batch)
+    except Exception:
+        logger.exception("ingest: %s flush failed, %d item(s) queued for retry", label, len(batch))
+        dropped = batcher.requeue(batch)
+        if dropped:
+            logger.warning(
+                "ingest: %s batcher over capacity, dropped %d oldest item(s)", label, dropped
+            )
+
+
 async def _handle_message(
     message: aiomqtt.Message,
     *,
@@ -154,16 +187,18 @@ async def _handle_message(
     if topic.endswith("/up"):
         flushed = uplink_batcher.add(RawUplink(node_id, payload_bytes, received_at))
         if flushed is not None:
-            await _flush_uplinks(flushed)
+            await _flush_with_retry(flushed, uplink_batcher, _flush_uplinks, "uplink")
     elif topic.endswith("/status"):
         flushed_status = status_batcher.add(RawStatusMessage(node_id, payload_bytes, received_at))
         if flushed_status is not None:
-            await _flush_status(flushed_status)
+            await _flush_with_retry(flushed_status, status_batcher, _flush_status, "status")
 
 
 async def run() -> None:
-    """The `ingestor` process entrypoint. Reconnects on `MqttError`
-    (network blips, broker restarts) instead of crashing the process."""
+    """The `ingestor` process entrypoint. Reconnects on `MqttError` (network
+    blips, broker restarts), and a flush failure (e.g. Postgres down) never
+    crashes the process either: `_flush_with_retry` keeps the batch for the
+    next attempt instead of propagating."""
     uplink_batcher: Batcher[RawUplink] = Batcher()
     status_batcher: Batcher[RawStatusMessage] = Batcher()
 
@@ -189,10 +224,12 @@ async def run() -> None:
 
                     due_uplinks = uplink_batcher.due()
                     if due_uplinks is not None:
-                        await _flush_uplinks(due_uplinks)
+                        await _flush_with_retry(
+                            due_uplinks, uplink_batcher, _flush_uplinks, "uplink"
+                        )
                     due_status = status_batcher.due()
                     if due_status is not None:
-                        await _flush_status(due_status)
+                        await _flush_with_retry(due_status, status_batcher, _flush_status, "status")
         except aiomqtt.MqttError:
             logger.warning(
                 "ingestor: MQTT connection lost, reconnecting in %ss", RECONNECT_INTERVAL_S

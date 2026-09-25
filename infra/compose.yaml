@@ -56,6 +56,7 @@ services:
     build:
       context: ../server
     profiles: [seminar]
+    restart: unless-stopped
     command: ["python", "-m", "techcamp.telemetry.adapters.ingestor"]
     environment:
       TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}

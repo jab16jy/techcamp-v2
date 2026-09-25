@@ -6,7 +6,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from techcamp.telemetry.adapters.ingestor import Batcher, node_id_from_topic
+import pytest
+
+from techcamp.telemetry.adapters.ingestor import Batcher, _flush_with_retry, node_id_from_topic
+
+pytestmark = pytest.mark.anyio
 
 
 class _FakeClock:
@@ -79,3 +83,31 @@ def test_node_id_from_topic_rejects_a_malformed_topic() -> None:
     assert node_id_from_topic("tc/v1/not-a-uuid/up") is None
     assert node_id_from_topic("garbage") is None
     assert node_id_from_topic("tc/v1/00000000-0000-0000-0000-000000000001") is None
+
+
+def test_batcher_requeue_drops_the_oldest_items_when_over_capacity() -> None:
+    batcher: Batcher[int] = Batcher(max_size=3, max_interval=100.0)
+    dropped = batcher.requeue([1, 2, 3, 4])
+    assert dropped == 1
+    assert batcher.add(5) == [2, 3, 4, 5]
+
+
+class _FlushOnceThenSucceeds:
+    def __init__(self) -> None:
+        self.calls: list[list[int]] = []
+
+    async def __call__(self, batch: list[int]) -> None:
+        self.calls.append(batch)
+        if len(self.calls) == 1:
+            raise RuntimeError("db unavailable")
+
+
+async def test_flush_with_retry_requeues_the_batch_on_failure_for_the_next_flush() -> None:
+    batcher: Batcher[int] = Batcher(max_size=3, max_interval=100.0)
+    flush = _FlushOnceThenSucceeds()
+
+    await _flush_with_retry([1, 2], batcher, flush, "uplink")
+
+    assert flush.calls == [[1, 2]]
+    # the failed batch was put back: it drains again once a third item arrives
+    assert batcher.add(3) == [1, 2, 3]
