@@ -94,6 +94,17 @@ class InvalidPlotError(Exception):
         super().__init__(f"Plot {plot_id} is not in this organization")
 
 
+class InvalidReadingRangeError(Exception):
+    """Raised by `GET /plots/{plot_id}/readings` (docs/04-api.md:92-97) for a
+    `from`/`to` range that isn't `to` strictly after `from`, or a resolution
+    requested over a range wider than it supports: `raw` up to 2 days,
+    `hour` up to 60 days. `day` has no documented upper limit."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
 class InsufficientRoleError(Exception):
     """Raised when a membership role may not claim, patch, rotate or
     calibrate a node/sensor (mirrors `farms.domain.errors.InsufficientRoleError`,

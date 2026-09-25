@@ -21,6 +21,7 @@ from techcamp.telemetry.domain.models import (
     NodeStatus,
     NodeStatusEvent,
     ReadingEvent,
+    ReadingPoint,
     ReadingRecord,
     Sensor,
 )
@@ -116,6 +117,29 @@ class ReadingRepository(Protocol):
         """Bulk `INSERT ... ON CONFLICT (sensor_id, time) DO NOTHING`
         (docs/06-diseno-detallado.md §1): duplicate QoS-1 redeliveries are
         idempotent. Returns the number of rows actually inserted."""
+        ...
+
+    async def query_raw(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        """`reading` rows in `[start, end)` with a calibrated `value`
+        (T5: uncalibrated rows, `value IS NULL`, are excluded), ordered by
+        time (docs/04-api.md:92-93, `resolution=raw`)."""
+        ...
+
+    async def query_hourly(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        """`reading_hourly` continuous-aggregate buckets in `[start, end)`
+        with at least one calibrated reading, ordered by bucket
+        (docs/04-api.md:92-93, `resolution=hour`)."""
+        ...
+
+    async def query_daily(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        """Same as `query_hourly`, over `reading_daily`
+        (docs/04-api.md:92-93, `resolution=day`)."""
         ...
 
 

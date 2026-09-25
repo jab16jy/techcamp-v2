@@ -21,7 +21,12 @@ from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.identity.domain.errors import NotAMemberError
 from techcamp.shared.errors import ProblemError
-from techcamp.telemetry.adapters.api.deps import CalibrationRepoDep, NodeRepoDep, SensorRepoDep
+from techcamp.telemetry.adapters.api.deps import (
+    CalibrationRepoDep,
+    NodeRepoDep,
+    ReadingRepoDep,
+    SensorRepoDep,
+)
 from techcamp.telemetry.application.add_calibration import add_calibration
 from techcamp.telemetry.application.get_node_health import get_node_health
 from techcamp.telemetry.application.manage_nodes import (
@@ -30,11 +35,13 @@ from techcamp.telemetry.application.manage_nodes import (
     rotate_credentials,
     update_node,
 )
+from techcamp.telemetry.application.query_readings import ReadingSeries, query_plot_readings
 from techcamp.telemetry.domain.errors import (
     ClaimCodeNotFoundError,
     InsufficientRoleError,
     InvalidCalibrationParamsError,
     InvalidPlotError,
+    InvalidReadingRangeError,
     NodeAlreadyClaimedError,
     NodeNotFoundError,
     SensorNotFoundError,
@@ -46,6 +53,7 @@ from techcamp.telemetry.domain.models import (
     Node,
     NodeStatus,
     NodeTransport,
+    ReadingResolution,
     Sensor,
 )
 
@@ -128,6 +136,18 @@ class CalibrationCreateRequest(BaseModel):
     valid_from: datetime
 
 
+class ReadingSeriesView(BaseModel):
+    sensor_id: int
+    depth_cm: int | None
+    points: list[tuple[datetime, float]]
+    """`[t, value]` pairs (docs/04-api.md:93): a tuple serializes as a JSON
+    array, matching the documented shape."""
+
+
+class ReadingsResponse(BaseModel):
+    series: list[ReadingSeriesView]
+
+
 def _node_view(node: Node) -> NodeView:
     return NodeView(
         id=node.id,
@@ -151,6 +171,14 @@ def _sensor_view(sensor: Sensor) -> SensorView:
         metric=sensor.metric,
         depth_cm=sensor.depth_cm,
         unit=sensor.unit,
+    )
+
+
+def _reading_series_view(series: ReadingSeries) -> ReadingSeriesView:
+    return ReadingSeriesView(
+        sensor_id=series.sensor_id,
+        depth_cm=series.depth_cm,
+        points=[(p.time, p.value) for p in series.points],
     )
 
 
@@ -351,3 +379,44 @@ async def post_calibration(
     except InvalidCalibrationParamsError as exc:
         raise ProblemError(status=422, title="Invalid calibration params", detail=str(exc)) from exc
     return _calibration_view(calibration)
+
+
+@router.get("/plots/{plot_id}/readings", response_model=ReadingsResponse)
+async def get_plot_readings(
+    plot_id: UUID,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    nodes: NodeRepoDep,
+    sensors: SensorRepoDep,
+    readings: ReadingRepoDep,
+    memberships: MembershipRepoDep,
+    metric: Annotated[str, Query()],
+    from_: Annotated[datetime, Query(alias="from")],
+    to: Annotated[datetime, Query()],
+    resolution: Annotated[str, Query()],
+) -> ReadingsResponse:
+    """docs/04-api.md:92-97: `raw` (≤ 2 days), `hour` (≤ 60 days) or `day`
+    (no documented upper limit)."""
+    try:
+        resolved_resolution = ReadingResolution(resolution)
+    except ValueError as exc:
+        raise ProblemError(status=422, title="resolution must be raw, hour or day") from exc
+    try:
+        series = await query_plot_readings(
+            user_id=user_id,
+            plot_id=plot_id,
+            metric=metric,
+            start=from_,
+            end=to,
+            resolution=resolved_resolution,
+            plots=plots,
+            nodes=nodes,
+            sensors=sensors,
+            readings=readings,
+            memberships=memberships,
+        )
+    except PlotNotFoundError as exc:
+        raise ProblemError(status=404, title="Plot not found") from exc
+    except InvalidReadingRangeError as exc:
+        raise ProblemError(status=422, title="Invalid reading range", detail=str(exc)) from exc
+    return ReadingsResponse(series=[_reading_series_view(s) for s in series])

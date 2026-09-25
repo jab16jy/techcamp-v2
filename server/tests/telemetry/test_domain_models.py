@@ -5,6 +5,7 @@ import pytest
 
 from techcamp.telemetry.domain.errors import (
     InvalidCalibrationParamsError,
+    InvalidReadingRangeError,
     MalformedUplinkPayloadError,
     UnsupportedUplinkVersionError,
 )
@@ -13,12 +14,14 @@ from techcamp.telemetry.domain.models import (
     CalibrationKind,
     CalibrationMethod,
     ReadingQuality,
+    ReadingResolution,
     UplinkPayload,
     apply_calibration,
     classify_reading_range,
     is_reading_too_old,
     parse_uplink,
     resolve_reading_time,
+    validate_reading_range,
 )
 
 _CALIBRATION_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -256,3 +259,41 @@ def test_is_reading_too_old_accepts_a_recent_ts() -> None:
     received_at = datetime(2026, 2, 1, tzinfo=UTC)
     ts = int((received_at - timedelta(days=1)).timestamp())
     assert is_reading_too_old(ts, received_at) is False
+
+
+# -- readings query range validation (docs/04-api.md:97: raw up to 2 days,
+# hour up to 60 days; day has no documented upper limit) --
+
+
+def test_validate_reading_range_rejects_to_not_after_from() -> None:
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    with pytest.raises(InvalidReadingRangeError):
+        validate_reading_range(ReadingResolution.RAW, at, at)
+
+
+def test_validate_reading_range_accepts_raw_within_2_days() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    validate_reading_range(ReadingResolution.RAW, start, start + timedelta(days=2))
+
+
+def test_validate_reading_range_rejects_raw_beyond_2_days() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    with pytest.raises(InvalidReadingRangeError):
+        validate_reading_range(ReadingResolution.RAW, start, start + timedelta(days=2, seconds=1))
+
+
+def test_validate_reading_range_accepts_hour_within_60_days() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    validate_reading_range(ReadingResolution.HOUR, start, start + timedelta(days=60))
+
+
+def test_validate_reading_range_rejects_hour_beyond_60_days() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    with pytest.raises(InvalidReadingRangeError):
+        validate_reading_range(ReadingResolution.HOUR, start, start + timedelta(days=60, seconds=1))
+
+
+def test_validate_reading_range_accepts_day_beyond_60_days() -> None:
+    """docs/04-api.md:97 gives `day` no documented upper limit."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    validate_reading_range(ReadingResolution.DAY, start, start + timedelta(days=365))
