@@ -31,8 +31,10 @@ class NodeStatus(StrEnum):
 @dataclass(frozen=True, slots=True)
 class Node:
     id: UUID
-    org_id: UUID
-    plot_id: UUID
+    org_id: UUID | None
+    """Set once claimed; null while `provisioned` and unclaimed."""
+    plot_id: UUID | None
+    """Set once claimed; null while `provisioned` and unclaimed."""
     transport: NodeTransport
     dev_eui: str | None
     """Unique when present; LoRaWAN nodes have one, wifi/cellular nodes don't."""

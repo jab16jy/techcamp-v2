@@ -70,7 +70,7 @@ async def _make_node(
             credential_hash="hash",
             firmware=None,
             interval_s=300,
-            claimed_at=None,
+            claimed_at=datetime(2026, 1, 1, tzinfo=UTC),
             last_seen_at=None,
             status="provisioned",
         )
@@ -102,7 +102,7 @@ async def test_node_repository_round_trips_by_id_and_org(db_session: AsyncSessio
     assert node.plot_id == plot_id
     assert node.transport is NodeTransport.WIFI
     assert node.status is NodeStatus.PROVISIONED
-    assert node.claimed_at is None
+    assert node.claimed_at is not None
 
 
 async def test_node_repository_hides_nodes_of_other_orgs(db_session: AsyncSession) -> None:
@@ -126,6 +126,60 @@ async def test_get_by_claim_code_finds_the_node_regardless_of_org(
     assert node is not None
     assert node.id == node_id
     assert await SqlAlchemyNodeRepository(db_session).get_by_claim_code("NOPE") is None
+
+
+async def test_get_by_claim_code_finds_an_unclaimed_node(db_session: AsyncSession) -> None:
+    node_id = uuid7()
+    db_session.add(
+        NodeRow(
+            id=node_id,
+            org_id=None,
+            plot_id=None,
+            transport="wifi",
+            dev_eui=None,
+            claim_code="UNCLAIMED2",
+            credential_hash="hash",
+            firmware=None,
+            interval_s=300,
+            claimed_at=None,
+            last_seen_at=None,
+            status="provisioned",
+        )
+    )
+    await db_session.commit()
+
+    node = await SqlAlchemyNodeRepository(db_session).get_by_claim_code("UNCLAIMED2")
+
+    assert node is not None
+    assert node.id == node_id
+    assert node.org_id is None
+    assert node.plot_id is None
+
+
+async def test_list_for_org_does_not_return_unclaimed_nodes(db_session: AsyncSession) -> None:
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    claimed_node = await _make_node(db_session, org_id, plot_id, claim_code="CLAIMED1")
+    db_session.add(
+        NodeRow(
+            id=uuid7(),
+            org_id=None,
+            plot_id=None,
+            transport="wifi",
+            dev_eui=None,
+            claim_code="UNCLAIMED3",
+            credential_hash="hash",
+            firmware=None,
+            interval_s=300,
+            claimed_at=None,
+            last_seen_at=None,
+            status="provisioned",
+        )
+    )
+    await db_session.commit()
+
+    nodes = await SqlAlchemyNodeRepository(db_session).list_for_org(org_id)
+
+    assert [n.id for n in nodes] == [claimed_node]
 
 
 async def test_list_for_org_filters_by_plot_and_status(db_session: AsyncSession) -> None:

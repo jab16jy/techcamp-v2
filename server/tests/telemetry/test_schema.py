@@ -60,7 +60,7 @@ async def _make_sensor(db_session: AsyncSession) -> int:
             credential_hash="hash",
             firmware=None,
             interval_s=300,
-            claimed_at=None,
+            claimed_at=datetime(2026, 1, 1, tzinfo=UTC),
             last_seen_at=None,
             status="provisioned",
         )
@@ -190,6 +190,94 @@ async def test_node_status_check_rejects_an_unknown_value(db_session: AsyncSessi
             claimed_at=None,
             last_seen_at=None,
             status="not-a-status",
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+
+
+async def test_unclaimed_node_inserts_with_null_org_plot_claimed_at(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06-diseno-detallado.md §2: a node exists, printed with its
+    `claim_code`, before `POST /nodes:claim` assigns it an org and plot."""
+    db_session.add(
+        NodeRow(
+            id=uuid7(),
+            org_id=None,
+            plot_id=None,
+            transport="wifi",
+            dev_eui=None,
+            claim_code="UNCLAIMED1",
+            credential_hash="hash",
+            firmware=None,
+            interval_s=300,
+            claimed_at=None,
+            last_seen_at=None,
+            status="provisioned",
+        )
+    )
+    await db_session.commit()
+
+    result = await db_session.execute(
+        text("SELECT org_id, plot_id, claimed_at FROM node WHERE claim_code = 'UNCLAIMED1'")
+    )
+    row = result.one()
+    assert row.org_id is None
+    assert row.plot_id is None
+    assert row.claimed_at is None
+
+
+@pytest.mark.parametrize(
+    "org_id_present,plot_id_present,claimed_at_present",
+    [
+        (True, False, False),
+        (False, True, True),
+        (True, True, False),
+        (False, False, True),
+    ],
+)
+async def test_node_ownership_check_rejects_partial_ownership(
+    db_session: AsyncSession,
+    org_id_present: bool,
+    plot_id_present: bool,
+    claimed_at_present: bool,
+) -> None:
+    org_id = uuid7()
+    db_session.add(OrganizationRow(id=org_id, name="Finca", kind="individual"))
+    await db_session.commit()
+    farm_id = uuid7()
+    db_session.add(
+        FarmRow(id=farm_id, org_id=org_id, name="Finca", municipality_code="47001", location=_POINT)
+    )
+    await db_session.commit()
+    plot_id = uuid7()
+    db_session.add(
+        PlotRow(
+            id=plot_id,
+            org_id=org_id,
+            farm_id=farm_id,
+            name="Lote 1",
+            boundary=_BOUNDARY,
+            irrigation_system="none",
+        )
+    )
+    await db_session.commit()
+    db_session.add(
+        NodeRow(
+            id=uuid7(),
+            org_id=org_id if org_id_present else None,
+            plot_id=plot_id if plot_id_present else None,
+            transport="wifi",
+            dev_eui=None,
+            claim_code="PARTIAL1",
+            credential_hash="hash",
+            firmware=None,
+            interval_s=300,
+            claimed_at=datetime(2026, 1, 1, tzinfo=UTC) if claimed_at_present else None,
+            last_seen_at=None,
+            status="provisioned",
         )
     )
 

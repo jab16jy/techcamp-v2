@@ -41,13 +41,17 @@ class NodeRow(Base):
         ),
         UniqueConstraint("dev_eui", name="uq_node_dev_eui"),
         UniqueConstraint("claim_code", name="uq_node_claim_code"),
+        CheckConstraint(
+            "(org_id IS NULL) = (plot_id IS NULL) AND (plot_id IS NULL) = (claimed_at IS NULL)",
+            name="ck_node_ownership_all_or_nothing",
+        ),
         Index("ix_node_org_id", "org_id"),
         Index("ix_node_plot_id", "plot_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
-    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
-    plot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("plot.id"), nullable=False)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organization.id"), nullable=True)
+    plot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("plot.id"), nullable=True)
     transport: Mapped[str] = mapped_column(String, nullable=False)
     dev_eui: Mapped[str | None] = mapped_column(String, nullable=True)
     claim_code: Mapped[str] = mapped_column(String, nullable=False)

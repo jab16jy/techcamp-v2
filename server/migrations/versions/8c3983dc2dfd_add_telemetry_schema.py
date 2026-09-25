@@ -29,8 +29,8 @@ def upgrade() -> None:
     op.create_table(
         'node',
         sa.Column('id', sa.Uuid(), nullable=False),
-        sa.Column('org_id', sa.Uuid(), nullable=False),
-        sa.Column('plot_id', sa.Uuid(), nullable=False),
+        sa.Column('org_id', sa.Uuid(), nullable=True),
+        sa.Column('plot_id', sa.Uuid(), nullable=True),
         sa.Column('transport', sa.String(), nullable=False),
         sa.Column('dev_eui', sa.String(), nullable=True),
         sa.Column('claim_code', sa.String(), nullable=False),
@@ -45,6 +45,10 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "status in ('provisioned','online','offline','retired')", name='ck_node_status'
+        ),
+        sa.CheckConstraint(
+            "(org_id IS NULL) = (plot_id IS NULL) AND (plot_id IS NULL) = (claimed_at IS NULL)",
+            name='ck_node_ownership_all_or_nothing',
         ),
         sa.ForeignKeyConstraint(['org_id'], ['organization.id']),
         sa.ForeignKeyConstraint(['plot_id'], ['plot.id']),
