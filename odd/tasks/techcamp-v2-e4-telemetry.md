@@ -47,9 +47,9 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T1 Schema: `node`/`sensor`/`calibration`/`reading` migrations, hypertable, compression, continuous aggregates, ORM, repositories filtered by `org_id` — route: delegated (sonnet-high) — forecast ~850 — actual 1,063 (`9b5dd96`)
 - [x] T1b Unclaimed nodes: `node.org_id`/`plot_id` nullable with all-or-nothing ownership CHECK (docs/06 §2: claim assigns org and plot) — route: delegated (sonnet) — forecast ~100 — actual 152 (`1df9981`)
 - [x] T1c Fix #33: org-scope `add_version`, `version DESC` tiebreaker, isolate status CHECK test, idempotent Timescale DDL, declare `ix_reading_sensor_time` in ORM — route: delegated (sonnet-high) — forecast ~150 — actual 170 (`8ba6fa7`). Last immediate follow-up fix: from now on non-blocking findings stay in the issue tracker for later (owner, 2026-09-24)
-- [ ] T2 Pure domain: calibration methods (linear, two_point, polynomial), uplink payload validation, quality rules — route: delegated (sonnet-high) — forecast ~600
+- [x] T2 Pure domain: calibration methods (linear, two_point, polynomial), uplink payload validation, quality rules — route: delegated (sonnet-high) — forecast ~600 — actual 411 (`04fe5b2`)
 - [ ] T3 Node API: claim (one-time password), list, patch, rotate, health, sensors, calibrations; org isolation test — route: delegated (sonnet-high) — forecast ~1,200
-- [ ] T4 Ingestor: `aiomqtt` subscriber, batching, idempotent insert, status/LWT, `NOTIFY`, `ingestor` compose service — route: delegated (sonnet-high) — forecast ~1,000
+- [ ] T4 Ingestor: `aiomqtt` subscriber, batching, idempotent insert, status/LWT, `NOTIFY`, `ingestor` compose service; discard messages with `ts` older than 30 days (docs/06 §1); decide quality precedence when a reading is both timestamp-corrected and out of range — route: delegated (sonnet-high) — forecast ~1,000
 - [ ] T5 Readings query: `raw|hour|day`, 2-day and 60-day limits — route: delegated (sonnet-high) — forecast ~600
 - [ ] T6 SSE stream: `LISTEN` fan-out, farm filter + org check, keepalive, `Last-Event-ID` — route: delegated (sonnet-high) — forecast ~700
 - [ ] T7 Recalibration job: procrastinate setup, `worker` compose service, recompute `value` — route: delegated (sonnet-high) — forecast ~500
@@ -64,6 +64,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - T1 + T1b (`fe85ae7..1df9981`, 1,215 lines): assessed medium, `slice_budget_reached`; standing grant applied; lineage `review-99634a0063c7e89e`, one reliability lens, APPROVED and acknowledged. 4 WARNING + 1 SUGGESTION, non-blocking → issue #33 (fixed by T1c). Boundary → `1df9981`.
 - `43d2abe` (doc): passive, boundary → `43d2abe`.
 - T1c `8ba6fa7`: medium, `under_budget` (170 lines); pending in the next slice.
+- T1c + T2 (`43d2abe..04fe5b2`, 588 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-d326a92df3ebed8d`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 2 SUGGESTION, non-blocking → issue #34, deferred (no immediate fix task). Boundary → `04fe5b2`.
 
 ## Acceptance criteria
 - The simulator publishes over MQTT, the ingestor stores calibrated `reading` rows (raw and calibrated), duplicates are ignored.
@@ -75,7 +76,8 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 ## Progress / evidence
 - 2026-09-24: branch `feat/e4-telemetry` created from `main` @ `e79d542`; feature doc created.
 - 2026-09-24: T1 done (`9b5dd96`): server pytest 227 passed, ruff, format, mypy, lint-imports green (writer). T1b (`1df9981`): pytest 234 passed, all server checks green (writer); parent spot check `uv run pytest tests/telemetry` 22 passed. Writer disclosed partial Read-before-CodeGraph during T1 exploration.
+- 2026-09-24: T2 (`04fe5b2`): pytest 263 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry/test_domain_models.py` 26 passed. Linear params use the documented names `scale`/`offset` (docs/03:465). Out-of-range rule only for `%` units: docs/06 §1 gives no other ranges.
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-T2 pure domain.
+T3 node API.
