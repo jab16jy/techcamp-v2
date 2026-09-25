@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import aiomqtt
@@ -80,7 +80,12 @@ async def run(args: argparse.Namespace) -> None:
         token = await _login(client, phone=args.phone, otp_code=args.otp_code)
         node = await claim_node(client, token=token, claim_code=claim_code, plot_id=args.plot_id)
         now = datetime.now(UTC)
-        await ensure_calibrations(client, token=token, node=node, valid_from=now)
+        # R3-calibration-valid-from-after-backfill: every backfilled uplink has
+        # ts < now, so valid_from must cover the earliest one or ingest finds
+        # no calibration for it (docs/06 §10; node_client.ensure_calibrations).
+        await ensure_calibrations(
+            client, token=token, node=node, valid_from=now - timedelta(days=args.backfill_days)
+        )
 
     async with aiomqtt.Client(
         args.broker_host, args.broker_port, username=node.mqtt_username, password=node.mqtt_password

@@ -4,7 +4,7 @@ transport (docs/06-diseno-detallado.md §10)."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from itertools import count
 from uuid import UUID
 
@@ -148,3 +148,28 @@ async def test_ensure_calibrations_posts_a_working_two_point_calibration_for_a_p
     # raw_wet=1300 -> 45%.
     assert apply_calibration(calibration, 2900) == pytest.approx(5)
     assert apply_calibration(calibration, 1300) == pytest.approx(45)
+
+
+async def test_ensure_calibrations_is_valid_at_the_earliest_backfill_timestamp(
+    db_session: AsyncSession,
+) -> None:
+    """R3-calibration-valid-from-after-backfill: `valid_from` must cover the
+    earliest backfilled uplink (trajectory.backfill_timestamps' first
+    timestamp is `now - backfill_days`), or ingest finds no calibration for
+    those readings."""
+    org_id, phone = await _member(db_session)
+    plot_id = await _make_plot(db_session, org_id)
+    await _make_unclaimed_node(db_session, claim_code="SIM-CLAIM-3")
+    now = datetime.now(UTC)
+    earliest_backfill_at = now - timedelta(days=1.0)
+
+    async with _client() as client:
+        token = await _login(client, phone)
+        node = await claim_node(client, token=token, claim_code="SIM-CLAIM-3", plot_id=plot_id)
+        await ensure_calibrations(client, token=token, node=node, valid_from=earliest_backfill_at)
+
+    sensor_id = node.sensors[0]["id"]
+    calibration = await SqlAlchemyCalibrationRepository(db_session).get_latest_valid_at(
+        sensor_id, org_id, earliest_backfill_at
+    )
+    assert calibration is not None
