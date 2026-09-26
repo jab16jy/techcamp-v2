@@ -16,7 +16,9 @@ import pytest
 from techcamp.weather.adapters.api.deps import get_weather_forecast_port
 from techcamp.weather.adapters.open_meteo import (
     OPEN_METEO_DAILY_VARS,
+    CircuitState,
     OpenMeteoAdapter,
+    OpenMeteoCircuitBreakerOpenError,
     OpenMeteoUnavailableError,
 )
 from techcamp.weather.application.ports import DailyWeatherRow, WeatherForecastPort
@@ -274,3 +276,298 @@ def test_di_profile_wiring_production(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(adapter, OpenMeteoAdapter)
     assert adapter._base_url == "https://customer-api.open-meteo.com/v1"
     assert adapter._api_key == "prod-key-123"
+
+
+# --- T3b: Retry and Circuit Breaker Tests ---
+
+
+async def test_fetch_daily_retries_on_5xx_and_succeeds() -> None:
+    call_count = 0
+    slept_delays: list[float] = []
+
+    async def _mock_sleep(seconds: float) -> None:
+        slept_delays.append(seconds)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return httpx.Response(503, text="service unavailable")
+        return httpx.Response(200, json=_FIXTURE_RESPONSE)
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=3,
+        retry_base_delay=0.5,
+        sleep=_mock_sleep,
+    )
+
+    rows = await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert len(rows) == 3
+    assert call_count == 3
+    assert len(slept_delays) == 2
+    # Verify exponential backoff: delay 2 > delay 1
+    assert slept_delays[1] > slept_delays[0]
+
+
+async def test_fetch_daily_retries_on_429_rate_limit() -> None:
+    call_count = 0
+    slept_delays: list[float] = []
+
+    async def _mock_sleep(seconds: float) -> None:
+        slept_delays.append(seconds)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(429, text="too many requests")
+        return httpx.Response(200, json=_FIXTURE_RESPONSE)
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=3,
+        sleep=_mock_sleep,
+    )
+
+    rows = await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert len(rows) == 3
+    assert call_count == 2
+    assert len(slept_delays) == 1
+
+
+async def test_fetch_daily_retries_on_transport_error() -> None:
+    call_count = 0
+    slept_delays: list[float] = []
+
+    async def _mock_sleep(seconds: float) -> None:
+        slept_delays.append(seconds)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("connection reset", request=request)
+        return httpx.Response(200, json=_FIXTURE_RESPONSE)
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=3,
+        sleep=_mock_sleep,
+    )
+
+    rows = await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert len(rows) == 3
+    assert call_count == 2
+    assert len(slept_delays) == 1
+
+
+async def test_fetch_daily_exhausts_retries_and_raises() -> None:
+    call_count = 0
+    slept_delays: list[float] = []
+
+    async def _mock_sleep(seconds: float) -> None:
+        slept_delays.append(seconds)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(500, text="internal server error")
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=3,
+        sleep=_mock_sleep,
+    )
+
+    with pytest.raises(OpenMeteoUnavailableError) as exc_info:
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert exc_info.value.upstream_status == 500
+    assert call_count == 4  # 1 initial + 3 retries
+    assert len(slept_delays) == 3
+
+
+async def test_fetch_daily_does_not_retry_on_4xx_client_error() -> None:
+    call_count = 0
+    slept_delays: list[float] = []
+
+    async def _mock_sleep(seconds: float) -> None:
+        slept_delays.append(seconds)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(400, text="bad request")
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=3,
+        sleep=_mock_sleep,
+    )
+
+    with pytest.raises(OpenMeteoUnavailableError) as exc_info:
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert exc_info.value.upstream_status == 400
+    assert call_count == 1  # No retries on 400
+    assert len(slept_delays) == 0
+
+
+async def test_circuit_breaker_opens_after_n_consecutive_failures() -> None:
+    current_time = 1000.0
+
+    def _mock_clock() -> float:
+        return current_time
+
+    async def _mock_sleep(seconds: float) -> None:
+        pass
+
+    call_count = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(503, text="service unavailable")
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=1,  # 1 retry so each call attempts twice
+        circuit_failure_threshold=3,
+        circuit_cooldown_seconds=60.0,
+        clock=_mock_clock,
+        sleep=_mock_sleep,
+    )
+
+    # Trigger 3 consecutive failed operations
+    for _ in range(3):
+        with pytest.raises(OpenMeteoUnavailableError):
+            await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert adapter.circuit_state == CircuitState.OPEN
+    assert adapter.is_circuit_open is True
+
+    # 4th operation fails fast via circuit breaker WITHOUT making HTTP requests
+    calls_before = call_count
+    with pytest.raises(OpenMeteoCircuitBreakerOpenError) as exc_info:
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert call_count == calls_before
+    assert isinstance(exc_info.value, OpenMeteoUnavailableError)
+
+
+async def test_circuit_breaker_half_open_trial_recovers_to_closed() -> None:
+    current_time = 1000.0
+
+    def _mock_clock() -> float:
+        return current_time
+
+    async def _mock_sleep(seconds: float) -> None:
+        pass
+
+    should_succeed = False
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if should_succeed:
+            return httpx.Response(200, json=_FIXTURE_RESPONSE)
+        return httpx.Response(500, text="error")
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=0,
+        circuit_failure_threshold=2,
+        circuit_cooldown_seconds=30.0,
+        clock=_mock_clock,
+        sleep=_mock_sleep,
+    )
+
+    # 2 failures trip the circuit
+    for _ in range(2):
+        with pytest.raises(OpenMeteoUnavailableError):
+            await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert adapter.circuit_state == CircuitState.OPEN
+
+    # Advance clock past cooldown
+    current_time += 35.0
+    should_succeed = True
+
+    # Half-open trial call should succeed and close the circuit
+    rows = await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert len(rows) == 3
+    assert adapter.circuit_state == CircuitState.CLOSED
+    assert adapter.is_circuit_open is False
+
+
+async def test_circuit_breaker_half_open_failure_trips_back_to_open() -> None:
+    current_time = 1000.0
+
+    def _mock_clock() -> float:
+        return current_time
+
+    async def _mock_sleep(seconds: float) -> None:
+        pass
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="error")
+
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=0,
+        circuit_failure_threshold=1,
+        circuit_cooldown_seconds=30.0,
+        clock=_mock_clock,
+        sleep=_mock_sleep,
+    )
+
+    # 1 failure trips circuit to OPEN
+    with pytest.raises(OpenMeteoUnavailableError):
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    assert adapter.circuit_state == CircuitState.OPEN
+
+    # Advance clock past cooldown -> HALF_OPEN on next call
+    current_time += 35.0
+
+    # Half-open call fails
+    with pytest.raises(OpenMeteoUnavailableError):
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+    # Trips back to OPEN and resets cooldown
+    assert adapter.circuit_state == CircuitState.OPEN
+
+    # Immediately calling again fails fast
+    with pytest.raises(OpenMeteoCircuitBreakerOpenError):
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+
+async def test_circuit_breaker_counts_exactly_one_failure_per_operation() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="internal server error")
+
+    async def _mock_sleep(seconds: float) -> None:
+        pass
+
+    threshold = 4
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=1,
+        circuit_failure_threshold=threshold,
+        sleep=_mock_sleep,
+    )
+
+    for i in range(threshold - 1):
+        with pytest.raises(OpenMeteoUnavailableError):
+            await adapter.fetch_daily(lat=10.9, lon=-74.1)
+        assert adapter.circuit_state == CircuitState.CLOSED, (
+            f"Circuit should remain CLOSED after {i + 1} failure(s) with threshold {threshold}"
+        )
+
+    # The N-th failure must transition the circuit to OPEN
+    with pytest.raises(OpenMeteoUnavailableError):
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+    assert adapter.circuit_state == CircuitState.OPEN
