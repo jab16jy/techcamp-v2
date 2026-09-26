@@ -42,6 +42,8 @@ from techcamp.farms.domain.models import (
     SoilProfile,
     SoilProfileSource,
 )
+from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
+from techcamp.weather.domain.models import cell_for
 
 
 def _farm_from_row(row: Row[Any]) -> Farm:
@@ -172,6 +174,10 @@ class SqlAlchemyFarmRepository:
 class SqlAlchemyPlotRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        # Same session, so the cell row and the plot row are written in one
+        # place. E5 owns the `weather_cell` table; farms only reads it through
+        # this repository (the ORM column stays a plain Integer, docs/03:100).
+        self._cells = SqlAlchemyWeatherRepository(session)
 
     async def get(self, plot_id: UUID, org_id: UUID) -> Plot | None:
         result = await self._session.execute(
@@ -211,6 +217,11 @@ class SqlAlchemyPlotRepository:
         irrigation_efficiency: float | None,
         system_flow_lph: float | None,
     ) -> Plot:
+        # The cell row is resolved first and committed on its own, so the plot
+        # and the cell it points at are written by ONE statement below: a
+        # failure can leave a cell nobody points at (never fetched, reused by
+        # the next attempt), never a stored plot without its cell.
+        cell_id = await self._cell_id_for(boundary_wkt)
         self._session.add(
             PlotRow(
                 id=plot_id,
@@ -218,6 +229,7 @@ class SqlAlchemyPlotRepository:
                 farm_id=farm_id,
                 name=name,
                 boundary=boundary_wkt,
+                weather_cell_id=cell_id,
                 irrigation_system=irrigation_system.value,
                 irrigation_efficiency=irrigation_efficiency,
                 system_flow_lph=system_flow_lph,
@@ -239,12 +251,18 @@ class SqlAlchemyPlotRepository:
         irrigation_efficiency: float | None,
         system_flow_lph: float | None,
     ) -> Plot:
+        # Same rule as `create`, and the same reason: the cell is derived from
+        # the WKT this statement writes, not read back from the row, so a
+        # concurrent update cannot pair the final boundary with a cell computed
+        # from the boundary it replaced.
+        cell_id = await self._cell_id_for(boundary_wkt)
         await self._session.execute(
             update(PlotRow)
             .where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
             .values(
                 name=name,
                 boundary=boundary_wkt,
+                weather_cell_id=cell_id,
                 irrigation_system=irrigation_system.value,
                 irrigation_efficiency=irrigation_efficiency,
                 system_flow_lph=system_flow_lph,
@@ -254,6 +272,29 @@ class SqlAlchemyPlotRepository:
         plot = await self.get(plot_id, org_id)
         assert plot is not None
         return plot
+
+    async def _cell_id_for(self, boundary_wkt: str) -> int:
+        """The id of the 0.1° cell the plot's representative point falls in
+        (docs/06-diseno-detallado.md §6): plots are grouped so the cell, not
+        the plot, is what the provider is queried for
+        (docs/09-cuellos-de-botella.md:39).
+
+        The representative point is `ST_Centroid` of the boundary, the same
+        point `get_centroid` treats as the plot's location (the SoilGrids query
+        point), taken from the WKT the caller is about to write so the cell and
+        the boundary are decided together. The grid rule itself stays in one
+        place, `cell_for` (weather domain, T1b).
+        """
+        row = (
+            await self._session.execute(
+                select(
+                    func.ST_Y(func.ST_Centroid(func.ST_GeomFromText(boundary_wkt, 4326))),
+                    func.ST_X(func.ST_Centroid(func.ST_GeomFromText(boundary_wkt, 4326))),
+                )
+            )
+        ).one()
+        lat, lon = row
+        return await self._cells.get_or_create_cell(*cell_for(lat, lon))
 
     async def get_centroid(self, plot_id: UUID, org_id: UUID) -> tuple[float, float]:
         """(lon, lat) of `ST_Centroid(boundary)` (T5: SoilGrids query point).

@@ -72,6 +72,13 @@ async def db_session() -> AsyncIterator[AsyncSession]:
     async with async_session_factory() as session:
         yield session
     async with engine.begin() as conn:
+        # `weather_cell`/`weather_daily` are in the truncate because they carry
+        # no `org_id`: the `organization ... CASCADE` alone never reaches them,
+        # and E5 writes a cell every time a plot is created, so they would
+        # otherwise leak from one test into the next.
         await conn.execute(
-            text("TRUNCATE membership, app_user, organization RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE membership, app_user, organization, weather_daily, weather_cell "
+                "RESTART IDENTITY CASCADE"
+            )
         )
