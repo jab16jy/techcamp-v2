@@ -9,14 +9,19 @@ from __future__ import annotations
 
 import pytest
 
-from techcamp.farms.domain.models import CropStage
+from techcamp.farms.domain.models import CropStage, KcSource
 from techcamp.irrigation.domain.models import (
     K_ASSIMILATION_DEFAULT,
     K_ASSIMILATION_NONE,
     P_MAX,
     P_MIN,
     PE_THRESHOLD_MM,
+    WATCH_THRESHOLD_RATIO,
     ZR_HALF_TOLERANCE_RATIO,
+    IrrigationRecommendation,
+    RainfedAdvice,
+    RecommendationKind,
+    WaterBalanceStatus,
     assimilate_depletion,
     compute_adjusted_p,
     compute_effective_rain,
@@ -27,7 +32,10 @@ from techcamp.irrigation.domain.models import (
     compute_raw,
     compute_stress_moisture,
     compute_taw,
+    compute_water_balance_status,
+    decide_recommendation,
     determine_sensor_weight,
+    evaluate_rainfed_advice,
     is_sensor_depth_representative,
     stage_for_cycle_day,
 )
@@ -41,6 +49,7 @@ def test_irrigation_constants_match_documented_values() -> None:
     assert K_ASSIMILATION_DEFAULT == 0.5
     assert K_ASSIMILATION_NONE == 0.0
     assert ZR_HALF_TOLERANCE_RATIO == 0.15
+    assert WATCH_THRESHOLD_RATIO == 0.8
 
 
 # Reference maize crop stages from FAO-56 Table 11 / docs/06 §5:
@@ -333,3 +342,356 @@ def test_determine_sensor_weight_rules() -> None:
     assert determine_sensor_weight(
         has_valid_reading=True, calibration_kind="field", is_representative=False
     ) == pytest.approx(0.0)
+
+
+# --- 11. Water Balance Status (docs/04:66,75) ---
+
+
+def test_compute_water_balance_status_irrigated_and_rainfed() -> None:
+    """docs/04:66,75: status is ok | watch | irrigate | stress.
+
+    Rainfed never reports 'irrigate'; reports 'stress' when Dr >= RAW.
+    Watch threshold is minimally defined at 0.8 * RAW.
+    Let RAW = 50.0 mm.
+    0.8 * RAW = 40.0 mm.
+
+    Dr = 20.0 mm (< 40.0) -> 'ok' for both.
+    Dr = 45.0 mm (40.0 <= Dr < 50.0) -> 'watch' for both.
+    Dr = 55.0 mm (>= 50.0):
+      irrigated -> 'irrigate'
+      rainfed -> 'stress'
+    """
+    raw = 50.0
+    # ok
+    assert compute_water_balance_status(dr=20.0, raw=raw, is_rainfed=False) is WaterBalanceStatus.OK
+    assert compute_water_balance_status(dr=20.0, raw=raw, is_rainfed=True) is WaterBalanceStatus.OK
+
+    # watch
+    assert (
+        compute_water_balance_status(dr=45.0, raw=raw, is_rainfed=False) is WaterBalanceStatus.WATCH
+    )
+    assert (
+        compute_water_balance_status(dr=45.0, raw=raw, is_rainfed=True) is WaterBalanceStatus.WATCH
+    )
+
+    # At or above RAW
+    assert (
+        compute_water_balance_status(dr=55.0, raw=raw, is_rainfed=False)
+        is WaterBalanceStatus.IRRIGATE
+    )
+    assert (
+        compute_water_balance_status(dr=55.0, raw=raw, is_rainfed=True) is WaterBalanceStatus.STRESS
+    )
+
+
+# --- 12. Rainfed Advice Evaluation in Table Order (docs/06 §5 table) ---
+
+
+def test_evaluate_rainfed_advice_no_active_cycle() -> None:
+    """docs/06 §5 table row 1: delay_sowing when no active cycle and 7d rain < 7d ET0."""
+    # 7d rain (15 mm) < 7d ET0 (35 mm) -> delay_sowing
+    advice = evaluate_rainfed_advice(
+        has_active_cycle=False,
+        dr=0.0,
+        raw=50.0,
+        forecast_rain_7d_mm=15.0,
+        forecast_et0_7d_mm=35.0,
+        stage="initial",
+    )
+    assert advice == (RainfedAdvice.DELAY_SOWING,)
+
+    # 7d rain (40 mm) >= 7d ET0 (35 mm) -> no advice needed
+    advice_sufficient_rain = evaluate_rainfed_advice(
+        has_active_cycle=False,
+        dr=0.0,
+        raw=50.0,
+        forecast_rain_7d_mm=40.0,
+        forecast_et0_7d_mm=35.0,
+        stage="initial",
+    )
+    assert advice_sufficient_rain == ()
+
+
+def test_evaluate_rainfed_advice_active_cycle_branches() -> None:
+    """docs/06 §5 table: evaluated in order, all that apply:
+
+    - rain_expected: Dr >= RAW and 7d rain >= Dr
+    - conserve_moisture: Dr >= RAW and 7d rain < Dr
+    - prioritize_harvest: conserve_moisture in stage late
+    - no_action: Dr < RAW
+    """
+    raw = 50.0
+
+    # No action: Dr (30 mm) < RAW (50 mm)
+    assert evaluate_rainfed_advice(
+        has_active_cycle=True,
+        dr=30.0,
+        raw=raw,
+        forecast_rain_7d_mm=10.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+    ) == (RainfedAdvice.NO_ACTION,)
+
+    # Rain expected: Dr (55 mm) >= RAW (50 mm) and 7d rain (60 mm) >= Dr (55 mm)
+    assert evaluate_rainfed_advice(
+        has_active_cycle=True,
+        dr=55.0,
+        raw=raw,
+        forecast_rain_7d_mm=60.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+    ) == (RainfedAdvice.RAIN_EXPECTED,)
+
+    # Conserve moisture (mid stage): Dr (55 mm) >= RAW (50 mm) and 7d rain (20 mm) < Dr (55 mm)
+    assert evaluate_rainfed_advice(
+        has_active_cycle=True,
+        dr=55.0,
+        raw=raw,
+        forecast_rain_7d_mm=20.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+    ) == (RainfedAdvice.CONSERVE_MOISTURE,)
+
+    # Prioritize harvest (late stage): conserve_moisture in stage late -> both codes in table order
+    assert evaluate_rainfed_advice(
+        has_active_cycle=True,
+        dr=55.0,
+        raw=raw,
+        forecast_rain_7d_mm=20.0,
+        forecast_et0_7d_mm=30.0,
+        stage="late",
+    ) == (RainfedAdvice.CONSERVE_MOISTURE, RainfedAdvice.PRIORITIZE_HARVEST)
+
+
+# --- 13. Recommendation Decision Flowchart (docs/06 §5 flowchart) ---
+
+
+def test_decide_recommendation_no_active_cycle() -> None:
+    """Flowchart:
+
+    - plot with irrigation system and no active cycle -> None
+    - rainfed plot and no active cycle with rain < ET0 -> rainfed with delay_sowing
+    """
+    # Irrigated plot without active cycle:
+    assert (
+        decide_recommendation(
+            has_active_cycle=False,
+            is_rainfed=False,
+            kc_source=KcSource.FAO56,
+            dr=0.0,
+            raw=50.0,
+            irrigation_efficiency=0.9,
+            area_m2=10000.0,
+            system_flow_lph=5000.0,
+            forecast_rain_48h_mm=0.0,
+            forecast_rain_7d_mm=10.0,
+            forecast_et0_7d_mm=30.0,
+            stage="initial",
+            rationale_context={},
+        )
+        is None
+    )
+
+    # Rainfed plot without active cycle:
+    rec = decide_recommendation(
+        has_active_cycle=False,
+        is_rainfed=True,
+        kc_source=KcSource.FAO56,
+        dr=0.0,
+        raw=50.0,
+        irrigation_efficiency=None,
+        area_m2=10000.0,
+        system_flow_lph=None,
+        forecast_rain_48h_mm=0.0,
+        forecast_rain_7d_mm=10.0,
+        forecast_et0_7d_mm=30.0,
+        stage="initial",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert isinstance(rec, IrrigationRecommendation)
+    assert rec.kind is RecommendationKind.RAINFED
+    assert rec.depth_mm is None
+    assert rec.duration_min is None
+    assert rec.advice == (RainfedAdvice.DELAY_SOWING,)
+
+
+def test_decide_recommendation_no_kc() -> None:
+    """Flowchart: kc_source == none -> no_kc recommendation."""
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.NONE,
+        dr=30.0,
+        raw=50.0,
+        irrigation_efficiency=0.9,
+        area_m2=10000.0,
+        system_flow_lph=5000.0,
+        forecast_rain_48h_mm=0.0,
+        forecast_rain_7d_mm=10.0,
+        forecast_et0_7d_mm=30.0,
+        stage="initial",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.NO_KC
+    assert rec.depth_mm is None
+    assert rec.duration_min is None
+    assert rec.advice == ()
+
+
+def test_decide_recommendation_irrigated_not_needed() -> None:
+    """Flowchart: Dr < RAW -> not_needed."""
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.FAO56,
+        dr=30.0,
+        raw=50.0,
+        irrigation_efficiency=0.9,
+        area_m2=10000.0,
+        system_flow_lph=5000.0,
+        forecast_rain_48h_mm=0.0,
+        forecast_rain_7d_mm=10.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.NOT_NEEDED
+    assert rec.depth_mm is None
+    assert rec.duration_min is None
+
+
+def test_decide_recommendation_irrigated_postpone() -> None:
+    """Flowchart: Dr >= RAW and 48h rain >= Dr -> postpone."""
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.FAO56,
+        dr=55.0,
+        raw=50.0,
+        irrigation_efficiency=0.9,
+        area_m2=10000.0,
+        system_flow_lph=5000.0,
+        forecast_rain_48h_mm=60.0,  # 60 >= 55
+        forecast_rain_7d_mm=70.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.POSTPONE
+    assert rec.depth_mm is None
+    assert rec.duration_min is None
+
+
+def test_decide_recommendation_irrigated_irrigate_depth_and_minutes() -> None:
+    """Flowchart: Dr >= RAW and 48h rain < Dr -> irrigate.
+
+    Arithmetic:
+      Dr = 54.0 mm, RAW = 50.0 mm
+      efficiency = 0.90 (drip)
+      depth_mm = Dr / efficiency = 54.0 / 0.90 = 60.0 mm
+      area_m2 = 5,000 m2
+      system_flow_lph = 10,000 L/h
+      minutes = depth * area_m2 / flow_lph * 60
+              = 60.0 * 5,000 / 10,000 * 60
+              = 300,000 / 10,000 * 60 = 30 * 60 = 1800 min
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.FAO56,
+        dr=54.0,
+        raw=50.0,
+        irrigation_efficiency=0.90,
+        area_m2=5000.0,
+        system_flow_lph=10000.0,
+        forecast_rain_48h_mm=10.0,
+        forecast_rain_7d_mm=20.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.IRRIGATE
+    assert rec.depth_mm == pytest.approx(60.0)
+    assert rec.duration_min == 1800
+
+
+def test_decide_recommendation_irrigated_duration_rounding() -> None:
+    """Verify sensible rounding for fractional minutes and depth:
+
+    depth rounded to 2 decimal places, duration rounded to nearest integer minute.
+    Arithmetic:
+      Dr = 45.0 mm, efficiency = 0.75 (sprinkler) -> depth = 60.0 mm
+      area_m2 = 1,234 m2, flow_lph = 4,000 L/h
+      raw minutes = 60.0 * 1,234 / 4,000 * 60 = 74,040 / 4,000 * 60 = 18.51 * 60 = 1110.6 min
+      rounded to integer -> 1111 min
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.LOCAL,
+        dr=45.0,
+        raw=40.0,
+        irrigation_efficiency=0.75,
+        area_m2=1234.0,
+        system_flow_lph=4000.0,
+        forecast_rain_48h_mm=5.0,
+        forecast_rain_7d_mm=15.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.IRRIGATE
+    assert rec.depth_mm == pytest.approx(60.0)
+    assert rec.duration_min == 1111
+
+
+def test_decide_recommendation_rationale_contents() -> None:
+    """docs/06 §5 / brief: rationale contains:
+
+    ET0, Kc, kc_source, flag approximate, p, RAW, TAW, Dr model, Dr assimilated,
+    K, forecast sums, without_sensor flag.
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.APPROXIMATE,
+        dr=54.0,
+        raw=50.0,
+        irrigation_efficiency=0.90,
+        area_m2=5000.0,
+        system_flow_lph=10000.0,
+        forecast_rain_48h_mm=10.0,
+        forecast_rain_7d_mm=20.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={
+            "et0_mm": 5.0,
+            "kc": 1.20,
+            "p": 0.55,
+            "taw_mm": 100.0,
+            "dr_model": 50.0,
+            "k": 0.0,
+        },
+    )
+    assert rec is not None
+    rationale = rec.rationale
+    assert rationale["et0_mm"] == 5.0
+    assert rationale["kc"] == 1.20
+    assert rationale["kc_source"] == "approximate"
+    assert rationale["kc_approximate"] is True
+    assert rationale["p"] == 0.55
+    assert rationale["raw_mm"] == 50.0
+    assert rationale["taw_mm"] == 100.0
+    assert rationale["depletion_model_mm"] == 50.0
+    assert rationale["depletion_mm"] == 54.0
+    assert rationale["k"] == 0.0
+    assert rationale["without_sensor"] is True
+    assert rationale["forecast_rain_48h_mm"] == 10.0
+    assert rationale["forecast_rain_7d_mm"] == 20.0
+    assert rationale["forecast_et0_7d_mm"] == 30.0
