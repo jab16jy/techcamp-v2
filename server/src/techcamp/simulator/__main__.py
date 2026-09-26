@@ -59,10 +59,15 @@ async def _login(client: httpx.AsyncClient, *, phone: str, otp_code: str | None)
     console, not returned by any endpoint — this simulator has no remote way
     to read it, so `--otp-code` (scripted runs) or an interactive prompt
     (demo runs, reading it off the visible api terminal) fills the gap. See
-    the task report's Gaps."""
-    await request_otp(client, phone)
-    code = otp_code or input(f"OTP for {phone} (printed to the api process console): ").strip()
-    return await verify_otp(client, phone, code)
+    the task report's Gaps.
+
+    A code is only requested when the caller has none: `otp_store.issue`
+    overwrites the previous code for that phone, so requesting one
+    unconditionally invalidated the very code `--otp-code` was given."""
+    if otp_code is None:
+        await request_otp(client, phone)
+        otp_code = input(f"OTP for {phone} (printed to the api process console): ").strip()
+    return await verify_otp(client, phone, otp_code)
 
 
 async def run(args: argparse.Namespace) -> None:

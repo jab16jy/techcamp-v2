@@ -17,12 +17,12 @@ que los datos que los originan").
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
 
 from sqlalchemy import Table, bindparam, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from techcamp.shared.db import async_session_factory, engine
 from techcamp.shared.jobs import app
@@ -42,6 +42,14 @@ TASK_NAME = "telemetry.recalibrate_readings"
 # (docs/02-estimaciones.md) never puts millions of readings behind a single
 # calibration window; revisit if a range this large shows up in practice.
 _RECOMPUTE_BATCH_SIZE = 1000
+
+_VIEW_BUCKETS = {
+    "reading_hourly": timedelta(hours=1),
+    "reading_daily": timedelta(days=1),
+}
+"""The `time_bucket` width of each continuous aggregate, as declared in
+migration `8c3983dc2dfd`. TimescaleDB requires a refresh window of at least one
+bucket, so each view is refreshed over whole buckets of its own width."""
 
 
 async def enqueue_recalibration(session: AsyncSession, calibration_id: UUID) -> None:
@@ -174,21 +182,49 @@ async def _recompute_range(
     return touched
 
 
+async def _bucket_window(
+    conn: AsyncConnection, start: datetime, end: datetime, bucket: timedelta
+) -> tuple[datetime, datetime]:
+    """Snaps `start` down and `end` up to whole `bucket` boundaries with the
+    database's own `time_bucket`, so the alignment is the view's and cannot drift
+    from it (the two are created in the same migration, `8c3983dc2dfd`)."""
+    row = (
+        await conn.execute(
+            text(
+                "SELECT time_bucket(CAST(:bucket AS interval), CAST(:start AS timestamptz)),"
+                " time_bucket(CAST(:bucket AS interval), CAST(:end AS timestamptz))"
+                " + CAST(:bucket AS interval)"
+            ),
+            {"bucket": bucket, "start": start, "end": end},
+        )
+    ).one()
+    return row[0], row[1]
+
+
 async def _refresh_aggregates(start: datetime, end: datetime | None) -> None:
     """`CALL refresh_continuous_aggregate(...)` cannot run inside a
     transaction block (verified via ctx7 against timescale/timescaledb's own
     docs, same reasoning as `tests/telemetry/test_reading_repository.py`),
     so this runs over an AUTOCOMMIT connection, separate from the recompute
-    session's transaction."""
+    session's transaction.
+
+    TimescaleDB rejects a refresh window shorter than one bucket of the view, and
+    a non-latest calibration version's window is bounded by the *next* version's
+    `valid_from` — so a back-dated version can own a window of minutes, far less
+    than a day. Each view is therefore refreshed over its own whole buckets.
+    Failing here used to land after the recompute had committed, so procrastinate
+    recorded a `failed` job for work that was already durable."""
+    window_end = end if end is not None else datetime.now(UTC)
     autocommit_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
     async with autocommit_engine.connect() as conn:
-        for view in ("reading_hourly", "reading_daily"):
+        for view, bucket in _VIEW_BUCKETS.items():
+            window_start, window_end_aligned = await _bucket_window(conn, start, window_end, bucket)
             await conn.execute(
                 text(
                     f"CALL refresh_continuous_aggregate("
                     f"'{view}', CAST(:start AS timestamptz), CAST(:end AS timestamptz))"
                 ),
-                {"start": start, "end": end},
+                {"start": window_start, "end": window_end_aligned},
             )
 
 
