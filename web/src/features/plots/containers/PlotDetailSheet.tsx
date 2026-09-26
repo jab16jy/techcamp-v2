@@ -17,6 +17,7 @@ import {
 } from '../../../design-system/ui/select'
 import { ApiError } from '../../../lib/api/client'
 import { describeApiError } from '../../../lib/api/errorCopy'
+import { PlotNodesSection } from '../../nodes/containers/PlotNodesSection'
 import {
   useActiveCycle,
   useAutofillSoil,
@@ -414,9 +415,10 @@ function CycleSection({ plotId }: { plotId: string }) {
 
 /**
  * Plot detail (docs/07 mapa de pantallas: `plots --> plotd[Parcela: polígono, suelo,
- * ciclo]`; the polygon itself is T8's creation map, not re-edited here — doc gap, no
- * screen layout is specified beyond that navigation node, T9). Opened from a plot row in
- * `PlotsList` (entry point, replacing an inert `<li>` with a button).
+ * ciclo]` and `plotd --> nodes[Nodos de la parcela]`; the polygon itself is T8's
+ * creation map, not re-edited here — doc gap, no screen layout is specified beyond that
+ * navigation node, T9). Opened from a plot row in `PlotsList` (entry point, replacing an
+ * inert `<li>` with a button).
  */
 export function PlotDetailSheet({ open, onOpenChange, plotId, plotName }: PlotDetailSheetProps) {
   return (
@@ -424,11 +426,12 @@ export function PlotDetailSheet({ open, onOpenChange, plotId, plotName }: PlotDe
       <SheetContent>
         <SheetHeader>
           <SheetTitle>{plotName}</SheetTitle>
-          <SheetDescription>Suelo y ciclo de cultivo de esta parcela.</SheetDescription>
+          <SheetDescription>Suelo, ciclo de cultivo y nodos de esta parcela.</SheetDescription>
         </SheetHeader>
         <div className="flex flex-col gap-6">
           <SoilSection plotId={plotId} />
           <CycleSection plotId={plotId} />
+          <PlotNodesSection plotId={plotId} />
         </div>
       </SheetContent>
     </Sheet>
