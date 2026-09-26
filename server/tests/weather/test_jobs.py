@@ -1,10 +1,11 @@
-"""Weather forecast refresh jobs (T5a, docs/06-diseno-detallado.md §6,
+"""Weather jobs (T5a refresh, T5b consolidation; docs/06-diseno-detallado.md §6,
 docs/10-dag.md §3, docs/09-cuellos-de-botella.md:29, ADR-0012).
 
 The 3 h run fans one job out per active cell, each job refreshes that cell's
-16-day forecast, and a provider outage leaves the stored rows exactly as they
-were, served as `stale` with their own `fetched_at`. Open-Meteo is the only
-test double in the chain: an injected `httpx.MockTransport` (ADR-0021).
+16-day forecast, and the daily 03:00 run stores the previous day as observed.
+A provider outage leaves the stored rows exactly as they were, served as `stale`
+with their own `fetched_at`. Open-Meteo is the only test double in the chain: an
+injected `httpx.MockTransport` (ADR-0021).
 """
 
 from __future__ import annotations
@@ -28,9 +29,13 @@ from techcamp.shared.ids import uuid7
 from techcamp.shared.jobs import app
 from techcamp.weather.adapters import jobs as jobs_module
 from techcamp.weather.adapters.jobs import (
+    CONSOLIDATE_TASK_NAME,
     FORECAST_DAYS,
     QUEUE_NAME,
     REFRESH_TASK_NAME,
+    consolidate_active_cells,
+    consolidate_cell,
+    local_today,
     refresh_active_cells,
     refresh_cell,
 )
@@ -66,23 +71,30 @@ async def _clear_jobs(db_session: AsyncSession):
     await db_session.commit()
 
 
-def _forecast_body(days: int) -> dict[str, Any]:
-    """`days` daily rows, as Open-Meteo answers a daily-variables query."""
+def _body_for(days: list[datetime.date]) -> dict[str, Any]:
+    """One daily row per day in `days`, as Open-Meteo answers a daily-variables
+    query. The days are explicit because a consolidation asks for one past day
+    and the response must name that same day."""
     return {
         "latitude": 10.9,
         "longitude": -74.1,
         "utc_offset_seconds": -18000,
         "timezone": "America/Bogota",
         "daily": {
-            "time": [(_FIRST_DAY + datetime.timedelta(days=i)).isoformat() for i in range(days)],
-            "et0_fao_evapotranspiration": [4.0 + i for i in range(days)],
-            "precipitation_sum": [0.0] * days,
-            "temperature_2m_min": [24.0] * days,
-            "temperature_2m_max": [33.0] * days,
-            "relative_humidity_2m_mean": [78.0] * days,
+            "time": [day.isoformat() for day in days],
+            "et0_fao_evapotranspiration": [4.0 + i for i in range(len(days))],
+            "precipitation_sum": [0.0] * len(days),
+            "temperature_2m_min": [24.0] * len(days),
+            "temperature_2m_max": [33.0] * len(days),
+            "relative_humidity_2m_mean": [78.0] * len(days),
         },
         "daily_units": {},
     }
+
+
+def _forecast_body(count: int) -> dict[str, Any]:
+    """`count` consecutive days from `_FIRST_DAY`, the forecast window."""
+    return _body_for([_FIRST_DAY + datetime.timedelta(days=i) for i in range(count)])
 
 
 def _adapter_responding(handler: Any) -> OpenMeteoAdapter:
@@ -161,6 +173,28 @@ async def _make_cell_with_data(db_session: AsyncSession) -> int:
         ],
     )
     return cell_id
+
+
+async def _store_forecast_day(
+    db_session: AsyncSession, cell_id: int, day: datetime.date, *, et0_mm: float
+) -> None:
+    """The forecast row a cell already carries for `day`, as the 3 h refresh left
+    it before the day it predicted was over."""
+    await SqlAlchemyWeatherRepository(db_session).upsert_daily(
+        cell_id,
+        [
+            WeatherDay(
+                day=day,
+                is_forecast=True,
+                et0_mm=et0_mm,
+                rain_mm=0.0,
+                tmin_c=24.0,
+                tmax_c=33.0,
+                rh_mean_pct=78.0,
+                fetched_at=_STORED_AT,
+            )
+        ],
+    )
 
 
 async def _stored_days(
@@ -406,5 +440,187 @@ async def test_a_refresh_of_a_deleted_cell_does_nothing(
     cells = SqlAlchemyWeatherRepository(db_session)
     await cells.get_or_create_cell(Decimal("10.9"), Decimal("-74.1"))
     await refresh_cell(cell_id=999_999)
+
+    assert calls == []
+
+
+async def test_the_daily_run_consolidates_yesterday_for_every_active_cell(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06-diseno-detallado.md §6 and docs/10-dag.md §3 ("03:00 consolidar
+    clima del día anterior"): the daily run fans out one job per active cell, in
+    parallel (docs/09-cuellos-de-botella.md:29), and asks for the previous day in
+    the DAG's own zone. A cell with no plot is not active and costs nothing."""
+    first = await _create_plot(db_session)
+    second = await _create_plot(db_session, _OTHER_CELL_BOUNDARY, name="Lote 2")
+    cells = SqlAlchemyWeatherRepository(db_session)
+    await cells.get_or_create_cell(Decimal("11.0"), Decimal("-75.0"))  # no plot points here
+
+    await consolidate_active_cells(timestamp=0)
+
+    yesterday = local_today() - datetime.timedelta(days=1)
+    jobs = (
+        await db_session.execute(
+            text(
+                "SELECT args, lock, queueing_lock, status, queue_name, task_name "
+                "FROM procrastinate_jobs WHERE task_name = :t ORDER BY id"
+            ),
+            {"t": CONSOLIDATE_TASK_NAME},
+        )
+    ).all()
+    assert {job.args["cell_id"] for job in jobs} == {first, second}
+    assert {job.args["day"] for job in jobs} == {yesterday.isoformat()}
+    assert all(job.queue_name == QUEUE_NAME for job in jobs)
+    assert all(job.status == "todo" for job in jobs)
+    assert {job.lock for job in jobs} == {f"consolidate:cell:{first}", f"consolidate:cell:{second}"}
+    # A consolidation is not the refresh of the same cell: its own lock and
+    # queueing lock, so a forecast still waiting to be fetched cannot swallow the
+    # 03:00 run (and the two write different rows of the same cell anyway).
+    assert all(job.lock.startswith("consolidate:") for job in jobs)
+
+
+async def test_a_day_is_stored_as_observed_and_its_forecast_row_is_left_alone(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the daily job (docs/06 §6): yesterday stops being a guess and
+    becomes what actually happened, stored as `is_forecast = false` beside the
+    forecast the 3 h refresh wrote for the same day — the two are different rows
+    of the same `(cell_id, day)` pair (docs/03-modelo-datos.md:180-191), and the
+    observed one is the one the water balance reads."""
+    yesterday = local_today() - datetime.timedelta(days=1)
+    cell_id = await _create_plot(db_session)
+    await _store_forecast_day(db_session, cell_id, yesterday, et0_mm=3.0)
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_body_for([yesterday]))
+
+    _use_adapter(monkeypatch, _adapter_responding(_handler))
+    before_this_run = datetime.datetime.now(datetime.UTC)
+
+    await consolidate_cell(cell_id=cell_id, day=yesterday.isoformat())
+
+    # One past day and no forecast days: exactly the day being consolidated
+    # (verified against the real Open-Meteo contract, which answers
+    # `past_days=1, forecast_days=0` with that single local day).
+    assert len(requests) == 1
+    assert requests[0].url.params["past_days"] == "1"
+    assert requests[0].url.params["forecast_days"] == "0"
+
+    stored = await _stored_days(db_session, cell_id)
+    assert [(day, is_forecast) for day, is_forecast, _, _ in stored] == [
+        (yesterday, False),
+        (yesterday, True),
+    ]
+    observed_et0, forecast_et0 = (et0 for _, _, et0, _ in stored)
+    assert observed_et0 == 4.0  # the provider's value for the day that happened
+    assert forecast_et0 == 3.0  # the guess the 3 h refresh had stored, untouched
+    observed_fetched_at = stored[0][3]
+    assert observed_fetched_at >= before_this_run
+    assert stored[1][3] == _STORED_AT
+
+
+async def test_a_consolidation_can_reach_a_day_older_than_yesterday(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`POST /dev/jobs/weather:run { day? }` (docs/04-api.md:177) can name an
+    older day, so the job asks for as many days back as that day is instead of
+    assuming one — the seminar can consolidate a day the worker was down for."""
+    three_days_ago = local_today() - datetime.timedelta(days=3)
+    cell_id = await _create_plot(db_session)
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_body_for([three_days_ago]))
+
+    _use_adapter(monkeypatch, _adapter_responding(_handler))
+
+    await consolidate_cell(cell_id=cell_id, day=three_days_ago.isoformat())
+
+    assert requests[0].url.params["past_days"] == "3"
+    stored = await _stored_days(db_session, cell_id)
+    assert [(day, is_forecast) for day, is_forecast, _, _ in stored] == [(three_days_ago, False)]
+
+
+async def test_a_day_the_provider_does_not_report_is_not_stored(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Open-Meteo answers with the days it has. A day missing from the response
+    has no observed values, and storing a row of nulls would be a second, worse
+    lie than no row: the read path would report an observed day with no rain."""
+    yesterday = local_today() - datetime.timedelta(days=1)
+    cell_id = await _create_plot(db_session)
+    _use_adapter(
+        monkeypatch,
+        _adapter_responding(
+            lambda _request: httpx.Response(
+                200, json=_body_for([yesterday - datetime.timedelta(days=1)])
+            )
+        ),
+    )
+
+    await consolidate_cell(cell_id=cell_id, day=yesterday.isoformat())
+
+    assert await _stored_days(db_session, cell_id) == []
+
+
+async def test_a_consolidation_outage_keeps_the_previous_rows(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The degradation rule (docs/06 §6) is the same for the daily job: with the
+    provider down the cell keeps what it has, and because `is_forecast` is part
+    of the primary key the row left untouched is still the forecast one — the
+    read path keeps serving it as a forecast, never as an observation."""
+    yesterday = local_today() - datetime.timedelta(days=1)
+    cell_id = await _create_plot(db_session)
+    await _store_forecast_day(db_session, cell_id, yesterday, et0_mm=3.0)
+    before = await _stored_days(db_session, cell_id)
+    _use_adapter(
+        monkeypatch,
+        _adapter_responding(lambda _request: httpx.Response(503, json={"reason": "down"})),
+    )
+
+    await consolidate_cell(cell_id=cell_id, day=yesterday.isoformat())
+
+    assert await _stored_days(db_session, cell_id) == before
+    task = app.tasks[CONSOLIDATE_TASK_NAME]
+    job = Job(
+        id=1,
+        status="todo",
+        queue=QUEUE_NAME,
+        priority=0,
+        lock=None,
+        queueing_lock=None,
+        task_name=CONSOLIDATE_TASK_NAME,
+        task_kwargs={},
+        scheduled_at=None,
+        attempts=0,
+        abort_requested=False,
+        worker_id=None,
+    )
+    assert (
+        task.get_retry_exception(
+            exception=OpenMeteoUnavailableError("Open-Meteo is down", upstream_status=503),
+            job=job,
+        )
+        is None
+    )
+
+
+async def test_a_consolidation_of_a_deleted_cell_does_nothing(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[httpx.Request] = []
+    _use_adapter(
+        monkeypatch,
+        _adapter_responding(
+            lambda request: (calls.append(request), httpx.Response(200, json=_body_for([])))[1]
+        ),
+    )
+    yesterday = local_today() - datetime.timedelta(days=1)
+
+    await consolidate_cell(cell_id=999_999, day=yesterday.isoformat())
 
     assert calls == []

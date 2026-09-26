@@ -38,8 +38,10 @@ if is_seminar_profile():
     # /dev routes only exist in the seminar profile (ADR-0021); still part of
     # the versioned REST API, so they get the same /api/v1 prefix.
     from techcamp.identity.adapters.api.dev_auth import router as dev_auth_router
+    from techcamp.weather.adapters.api.dev_jobs import router as dev_weather_jobs_router
 
     app.include_router(dev_auth_router, prefix="/api/v1")
+    app.include_router(dev_weather_jobs_router, prefix="/api/v1")
 
 
 @app.get("/health")
