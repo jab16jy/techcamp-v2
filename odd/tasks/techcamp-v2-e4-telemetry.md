@@ -65,15 +65,15 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T9d Calibration + credentials: node sensors list, `CalibrationSheet` (method `linear|two_point|polynomial`, `kind`, params, `rmse_pct`, `valid_from`; new version, never edit), rotate credentials with password shown once — route: delegated (OpenCode via Herdr, same session) — forecast ~450 — actual 831 (`e4dd324`)
 - [x] T10a Stream client: authenticated SSE hook for `GET /stream?farm_id=` read with `fetch` + `ReadableStream` so the bearer token stays in the `Authorization` header (`EventSource` cannot send headers; owner decision 2026-09-25, no server change), reconnect with `Last-Event-ID`, keepalive tolerant — route: delegated (OpenCode via Herdr; should have been a fresh session, see Decisions) — forecast ~250 — actual 377 (`28c1f85`)
 - [x] T10b Live reading on plot detail: latest calibrated reading per sensor, seeded from `GET /plots/{plot_id}/readings?resolution=raw` and updated by `reading` events — route: delegated (OpenCode via Herdr, same session) — forecast ~300 — actual 299 (`cc282d2`)
-- Completeness unit (T11c, parent decision 2026-09-25, pending owner confirmation): keep the server's 0–1 ratio on the wire and document it in docs/04; the web formats it as a percentage. No API change.
+- Completeness unit (T11c, parent decision 2026-09-25, owner accepted by approving T11): keep the server's 0–1 ratio on the wire and document it in docs/04; the web formats it as a percentage. No API change.
 - Herdr sessions (owner, 2026-09-25): one writer session per feature. T9a–T9d complement each other and may share one; T10 is a new feature and should have started a fresh session (it did not — recorded, not repeated).
 
 - Review-fix rounds (T*b) reserved: forecast ~1,800
 
-- [ ] T11 E4 demo fixes (end-to-end demo 2026-09-25, see "End-to-end demo" below) — route: delegated (fresh OpenCode session via Herdr, RDD run by the writer per work-unit commit, consent relayed to the owner) — forecast ~500
-  - [ ] T11a Stack boots from compose (D1, D2, D3): build mounts readable under SELinux, `httpx` a runtime dependency, image ships `migrations/` + `alembic.ini`, one-shot `migrate` service before api/ingestor/worker
-  - [ ] T11b Server fixes (D4, D5, 5.1): simulator `--provision` outside pytest, recalibration refresh window aligned to buckets and job status honest, `--otp-code` usable in scripted runs
-  - [ ] T11c Completeness unit (D6): docs/04 states `completeness_24h` is a 0–1 ratio (server unchanged); web shows it as a rounded percentage; fixtures use real ratios
+- [x] T11 E4 demo fixes (end-to-end demo 2026-09-25, see "End-to-end demo" below) — route: delegated (fresh OpenCode session via Herdr, RDD run by the writer per work-unit commit, consent answered by the owner) — forecast ~500 — actual 365
+  - [x] T11a Stack boots from compose (D1, D2, D3) — `4d60d78`, 48 lines: build mounts readable under SELinux, `httpx` a runtime dependency, image ships `migrations/` + `alembic.ini`, one-shot `migrate` service before api/ingestor/worker
+  - [x] T11b Server fixes (D4, D5, 5.1) — `82f09bc`, 252 lines: simulator `--provision` outside pytest, recalibration refresh window aligned to buckets and job status honest, `--otp-code` usable in scripted runs
+  - [x] T11c Completeness unit (D6) — `1010ff6`, 65 lines: docs/04 states `completeness_24h` is a 0–1 ratio (server unchanged); web shows it as a rounded percentage; fixtures use real ratios
 ## Review (RDD)
 - Boundary: `e79d542`.
 - `fe85ae7` (feature doc): assessed passive, no review; boundary → `fe85ae7`.
@@ -101,6 +101,9 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - T9d (`92a3d90..e4dd324`, 831 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-b89f697b0e58ed5e`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 2 SUGGESTION, non-blocking → issue #43, deferred. Boundary → `e4dd324`.
 - `989dce0` (doc): passive, boundary → `989dce0`. T10a `28c1f85`: medium, `under_budget` (377), pending in the slice.
 - T10a + T10b (`989dce0..cc282d2`, 701 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-d7f5466f4f7ccf82`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 4 SUGGESTION, non-blocking → issue #44, deferred. Boundary → `cc282d2`.
+- `a1ba5ce` (doc): passive, boundary → `a1ba5ce`. T11a `4d60d78`: medium, `under_budget` (48), pending in the slice.
+- T11a + T11b (`a1ba5ce..82f09bc`, 300 lines): high (`process_boundary` from the new subprocess test), `slice_budget_reached`; consent answered by the owner in the writer pane; lineage `review-545a37756486bdeb`, canonical four lenses (risk, resilience, readability, reliability), APPROVED with zero findings, acknowledged by the writer. Boundary → `82f09bc`.
+- T11c (`82f09bc..1010ff6`, 65 lines): medium, `under_budget`; reviewed as the chain's last commit, consent by the owner; lineage `review-c8667ab2e3b2e4d6`, one reliability lens, APPROVED with zero findings, acknowledged by the writer. Boundary → `1010ff6`. No follow-up issue (no findings).
 
 ## End-to-end demo (2026-09-25)
 Run by a fresh OpenCode session on `d4404c9` with `uvx podman-compose` (podman 5.8.7 rootless, SELinux Enforcing). Verification only: no tracked file changed. Full report kept in the session scratchpad; summary here.
@@ -118,6 +121,8 @@ Run by a fresh OpenCode session on `d4404c9` with `uvx podman-compose` (podman 5
 
 Covers the PENDING T4 compose/shared-subscription check and the T7 `worker` runtime check.
 
+Status: D1–D6 and caveat 5.1 fixed by T11 (`4d60d78`, `82f09bc`, `1010ff6`); T11a re-ran the stack on a fresh volume (`migrate` exited 0, `/health` 200, api/ingestor/worker 0 restarts). Caveats 5.2–5.9 stay as documented.
+
 Defects (CI and every review were green because no test exercises the built image or the server↔web contract):
 - D1 `server/Dockerfile:7-8` — `RUN --mount=type=bind` of `pyproject.toml`/`uv.lock` is unreadable under SELinux Enforcing (`user_home_t` vs `container_t`): build fails with EACCES. Origin E0, already on `main`.
 - D2 `server/pyproject.toml:29` + `farms/adapters/soilgrids.py:35` — `httpx` is dev-only but imported at api startup; the `--no-dev` image exits with `ModuleNotFoundError`. Origin E3, already on `main`.
@@ -133,8 +138,10 @@ Defects (CI and every review were green because no test exercises the built imag
 - Recalibration recomputes `value` from `raw_value` forward.
 - Node claim by QR/code works from the web; health and calibration visible.
 - All server and web checks green.
+- Met 2026-09-25: end-to-end demo passed all eight criteria; its defects fixed in T11.
 
 ## Progress / evidence
+- 2026-09-25: T11 (writer: fresh OpenCode session via Herdr, RDD run by the writer). T11a `4d60d78`: infra proven by running it — build under SELinux Enforcing, image ships `alembic.ini` + `migrations/`, `httpx` importable, one-shot `migrate` service; pytest 392, ruff, format, mypy, lint-imports green. T11b `82f09bc`: RED behavioral (`unregistered FK targets: ['organization', 'plot']` in a subprocess; `refresh window too small` on a 12-minute window; `401` with a supplied OTP), GREEN; pytest 396 passed. D5 residual: a refresh failure from another cause still lands after the committed recompute (Timescale cannot refresh inside the recompute transaction); the test asserts both aggregates refresh. T11c `1010ff6`: docs/04:84 states the 0–1 ratio; `formatPercent` in `format.ts`; RED printed `0.19791666666666666 %`; a third unreal fixture fixed in `PlotDetailSheet.test.tsx`; web 169 passed, size 162.07/200 kB. Parent spot check: `pytest tests/simulator/test_provision.py tests/telemetry/test_jobs.py` 9 passed, `npm test -- --run src/features/nodes src/design-system/components/format.test.ts` 56 passed. The writer removed the local `infra_postgres_1` container (volume kept); the parent recreated it with `--profile seminar`.
 - 2026-09-25: T10b (`cc282d2`): RED behavioral (seeded value, event update, other-plot event, empty state); lint, typecheck, `test -- --run` 164 passed, build, size 162.04/200 kB (writer); parent spot check `npm test -- --run src/features/plots src/lib/api src/design-system/components/format.test.ts` 98 passed, typecheck clean. `format.ts` gains a pure `minutesSince` helper (no visual change). Gaps (#44): the `reading` event carries only `plot_id`/`metric`/`value`/`at` (no `sensor_id`/`depth_cm`), so per-depth rows come from the query and the latest stream event shows on its own line; one stream per plot sheet, not per farm; no connection state (docs/07 connection honesty unmet there); 2 h seed window is a local choice.
 - 2026-09-25: T10a (`28c1f85`): RED behavioral (parser cases, event delivery, auth header, reconnect, abort, 404, 401 sign-out); lint, typecheck, `test -- --run` 155 passed, build, size (writer); parent fixed `expireSession` placement in `client.ts` (it split `sessionMiddleware` from its doc comment), then `npm test -- --run src/lib/api` 32 passed, lint and typecheck clean. Gaps (#44): server accepts `Last-Event-ID` without replay and event ids restart per process; a stream that closes right after connecting retries every 1 s.
 - 2026-09-25: T9d (`e4dd324`): RED behavioral (no calibration fields, sensors never listed, node row not an entry point); a wire-level assertion caught the mutation posting to `/sensors/%7Bsensor_id%7D/calibrations` with an empty body before commit. lint, typecheck, `test -- --run` 140 passed, build, size 160.88/200 kB (writer); parent spot check `npm test -- --run src/features/nodes` 40 passed, typecheck clean. Param names from the server `apply_calibration`: linear `scale`/`offset`, two_point `raw_dry`/`raw_wet`/`vwc_dry`/`vwc_wet`, polynomial `coeffs`. One-time credential UI extracted to `features/nodes/components/OneTimeSecret.tsx` (shared by claim and rotate). Rotate confirm is inline (no third overlay). GAP (docs/04): no endpoint reads a sensor's calibrations, so only a calibration created this session is shown — acceptance "calibration visible" is partial until docs/04 + server add one (#43). Plot → node → calibration are three stacked sheets.
@@ -154,4 +161,4 @@ Defects (CI and every review were green because no test exercises the built imag
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-PRs #45–#56 open (stacked-to-main, one per ODD task, `size:exception`), CI green on all 12, not merged (2026-09-25). T11 in progress: fixes land as PR 13 on top of #56, then the chain merges in order.
+E4 complete and reviewed (boundary `1010ff6`). Delivery: PRs #45–#56 plus the T11 PR on top of #56, stacked-to-main, merged in order with merge commits after CI (owner, 2026-09-25). Open follow-up issues: #33–#44. Pending owner decisions: calibration read endpoint (#43), `sensor_id` in the `reading` event and stream connection state (#44).
