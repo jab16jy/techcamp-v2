@@ -39,31 +39,38 @@ E6 (irrigation) and E7 (alerts) consume calibrated readings and the live stream.
 - Calibration version race (#35): on unique-violation return 409 `calibration_version_conflict`; the client retries.
 - procrastinate (#39): pin the exact installed version in `pyproject.toml`; test `_split_sql_statements` against the real schema.
 - Web list pagination (#41): `useNodes` follows `next_cursor` until exhausted (a plot has few nodes).
-- Quality flag drift (#39, last finding): needs an owner doc decision (docs/03:174 stores two signals in one `quality`); asked when F5 starts.
+- Quality flags (#39 finding 6, owner decision 2026-09-25): `reading.quality` stays a smallint read as flags — 1 timestamp corrected, 2 out of range, 3 both; ingest ORs them, recalibration keeps the timestamp flag and recomputes only the range flag; migration `a3f1c7d92b40` widens `ck_reading_quality` to 0..3 (downgrade folds 3 into 2). docs/03 + docs/06 §1 updated.
+- Review follow-ups (owner, 2026-09-25): every WARNING/SUGGESTION from a writer's own review is filed as that round's issue and fixed right away by the same writer session, then reviewed again, until clean. Rounds opened and closed here: #58, #59, #60, #61, #62, #63.
+- Parallel server writers (owner, 2026-09-25): F3–F6 ran as separate OpenCode sessions in Herdr tabs, each on its own branch from `ebd8495` and its own test database (`techcamp_f3..f6`), because the test session migrates up and down. Branches were cherry-picked into one linear chain (no conflicts) and re-verified before delivery.
+- AGY (Antigravity) cannot run RDD: `gentle-ai review status --agent antigravity` → `immutable_review_transport_unsupported` (verified 2026-09-25). The parent ran RDD on the web commits as `claude-code`.
 
 ## Tasks
-Server chain (OpenCode, RDD by the writer):
-- [ ] F1 Uplink parsing and ingest robustness — #34 (all 4) + #36 (all 4): `ts` range guard (malformed, not a crash), reject NaN/Infinity, strict `v` and non-dict payload, Timescale block repeat test; monotonic `last_seen_at`/status, `reading` events only for inserted rows, rename/fix the unclaimed-node test — forecast ~400
-- [ ] F2 Node API and calibration — #35 (all 6): 409 on version race + concurrent test, validate params directly (422), `GET /nodes` pagination/filter tests, write-role 403 tests, lost claim race test, `verify_password` on malformed hashes — forecast ~450
-- [ ] F3 Readings query and SSE hub — #37 (all 3) + #38 (all 3): tz-aware `from`/`to` (422), unknown metric 422, document the node cap; hub retries on `PostgresError` and closes a half-open connection, readiness flag for tests, subscribe inside the generator — forecast ~400
-- [ ] F4 Recalibration jobs — #39 findings 1–5: pin procrastinate, splitter test, per-sensor job lock and `valid_from` tie-break, verify bucket alignment (T11b `82f09bc` fixed D5; close if proven), retry the refresh step — forecast ~300
-- [ ] F5 Quality flag drift — #39 finding 6: owner doc decision first, then docs/03 + code — forecast ~150
-- [ ] F6 Simulator — #40 (all 5): confirm calibration tests, live index offset after backfill, validate backfill args, one-transaction provisioning, `run()` orchestration test — forecast ~250
+Server (OpenCode writers, each ran RDD on its own commits):
+- [x] F1 Uplink parsing and ingest robustness — #34 + #36 — `aaa5d37` (294) + `ebd8495` (249) — review `review-e4215d6cd1963217` approved; its test gap → #58
+- [x] F2 Node API and calibration — #35 — `c20a5a5` (476) — review `review-cf8c859dcd7d8813` approved; WARNING → #61
+- [x] F7 F1/F2 review rounds — #58 + #61 — `947a8d7` (113) — review `review-0ebeb30d0606fb4d` approved, 0 findings
+- [x] F3 Readings query and SSE hub — #37 + #38 — `f5fe9c9` (409) — review `review-78d44617dfdc5c5c` approved (CRITICAL refuted); WARNING + flaky aggregate tests + dead `is_subscribed` → #63, fixed by the same session in `e1fcf6d` (257) + bounded correction `70ac6ef` (18, CRITICAL `R3-stop-cancels-unclaimed-release`) — review `review-d5471db1c6563a1d` approved. Flake root cause: TimescaleDB background policies share a lock with the tests' manual refresh; conftest unschedules them for the session.
+- [x] F4 Recalibration jobs — #39 findings 1–5 — `298a214` (230) + `5e59f4e` (290) — review `review-c053699db24e9666` approved, 0 findings. Bucket alignment needed no change (proven by the existing test).
+- [x] F5 Quality flags — #39 finding 6 — `be82ebf` (191) + bounded correction `040d70b` (4, blocking: downgrade failed after a stored 3) — review `review-301f5e8a8348e0de` approved
+- [x] F6 Simulator — #40 — `ceb81a2` (345; also fixed a sub-second calibration hole, noted on #40) — review `review-167599c1aee68072` (high, four lenses) approved; 2 WARNING → #62, fixed by the same session in `7a81c22` (229) — review `review-fb08d5bcba4a3a59` approved, 0 findings
 
-Web chain (AGY writer, RDD by the parent):
-- [ ] W1 Nodes API, claim and rotate — #41 (all 3) + #42 (both) + #43 (all 3): follow `next_cursor`, `enabled` guards, org-null test, no concurrent scan leak, handle clipboard rejection once in `OneTimeSecret`, keep the rotate password when the sheet closes while pending, stronger no-rotate test — forecast ~300
-- [ ] W2 Stream client — #44 (all 5): deterministic ignored-event test, reset backoff only after a received event, ticking freshness label, abort listener cleanup, id-less frame handling — forecast ~250
+Web (AGY writer, RDD by the parent):
+- [x] W1 Nodes API, claim and rotate — #41 + #42 + #43 — `cd3160b` (256). Parent correction during the task: the one-time password is not cached (docs/04:83); the sheet ignores close while rotation is pending.
+- [x] W2 Stream client — #44 — `56fc2bb` (166) — W1+W2 review `review-2184809b8004f415` approved; 4 findings → #59
+- [x] W3 Web review round — #59 — `e40c032` (118, CodeGraph-first) — review `review-225b517f13a4827b` approved; 1 SUGGESTION → #60
+- [x] W4 — #60 — `84fcb45` (9, parent, test proven to fail without the guard) — medium `under_budget`, not separately reviewed
 
 ## Review (RDD)
-- Server boundary: `7f2f290`. Web boundary: `7f2f290`.
+All lineages above approved and acknowledged (authority burned). Consent on every fix candidate was answered by the owner.
 
 ## Acceptance criteria
-- Every checkbox in #34–#44 is fixed with a test (or proven already fixed), and each issue is closed by a referencing commit or PR.
-- Out-of-scope doc gaps remain listed in their issues.
-- All server and web checks green; CI green on every PR.
+- [x] Every checkbox in #34–#44 fixed with a test or proven already fixed; every review round of this feature (#58–#63) fixed.
+- [x] Out-of-scope doc gaps remain listed in their issues (#34, #43, #44).
+- [x] Integration chain (`e4fu-int`): server 476 passed, ruff/format/mypy/lint-imports green, one Alembic head `a3f1c7d92b40`; web 190 passed, lint/typecheck/build green, size 162.39/200 kB. CI per PR pending.
 
 ## Progress / evidence
-- 2026-09-25: feature doc created; scope E4 only (owner).
+- 2026-09-25: feature doc created; scope E4 only (owner). All 11 tasks delivered by parallel Herdr writers; 3,535 authored lines over 18 commits (excluding `uv.lock`).
 
 ## Next step
-1. Create the two worktrees and start F1 (OpenCode) and W1 (AGY) in parallel Herdr panes.
+1. Stacked-to-main PRs (7 slices), merge in order with CI green; close #34–#44 and #58–#63.
+2. Delete the `e4-followups-*` worktrees, their branches and the `techcamp_f3..f6` test databases (owner, 2026-09-25).
