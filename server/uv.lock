@@ -1384,7 +1384,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "geoalchemy2", specifier = ">=0.20.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "procrastinate", specifier = ">=3.10.0" },
+    { name = "procrastinate", specifier = "==3.10.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.14.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
