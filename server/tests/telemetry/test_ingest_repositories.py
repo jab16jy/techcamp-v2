@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 import pytest
@@ -45,14 +45,40 @@ async def test_get_by_id_finds_a_claimed_node_without_an_org_filter(
 
 
 async def test_get_by_id_finds_an_unclaimed_node(db_session: AsyncSession) -> None:
-    org_id, plot_id = await _make_org_and_plot(db_session)
-    node_id = await _make_node(db_session, org_id, plot_id)
-    unclaimed = await SqlAlchemyNodeRepository(db_session).get_by_id(node_id)
-    assert unclaimed is not None  # sanity: claimed node round-trips too
-
+    """GitHub #36: the ingestor looks a node up before it knows any org, so
+    `get_by_id` must find a node that nobody has claimed yet (org_id/plot_id
+    are all null before `POST /nodes:claim`)."""
     from uuid import uuid4
 
-    assert await SqlAlchemyNodeRepository(db_session).get_by_id(uuid4()) is None
+    from techcamp.shared.ids import uuid7
+    from techcamp.telemetry.adapters.orm import NodeRow
+
+    node_id = uuid7()
+    db_session.add(
+        NodeRow(
+            id=node_id,
+            org_id=None,
+            plot_id=None,
+            transport="wifi",
+            dev_eui=None,
+            claim_code="UNCLAIMED-LOOKUP",
+            credential_hash="hash",
+            firmware=None,
+            interval_s=300,
+            claimed_at=None,
+            last_seen_at=None,
+            status="provisioned",
+        )
+    )
+    await db_session.commit()
+    repo = SqlAlchemyNodeRepository(db_session)
+
+    unclaimed = await repo.get_by_id(node_id)
+    assert unclaimed is not None
+    assert unclaimed.org_id is None
+    assert unclaimed.plot_id is None
+
+    assert await repo.get_by_id(uuid4()) is None
 
 
 async def test_mark_seen_batch_sets_last_seen_and_status(db_session: AsyncSession) -> None:
@@ -78,6 +104,49 @@ async def test_mark_seen_batch_sets_last_seen_and_status(db_session: AsyncSessio
     assert node.status is NodeStatus.ONLINE
 
 
+async def test_mark_seen_batch_ignores_an_update_older_than_the_stored_last_seen(
+    db_session: AsyncSession,
+) -> None:
+    """GitHub #36: the uplink and status batchers flush independently, so an
+    uplink received before a Last Will `offline` can be written after it.
+    `last_seen_at`/`status` must never move backwards."""
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    newer = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+    repo = SqlAlchemyNodeRepository(db_session)
+
+    first = await repo.mark_seen_batch(
+        [
+            NodeSeenUpdate(
+                node_id=node_id,
+                org_id=org_id,
+                plot_id=plot_id,
+                last_seen_at=newer,
+                status=NodeStatus.OFFLINE,
+            )
+        ]
+    )
+    second = await repo.mark_seen_batch(
+        [
+            NodeSeenUpdate(
+                node_id=node_id,
+                org_id=org_id,
+                plot_id=plot_id,
+                last_seen_at=newer - timedelta(seconds=60),
+                status=NodeStatus.ONLINE,
+            )
+        ]
+    )
+
+    assert first == {node_id}
+    assert second == set()  # nothing written: the caller publishes no event for it
+
+    node = await repo.get(node_id, org_id)
+    assert node is not None
+    assert node.last_seen_at == newer
+    assert node.status is NodeStatus.OFFLINE
+
+
 async def test_reading_repository_insert_batch_is_idempotent(db_session: AsyncSession) -> None:
     org_id, plot_id = await _make_org_and_plot(db_session)
     node_id = await _make_node(db_session, org_id, plot_id)
@@ -96,14 +165,14 @@ async def test_reading_repository_insert_batch_is_idempotent(db_session: AsyncSe
     first = await repo.insert_batch([record])
     second = await repo.insert_batch([record])  # duplicate: same (sensor_id, time)
 
-    assert first == 1
-    assert second == 0  # ON CONFLICT DO NOTHING: no second row
+    assert first == {(sensor_id, at)}
+    assert second == set()  # ON CONFLICT DO NOTHING: no second row, nothing to notify
 
 
 async def test_reading_repository_insert_batch_handles_an_empty_list(
     db_session: AsyncSession,
 ) -> None:
-    assert await SqlAlchemyReadingRepository(db_session).insert_batch([]) == 0
+    assert await SqlAlchemyReadingRepository(db_session).insert_batch([]) == set()
 
 
 def _dsn() -> str:

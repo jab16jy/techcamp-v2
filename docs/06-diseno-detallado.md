@@ -48,7 +48,8 @@ sequenceDiagram
 | Precedencia de `quality` (T4, gap) | Si una lectura cae en ambos casos (`ts` corregido y fuera de rango), se guarda `quality = 2`: fuera de rango es la señal más fuerte. Los docs no especificaban la precedencia. |
 | Sin calibración vigente (T4, gap) | Si no hay `calibration` con `valid_from <= time` para el sensor, se guarda la lectura con `raw_value` y `value = null` (no se descarta). Los docs no cubrían este caso; el esquema ya modela `value` como nullable. |
 | Lote | Inserción en lote cada 500 mensajes o 1 s. Con 110 msg/s de pico (año 3) queda muy lejos del límite. |
-| Duplicados | La restricción `UNIQUE (sensor_id, time)` más `ON CONFLICT DO NOTHING` hace idempotente la entrega "al menos una vez" de QoS 1. |
+| Duplicados | La restricción `UNIQUE (sensor_id, time)` más `ON CONFLICT DO NOTHING` hace idempotente la entrega "al menos una vez" de QoS 1. Solo las lecturas realmente insertadas emiten un evento `reading`: una redelivery no inserta nada y, por tanto, no vuelve a notificar al fan-out por SSE. |
+| Estado del nodo | `UPDATE node SET last_seen_at, status` solo avanza: se aplica únicamente si el `last_seen_at` guardado es más antiguo. Los lotes de uplink y de status se vacían por separado, así que un uplink recibido antes de un Last Will `offline` puede escribirse después; sin esta guarda el nodo volvería a `online` con una fecha más antigua. |
 | Huecos | Un salto en `seq` incrementa `ingest_gap_total`. La completitud diaria por nodo es un SLI ([11-metricas](11-metricas.md)). |
 
 > **Límite conocido:** la librería MQTT confirma el mensaje al recibirlo, así que si el ingestor cae entre la confirmación y la inserción se pierde como máximo un lote (≤ 1 s). Se detecta como hueco de `seq`. Si la completitud baja del SLO, se pasa a confirmación manual después del `INSERT`.

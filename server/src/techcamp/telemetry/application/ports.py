@@ -71,9 +71,11 @@ class NodeRepository(Protocol):
 
     async def count_readings_since(self, node_id: UUID, org_id: UUID, since: datetime) -> int: ...
 
-    async def mark_seen_batch(self, updates: Sequence[NodeSeenUpdate]) -> None:
+    async def mark_seen_batch(self, updates: Sequence[NodeSeenUpdate]) -> set[UUID]:
         """Sets `last_seen_at`/`status` for every node touched by one ingest
-        flush (docs/06-diseno-detallado.md §1), one commit for the batch."""
+        flush (docs/06-diseno-detallado.md §1), one commit for the batch, and
+        `last_seen_at` only moves forward. Returns the nodes actually written,
+        so a `node.status` event is published only for a change that landed."""
         ...
 
 
@@ -113,10 +115,13 @@ class CalibrationRepository(Protocol):
 
 
 class ReadingRepository(Protocol):
-    async def insert_batch(self, records: Sequence[ReadingRecord]) -> int:
+    async def insert_batch(self, records: Sequence[ReadingRecord]) -> set[tuple[int, datetime]]:
         """Bulk `INSERT ... ON CONFLICT (sensor_id, time) DO NOTHING`
         (docs/06-diseno-detallado.md §1): duplicate QoS-1 redeliveries are
-        idempotent. Returns the number of rows actually inserted."""
+        idempotent. Returns the `(sensor_id, time)` keys of the rows actually
+        inserted, so the caller only publishes `reading` events for readings
+        that landed (a redelivery inserts nothing and must not re-notify the
+        SSE fan-out)."""
         ...
 
     async def query_raw(

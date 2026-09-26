@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Row, func, select, text, update
+from sqlalchemy import CursorResult, Row, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -227,18 +227,32 @@ class SqlAlchemyNodeRepository:
         )
         return result.scalar_one()
 
-    async def mark_seen_batch(self, updates: Sequence[NodeSeenUpdate]) -> None:
+    async def mark_seen_batch(self, updates: Sequence[NodeSeenUpdate]) -> set[UUID]:
         """One `UPDATE` per node touched by an ingest flush (T4), one commit
-        for the whole batch (docs/06-diseno-detallado.md §1)."""
-        if not updates:
-            return
+        for the whole batch (docs/06-diseno-detallado.md §1).
+
+        `last_seen_at` only moves forward: the uplink and status batchers
+        flush independently, so an uplink received before a Last Will
+        `offline` can reach this method after it. Without the guard the node
+        would flip back to `online` with an older timestamp (#36).
+
+        Returns the nodes actually written, so the caller publishes a
+        `node.status` event only for a change that landed."""
+        updated: set[UUID] = set()
         for u in updates:
-            await self._session.execute(
+            result = await self._session.execute(
                 update(NodeRow)
-                .where(NodeRow.id == u.node_id, NodeRow.org_id == u.org_id)
+                .where(
+                    NodeRow.id == u.node_id,
+                    NodeRow.org_id == u.org_id,
+                    or_(NodeRow.last_seen_at.is_(None), NodeRow.last_seen_at < u.last_seen_at),
+                )
                 .values(last_seen_at=u.last_seen_at, status=u.status.value)
             )
+            if cast(CursorResult[Any], result).rowcount:
+                updated.add(u.node_id)
         await self._session.commit()
+        return updated
 
 
 _SENSOR_COLUMNS = (
@@ -395,12 +409,14 @@ class SqlAlchemyReadingRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def insert_batch(self, records: Sequence[ReadingRecord]) -> int:
+    async def insert_batch(self, records: Sequence[ReadingRecord]) -> set[tuple[int, datetime]]:
         """`INSERT ... ON CONFLICT (time, sensor_id) DO NOTHING`
         (docs/06-diseno-detallado.md §1): idempotent under QoS-1 redelivery,
-        `reading`'s composite primary key is the conflict target."""
+        `reading`'s composite primary key is the conflict target. `RETURNING`
+        reports only the rows that were actually inserted, which is what the
+        caller needs to skip `reading` events for skipped rows."""
         if not records:
-            return 0
+            return set()
         stmt = (
             pg_insert(ReadingRow)
             .values(
@@ -417,10 +433,11 @@ class SqlAlchemyReadingRepository:
                 ]
             )
             .on_conflict_do_nothing(index_elements=["time", "sensor_id"])
+            .returning(ReadingRow.sensor_id, ReadingRow.time)
         )
-        result = cast(CursorResult[Any], await self._session.execute(stmt))
+        result = await self._session.execute(stmt)
         await self._session.commit()
-        return result.rowcount
+        return {(row.sensor_id, row.time) for row in result}
 
     async def query_raw(
         self, sensor_id: int, *, start: datetime, end: datetime
