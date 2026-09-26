@@ -63,4 +63,26 @@ describe('createSseParser', () => {
     ])
     expect(createSseParser().push('event: ping\n\n')).toEqual([])
   })
+
+  it('retains the last event id when a subsequent frame omits id', () => {
+    const parser = createSseParser()
+    const chunk =
+      'id: 42\nevent: reading\ndata: {"value":1}\n\n' +
+      'event: reading\ndata: {"value":2}\n\n'
+
+    expect(parser.push(chunk)).toEqual([
+      { id: '42', event: 'reading', data: '{"value":1}' },
+      { id: '42', event: 'reading', data: '{"value":2}' },
+    ])
+  })
+
+  it('resets the last event id when an empty id field is sent', () => {
+    const parser = createSseParser()
+    const chunk = 'id: 42\ndata: first\n\nid:\ndata: second\n\n'
+
+    expect(parser.push(chunk)).toEqual([
+      { id: '42', event: 'message', data: 'first' },
+      { event: 'message', data: 'second' },
+    ])
+  })
 })

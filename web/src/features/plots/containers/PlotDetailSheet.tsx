@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Sheet,
   SheetContent,
@@ -426,9 +426,17 @@ function CycleSection({ plotId }: { plotId: string }) {
  * payload carries no `sensor_id`/`depth_cm` (docs/04:182) and a value must never be shown
  * under a depth it did not come from.
  */
+const FRESHNESS_INTERVAL_MS = 30_000
+
 function SoilMoistureSection({ plotId, farmId }: { plotId: string; farmId: string }) {
   const readingsQuery = useLatestReadings(plotId)
   const [live, setLive] = useState<{ value: number; at: string } | null>(null)
+  const [, setTick] = useState(0)
+
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), FRESHNESS_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [])
 
   useFarmEvents(farmId, (event) => {
     if (event.event !== 'reading') return

@@ -566,14 +566,15 @@ describe('PlotDetailSheet', () => {
         jsonResponse({ series: [{ sensor_id: 1, depth_cm: 20, points: [['2026-09-25T10:00:00Z', 42.5]] }] }),
       '/stream': () =>
         streamResponse(
-          `id: 8\nevent: reading\ndata: {"plot_id":"plot-9","metric":"soil_moisture","value":51.2,"at":"${new Date().toISOString()}"}\n\n`,
+          `id: 8\nevent: reading\ndata: {"plot_id":"plot-9","metric":"soil_moisture","value":51.2,"at":"${new Date().toISOString()}"}\n\n` +
+            `id: 9\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":60.0,"at":"${new Date().toISOString()}"}\n\n`,
         ),
     })
     renderSheet()
 
-    await screen.findByText('42.5 %')
+    // Wait for the matching event to arrive and render, proving the stream processed past the first event.
+    expect(await screen.findByText(/Última lectura del nodo: 60(\.0)? %/)).toBeInTheDocument()
     expect(screen.queryByText(/51\.2/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Última lectura del nodo/)).not.toBeInTheDocument()
   })
 
   it('says so when the plot has no recent readings', async () => {
@@ -581,5 +582,37 @@ describe('PlotDetailSheet', () => {
     renderSheet()
 
     expect(await screen.findByText('Sin lecturas recientes')).toBeInTheDocument()
+  })
+
+  it('updates the freshness label as time passes', async () => {
+    vi.useFakeTimers()
+    const baseTime = Date.parse('2026-09-25T12:00:00Z')
+    vi.setSystemTime(baseTime)
+
+    try {
+      const oneMinuteAgo = new Date(baseTime - 60_000).toISOString()
+      mockFetch({
+        '/crops': () => jsonResponse(CROPS),
+        '/readings': () =>
+          jsonResponse({
+            series: [
+              {
+                sensor_id: 1,
+                depth_cm: 20,
+                points: [[oneMinuteAgo, 42.5]],
+              },
+            ],
+          }),
+      })
+      renderSheet()
+
+      await vi.advanceTimersByTimeAsync(0)
+      expect(screen.getByText('dato de hace 1 min')).toBeInTheDocument()
+
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(screen.getByText('dato de hace 2 min')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
