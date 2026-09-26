@@ -14,11 +14,11 @@ import subprocess
 import sys
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.simulator.provision import provision_unclaimed_node
-from techcamp.telemetry.adapters.orm import SensorRow
+from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
 from techcamp.telemetry.adapters.repositories import SqlAlchemyNodeRepository
 
 pytestmark = pytest.mark.anyio
@@ -88,3 +88,27 @@ async def test_provision_unclaimed_node_generates_a_unique_claim_code_each_call(
     second = await provision_unclaimed_node(db_session)
 
     assert first != second
+
+
+async def test_provision_unclaimed_node_leaves_no_node_when_the_sensor_insert_fails(
+    db_session: AsyncSession,
+) -> None:
+    """#40: node and sensor were committed separately, so a failed sensor insert
+    left behind a claimable node with no sensors — `claim_node` then returns a
+    node the simulator cannot publish anything for. One transaction means the
+    node rolls back with its sensor."""
+
+    def _fail_on_sensor(session: object, flush_context: object, instances: object) -> None:
+        if any(isinstance(obj, SensorRow) for obj in session.new):  # type: ignore[attr-defined]
+            raise RuntimeError("sensor insert failed")
+
+    event.listen(db_session.sync_session, "before_flush", _fail_on_sensor)
+    try:
+        with pytest.raises(RuntimeError, match="sensor insert failed"):
+            await provision_unclaimed_node(db_session)
+    finally:
+        event.remove(db_session.sync_session, "before_flush", _fail_on_sensor)
+    await db_session.rollback()
+
+    nodes = (await db_session.execute(select(NodeRow))).scalars().all()
+    assert nodes == []

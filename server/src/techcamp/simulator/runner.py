@@ -31,22 +31,24 @@ async def publish_backfill(
     interval_s: int,
     seed: int,
     now: datetime,
-    start_seq: int = 1,
     firmware: str = DEFAULT_FIRMWARE,
 ) -> int:
     """Publishes one uplink per backfill timestamp (docs/06 §10: "backfill...
-    con ts en el pasado"). Returns the next unused `seq`, so a following
-    `publish_live` call continues the same monotonic counter
-    (docs/04-api.md:217: `seq` detects gaps)."""
+    con ts en el pasado"). Returns how many trajectory points it published, so a
+    following `publish_live` continues exactly where this one stopped.
+
+    One uplink per point means trajectory point `i` is always `seq = i + 1`
+    (docs/04-api.md:217: `seq` detects gaps), so the point count is the only
+    state the two loops have to share."""
     timestamps = backfill_timestamps(days=days, interval_s=interval_s, now=now)
     for i, ts in enumerate(timestamps):
         channels = {
             sensor["channel_key"]: raw_value_at(i, seed=seed + j)
             for j, sensor in enumerate(sensors)
         }
-        payload = build_uplink(seq=start_seq + i, ts=ts, channels=channels, firmware=firmware)
+        payload = build_uplink(seq=i + 1, ts=ts, channels=channels, firmware=firmware)
         await publisher.publish_uplink(node_id, payload)
-    return start_seq + len(timestamps)
+    return len(timestamps)
 
 
 async def publish_live(
@@ -55,7 +57,7 @@ async def publish_live(
     *,
     sensors: list[dict[str, Any]],
     seed: int,
-    start_seq: int,
+    after: int = 0,
     interval_s: int = LIVE_INTERVAL_S,
     iterations: int | None = None,
     firmware: str = DEFAULT_FIRMWARE,
@@ -63,18 +65,24 @@ async def publish_live(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
     """Publishes the trajectory's next point every `interval_s` (default 5s,
-    docs/06 §10), with `ts = now`. `iterations=None` (the CLI default) runs
-    until cancelled (Ctrl+C); a finite count makes this testable without a
-    real wait."""
-    index = 0
-    while iterations is None or index < iterations:
+    docs/06 §10), with `ts = now`. `after` is the number of trajectory points a
+    preceding `publish_backfill` published: the live loop continues both the
+    trajectory (docs/06 §10: "la lectura siguiente de la trayectoria") and the
+    `seq` counter from that one number, so a caller cannot align them wrongly.
+    `iterations=None` (the CLI default) runs until cancelled (Ctrl+C); a finite
+    count makes this testable without a real wait."""
+    iteration = 0
+    while iterations is None or iteration < iterations:
         channels = {
-            sensor["channel_key"]: raw_value_at(index, seed=seed + j)
+            sensor["channel_key"]: raw_value_at(after + iteration, seed=seed + j)
             for j, sensor in enumerate(sensors)
         }
         payload = build_uplink(
-            seq=start_seq + index, ts=int(now().timestamp()), channels=channels, firmware=firmware
+            seq=after + 1 + iteration,
+            ts=int(now().timestamp()),
+            channels=channels,
+            firmware=firmware,
         )
         await publisher.publish_uplink(node_id, payload)
-        index += 1
+        iteration += 1
         await sleep(interval_s)
