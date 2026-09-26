@@ -181,24 +181,25 @@ def sustained_run(
     samples: Sequence[tuple[datetime, float | Decimal]],
     predicate: Callable[[float], bool],
     at: datetime | None = None,
-) -> timedelta:
+) -> timedelta | None:
     """How long the predicate has held continuously up to the latest sample (D1).
 
     The run starts at the first sample after the last sample that failed the predicate.
-    Returns timedelta(0) if there are no samples or the latest sample fails the predicate.
+    Returns None when there is no run (no samples, or the latest sample fails the
+    predicate), so a zero-length run of one violating sample stays distinguishable.
     """
     if not samples:
-        return timedelta(0)
+        return None
     if at is not None:
         filtered = [s for s in samples if s[0] <= at]
     else:
         filtered = list(samples)
     if not filtered:
-        return timedelta(0)
+        return None
 
     # Latest sample must satisfy the predicate
     if not predicate(float(filtered[-1][1])):
-        return timedelta(0)
+        return None
 
     # Search backwards for the last failing sample
     start_index = 0
@@ -282,7 +283,7 @@ def decide_alert(
             lambda v: is_condition_met(rule.operator, v, thresh_f),
             at=at,
         )
-        if cond_run >= rule.min_duration:
+        if cond_run is not None and cond_run >= rule.min_duration:
             return AlertDecision(
                 action=AlertAction.OPEN,
                 alert=Alert(
@@ -303,7 +304,7 @@ def decide_alert(
                 lambda v: is_clear_met(rule.operator, v, thresh_f, hyst_f),
                 at=at,
             )
-            if clear_run >= RESOLUTION_WINDOW:
+            if clear_run is not None and clear_run >= RESOLUTION_WINDOW:
                 return AlertDecision(
                     action=AlertAction.RESOLVE,
                     alert=current_alert.resolve_automatically(at),

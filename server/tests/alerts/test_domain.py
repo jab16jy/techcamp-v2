@@ -92,16 +92,16 @@ def test_condition_and_clear_tests_hysteresis():
 def test_sustained_run_basic_and_reset():
     t0 = datetime(2026, 9, 26, 8, 0, tzinfo=UTC)
 
-    # Empty samples -> timedelta(0)
-    assert sustained_run([], lambda v: v > 35) == timedelta(0)
+    # Empty samples -> no run
+    assert sustained_run([], lambda v: v > 35) is None
 
-    # Latest sample fails -> timedelta(0)
+    # Latest sample fails -> no run
     samples = [
         (t0, 36.0),
         (t0 + timedelta(minutes=15), 36.0),
         (t0 + timedelta(minutes=30), 34.0),  # fails
     ]
-    assert sustained_run(samples, lambda v: v > 35) == timedelta(0)
+    assert sustained_run(samples, lambda v: v > 35) is None
 
     # All samples satisfy -> run starts at first sample
     samples_all = [
@@ -422,3 +422,19 @@ def test_scenario_a_soil_moisture_linear_fall_and_resolution():
     assert resolved_alert is not None
     assert resolved_alert.state == AlertState.RESOLVED
     assert resolved_alert.resolved_at == t_rec + timedelta(minutes=60)
+
+
+def test_zero_duration_rule_opens_only_on_a_violating_latest_sample():
+    t0 = datetime(2026, 9, 26, 8, 0, tzinfo=UTC)
+    battery = AlertRule(
+        code="node_battery_low",
+        metric="battery_v",
+        operator="<",
+        threshold=Decimal("3.4"),
+        min_duration=timedelta(0),
+        severity=Severity.INFO,
+    )
+
+    assert decide_alert(battery, [], t0).action == AlertAction.NO_ACTION
+    assert decide_alert(battery, [(t0, 3.9)], t0).action == AlertAction.NO_ACTION
+    assert decide_alert(battery, [(t0, 3.3)], t0).action == AlertAction.OPEN
