@@ -1,0 +1,238 @@
+# TechCamp v2 — E7 Alerts and notifications
+
+## Objective
+Deliver epic E7 from `docs/10-dag.md:70`: scenario A fires an alert and a push arrives (and the
+simulated SMS lands in `/dev/outbox`); retries and escalation are tested. `flood_risk` /
+`drought_risk` are seeded but only activate when E10 lands. Modules `alerts` and
+`notifications` (docs/05 §Módulos: `alerts → telemetry, weather, risk, notifications`).
+
+## Why
+RF-07 (rule and model alerts, open → acknowledged → resolved) and RF-08 (web push, SMS/WhatsApp
+fallback for critical) (docs/01:30-31). RNF-05: critical alert p95 < 2 min from reading to
+notification (seminar: `/dev/outbox` or push). E7 unblocks E9 (home + technician tray with open
+alerts), E11 (adoption index `risk_management`), E12 (assistant) and E16 (scenario `expected`
+alerts).
+
+## Scope
+- In (server; web only for the push client):
+  - Tables (docs/03:272-311, indexes docs/03:484-486): `alert_rule` (factory rules with
+    `org_id = null`, seeded by migration), `alert` (partial unique index: one non-resolved alert
+    per `rule_id` + `plot_id`/`node_id`, docs/06 §3), `notification`, `push_subscription`.
+  - Alert domain (docs/06 §3): sustained condition over `min_duration_min`, hysteresis, the state
+    machine (open, acknowledged, resolved; escalation of critical unacknowledged after 2 h),
+    `water_stress` critical after 48 h, `heavy_rain_forecast` critical with saturated soil.
+  - Rule sources (docs/06 §3 table): reading thresholds evaluated in the ingestor after each batch
+    (`heat_stress`, `waterlogging`, org custom threshold rules, `water_stress` trigger a); node
+    health every 5 min in the worker (`node_offline`, `node_battery_low`, to the technician);
+    forecast (`heavy_rain_forecast`) after the 3 h weather refresh; `fungal_risk` daily; balance
+    (`water_stress` trigger b, `Dr > RAW`) after E6's daily balance.
+  - Outbox (docs/06 §4, ADR-0016): alert and notifications in one transaction; worker delivery with
+    `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff 1 min / 5 min / 30 min / 2 h, max 5 attempts then
+    `failed`; 410 Gone deletes the subscription and tries the next channel; per-provider circuit
+    breaker (5 consecutive failures → open 5 min, criticals go to the alternate channel); quiet
+    hours 20:00–05:00 America/Bogota (critical only, the rest at 05:00); grouping of non-critical
+    alerts of the same farm within 15 min; channels by severity (info in-app only, warning push,
+    critical push + SMS/WhatsApp escalation).
+  - Adapters (ADR-0021): Web Push real in both profiles (VAPID); SMS/WhatsApp seminar adapter logs
+    and shows in `GET /dev/outbox`; production SMS provider stays future (ADR-0016 scope).
+  - API (docs/04 §Alertas y notificaciones, `/dev/outbox` docs/04:182, SSE `alert.opened` /
+    `alert.updated` docs/04:193-194 through `NOTIFY plot_events`, ADR-0015).
+  - Web: service-worker push handler and push-subscription registration (so "llega un push" is
+    real in the browser), reusing E1 primitives (design frozen).
+- Out:
+  - Model rules `flood_risk` / `drought_risk` evaluation: seeded inactive; wired when E10 lands
+    (docs/10:70).
+  - `sensor_suspect` (docs/09:47): not in docs/06 §3 factory rules; left for a later epic.
+  - Alert list/tray screens and the 05:00 morning irrigation push content: E9 / E6 follow-up
+    (coordination note: E6 leaves the informative irrigation push to wire through this outbox once
+    both are on main).
+  - `alert.outcome` (confirmed/false_alarm) capture: E11 needs it; no endpoint in docs/04 today.
+  - Scenario YAMLs, fixtures and `/dev/scenarios/{name}:load`: E16. E7 proves scenario A with an
+    integration test that replays scenario-A readings through the ingest path.
+  - Production SMS/WhatsApp provider and Prometheus `alert_dispatch_latency_seconds`: production
+    profile (ADR-0021).
+
+## Constraints
+- ADR-0002 (hexagonal, import-linter layers already list `alerts` and `notifications`), ADR-0003,
+  ADR-0012 (procrastinate; jobs idempotent), ADR-0015 (SSE via `NOTIFY plot_events`, payload
+  ≤ 8 KB: ids and minimal data), ADR-0016 (outbox), ADR-0021 (seminar), ADR-0022 (`water_stress`
+  per plot from `water_balance_daily.stress_moisture_pct`), docs/04 conventions (problem+json,
+  404 across orgs, cursor pages), docs/09 (every repository filters by `org_id`; org isolation
+  tests).
+- Module edges (docs/05): `alerts` may call the public `application` facade of `telemetry`,
+  `weather`, `farms` (via telemetry/weather deps), `risk`, `notifications`; never the reverse. The
+  ingestor (telemetry) and the weather jobs must not import `alerts`: the reading-rule hook is
+  injected by a composition root (ingestor entrypoint), and the forecast rule runs as its own
+  alerts periodic job after the refresh.
+- E6 boundary (coordination note, docs/06 §3 "Balance hídrico", §5, ADR-0022): E6 owns
+  `water_balance_daily`, its migration, the 04:30 balance job and `irrigation_recommendation`.
+  E7 never creates them. Both `water_stress` triggers read E6's table: those tasks (T10) run LAST,
+  after E6's `water_balance_daily` is on `main` (rebase then). Everything else does not wait.
+- Migrations chain from head `b7e2c9a41d38`. E6 also adds one off the same head: whichever
+  merges second re-chains its `down_revision` onto main's new head before its PR.
+- Reuse: `shared/jobs.py` + `telemetry/adapters/jobs.py` (same-transaction defer via
+  `procrastinate_defer_jobs_v1`, `queueing_lock`), `weather/adapters/jobs.py` (periodic fan-out,
+  worker `TZ=America/Bogota`), `weather/adapters/open_meteo.py` `CircuitBreaker` (move to `shared`
+  if reused, do not copy), `telemetry/adapters/sse_hub.py`, `shared/errors.py` `ProblemError`,
+  `identity` `resolve_org_membership`, `farms` `resolve_plot_access`, per-router cursor pages,
+  `shared/config.is_seminar_profile()` for adapter selection.
+- Ports only for external I/O needing a test double: push sender and SMS/WhatsApp sender.
+- New dependency: `pywebpush` (Web Push needs VAPID signing and payload encryption; not a few
+  lines). Confirm version and API with `find-docs`; pin in `server/pyproject.toml` + `uv.lock`.
+- CodeGraph first (owner 2026-09-26): `codegraph status` in the worktree root (indexed: 270 files);
+  `codegraph_explore` or the read-only CLI (explore, query, node, callers, callees, impact,
+  affected) before any grep/find/read; fall back only if it fails and say so. Every writer and
+  subagent brief carries this rule.
+- Ponytail full. Library docs via `find-docs` (ctx7). English code; Spanish only in user-facing
+  notification copy (docs/07).
+
+## Route and checks
+- TDD: on (owner decision 2026-09-22, `AGENTS.md` Testing). RED with a targeted
+  `uv run pytest path::test`, GREEN, REFACTOR. Owner rule for E7: the full suite runs once at the
+  end of each task, not after every step; on failure re-run only the failing tests.
+- Checks per task (server/, `DATABASE_URL=postgresql+asyncpg://techcamp:techcamp@localhost:5437/techcamp`,
+  container `techcamp-e7-db`; never 5432 or 5436): `uv run pytest`, `uv run ruff check`,
+  `uv run ruff format --check`, `uv run mypy`, `uv run lint-imports`. Web (T9): `npm run lint`,
+  `npm run typecheck`, `npm test -- --run`, `npm run build`, `npm run size`.
+- Route: delegated direct. Planner/orchestrator: this Claude Code session (Opus 5.5, owner
+  2026-09-26). Writers through Herdr, one tab per writer, one session per task group; a new task
+  number gets a fresh session. Writer priority (owner 2026-09-26, relayed by the E6
+  orchestrator): **AGY is the default writer** (the parent runs RDD on its commits and records its
+  evidence: commit, RED line, checks); OpenCode only for mid-to-high units that need something
+  slightly better (runs its own RDD); the Claude `odd-worker` subagent only for complex units.
+  Writers never plan. Triggers fired: mapping (12+ docs and 5 modules, one Sonnet mapper),
+  writer (every unit touches 2+ non-trivial files).
+- Skills forwarded: `fastapi`, `pydantic`, `find-docs`, `work-unit-commits`, `systematic-debugging`,
+  ponytail; `impeccable` for T9 only (E1 design frozen: reuse, no visual changes);
+  `domain-modeling` whenever a unit changes docs/03, docs/04 or docs/06.
+- Single lane, one worktree (`e7-alerts`, branch `feat/e7-alerts` from `main` @ `a899aa6`), one
+  writer at a time.
+- Delivery: `stacked-to-main` chained PRs (skill `chained-pr`), about 400 authored lines each,
+  merged in order by the owner. Push and open PRs when a slice is ready and green; never merge.
+  Forecast ≈ 4,600 authored lines (E4/E5 ran ~1.5× over forecast).
+- RDD: on (global). `gentle-ai review assess --cwd <worktree> --agent claude-code --base-ref
+  <last reviewed boundary> --committed-only --json` per work-unit commit; first boundary is the
+  branch point `a899aa6`. Consent for new-feature candidates: standing grant. Blocking findings:
+  bounded correction. Non-blocking: one issue per review round (`review-follow-up`, `epic:e7`,
+  `area:*`, `type:*`), fixed later in the epic by the same session, commits `Refs #N`.
+
+## Decisions
+Readings closest to the docs; each one that changes a doc is written into that doc in the same
+work unit (`domain-modeling`).
+- D1 Sustained conditions are evaluated statelessly over the stored readings of the window
+  (`min_duration_min` back from the batch's latest reading time), not with an in-memory timer.
+  docs/06 §3 says `Pending` is not persisted as an alert; computing it from `reading` keeps it
+  correct across ingestor restarts and during a backfill with past `ts` (scenario A opens on day
+  ≈ 10.7 of the backfill, docs/06 §10). The window counts as sustained when every valid reading
+  (quality flag 2 excluded, docs/06 §1) in it meets the condition and the readings span the whole
+  window. Update docs/06 §3 with this rule (T2).
+- D2 Resolution: condition false beyond the hysteresis band sustained 60 min (docs/06 §3 example:
+  resolves with > 15.3 + 3 sustained 1 h). The 60 min is a domain constant (no column in
+  docs/03).
+- D3 Escalation is not a stored state (`alert.state` stays `open|acknowledged|resolved`,
+  glossary): a new `alert.escalated_at` marks it. `POST /alerts/{id}:resolve {note?}` stores the
+  note in a new nullable `alert.resolution_note`. Both added to docs/03 in T1.
+- D4 Recipients: plot alerts go to org members with role `owner` or `producer`; node alerts and
+  escalations go to `farm.technician_id` (docs/06 §3, docs/01 scenario C); with no technician
+  assigned they fall back to the org owners. `viewer` never receives notifications. Open question
+  Q1.
+- D5 Channels (docs/06 §4): `info` creates no `notification` row (in-app only, SSE); `warning` one
+  `push` row per recipient; `critical` one `push` row per recipient plus, on escalation, one `sms`
+  row to the technician. A severity upgrade to critical (`water_stress` at 48 h,
+  `heavy_rain_forecast` with saturated soil) notifies again as critical.
+- D6 Quiet hours are applied when the row is written: a non-critical notification created between
+  20:00 and 05:00 America/Bogota gets `next_attempt_at` = next 05:00. Grouping: the dispatcher
+  sends every due non-critical push of one (user, farm) as a single message; a non-critical row
+  created within 15 min of a still-pending one for the same (user, farm) takes that row's
+  `next_attempt_at`.
+- D7 Delivery trigger: the outbox write defers a procrastinate dispatch job in the same
+  transaction (ADR-0012, RNF-05 latency), and a periodic sweep every minute picks up retries and
+  anything left over. procrastinate cron has minute resolution, so docs/06 §4 and docs/10 §3
+  "cada 5 s" become "at insert + every minute" (doc update in T7a).
+- D8 `GET /dev/outbox` lists `notification` rows with channel `sms`/`whatsapp` joined to their
+  alert; the seminar SMS adapter only logs and marks them `sent`. No extra table.
+- D9 The reading-rule hook: `telemetry` must not import `alerts`, so the ingestor accepts an
+  after-flush callback (plot ids + inserted readings) and the ingestor entrypoint composes it with
+  the alerts evaluator. The SSE hub learns the `alert.opened` / `alert.updated` event kinds
+  without importing `alerts` (payload carries `farm_id` like the others).
+- D10 The forecast rule runs as an alerts periodic job a few minutes after each 3 h weather
+  refresh (docs/10 §3 k → l) instead of being called by the weather job (no `weather → alerts`
+  edge). `fungal_risk` runs daily over the previous day. Node health runs every 5 min.
+- D11 Factory rules are read-only for orgs (`PATCH` of an `org_id = null` rule → 404); orgs add
+  their own threshold rules with `POST /alert-rules` (role `owner`). `flood_risk` /
+  `drought_risk` rows are seeded; no evaluator until E10.
+
+## Open questions
+- Q1 Plot-alert recipients: docs name the technician for node alerts and escalations and the
+  producer for plot alerts, but not whether `owner` also receives plot alerts. D4 includes owners
+  (small orgs: the owner is often the producer). Owner to confirm.
+- Q2 `water_stress` trigger b (`Dr > RAW` from the balance): E7 evaluates it in an alerts job after
+  E6's 04:30 balance job, reading `water_balance_daily`; E6 may prefer to call it at the end of
+  its job. Decide with E6 when T10 starts.
+
+## Tasks
+- [ ] T1 Schema: migration from `b7e2c9a41d38` for `alert_rule` (+ factory rules seeded),
+  `alert` (partial unique open index, `escalated_at`, `resolution_note`), `notification`
+  (+ `created_at`, `sent_at`, `last_error`), `push_subscription`; ORM rows; docs/03 — route:
+  Herdr AGY — forecast ~350
+- [ ] T2 Alerts domain (pure): sustained window (D1), hysteresis and 60 min resolution (D2), state
+  transitions and escalation eligibility (2 h critical, 48 h `water_stress`), threshold per rule
+  code; docs/06 §3 — route: Herdr AGY — forecast ~350
+- [ ] T3 Alert lifecycle: repository (org-filtered), open/update/resolve use cases writing alert +
+  notification rows in one transaction (D4–D6), `NOTIFY plot_events` `alert.opened` /
+  `alert.updated`, SSE hub pass-through — route: Herdr AGY — forecast ~450
+- [ ] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
+  `GET/POST/PATCH /alert-rules`, `POST/DELETE /push-subscriptions`; org isolation tests;
+  docs/04 shapes — route: Herdr AGY — forecast ~450
+- [ ] T5 Reading rules in the ingestor: after-flush hook (D9), `heat_stress`, `waterlogging`
+  (field capacity + 5 from the plot soil), org custom threshold rules; open and resolve on each
+  batch — route: Herdr OpenCode (cross-module wiring in the hot path) — forecast ~450
+- [ ] T6 Worker rules
+  - [ ] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
+    `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Herdr AGY —
+    forecast ~350
+  - [ ] T6b `heavy_rain_forecast` after the 3 h refresh (D10), critical with saturated soil;
+    `fungal_risk` daily — route: Herdr AGY (same session as T6a) — forecast ~400
+- [ ] T7 Notifications outbox
+  - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
+    attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
+    `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode (delivery guarantee) —
+    forecast ~450
+  - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
+    subscription and tries the next channel — route: Herdr AGY — forecast ~300
+  - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
+    fallback to the alternate channel, grouping and quiet hours at send (D6) — route: Herdr
+    OpenCode (same session as T7a) — forecast ~400
+- [ ] T8 Escalation job: critical unacknowledged ≥ 2 h → `escalated_at` + SMS to the technician
+  (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr AGY — forecast ~300
+- [ ] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
+  registration against `POST /push-subscriptions`, one entry point reusing E1 primitives — route:
+  Herdr AGY + `impeccable` — forecast ~300
+- [ ] T10 `water_stress` (after E6's `water_balance_daily` is on `main`; rebase first): trigger a
+  over readings vs `stress_moisture_pct` with a representative sensor, trigger b `Dr > RAW`
+  without one (ADR-0022, Q2) — route: Herdr OpenCode — forecast ~450
+- [ ] T11 Close: scenario-A integration test (readings through ingest → `heat_stress` and
+  `water_stress` open → push via the fake sender → escalation SMS in `/dev/outbox`), retries and
+  escalation proven; seminar-stack demo; final report — route: Herdr AGY — forecast ~250
+
+## Acceptance criteria
+- [ ] One non-resolved alert per rule and plot/node, enforced by a partial unique index.
+- [ ] Scenario-A readings open `heat_stress` and `water_stress` at the documented times and not
+  before; hysteresis prevents flapping.
+- [ ] Each warning/critical alert and its notification rows are written in one transaction; a
+  push arrives (fake sender in tests, real browser in the demo); the escalation SMS appears in
+  `GET /dev/outbox`.
+- [ ] Retries follow 1 min / 5 min / 30 min / 2 h and stop at 5 attempts with `failed`; the
+  breaker opens after 5 consecutive failures and criticals switch channel.
+- [ ] Every alert, rule and subscription endpoint is org-isolated (404 across orgs).
+- [ ] All server (and web, for T9) checks green; RDD per work-unit commit.
+
+## Review (RDD)
+- Boundary: `a899aa6`.
+
+## Progress / evidence
+- 2026-09-26: docs read (AGENTS.md, docs/README, 00, 01, 03, 04, 05, 06 §1/§3/§4/§10, 09, 10,
+  ADR-0002/0003/0012/0015/0016/0021/0022, E5 feature doc); code mapped (Sonnet mapper, Alembic
+  head verified by the parent: `b7e2c9a41d38`; `alerts`/`notifications` are empty skeletons).
+  Feature doc created with 11 tasks (14 units).
+- Next step: T1 (AGY).
