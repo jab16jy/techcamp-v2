@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -16,6 +16,7 @@ from techcamp.telemetry.domain.models import (
     UplinkPayload,
     apply_calibration,
     classify_reading_range,
+    is_reading_too_old,
     parse_uplink,
     resolve_reading_time,
 )
@@ -232,3 +233,26 @@ def test_classify_reading_range_has_no_documented_range_for_other_units() -> Non
     """docs give no plausible range for °C, V or dBm — flagged as a gap
     rather than an invented threshold; these always come back OK."""
     assert classify_reading_range("°C", 999.0) == ReadingQuality.OK
+
+
+# -- ingest: 30-day discard (docs/06-diseno-detallado.md §1: "Si es anterior
+# a 30 días, se descarta" — outright discarded, unlike the future-clock case
+# above which is only flagged with quality=1) --
+
+
+def test_is_reading_too_old_flags_a_ts_more_than_30_days_in_the_past() -> None:
+    received_at = datetime(2026, 2, 1, tzinfo=UTC)
+    ts = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
+    assert is_reading_too_old(ts, received_at) is True
+
+
+def test_is_reading_too_old_accepts_the_30_day_boundary() -> None:
+    received_at = datetime(2026, 2, 1, tzinfo=UTC)
+    ts = int((received_at - timedelta(days=30)).timestamp())
+    assert is_reading_too_old(ts, received_at) is False
+
+
+def test_is_reading_too_old_accepts_a_recent_ts() -> None:
+    received_at = datetime(2026, 2, 1, tzinfo=UTC)
+    ts = int((received_at - timedelta(days=1)).timestamp())
+    assert is_reading_too_old(ts, received_at) is False

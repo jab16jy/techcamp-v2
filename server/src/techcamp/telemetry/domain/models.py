@@ -1,9 +1,9 @@
 """Node, sensor and calibration domain entities (docs/03-modelo-datos.md:136-167; ADR-0004).
 
-Pure data, no I/O. `reading` has no domain model yet: T1 builds no use case
-that reads or writes it directly (ingest insert is T4, `raw|hour|day` queries
-are T5) — only the hypertable schema and repositories T3/T4 will obviously
-need.
+Pure data, no I/O. `reading` gets its first domain shapes in T4
+(`ReadingRecord`, the ingest event dataclasses): T1 built no use case that
+read or wrote it directly (ingest insert is T4, `raw|hour|day` queries are
+T5) — only the hypertable schema and repositories T3 needed.
 """
 
 from __future__ import annotations
@@ -236,3 +236,70 @@ def classify_reading_range(unit: str, value: float) -> ReadingQuality:
     if unit == "%" and not 0 <= value <= 100:
         return ReadingQuality.OUT_OF_RANGE
     return ReadingQuality.OK
+
+
+MAX_READING_AGE = timedelta(days=30)
+"""docs/06-diseno-detallado.md §1: "Si [ts] es anterior a 30 días, se
+descarta" — an outright discard by the ingestor, unlike the future-clock case
+in `resolve_reading_time`, which only flags `quality=1`."""
+
+
+def is_reading_too_old(ts: int, received_at: datetime) -> bool:
+    """`True` when the node-clock `ts` is more than `MAX_READING_AGE` behind
+    `received_at`. Only meaningful when `ts` is present; a missing `ts` is
+    `resolve_reading_time`'s concern, not this one's."""
+    return datetime.fromtimestamp(ts, tz=UTC) < received_at - MAX_READING_AGE
+
+
+@dataclass(frozen=True, slots=True)
+class ReadingRecord:
+    """One row for `ReadingRepository.insert_batch` (docs/03-modelo-
+    datos.md:168-175). `value` is `None` when no calibration was valid at
+    `time` (T4 decision, flagged doc gap: docs are silent on this case) — the
+    raw value is still stored, uncalibrated."""
+
+    sensor_id: int
+    time: datetime
+    raw_value: float
+    value: float | None
+    received_at: datetime
+    quality: ReadingQuality
+
+
+@dataclass(frozen=True, slots=True)
+class NodeSeenUpdate:
+    """One node's `last_seen_at`/`status` change from an ingest flush
+    (docs/06-diseno-detallado.md §1)."""
+
+    node_id: UUID
+    org_id: UUID
+    plot_id: UUID
+    last_seen_at: datetime
+    status: NodeStatus
+
+
+@dataclass(frozen=True, slots=True)
+class ReadingEvent:
+    """`NOTIFY plot_events` payload for a `reading` SSE event
+    (docs/04-api.md:180-189). Carries `org_id`/`farm_id` beyond what the SSE
+    client sees, for T6's org check and per-farm fan-out (task instruction)."""
+
+    org_id: UUID
+    farm_id: UUID
+    plot_id: UUID
+    metric: str
+    value: float
+    at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NodeStatusEvent:
+    """`NOTIFY plot_events` payload for a `node.status` SSE event
+    (docs/04-api.md:180-189), same `org_id`/`farm_id` reasoning as
+    `ReadingEvent`."""
+
+    org_id: UUID
+    farm_id: UUID
+    node_id: UUID
+    status: NodeStatus
+    at: datetime
