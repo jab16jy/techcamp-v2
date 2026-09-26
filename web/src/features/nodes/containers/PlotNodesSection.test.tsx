@@ -139,6 +139,21 @@ describe('PlotNodesSection', () => {
     expect(screen.getByLabelText(/Código del nodo/)).toBeInTheDocument()
   })
 
+  it('opens the node detail for the clicked node row', async () => {
+    mockFetch({
+      '/nodes?': () => jsonResponse(nodePage([NODE])),
+      '/health': () => jsonResponse(HEALTH),
+      '/nodes/node-1/sensors': () => jsonResponse([]),
+    })
+    renderSection()
+
+    fireEvent.click(await screen.findByRole('button', { name: /70B3D5A3B0000001/ }))
+
+    expect(
+      await screen.findByRole('heading', { name: /Nodo 70B3D5A3B0000001/ }),
+    ).toBeInTheDocument()
+  })
+
   it('shows the empty state when the plot has no nodes', async () => {
     mockFetch({ '/nodes?': () => jsonResponse(nodePage([])) })
     renderSection()
