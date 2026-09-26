@@ -100,8 +100,8 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
   - [x] T3b Timeout 10 s, 3 retries with backoff and jitter, circuit breaker — route: Herdr AGY
     (same session as T3a) — forecast ~250 — actual 404 (`b0e95e7`) + review correction 30 (`05c4f47`)
 - [ ] T4 Weather API (lane A): `GET /plots/{plot_id}/weather?days=`, org isolation test, docs/04
-  `WeatherDay` shape — route: Herdr OpenCode — forecast ~400
-- [ ] T5 Weather jobs (after lanes merge)
+  `WeatherDay` shape — route: Herdr AGY (parallel with T5) — forecast ~400
+- [ ] T5 Weather jobs (branch `feat/e5-weather-jobs` = lane A @ `afbd9ab` + lane B merged; parallel with T4)
   - [ ] T5a 3 h forecast refresh per active cell, parallel per cell, keeps last data on failure;
     cold-start fetch for new cells — route: Herdr OpenCode — forecast ~400
   - [ ] T5b Daily consolidation of the previous day as observed; `POST /dev/jobs/weather:run` —
