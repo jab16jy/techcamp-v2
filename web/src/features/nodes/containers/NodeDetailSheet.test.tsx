@@ -42,7 +42,7 @@ function renderSheet(onOpenChange: (open: boolean) => void = vi.fn()) {
   return { onOpenChange, rerender: (open: boolean) => view.rerender(sheet(open)) }
 }
 
-function mockFetch(byUrl: Record<string, () => Response>) {
+function mockFetch(byUrl: Record<string, () => Response | Promise<Response>>) {
   vi.mocked(fetch).mockImplementation(async (input) => {
     const request = requestOf(input as Request)
     const match = Object.entries(byUrl).find(([substr]) => request.url.includes(substr))
@@ -129,9 +129,53 @@ describe('NodeDetailSheet', () => {
     await screen.findByText('soil_moisture_20cm')
     fireEvent.click(screen.getByRole('button', { name: 'Rotar credenciales' }))
 
-    expect(vi.mocked(fetch).mock.calls.some(([input]) =>
-      requestOf(input as Request).url.includes('credentials:rotate'),
-    )).toBe(false)
+    // Confirmation prompt and action buttons are visible
+    expect(screen.getByText(/¿Rotar credenciales\?/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Volver' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sí, rotar' })).toBeInTheDocument()
+
+    // Cancel confirmation
+    fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
+
+    // Confirmed state is dismissed and rotation was never dispatched
+    expect(screen.queryByText(/¿Rotar credenciales\?/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rotar credenciales' })).toBeInTheDocument()
+    expect(
+      vi.mocked(fetch).mock.calls.some(([input]) =>
+        requestOf(input as Request).url.includes('credentials:rotate'),
+      ),
+    ).toBe(false)
+  })
+
+  it('ignores close requests while rotation is pending and keeps the sheet open until the password is shown', async () => {
+    let resolveRotate!: (value: Response) => void
+    const rotatePromise = new Promise<Response>((resolve) => {
+      resolveRotate = resolve
+    })
+    mockFetch({
+      '/nodes/node-1/sensors': () => jsonResponse(SENSORS),
+      'credentials:rotate': () => rotatePromise,
+    })
+    const onOpenChange = vi.fn()
+    renderSheet(onOpenChange)
+
+    await screen.findByText('soil_moisture_20cm')
+    fireEvent.click(screen.getByRole('button', { name: 'Rotar credenciales' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sí, rotar' }))
+
+    // Request close while rotation is pending (e.g. clicking Cancelar)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    // onOpenChange(false) must not have been called
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+
+    // Resolve the rotation
+    resolveRotate(jsonResponse({ password: 'rotated-secret-pending' }))
+
+    // New password is shown in the sheet and sheet remained open
+    expect(await screen.findByText('rotated-secret-pending')).toBeInTheDocument()
+    expect(screen.getByText(/no se volverá a mostrar/i)).toBeInTheDocument()
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
   it('discards the rotated password when the sheet is closed and reopened', async () => {

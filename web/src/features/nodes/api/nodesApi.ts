@@ -22,16 +22,24 @@ function sensorsQueryKey(nodeId: string) {
 
 /** docs/04-api.md:81 `GET /nodes?plot_id=&status= → Page<Node>`. `org_id` is required by
  * the server on every repository read (docs/09 §Seguridad) and is not in the doc's
- * signature, so it is read from the session here. Returns the page's items only: a plot
- * has a handful of nodes, so cursor paging is out of scope for T9a (same gap
- * `usePlotsByFarm` documents for plots). */
+ * signature, so it is read from the session here. Follows `next_cursor` until exhausted
+ * so callers get the full list (feature doc decision #41; a plot has few nodes). */
 async function fetchNodes(orgId: string, plotId: string | null): Promise<NodeView[]> {
-  const { data, error } = await apiClient.GET('/api/v1/nodes', {
-    params: { query: { org_id: orgId, plot_id: plotId ?? undefined } },
-  })
-  if (error) throw error
-  if (!data) throw new Error('empty response from /nodes')
-  return data.items
+  const items: NodeView[] = []
+  let cursor: string | null | undefined = undefined
+  do {
+    const query: { org_id: string; plot_id?: string; cursor?: string } = {
+      org_id: orgId,
+      plot_id: plotId ?? undefined,
+      cursor: cursor ?? undefined,
+    }
+    const res = await apiClient.GET('/api/v1/nodes', { params: { query } })
+    if (res.error) throw res.error
+    if (!res.data) throw new Error('empty response from /nodes')
+    items.push(...res.data.items)
+    cursor = res.data.next_cursor
+  } while (cursor)
+  return items
 }
 
 /** The org's nodes, optionally narrowed to one plot. `orgId === null` (no org chosen
@@ -127,6 +135,7 @@ export function useNodeHealth(nodeId: string) {
   return useQuery({
     queryKey: ['nodeHealth', nodeId],
     queryFn: () => fetchNodeHealth(nodeId),
+    enabled: Boolean(nodeId),
   })
 }
 
@@ -144,6 +153,7 @@ export function useNodeSensors(nodeId: string) {
   return useQuery({
     queryKey: sensorsQueryKey(nodeId),
     queryFn: () => fetchNodeSensors(nodeId),
+    enabled: Boolean(nodeId),
   })
 }
 

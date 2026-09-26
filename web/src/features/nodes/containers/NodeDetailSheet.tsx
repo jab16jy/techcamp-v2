@@ -32,6 +32,7 @@ export function NodeDetailSheet({ open, onOpenChange, node }: NodeDetailSheetPro
 
   function handleOpenChange(next: boolean) {
     if (!next) {
+      if (rotate.isPending) return
       setCalibrating(null)
       setPassword(null)
       setConfirming(false)

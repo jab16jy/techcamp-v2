@@ -78,7 +78,9 @@ export function ClaimNodeSheet({ open, onOpenChange, plotId }: ClaimNodeSheetPro
   // The camera must not outlive the screen, even on an unmount mid-scan.
   useEffect(
     () => () => {
+      scanTokenRef.current += 1
       streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
     },
     [],
   )
@@ -105,24 +107,26 @@ export function ClaimNodeSheet({ open, onOpenChange, plotId }: ClaimNodeSheetPro
 
   async function startScan() {
     setError(null)
+    stopScan()
+    const token = scanTokenRef.current
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
       })
     } catch {
-      setError('No se pudo abrir la cámara. Revisa los permisos del navegador.')
+      if (token === scanTokenRef.current) {
+        setError('No se pudo abrir la cámara. Revisa los permisos del navegador.')
+      }
       return
     }
     const video = videoRef.current
     const Detector = barcodeDetector()
-    if (!video || !Detector) {
+    if (token !== scanTokenRef.current || !video || !Detector) {
       stream.getTracks().forEach((track) => track.stop())
       return
     }
     const detector = new Detector({ formats: ['qr_code'] })
-    const token = scanTokenRef.current + 1
-    scanTokenRef.current = token
     streamRef.current = stream
     setScanning(true)
     video.srcObject = stream
