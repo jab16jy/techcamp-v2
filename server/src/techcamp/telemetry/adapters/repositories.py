@@ -69,6 +69,25 @@ def _sensor_from_row(row: Row[Any]) -> Sensor:
     )
 
 
+_CALIBRATION_VERSION_CONSTRAINT = "uq_calibration_sensor_version"
+"""The one constraint whose violation is a lost version race, not a bug
+(docs/03-modelo-datos.md:461: calibration is versioned and never edited in
+place)."""
+
+
+def _violated_constraint(exc: IntegrityError) -> str | None:
+    """The constraint asyncpg reported for `exc`, or `None` when it named
+    none (a not-null or foreign-key failure carries no constraint name).
+
+    The dialect's translated error keeps only `sqlstate`/`pgcode` and chains
+    the driver error as `__cause__` (`_handle_exception` in
+    `sqlalchemy/dialects/postgresql/asyncpg.py`), so the asyncpg attributes
+    are read from there, not from `exc.orig` itself.
+    """
+    driver_error = getattr(exc.orig, "__cause__", None)
+    return cast("str | None", getattr(driver_error, "constraint_name", None))
+
+
 def _calibration_from_row(row: Row[Any]) -> Calibration:
     return Calibration(
         id=row.id,
@@ -391,9 +410,13 @@ class SqlAlchemyCalibrationRepository:
         except IntegrityError as exc:
             # `MAX(version) + 1` and this insert are separate statements
             # (add_calibration), so two concurrent POSTs can pick the same
-            # version; the `owned` read above already rules out the other
-            # integrity constraints this insert could trip.
+            # version. That unique violation is the only retryable conflict:
+            # the `procrastinate_jobs` insert above shares this commit, and
+            # reporting one of its failures as a 409 would send the client
+            # into a futile retry instead of surfacing a server error (#61).
             await self._session.rollback()
+            if _violated_constraint(exc) != _CALIBRATION_VERSION_CONSTRAINT:
+                raise
             raise CalibrationVersionConflictError(sensor_id) from exc
         result = await self._session.execute(
             select(*_CALIBRATION_COLUMNS).where(CalibrationRow.id == calibration_id)
