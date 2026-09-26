@@ -35,7 +35,6 @@ from techcamp.telemetry.domain.models import (
     NodeStatus,
     NodeStatusEvent,
     ReadingEvent,
-    ReadingQuality,
     ReadingRecord,
     Sensor,
     apply_calibration,
@@ -210,10 +209,11 @@ async def ingest_uplinks(
             quality = ts_quality
             if value is not None:
                 range_quality = classify_reading_range(sensor.unit, value)
-                # T4 decision (docs are silent on precedence when both apply,
-                # flagged gap): out-of-range is the stronger signal — this
-                # falls out of `ReadingQuality`'s own ordering (2 > 1).
-                quality = ReadingQuality(max(int(ts_quality), int(range_quality)))
+                # Both signals are independent bits of `quality`
+                # (docs/03-modelo-datos.md:174), so a reading that is both
+                # timestamp-corrected and out of range stores `3`, and each
+                # flag stays readable on its own (owner decision 2026-09-25).
+                quality = ts_quality | range_quality
 
             records.append(
                 ReadingRecord(

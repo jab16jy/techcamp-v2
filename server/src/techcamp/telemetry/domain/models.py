@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import IntEnum, StrEnum
+from enum import IntFlag, StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -286,8 +286,9 @@ def parse_uplink(payload: dict[str, Any]) -> UplinkPayload:
     )
 
 
-class ReadingQuality(IntEnum):
-    """docs/03-modelo-datos.md:174: `0 ok, 1 ts corregido, 2 fuera de rango`."""
+class ReadingQuality(IntFlag):
+    """docs/03-modelo-datos.md:174: `quality` holds two independent signals as
+    flags, not one value: `1 ts corregido`, `2 fuera de rango`, `3 ambos`."""
 
     OK = 0
     TIMESTAMP_CORRECTED = 1
@@ -326,26 +327,21 @@ def recalibrate_reading(
     """Recompute `(value, quality)` for one already-stored reading against a
     (new) calibration version (docs/03-modelo-datos.md:461: recalibrating
     recomputes `value` from `valid_from` forward), reusing `apply_calibration`
-    and `classify_reading_range` — same `max(ts, range)` precedence as
-    `ingest_uplinks` (out-of-range is the stronger signal).
+    and `classify_reading_range`.
 
-    `reading.quality` merges two independent signals into one column
-    (docs/03-modelo-datos.md:174), so the original timestamp-correction bit
-    isn't stored separately. `previous_quality` recovers it: `OK` and
-    `TIMESTAMP_CORRECTED` are unambiguous; a previous `OUT_OF_RANGE` can't
-    tell whether the timestamp was also corrected underneath it (T7 decision,
-    flagged doc gap: docs are silent here), so it's conservatively treated as
-    `TIMESTAMP_CORRECTED` rather than silently downgrading to a clean `OK`.
+    Only the out-of-range bit is recomputed — it is a property of the
+    calibrated value, which is exactly what the new calibration changes. The
+    timestamp-corrected bit is decided once, at ingest, from the node clock and
+    `received_at` (docs/04-api.md:218), so a recalibration keeps whatever was
+    stored. Since `quality` is bit flags (docs/03-modelo-datos.md:174), a
+    reading that v2 pushed out of range and v3 brings back in range returns to
+    exactly the flags it had before, instead of drifting (owner decision
+    2026-09-25, #39 finding 6).
     """
     value = apply_calibration(calibration, raw_value)
-    ts_quality = (
-        ReadingQuality.OK
-        if previous_quality is ReadingQuality.OK
-        else ReadingQuality.TIMESTAMP_CORRECTED
-    )
+    ts_quality = previous_quality & ReadingQuality.TIMESTAMP_CORRECTED
     range_quality = classify_reading_range(unit, value)
-    quality = ReadingQuality(max(int(ts_quality), int(range_quality)))
-    return value, quality
+    return value, ts_quality | range_quality
 
 
 MAX_READING_AGE = timedelta(days=30)

@@ -287,24 +287,49 @@ def test_recalibrate_reading_reclassifies_out_of_range_under_the_new_calibration
 
 
 def test_recalibrate_reading_preserves_a_timestamp_corrected_flag() -> None:
-    """A previously `TIMESTAMP_CORRECTED` reading keeps that signal even when
-    the recalibrated value is back in range (max(ts, range) ordering, same as
-    `ingest_uplinks`)."""
+    """A previously `TIMESTAMP_CORRECTED` reading keeps that bit even when the
+    recalibrated value is back in range, and an out-of-range recalibration
+    adds the other bit instead of replacing it (`quality` holds both signals
+    as flags, docs/03-modelo-datos.md:174)."""
     calibration = _calibration(CalibrationMethod.LINEAR, {"scale": 1.0, "offset": 0.0})
     value, quality = recalibrate_reading(calibration, 50.0, "%", ReadingQuality.TIMESTAMP_CORRECTED)
     assert value == 50.0
     assert quality == ReadingQuality.TIMESTAMP_CORRECTED
 
+    _, out_of_range = recalibrate_reading(
+        calibration, 120.0, "%", ReadingQuality.TIMESTAMP_CORRECTED
+    )
+    assert out_of_range == ReadingQuality.TIMESTAMP_CORRECTED | ReadingQuality.OUT_OF_RANGE
+    assert out_of_range == 3
 
-def test_recalibrate_reading_treats_a_previous_out_of_range_as_conservatively_corrected() -> None:
-    """T7 decision, flagged doc gap: `quality` merges two independent signals
-    into one column, so a previous `OUT_OF_RANGE` can't tell whether the
-    timestamp was also corrected underneath it. Recomputing with a calibration
-    that brings the value back in range conservatively keeps
-    `TIMESTAMP_CORRECTED` rather than silently claiming a clean `OK`."""
+
+def test_recalibrate_reading_clears_the_out_of_range_flag_keeps_the_stored_one() -> None:
+    """#39 finding 6: v2 pushes the reading out of range and v3 brings it back
+    in. Only the out-of-range bit is recomputed, so a reading that was never
+    timestamp-corrected returns to a clean `OK` instead of keeping a flag it
+    never had."""
+    pushes_out = _calibration(CalibrationMethod.LINEAR, {"scale": 2.0, "offset": 0.0})
+    brings_back = _calibration(CalibrationMethod.LINEAR, {"scale": 1.0, "offset": 0.0})
+
+    _, flagged = recalibrate_reading(pushes_out, 60.0, "%", ReadingQuality.OK)
+    assert flagged == ReadingQuality.OUT_OF_RANGE
+
+    value, quality = recalibrate_reading(brings_back, 60.0, "%", flagged)
+    assert value == 60.0
+    assert quality == ReadingQuality.OK
+
+
+def test_recalibrate_reading_keeps_both_flags_of_a_previously_double_flagged_reading() -> None:
+    """A reading stored with both bits set keeps the timestamp bit when the
+    new calibration leaves it out of range, and loses only the out-of-range
+    bit when the new calibration brings it back."""
     calibration = _calibration(CalibrationMethod.LINEAR, {"scale": 1.0, "offset": 0.0})
-    value, quality = recalibrate_reading(calibration, 50.0, "%", ReadingQuality.OUT_OF_RANGE)
-    assert value == 50.0
+    both = ReadingQuality.TIMESTAMP_CORRECTED | ReadingQuality.OUT_OF_RANGE
+
+    _, quality = recalibrate_reading(calibration, 120.0, "%", both)
+    assert quality == both
+
+    _, quality = recalibrate_reading(calibration, 50.0, "%", both)
     assert quality == ReadingQuality.TIMESTAMP_CORRECTED
 
 
