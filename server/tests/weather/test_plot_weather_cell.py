@@ -16,6 +16,7 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
@@ -197,6 +198,35 @@ async def test_renaming_a_plot_keeps_its_cell(db_session: AsyncSession) -> None:
     assert renamed.weather_cell_id == before.weather_cell_id
     cells = await db_session.execute(text("SELECT count(*) FROM weather_cell"))
     assert cells.scalar_one() == 1
+
+
+async def test_a_rejected_plot_is_never_stored_without_its_cell(
+    db_session: AsyncSession,
+) -> None:
+    """The plot row and the cell it points at are written by one statement, so a
+    plot the database rejects leaves nothing behind: no stored plot whose
+    `weather_cell_id` is null, waiting for a repair nobody runs."""
+    org_id = await _make_org(db_session)
+    farm_id = await _make_farm(db_session, org_id)
+    repository = SqlAlchemyPlotRepository(db_session)
+    plot_id = uuid7()
+
+    with pytest.raises(IntegrityError):
+        await repository.create(
+            plot_id=plot_id,
+            org_id=org_id,
+            farm_id=farm_id,
+            name="Lote 1",
+            boundary_wkt=_BOUNDARY,
+            # A rainfed plot may not carry efficiency (ADR-0023): the insert is
+            # rejected by `ck_plot_rainfed_has_no_irrigation`.
+            irrigation_system=IrrigationSystem.NONE,
+            irrigation_efficiency=0.9,
+            system_flow_lph=None,
+        )
+    await db_session.rollback()
+
+    assert await repository.get(plot_id, org_id) is None
 
 
 def _load_migration() -> ModuleType:

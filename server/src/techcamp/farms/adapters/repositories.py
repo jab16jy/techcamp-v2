@@ -217,6 +217,11 @@ class SqlAlchemyPlotRepository:
         irrigation_efficiency: float | None,
         system_flow_lph: float | None,
     ) -> Plot:
+        # The cell row is resolved first and committed on its own, so the plot
+        # and the cell it points at are written by ONE statement below: a
+        # failure can leave a cell nobody points at (never fetched, reused by
+        # the next attempt), never a stored plot without its cell.
+        cell_id = await self._cell_id_for(boundary_wkt)
         self._session.add(
             PlotRow(
                 id=plot_id,
@@ -224,13 +229,13 @@ class SqlAlchemyPlotRepository:
                 farm_id=farm_id,
                 name=name,
                 boundary=boundary_wkt,
+                weather_cell_id=cell_id,
                 irrigation_system=irrigation_system.value,
                 irrigation_efficiency=irrigation_efficiency,
                 system_flow_lph=system_flow_lph,
             )
         )
         await self._session.commit()
-        await self._assign_cell(plot_id, org_id)
         plot = await self.get(plot_id, org_id)
         assert plot is not None
         return plot
@@ -246,47 +251,50 @@ class SqlAlchemyPlotRepository:
         irrigation_efficiency: float | None,
         system_flow_lph: float | None,
     ) -> Plot:
+        # Same rule as `create`, and the same reason: the cell is derived from
+        # the WKT this statement writes, not read back from the row, so a
+        # concurrent update cannot pair the final boundary with a cell computed
+        # from the boundary it replaced.
+        cell_id = await self._cell_id_for(boundary_wkt)
         await self._session.execute(
             update(PlotRow)
             .where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
             .values(
                 name=name,
                 boundary=boundary_wkt,
+                weather_cell_id=cell_id,
                 irrigation_system=irrigation_system.value,
                 irrigation_efficiency=irrigation_efficiency,
                 system_flow_lph=system_flow_lph,
             )
         )
         await self._session.commit()
-        # Assigned on every update, not only when the boundary moved: resolving
-        # the same coordinates again is the same row, so an untouched location
-        # costs one idempotent upsert instead of a `boundary changed` flag
-        # threaded through the port.
-        await self._assign_cell(plot_id, org_id)
         plot = await self.get(plot_id, org_id)
         assert plot is not None
         return plot
 
-    async def _assign_cell(self, plot_id: UUID, org_id: UUID) -> None:
-        """Point the plot at the 0.1° cell its location falls in
+    async def _cell_id_for(self, boundary_wkt: str) -> int:
+        """The id of the 0.1° cell the plot's representative point falls in
         (docs/06-diseno-detallado.md §6): plots are grouped so the cell, not
         the plot, is what the provider is queried for
         (docs/09-cuellos-de-botella.md:39).
 
-        The representative point is the polygon centroid, the same point
-        `get_centroid` already treats as the plot's location (the SoilGrids
-        query point), so the cell E5 assigns is the cell the rest of the code
-        reads. The grid rule itself stays in one place, `cell_for` (weather
-        domain, T1b).
+        The representative point is `ST_Centroid` of the boundary, the same
+        point `get_centroid` treats as the plot's location (the SoilGrids query
+        point), taken from the WKT the caller is about to write so the cell and
+        the boundary are decided together. The grid rule itself stays in one
+        place, `cell_for` (weather domain, T1b).
         """
-        lon, lat = await self.get_centroid(plot_id, org_id)
-        cell_id = await self._cells.get_or_create_cell(*cell_for(lat, lon))
-        await self._session.execute(
-            update(PlotRow)
-            .where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
-            .values(weather_cell_id=cell_id)
-        )
-        await self._session.commit()
+        row = (
+            await self._session.execute(
+                select(
+                    func.ST_Y(func.ST_Centroid(func.ST_GeomFromText(boundary_wkt, 4326))),
+                    func.ST_X(func.ST_Centroid(func.ST_GeomFromText(boundary_wkt, 4326))),
+                )
+            )
+        ).one()
+        lat, lon = row
+        return await self._cells.get_or_create_cell(*cell_for(lat, lon))
 
     async def get_centroid(self, plot_id: UUID, org_id: UUID) -> tuple[float, float]:
         """(lon, lat) of `ST_Centroid(boundary)` (T5: SoilGrids query point).
