@@ -11,6 +11,7 @@ from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.errors import register_error_handlers
 from techcamp.telemetry.adapters.api.router import router as telemetry_router
 from techcamp.telemetry.adapters.sse_hub import PlotEventsHub
+from techcamp.weather.adapters.api.router import router as weather_router
 
 
 @asynccontextmanager
@@ -33,6 +34,7 @@ register_error_handlers(app)
 app.include_router(identity_router, prefix="/api/v1")
 app.include_router(farms_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
+app.include_router(weather_router, prefix="/api/v1")
 
 if is_seminar_profile():
     # /dev routes only exist in the seminar profile (ADR-0021); still part of

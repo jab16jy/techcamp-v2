@@ -98,6 +98,10 @@ La resolución se elige según el rango: `raw` hasta 2 días, `hour` hasta 60 d�
 
 `metric` es una de las variables del [glosario](00-glosario.md) (`soil_moisture`, `soil_temp`, `air_temp`, `air_rh`, `rain`, `water_flow`, `battery_v`, `rssi`); una métrica desconocida responde `422` y no una serie vacía, que sería indistinguible de una parcela sin sensores de esa variable. La consulta recorre hasta 500 nodos de la parcela, por encima de lo que la escala de [02-estimaciones](02-estimaciones.md) necesita.
 
+`GET /plots/{plot_id}/weather` acepta `days` entre 1 y 16 (por defecto 7; fuera de ese rango responde `422`). La respuesta entrega los últimos `days` registros observados (`is_forecast=false`, día en `[today-days, today-1]`) seguidos de las filas de pronóstico (`is_forecast=true`, día en `[today, today+days-1]`), ordenados por día y observado antes de pronóstico; `today` es la fecha en `America/Bogota`. Cada elemento `WeatherDay` tiene la forma:
+`{ day: string, is_forecast: bool, et0_mm: float | null, rain_mm: float | null, tmin_c: float | null, tmax_c: float | null, rh_mean_pct: float | null, fetched_at: string, stale: bool }`.
+El indicador `stale` evalúa la degradación de la celda completa contra el instante de consulta (`is_stale(max(fetched_at), now)`): es `true` si la captura más reciente supera las 6 h (dos refrescos de 3 h perdidos) y `false` en caso contrario, repetido por elemento. Una parcela sin celda asignada o cuya celda no tiene filas almacenadas responde `[]`.
+
 ### Riego
 
 ```
