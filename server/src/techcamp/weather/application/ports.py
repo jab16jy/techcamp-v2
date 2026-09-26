@@ -1,10 +1,16 @@
-"""Application ports and data structures for the weather module."""
+"""Application ports and data structures for the weather module.
+
+Hexagonal layering per ADR-0002 and ADR-0003: application defines the
+interfaces it needs, adapters implement them.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
 from typing import Protocol, runtime_checkable
+
+from techcamp.weather.domain.models import WeatherDay
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,3 +53,7 @@ class WeatherForecastPort(Protocol):
         past_days: int = 0,
         forecast_days: int = 7,
     ) -> list[DailyWeatherRow]: ...
+
+
+class WeatherRepository(Protocol):
+    async def list_daily(self, cell_id: int, from_day: date, to_day: date) -> list[WeatherDay]: ...
