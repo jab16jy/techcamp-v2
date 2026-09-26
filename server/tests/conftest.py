@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -27,8 +28,43 @@ def _migrated_schema() -> None:
     config = Config(str(SERVER_DIR / "alembic.ini"))
     config.set_main_option("script_location", str(SERVER_DIR / "migrations"))
     command.upgrade(config, "head")
+    _set_our_background_jobs(scheduled=False)
     yield
+    _set_our_background_jobs(scheduled=True)
     command.downgrade(config, "base")
+
+
+def _set_our_background_jobs(*, scheduled: bool) -> None:
+    """Unschedule (or restore) TimescaleDB's compression and
+    continuous-aggregate policies for the whole test session.
+
+    They share a lock domain with the rows a test writes and with the
+    `CALL refresh_continuous_aggregate(..., NULL, NULL)` a test runs by hand:
+    when a policy fires mid-test, whichever side loses the race fails with
+    `55P03 lock_not_available` — the nondeterminism behind #63, which
+    `timescaledb_information.job_errors` recorded for `reading_hourly`. Tests
+    drive the aggregates themselves, so no policy may run underneath them.
+
+    Only jobs with a hypertable in our schema: TimescaleDB's internal jobs
+    (telemetry reporting, job history retention) own none, do not touch the
+    hypertables, and are left running.
+    """
+    # The asyncpg dialect has no sync DBAPI, so `alter_job` runs through the
+    # async engine's own greenlet bridge: this fixture must stay sync because
+    # Alembic drives the migration from sync code.
+    asyncio.run(_alter_our_jobs(scheduled=scheduled))
+
+
+async def _alter_our_jobs(*, scheduled: bool) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "SELECT alter_job(job_id, scheduled => :scheduled) "
+                "FROM timescaledb_information.jobs "
+                "WHERE hypertable_schema = 'public'"
+            ),
+            {"scheduled": scheduled},
+        )
 
 
 @pytest.fixture

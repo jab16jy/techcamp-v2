@@ -125,7 +125,7 @@ def _status_payload(*, farm_id: object, node_id: object) -> str:
 # -- PlotEventsHub: farm-filtered dispatch --
 
 
-def test_hub_dispatches_only_to_matching_farm_subscribers() -> None:
+async def test_hub_dispatches_only_to_matching_farm_subscribers() -> None:
     hub = PlotEventsHub()
     farm_a, farm_b = uuid7(), uuid7()
     client_a, queue_a = hub.subscribe(farm_a)
@@ -138,7 +138,7 @@ def test_hub_dispatches_only_to_matching_farm_subscribers() -> None:
     del client_b  # only used to keep the subscription alive
 
 
-def test_hub_dispatch_carries_documented_fields_only() -> None:
+async def test_hub_dispatch_carries_documented_fields_only() -> None:
     hub = PlotEventsHub()
     farm_id, plot_id = uuid7(), uuid7()
     _client_id, queue = hub.subscribe(farm_id)
@@ -156,7 +156,7 @@ def test_hub_dispatch_carries_documented_fields_only() -> None:
     assert event.id == 1
 
 
-def test_hub_dispatch_node_status_carries_documented_fields_only() -> None:
+async def test_hub_dispatch_node_status_carries_documented_fields_only() -> None:
     hub = PlotEventsHub()
     farm_id, node_id = uuid7(), uuid7()
     _client_id, queue = hub.subscribe(farm_id)
@@ -172,7 +172,7 @@ def test_hub_dispatch_node_status_carries_documented_fields_only() -> None:
     }
 
 
-def test_hub_event_id_is_monotonic_per_process() -> None:
+async def test_hub_event_id_is_monotonic_per_process() -> None:
     hub = PlotEventsHub()
     farm_id = uuid7()
     _client_id, queue = hub.subscribe(farm_id)
@@ -184,7 +184,7 @@ def test_hub_event_id_is_monotonic_per_process() -> None:
     assert queue.get_nowait().id == 2
 
 
-def test_hub_ignores_malformed_and_unknown_payloads() -> None:
+async def test_hub_ignores_malformed_and_unknown_payloads() -> None:
     hub = PlotEventsHub()
     farm_id = uuid7()
     _client_id, queue = hub.subscribe(farm_id)
@@ -195,7 +195,7 @@ def test_hub_ignores_malformed_and_unknown_payloads() -> None:
     assert queue.qsize() == 0
 
 
-def test_hub_drops_non_object_json_payload() -> None:
+async def test_hub_drops_non_object_json_payload() -> None:
     """A JSON array or scalar has no `.get` (AttributeError today) — dropped,
     not raised (R3-partial-payload-unhandled)."""
     hub = PlotEventsHub()
@@ -207,7 +207,7 @@ def test_hub_drops_non_object_json_payload() -> None:
     assert queue.qsize() == 0
 
 
-def test_hub_drops_payload_missing_required_fields() -> None:
+async def test_hub_drops_payload_missing_required_fields() -> None:
     """A `reading` missing `plot_id`/`metric`/`value`/`at` raises `KeyError`
     today — dropped, not raised (R3-partial-payload-unhandled)."""
     hub = PlotEventsHub()
@@ -219,7 +219,7 @@ def test_hub_drops_payload_missing_required_fields() -> None:
     assert queue.qsize() == 0
 
 
-def test_hub_drops_payload_with_invalid_farm_id() -> None:
+async def test_hub_drops_payload_with_invalid_farm_id() -> None:
     """A non-UUID `farm_id` raises `ValueError` today — dropped, not raised
     (R3-partial-payload-unhandled)."""
     hub = PlotEventsHub()
@@ -242,28 +242,28 @@ def test_hub_drops_payload_with_invalid_farm_id() -> None:
     assert queue.qsize() == 0
 
 
-def test_hub_drops_slow_client_without_blocking_others() -> None:
+async def test_hub_drops_slow_client_without_blocking_others() -> None:
     hub = PlotEventsHub()
     farm_id = uuid7()
-    slow_id, slow_queue = hub.subscribe(farm_id, maxsize=1)
+    _slow_id, slow_queue = hub.subscribe(farm_id, maxsize=1)
     _fast_id, fast_queue = hub.subscribe(farm_id, maxsize=10)
 
     hub.dispatch(_reading_payload(farm_id=farm_id, plot_id=uuid7()))
     hub.dispatch(_reading_payload(farm_id=farm_id, plot_id=uuid7()))
 
-    assert not hub.is_subscribed(slow_id)
+    assert hub.subscriber_count == 1, "the slow client is dropped, the fast one stays"
     assert slow_queue.qsize() == 1  # the first message that fit, never blocked
     assert fast_queue.qsize() == 2  # the other client is unaffected
 
 
-def test_hub_unsubscribe_is_idempotent() -> None:
+async def test_hub_unsubscribe_is_idempotent() -> None:
     hub = PlotEventsHub()
     client_id, _queue = hub.subscribe(uuid7())
 
     hub.unsubscribe(client_id)
     hub.unsubscribe(client_id)  # must not raise
 
-    assert not hub.is_subscribed(client_id)
+    assert hub.subscriber_count == 0
 
 
 # -- stream_plot_events: per-client SSE generator --
@@ -272,15 +272,13 @@ def test_hub_unsubscribe_is_idempotent() -> None:
 async def test_stream_plot_events_yields_queued_event() -> None:
     hub = PlotEventsHub()
     farm_id, plot_id = uuid7(), uuid7()
-
-    gen = stream_plot_events(hub, farm_id, keepalive_interval=5.0)
-    # The generator subscribes when its body first runs, so the event has to be
-    # published after that, never before.
-    first = asyncio.ensure_future(anext(gen))
-    await _wait_until(lambda: hub.subscriber_count == 1)
+    client_id, queue = hub.subscribe(farm_id)
     hub.dispatch(_reading_payload(farm_id=farm_id, plot_id=plot_id))
 
-    chunk = await asyncio.wait_for(first, timeout=1.0)
+    gen = stream_plot_events(hub, client_id, queue, keepalive_interval=5.0)
+    assert hub.subscriber_count == 1, "the body must claim the route's subscription"
+    chunk = await asyncio.wait_for(anext(gen), timeout=1.0)
+
     assert chunk == (
         b"id: 1\nevent: reading\n"
         b'data: {"plot_id": "'
@@ -290,31 +288,64 @@ async def test_stream_plot_events_yields_queued_event() -> None:
     await gen.aclose()
 
 
+async def test_stream_plot_events_yields_an_event_published_before_the_body_starts() -> None:
+    """The route subscribes, so an event published between the route returning
+    and the body starting is buffered in the queue instead of lost (#63,
+    `R3-delayed-stream-subscription-event-gap`)."""
+    hub = PlotEventsHub()
+    farm_id, plot_id = uuid7(), uuid7()
+    client_id, queue = hub.subscribe(farm_id)
+    hub.dispatch(_reading_payload(farm_id=farm_id, plot_id=plot_id))
+
+    gen = stream_plot_events(hub, client_id, queue, keepalive_interval=5.0)
+    chunk = await asyncio.wait_for(anext(gen), timeout=1.0)
+
+    assert b"event: reading" in chunk
+    assert f'"plot_id": "{plot_id}"'.encode() in chunk
+    await gen.aclose()
+
+
 async def test_stream_plot_events_yields_keepalive_when_idle() -> None:
     hub = PlotEventsHub()
+    client_id, queue = hub.subscribe(uuid7())
 
-    gen = stream_plot_events(hub, uuid7(), keepalive_interval=0.05)
+    gen = stream_plot_events(hub, client_id, queue, keepalive_interval=0.05)
     chunk = await asyncio.wait_for(anext(gen), timeout=1.0)
 
     assert chunk == b":keepalive\n\n"
     await gen.aclose()
 
 
-async def test_stream_plot_events_does_not_subscribe_before_its_body_runs() -> None:
-    """An async generator body hasn't executed until the first `anext`, so a
-    body that never starts must not leave a subscription behind (#38)."""
-    hub = PlotEventsHub()
+async def test_stream_plot_events_keeps_its_claimed_subscription() -> None:
+    """The release timer that frees a body which never starts must not take
+    down a stream that did start (#63)."""
+    hub = PlotEventsHub(claim_timeout=0.05)
+    client_id, queue = hub.subscribe(uuid7())
 
-    gen = stream_plot_events(hub, uuid7(), keepalive_interval=5.0)
+    gen = stream_plot_events(hub, client_id, queue, keepalive_interval=0.05)
+    await anext(gen)  # one keepalive, so the body has started and claimed
+    await asyncio.sleep(0.2)  # several claim timeouts
 
-    assert hub.subscriber_count == 0
+    assert hub.subscriber_count == 1
     await gen.aclose()
+
+
+async def test_hub_releases_a_subscription_the_body_never_claims() -> None:
+    """For a body that never starts, nothing would ever call the generator's
+    `finally` (#38), so the hub frees the subscription itself and tells the
+    body — if it ever starts — to end, instead of holding it forever (#63)."""
+    hub = PlotEventsHub(claim_timeout=0.05)
+    _client_id, queue = hub.subscribe(uuid7())
+
+    await _wait_until(lambda: hub.subscriber_count == 0)
+    assert queue.get_nowait() is None, "a body that starts late must end, not stream silence"
 
 
 async def test_stream_plot_events_releases_its_subscription_when_the_client_leaves() -> None:
     hub = PlotEventsHub()
-    gen = stream_plot_events(hub, uuid7(), keepalive_interval=0.05)
-    await anext(gen)  # one keepalive, so the body is running and subscribed
+    client_id, queue = hub.subscribe(uuid7())
+    gen = stream_plot_events(hub, client_id, queue, keepalive_interval=0.05)
+    await anext(gen)  # one keepalive, so the body is running
 
     assert hub.subscriber_count == 1
     await gen.aclose()
@@ -326,14 +357,13 @@ async def test_stream_plot_events_ends_on_none_sentinel() -> None:
     (R3-listener-no-reconnect, R3-lifespan-coupling); the generator must end
     instead of yielding it as an event."""
     hub = PlotEventsHub()
-    gen = stream_plot_events(hub, uuid7(), keepalive_interval=5.0)
-    first = asyncio.ensure_future(anext(gen))
-    await _wait_until(lambda: hub.subscriber_count == 1)
+    client_id, queue = hub.subscribe(uuid7())
+    gen = stream_plot_events(hub, client_id, queue, keepalive_interval=5.0)
 
-    await hub.stop()  # ends every open stream
+    await hub.stop()  # ends every open stream, the body included
 
     with pytest.raises(StopAsyncIteration):
-        await asyncio.wait_for(first, timeout=1.0)
+        await asyncio.wait_for(anext(gen), timeout=1.0)
 
 
 # -- PlotEventsHub: connection loss, reconnect, lifespan (E4 T6b) --
