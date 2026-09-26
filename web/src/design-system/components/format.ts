@@ -32,3 +32,14 @@ export function minutesSince(iso: string | null): number | null {
   if (Number.isNaN(elapsed)) return null
   return Math.max(0, Math.round(elapsed / 60_000))
 }
+
+/**
+ * A 0–1 ratio as a one-decimal percentage, e.g. `0.198` → `19.8 %`. docs/04-api.md:84
+ * sends `completeness_24h` as a ratio; the producer reads it as a percentage, so the
+ * conversion lives here instead of in each screen. A missing ratio is a bare dash, with
+ * no unit: no dangling `%` on a value the node never reported.
+ */
+export function formatPercent(ratio: number | null | undefined): string {
+  if (ratio === null || ratio === undefined) return '—'
+  return `${(ratio * 100).toFixed(1)} %`
+}

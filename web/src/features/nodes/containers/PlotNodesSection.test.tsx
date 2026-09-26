@@ -29,7 +29,7 @@ const HEALTH = {
   last_seen_at: '2026-09-25T10:00:00Z',
   battery_v: 3.9,
   rssi: -78,
-  completeness_24h: 98.4,
+  completeness_24h: 0.198,
 }
 
 function nodePage(nodes: unknown[]) {
@@ -77,7 +77,21 @@ describe('PlotNodesSection', () => {
     // The health request is per node, so the row's numbers land after the list does.
     expect(await screen.findByText('3.9 V')).toBeInTheDocument()
     expect(screen.getByText('-78 dBm')).toBeInTheDocument()
-    expect(screen.getByText('98.4 %')).toBeInTheDocument()
+    // docs/04-api.md:84 sends a 0–1 ratio; the row shows it as a percentage.
+    expect(screen.getByText('19.8 %')).toBeInTheDocument()
+  })
+
+  it('rounds the 24 h completeness ratio instead of printing the raw float', async () => {
+    // The exact value the E4 demo received: unrounded, it rendered as
+    // "0.19791666666666666 %" (D6).
+    mockFetch({
+      '/nodes?': () => jsonResponse(nodePage([NODE])),
+      '/health': () => jsonResponse({ ...HEALTH, completeness_24h: 0.19791666666666666 }),
+    })
+    renderSection()
+
+    expect(await screen.findByText('19.8 %')).toBeInTheDocument()
+    expect(screen.queryByText(/0\.19791666/)).not.toBeInTheDocument()
   })
 
   it('reads the nodes list scoped to the plot and the org', async () => {

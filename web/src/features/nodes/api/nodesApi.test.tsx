@@ -152,14 +152,15 @@ describe('nodesApi', () => {
         last_seen_at: '2026-09-25T10:00:00Z',
         battery_v: 3.9,
         rssi: -78,
-        completeness_24h: 98.4,
+        // docs/04-api.md:84: a 0–1 ratio, passed through untouched.
+        completeness_24h: 0.198,
       }),
     )
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
     const { result } = renderHook(() => useNodeHealth('node-1'), { wrapper: wrapper(queryClient) })
 
-    await waitFor(() => expect(result.current.data?.completeness_24h).toBe(98.4))
+    await waitFor(() => expect(result.current.data?.completeness_24h).toBe(0.198))
     expect(result.current.data?.battery_v).toBe(3.9)
     expect(requestUrl(vi.mocked(fetch).mock.calls[0][0] as Request)).toContain(
       '/api/v1/nodes/node-1/health',
