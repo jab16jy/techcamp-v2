@@ -269,7 +269,6 @@ class OpenMeteoAdapter:
                         jitter = random.uniform(0, 0.1 * backoff)
                         await self._sleep(backoff + jitter)
                         continue
-                    self._circuit_breaker.record_failure()
                     raise OpenMeteoUnavailableError(
                         detail=f"Open-Meteo returned status {response.status_code}",
                         upstream_status=response.status_code,
@@ -277,7 +276,6 @@ class OpenMeteoAdapter:
 
                 if response.status_code != 200:
                     # 4xx client errors other than 429: do not retry
-                    self._circuit_breaker.record_failure()
                     raise OpenMeteoUnavailableError(
                         detail=f"Open-Meteo returned status {response.status_code}",
                         upstream_status=response.status_code,

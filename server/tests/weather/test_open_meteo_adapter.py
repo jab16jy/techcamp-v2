@@ -543,3 +543,31 @@ async def test_circuit_breaker_half_open_failure_trips_back_to_open() -> None:
     # Immediately calling again fails fast
     with pytest.raises(OpenMeteoCircuitBreakerOpenError):
         await adapter.fetch_daily(lat=10.9, lon=-74.1)
+
+
+async def test_circuit_breaker_counts_exactly_one_failure_per_operation() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="internal server error")
+
+    async def _mock_sleep(seconds: float) -> None:
+        pass
+
+    threshold = 4
+    adapter = OpenMeteoAdapter(
+        transport=httpx.MockTransport(_handler),
+        max_retries=1,
+        circuit_failure_threshold=threshold,
+        sleep=_mock_sleep,
+    )
+
+    for i in range(threshold - 1):
+        with pytest.raises(OpenMeteoUnavailableError):
+            await adapter.fetch_daily(lat=10.9, lon=-74.1)
+        assert adapter.circuit_state == CircuitState.CLOSED, (
+            f"Circuit should remain CLOSED after {i + 1} failure(s) with threshold {threshold}"
+        )
+
+    # The N-th failure must transition the circuit to OPEN
+    with pytest.raises(OpenMeteoUnavailableError):
+        await adapter.fetch_daily(lat=10.9, lon=-74.1)
+    assert adapter.circuit_state == CircuitState.OPEN
