@@ -18,8 +18,9 @@ from techcamp.telemetry.application.ports import NodeRepository, ReadingReposito
 from techcamp.telemetry.domain.models import ReadingPoint, ReadingResolution, validate_reading_range
 
 # ponytail: one `list_for_org` page covers every node on a plot at this
-# project's scale (docs/02-estimaciones.md); revisit with a dedicated
-# unbounded repository method if a plot ever nears this many nodes.
+# project's scale (docs/02-estimaciones.md; docs/04-api.md documents the same
+# 500-node cap); revisit with a dedicated unbounded repository method if a
+# plot ever nears this many nodes.
 _MAX_NODES_PER_PLOT = 500
 
 

@@ -61,6 +61,7 @@ from techcamp.telemetry.domain.models import (
     Node,
     NodeStatus,
     NodeTransport,
+    ReadingMetric,
     ReadingResolution,
     Sensor,
 )
@@ -417,6 +418,11 @@ async def get_plot_readings(
     except ValueError as exc:
         raise ProblemError(status=422, title="resolution must be raw, hour or day") from exc
     try:
+        ReadingMetric(metric)
+    except ValueError as exc:
+        known = ", ".join(m.value for m in ReadingMetric)
+        raise ProblemError(status=422, title=f"metric must be one of: {known}") from exc
+    try:
         series = await query_plot_readings(
             user_id=user_id,
             plot_id=plot_id,
@@ -457,6 +463,9 @@ async def stream_events(
     `Last-Event-ID` (E4 T6 gap, docs are silent on replay): the browser sends
     it automatically on reconnect; it is accepted and simply ignored here,
     no replay is built.
+
+    The subscription is taken by the body itself (`stream_plot_events`), not
+    here: a body that never starts must not leave a subscription behind (#38).
     """
     async with async_session_factory() as session:
         farms = SqlAlchemyFarmRepository(session)
@@ -467,9 +476,8 @@ async def stream_events(
             )
         except FarmNotFoundError as exc:
             raise ProblemError(status=404, title="Farm not found") from exc
-    client_id, queue = hub.subscribe(farm_id)
     return StreamingResponse(
-        stream_plot_events(hub, client_id, queue),
+        stream_plot_events(hub, farm_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

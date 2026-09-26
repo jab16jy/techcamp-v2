@@ -284,3 +284,69 @@ async def test_plot_with_no_nodes_returns_empty_series(db_session: AsyncSession)
 
     assert response.status_code == 200
     assert response.json() == {"series": []}
+
+
+async def test_naive_from_and_to_are_rejected(db_session: AsyncSession) -> None:
+    """A boundary without an offset would be read against the session
+    timezone (docs/04-api.md:20: ISO 8601 in UTC) — 422, never a silent shift."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    plot_id = await _make_plot(db_session, org_id)
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/v1/plots/{plot_id}/readings",
+            params={
+                "metric": "soil_moisture",
+                "from": "2026-03-01T00:00:00",
+                "to": "2026-03-02T00:00:00",
+                "resolution": "raw",
+            },
+            headers=_auth(token),
+        )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_mixed_timezone_awareness_is_rejected(db_session: AsyncSession) -> None:
+    """One aware and one naive boundary used to raise `TypeError` and answer
+    500 (#37); it is a 422 like every other invalid range."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    plot_id = await _make_plot(db_session, org_id)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            f"/api/v1/plots/{plot_id}/readings",
+            params={
+                "metric": "soil_moisture",
+                "from": "2026-03-01T00:00:00Z",
+                "to": "2026-03-02T00:00:00",
+                "resolution": "raw",
+            },
+            headers=_auth(token),
+        )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_unknown_metric_is_rejected(db_session: AsyncSession) -> None:
+    """A typo'd `metric` used to answer 200 with an empty `series`, the same
+    as a plot with no matching sensor (#37); docs/04-api.md:94 rejects it."""
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    plot_id = await _make_plot(db_session, org_id)
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/v1/plots/{plot_id}/readings",
+            params={
+                "metric": "soil_moisturre",
+                "from": "2026-03-01T00:00:00Z",
+                "to": "2026-03-02T00:00:00Z",
+                "resolution": "raw",
+            },
+            headers=_auth(token),
+        )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"

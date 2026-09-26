@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import cast
 from uuid import UUID
 
 import asyncpg
@@ -33,8 +34,11 @@ from techcamp.shared.config import database_url
 from techcamp.shared.db import engine
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters import sse_hub
+from techcamp.telemetry.adapters.api.router import stream_events
+from techcamp.telemetry.adapters.sse_hub import PlotEventsHub
 
 from .test_api import _auth, _member
+from .test_sse_stream import _reading_payload
 
 pytestmark = pytest.mark.anyio
 
@@ -71,6 +75,14 @@ async def live_base_url() -> AsyncIterator[str]:
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())
     while not server.started:
+        await asyncio.sleep(0.01)
+    # `server.started` only says the app booted: the hub connects in the
+    # background (R3-lifespan-coupling), so a `pg_notify` sent right after
+    # would be lost if `LISTEN plot_events` isn't registered yet (#38).
+    hub = cast(PlotEventsHub, app.state.plot_events_hub)
+    deadline = asyncio.get_event_loop().time() + 10.0
+    while not hub.is_listening:
+        assert asyncio.get_event_loop().time() < deadline, "the hub never registered LISTEN"
         await asyncio.sleep(0.01)
     port = server.servers[0].sockets[0].getsockname()[1]
     try:
@@ -249,3 +261,36 @@ def test_app_boots_when_listener_connect_fails(monkeypatch: pytest.MonkeyPatch) 
         response = client.get("/health")
 
     assert response.status_code == 200
+
+
+async def test_stream_route_subscribes_only_while_its_body_runs(
+    db_session: AsyncSession,
+) -> None:
+    """#38: the route used to subscribe before returning the response, so a
+    body that never starts (client gone, proxy dropped the response) left the
+    subscription behind — only the generator's `finally` unsubscribes.
+
+    The route function is called directly because a `StreamingResponse` body
+    that never ends can't be consumed through `TestClient` (module docstring).
+    """
+    org_id, user_id, _token = await _member(db_session, role="owner")
+    farm_id = await _make_farm(db_session, org_id)
+    hub = PlotEventsHub()
+
+    response = await stream_events(user_id=user_id, hub=hub, farm_id=farm_id)
+
+    assert hub.subscriber_count == 0, "an unstarted body must not hold a subscription"
+
+    body = cast(AsyncIterator[bytes], response.body_iterator)
+    first = asyncio.ensure_future(body.__anext__())
+    deadline = asyncio.get_event_loop().time() + 5.0
+    while hub.subscriber_count == 0:
+        assert asyncio.get_event_loop().time() < deadline, "the body never subscribed"
+        await asyncio.sleep(0.01)
+    hub.dispatch(_reading_payload(farm_id=farm_id, plot_id=uuid7()))
+
+    chunk = await asyncio.wait_for(first, timeout=5.0)
+    assert b"event: reading" in chunk
+
+    await body.aclose()
+    assert hub.subscriber_count == 0, "a client that leaves must release its subscription"

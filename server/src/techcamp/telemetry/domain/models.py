@@ -396,6 +396,23 @@ class ReadingResolution(StrEnum):
     DAY = "day"
 
 
+class ReadingMetric(StrEnum):
+    """`GET /plots/{plot_id}/readings?metric=` (docs/04-api.md:94): the
+    variables a sensor measures ([docs/00-glosario.md](00-glosario.md),
+    `Variable`). An unknown value is rejected instead of answered with an
+    empty `series`, which is indistinguishable from "this plot has no sensor
+    for that metric" (#37)."""
+
+    SOIL_MOISTURE = "soil_moisture"
+    SOIL_TEMP = "soil_temp"
+    AIR_TEMP = "air_temp"
+    AIR_RH = "air_rh"
+    RAIN = "rain"
+    WATER_FLOW = "water_flow"
+    BATTERY_V = "battery_v"
+    RSSI = "rssi"
+
+
 @dataclass(frozen=True, slots=True)
 class ReadingPoint:
     """One `[t, value]` point (docs/04-api.md:93): the calibrated `value` for
@@ -417,6 +434,14 @@ MAX_HOUR_RANGE = timedelta(days=60)
 def validate_reading_range(resolution: ReadingResolution, start: datetime, end: datetime) -> None:
     """docs/04-api.md:20 (`from` inclusive, `to` exclusive) and :97 (resolution
     range limits). `day` has no documented upper limit ("`day` para más")."""
+    if start.tzinfo is None or end.tzinfo is None:
+        # docs/04-api.md:20 dates are ISO 8601 in UTC, so both boundaries carry
+        # an offset: a naive one would be read against the session timezone, and
+        # comparing a naive with an aware value raises `TypeError` — a 500
+        # instead of the documented 422 (#37).
+        raise InvalidReadingRangeError(
+            "`from` and `to` must be timezone-aware (ISO 8601 with offset)"
+        )
     if end <= start:
         raise InvalidReadingRangeError("`to` must be after `from`")
     span = end - start

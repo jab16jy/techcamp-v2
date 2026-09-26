@@ -27,13 +27,17 @@ def _format_event(event: StreamEvent) -> bytes:
 
 async def stream_plot_events(
     hub: PlotEventsHub,
-    client_id: UUID,
-    queue: asyncio.Queue[StreamEvent | None],
+    farm_id: UUID,
     *,
     keepalive_interval: float = KEEPALIVE_INTERVAL_S,
 ) -> AsyncIterator[bytes]:
+    """Subscribe here, not in the route: an async generator body only runs
+    once the response starts being sent, so a body that never starts (client
+    gone, proxy dropped the response) must not leave a subscription behind
+    (#38). Nothing unsubscribes except the `finally` below."""
+    client_id, queue = hub.subscribe(farm_id)
     try:
-        while hub.is_subscribed(client_id):
+        while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=keepalive_interval)
             except TimeoutError:
