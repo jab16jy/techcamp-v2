@@ -66,11 +66,17 @@ All lineages above approved and acknowledged (authority burned). Consent on ever
 ## Acceptance criteria
 - [x] Every checkbox in #34–#44 fixed with a test or proven already fixed; every review round of this feature (#58–#63) fixed.
 - [x] Out-of-scope doc gaps remain listed in their issues (#34, #43, #44).
-- [x] Integration chain (`e4fu-int`): server 476 passed, ruff/format/mypy/lint-imports green, one Alembic head `a3f1c7d92b40`; web 190 passed, lint/typecheck/build green, size 162.39/200 kB. CI per PR pending.
+- [x] Integration chain (`e4fu-int`): server 476 passed, ruff/format/mypy/lint-imports green, one Alembic head `a3f1c7d92b40`; web 190 passed, lint/typecheck/build green, size 162.39/200 kB. CI green on every PR (#64–#75) and on `main`.
 
 ## Progress / evidence
 - 2026-09-25: feature doc created; scope E4 only (owner). All 11 tasks delivered by parallel Herdr writers; 3,535 authored lines over 18 commits (excluding `uv.lock`).
 
+- 2026-09-26: delivered as stacked PRs #64–#73 (one per ODD task; F1, F2, F4 `size:exception`), merged in order with CI green; #34–#44 and #58–#63 closed.
+- 2026-09-26: E4 end-to-end demo re-run on merged `main` with fresh volumes (compose project `e4demo`): all 8 E4 criteria plus 4 follow-up checks PASS (migrations at `a3f1c7d92b40`, procrastinate 3.10.0; 0 of 62 simulated readings uncalibrated; quality values within 0..3 and recalibration jobs `succeeded`; SSE kept serving and reconnected through a Postgres restart). It found three defects outside the unit tests' reach, fixed and merged:
+  - D7 `web/Dockerfile:4` — the image did not copy `web/.npmrc` (`legacy-peer-deps`), so `npm ci` failed with ERESOLVE and the seminar `web` service never built; CI passed because it runs `npm ci` in the full checkout. PR #74. (Merged before its CI had registered; CI then passed on the PR and on `main`.)
+  - D8 `infra/compose.yaml:108` — the web container proxied `/api/v1` to its own `localhost:8000` (502 on every call); default is now `http://api:8000`. PR #75.
+  - D9 `PlotDetailSheet.tsx:466,474` — soil moisture printed the raw float; one decimal now, like `formatPercent`. PR #75.
+- 2026-09-26: cleanup (owner): `e4-followups-*` worktrees, their local and remote branches, test databases `techcamp_f3..f6`, and the demo images and volumes removed. Only `main` remains.
+
 ## Next step
-1. Stacked-to-main PRs (7 slices), merge in order with CI green; close #34–#44 and #58–#63.
-2. Delete the `e4-followups-*` worktrees, their branches and the `techcamp_f3..f6` test databases (owner, 2026-09-25).
+None: feature closed. `main` @ `8eb5dc0` is green.
