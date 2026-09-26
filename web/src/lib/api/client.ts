@@ -101,6 +101,16 @@ function combineWithTimeout(callerSignal: AbortSignal): AbortSignal {
 }
 
 /**
+ * The 401 path every authenticated call shares: the token is gone, so drop the
+ * session and send the user to sign in. Exported so the stream client (which does
+ * not go through `apiClient`) signs out the same way instead of retrying forever.
+ */
+export function expireSession(): void {
+  clearSession()
+  if (typeof window !== 'undefined') window.location.assign('/ingreso')
+}
+
+/**
  * Bearer token, request timeout, and error handling in one middleware (a
  * single object so `onResponse` sees exactly the `Request` `onRequest`
  * produced, with no ordering question between separate middlewares).
@@ -128,8 +138,7 @@ const sessionMiddleware: Middleware = {
     const hadSession = request.headers.has('Authorization')
     const { title, detail } = await parseErrorBody(response)
     if (response.status === 401 && hadSession) {
-      clearSession()
-      if (typeof window !== 'undefined') window.location.assign('/ingreso')
+      expireSession()
     }
     throw new ApiError(response.status, title, detail)
   },
