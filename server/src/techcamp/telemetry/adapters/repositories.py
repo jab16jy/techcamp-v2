@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.jobs import enqueue_recalibration
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, ReadingRow, SensorRow
+from techcamp.telemetry.domain.errors import CalibrationVersionConflictError
 from techcamp.telemetry.domain.models import (
     Calibration,
     CalibrationKind,
@@ -387,14 +388,13 @@ class SqlAlchemyCalibrationRepository:
         await enqueue_recalibration(self._session, calibration_id)
         try:
             await self._session.commit()
-        except IntegrityError:
-            # No domain error to map a duplicate (sensor_id, version) to yet
-            # (no use case depends on this repository through a port, see
-            # the module docstring); just keep the session usable for the
-            # caller, same rollback-then-reraise shape as
-            # `SqlAlchemyCropCycleRepository.create`.
+        except IntegrityError as exc:
+            # `MAX(version) + 1` and this insert are separate statements
+            # (add_calibration), so two concurrent POSTs can pick the same
+            # version; the `owned` read above already rules out the other
+            # integrity constraints this insert could trip.
             await self._session.rollback()
-            raise
+            raise CalibrationVersionConflictError(sensor_id) from exc
         result = await self._session.execute(
             select(*_CALIBRATION_COLUMNS).where(CalibrationRow.id == calibration_id)
         )

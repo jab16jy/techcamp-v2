@@ -117,15 +117,63 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-def _require_number(params: dict[str, Any], key: str, method: CalibrationMethod) -> float:
-    value = params.get(key)
+def _finite_float(value: Any, method: CalibrationMethod, key: str) -> float:
+    """A coefficient the method's arithmetic can actually use. A JSON integer
+    too large for a float raises `OverflowError` and `NaN`/`inf` break the
+    `params` JSONB column, so all three are an
+    `InvalidCalibrationParamsError` (a `422`), never a `500`."""
     if not isinstance(value, int | float) or isinstance(value, bool):
         raise InvalidCalibrationParamsError(method.value, f"'{key}' must be a number")
-    return float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise InvalidCalibrationParamsError(method.value, f"'{key}' is out of range") from exc
+    if not math.isfinite(number):
+        raise InvalidCalibrationParamsError(method.value, f"'{key}' must be finite")
+    return number
+
+
+def _require_number(params: dict[str, Any], key: str, method: CalibrationMethod) -> float:
+    return _finite_float(params.get(key), method, key)
+
+
+def _require_coefficients(params: dict[str, Any], method: CalibrationMethod) -> list[float]:
+    coeffs = params.get("coeffs")
+    if not isinstance(coeffs, list) or not coeffs:
+        raise InvalidCalibrationParamsError(
+            method.value, "coeffs must be a non-empty list of numbers"
+        )
+    return [_finite_float(c, method, f"coeffs[{i}]") for i, c in enumerate(coeffs)]
+
+
+def validate_calibration_params(calibration: Calibration) -> None:
+    """`params` matches its `method` (docs/03-modelo-datos.md:463-467), checked
+    directly instead of by running `apply_calibration(raw=0.0)`: a probe at a
+    fake `raw` reports the shape only by accident of that arithmetic, and the
+    use case that stores `params` has to reject a bad coefficient whether or not
+    `raw` happens to touch it."""
+    method, params = calibration.method, calibration.params
+    if method is CalibrationMethod.LINEAR:
+        _require_number(params, "scale", method)
+        _require_number(params, "offset", method)
+    elif method is CalibrationMethod.TWO_POINT:
+        raw_dry = _require_number(params, "raw_dry", method)
+        raw_wet = _require_number(params, "raw_wet", method)
+        _require_number(params, "vwc_dry", method)
+        _require_number(params, "vwc_wet", method)
+        if raw_dry == raw_wet:
+            raise InvalidCalibrationParamsError(method.value, "raw_dry and raw_wet must differ")
+    elif method is CalibrationMethod.POLYNOMIAL:
+        _require_coefficients(params, method)
+    else:
+        raise AssertionError(f"unhandled calibration method: {method}")
 
 
 def apply_calibration(calibration: Calibration, raw: float) -> float:
     """Map a raw ADC value to its calibrated value (docs/03-modelo-datos.md:463-467)."""
+    # The one check this arithmetic below doesn't repeat: `two_point` divides by
+    # `raw_wet - raw_dry` instead of comparing it.
+    validate_calibration_params(calibration)
     params = calibration.params
     method = calibration.method
     if method is CalibrationMethod.LINEAR:
@@ -137,17 +185,10 @@ def apply_calibration(calibration: Calibration, raw: float) -> float:
         raw_wet = _require_number(params, "raw_wet", method)
         vwc_dry = _require_number(params, "vwc_dry", method)
         vwc_wet = _require_number(params, "vwc_wet", method)
-        if raw_dry == raw_wet:
-            raise InvalidCalibrationParamsError(method.value, "raw_dry and raw_wet must differ")
         fraction = (raw - raw_dry) / (raw_wet - raw_dry)
         return vwc_dry + fraction * (vwc_wet - vwc_dry)
     if method is CalibrationMethod.POLYNOMIAL:
-        coeffs = params.get("coeffs")
-        if not isinstance(coeffs, list) or not coeffs or not all(_is_number(c) for c in coeffs):
-            raise InvalidCalibrationParamsError(
-                method.value, "coeffs must be a non-empty list of numbers"
-            )
-        return sum(float(c) * raw**i for i, c in enumerate(coeffs))
+        return sum(c * raw**i for i, c in enumerate(_require_coefficients(params, method)))
     raise AssertionError(f"unhandled calibration method: {method}")
 
 

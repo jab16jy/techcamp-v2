@@ -44,6 +44,7 @@ from techcamp.telemetry.application.manage_nodes import (
 )
 from techcamp.telemetry.application.query_readings import ReadingSeries, query_plot_readings
 from techcamp.telemetry.domain.errors import (
+    CalibrationVersionConflictError,
     ClaimCodeNotFoundError,
     InsufficientRoleError,
     InvalidCalibrationParamsError,
@@ -385,6 +386,13 @@ async def post_calibration(
         raise ProblemError(status=403, title="Role cannot calibrate this sensor") from exc
     except InvalidCalibrationParamsError as exc:
         raise ProblemError(status=422, title="Invalid calibration params", detail=str(exc)) from exc
+    except CalibrationVersionConflictError as exc:
+        raise ProblemError(
+            status=409,
+            title="Calibration version conflict",
+            detail="Another calibration for this sensor took that version; retry.",
+            type_="calibration_version_conflict",
+        ) from exc
     return _calibration_view(calibration)
 
 
