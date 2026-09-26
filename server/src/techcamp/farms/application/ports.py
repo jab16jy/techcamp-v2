@@ -50,6 +50,10 @@ class FarmRepository(Protocol):
 
 
 class PlotRepository(Protocol):
+    async def get_by_id(self, plot_id: UUID) -> Plot | None:
+        """Get plot by id regardless of org (used by background jobs such as irrigation)."""
+        ...
+
     async def get_for_orgs(self, plot_id: UUID, org_ids: Sequence[UUID]) -> Plot | None: ...
 
     async def list_for_farm(self, farm_id: UUID, org_id: UUID) -> list[Plot]: ...
@@ -86,6 +90,10 @@ class PlotRepository(Protocol):
 
 
 class SoilProfileRepository(Protocol):
+    async def get_for_plot(self, plot_id: UUID) -> SoilProfile | None:
+        """Get the soil profile for a plot, or None if none has been configured."""
+        ...
+
     async def put(self, profile: SoilProfile) -> SoilProfile: ...
 
 

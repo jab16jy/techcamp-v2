@@ -180,6 +180,12 @@ class SqlAlchemyPlotRepository:
         # this repository (the ORM column stays a plain Integer, docs/03:100).
         self._cells = SqlAlchemyWeatherRepository(session)
 
+    async def get_by_id(self, plot_id: UUID) -> Plot | None:
+        """Get plot by id regardless of org for background jobs (e.g. daily water balance)."""
+        result = await self._session.execute(select(*_PLOT_COLUMNS).where(PlotRow.id == plot_id))
+        row = result.one_or_none()
+        return _plot_from_row(row) if row is not None else None
+
     async def get(self, plot_id: UUID, org_id: UUID) -> Plot | None:
         result = await self._session.execute(
             select(*_PLOT_COLUMNS).where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
@@ -507,6 +513,14 @@ class SqlAlchemySoilProfileRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get_for_plot(self, plot_id: UUID) -> SoilProfile | None:
+        """Get the soil profile for a plot, or None if none has been configured."""
+        result = await self._session.execute(
+            select(SoilProfileRow).where(SoilProfileRow.plot_id == plot_id)
+        )
+        row = result.scalar_one_or_none()
+        return _soil_profile_from_row(row) if row is not None else None
 
     async def put(self, profile: SoilProfile) -> SoilProfile:
         values = {
