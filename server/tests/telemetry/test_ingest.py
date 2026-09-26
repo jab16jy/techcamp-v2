@@ -134,6 +134,32 @@ async def test_ingest_uplinks_is_idempotent_across_two_flushes(db_session: Async
 # -- future/missing ts → received_at + quality 1 --
 
 
+# -- GitHub #36: one unusable `ts` is classified, not fatal to the batch --
+
+
+async def test_ingest_uplinks_keeps_the_batch_when_one_ts_is_unusable(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id, node_id, sensor_id = await _claimed_node_with_sensor(db_session)
+    await _add_calibration(
+        db_session, org_id=org_id, sensor_id=sensor_id, valid_from=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    ports = await _ports(db_session)
+
+    stats = await ingest_uplinks(
+        [
+            RawUplink(
+                node_id=node_id, payload=_uplink_payload(ts=10**20), received_at=_RECEIVED_AT
+            ),
+            RawUplink(node_id=node_id, payload=_uplink_payload(seq=2), received_at=_RECEIVED_AT),
+        ],
+        **ports,
+    )
+
+    assert stats.counts["malformed_payload"] == 1
+    assert stats.inserted == 1  # the good message of the same batch still landed
+
+
 async def test_ingest_uplinks_falls_back_to_received_at_for_a_far_future_ts(
     db_session: AsyncSession,
 ) -> None:

@@ -213,10 +213,10 @@ El cliente se reconecta solo con `Last-Event-ID`. El servidor envía un `:keepal
 
 | Campo | Regla |
 |---|---|
-| `v` | Versión del esquema del payload. Una versión desconocida se descarta y se cuenta en una métrica. |
+| `v` | Versión del esquema del payload. Una versión desconocida se descarta y se cuenta en una métrica. Un valor de otro tipo (booleano, decimal, texto) hace el payload mal formado. |
 | `seq` | Contador monotónico del nodo. Sirve para detectar huecos (lecturas perdidas). |
 | `ts` | Epoch en segundos, tomado del reloj del nodo sincronizado por NTP. Si falta o está desfasado más de 10 min hacia el futuro, se usa `received_at` y la lectura queda con `quality = 1`. |
-| `m` | Mapa `channel_key → valor crudo`. La humedad de suelo llega como ADC crudo; la calibración se aplica en el servidor. |
+| `m` | Mapa `channel_key → valor crudo`. La humedad de suelo llega como ADC crudo; la calibración se aplica en el servidor. Un valor no finito (`NaN`, `Infinity`) hace el payload mal formado: `json` los decodifica, pero ninguna bandera de `quality` describe una lectura no finita. |
 | Buffer | Sin conexión, el nodo guarda lecturas (≥ 72 h) y las publica en orden al reconectar, con su `ts` original. |
 
 **Downlink de configuración:**

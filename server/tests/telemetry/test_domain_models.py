@@ -184,6 +184,35 @@ def test_parse_uplink_rejects_non_string_firmware() -> None:
         parse_uplink({**_VALID_PAYLOAD, "fw": 103})
 
 
+# -- GitHub #34: strict types and a `ts` a datetime can actually represent --
+
+
+@pytest.mark.parametrize("ts", [10**20, -(10**20), 10**15, -(10**12)])
+def test_parse_uplink_rejects_a_ts_outside_the_representable_range(ts: int) -> None:
+    with pytest.raises(MalformedUplinkPayloadError):
+        parse_uplink({**_VALID_PAYLOAD, "ts": ts})
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_parse_uplink_rejects_a_non_finite_channel_value(value: float) -> None:
+    with pytest.raises(MalformedUplinkPayloadError):
+        parse_uplink({**_VALID_PAYLOAD, "m": {"sm_10": value}})
+
+
+@pytest.mark.parametrize("version", [True, 1.0])
+def test_parse_uplink_rejects_a_non_integer_version(version: object) -> None:
+    """`seq`/`ts` reject a bool or a float; `v` must too — `True == 1` and
+    `1.0 == 1`, so a bare `!=` check let both through."""
+    with pytest.raises(MalformedUplinkPayloadError):
+        parse_uplink({**_VALID_PAYLOAD, "v": version})
+
+
+@pytest.mark.parametrize("payload", [[1, 2], "sm_10", 7, None])
+def test_parse_uplink_rejects_a_payload_that_is_not_an_object(payload: object) -> None:
+    with pytest.raises(MalformedUplinkPayloadError):
+        parse_uplink(payload)  # type: ignore[arg-type]
+
+
 # -- quality: timestamp resolution (docs/04-api.md:218) --
 
 
@@ -300,6 +329,31 @@ def test_is_reading_too_old_accepts_a_recent_ts() -> None:
     received_at = datetime(2026, 2, 1, tzinfo=UTC)
     ts = int((received_at - timedelta(days=1)).timestamp())
     assert is_reading_too_old(ts, received_at) is False
+
+
+# -- GitHub #36: an unrepresentable `ts` is a malformed payload, never a
+# crash that aborts the whole ingest batch (models.py:251) --
+
+
+def test_is_reading_too_old_rejects_a_ts_outside_the_representable_range() -> None:
+    with pytest.raises(MalformedUplinkPayloadError):
+        is_reading_too_old(10**15, datetime(2026, 2, 1, tzinfo=UTC))
+
+
+# -- GitHub #34: a naive `received_at` is the server's own clock, read as UTC
+# instead of raising a bare `TypeError` on the comparison --
+
+
+def test_resolve_reading_time_reads_a_naive_received_at_as_utc() -> None:
+    naive_received_at = datetime(2026, 1, 1, 12, 0)  # noqa: DTZ001 - the point of the test
+    at, quality = resolve_reading_time(None, naive_received_at)
+    assert at == naive_received_at.replace(tzinfo=UTC)
+    assert quality == ReadingQuality.TIMESTAMP_CORRECTED
+
+
+def test_is_reading_too_old_reads_a_naive_received_at_as_utc() -> None:
+    ts = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
+    assert is_reading_too_old(ts, datetime(2026, 2, 1)) is True  # noqa: DTZ001
 
 
 # -- readings query range validation (docs/04-api.md:97: raw up to 2 days,
