@@ -65,10 +65,15 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T9d Calibration + credentials: node sensors list, `CalibrationSheet` (method `linear|two_point|polynomial`, `kind`, params, `rmse_pct`, `valid_from`; new version, never edit), rotate credentials with password shown once — route: delegated (OpenCode via Herdr, same session) — forecast ~450 — actual 831 (`e4dd324`)
 - [x] T10a Stream client: authenticated SSE hook for `GET /stream?farm_id=` read with `fetch` + `ReadableStream` so the bearer token stays in the `Authorization` header (`EventSource` cannot send headers; owner decision 2026-09-25, no server change), reconnect with `Last-Event-ID`, keepalive tolerant — route: delegated (OpenCode via Herdr; should have been a fresh session, see Decisions) — forecast ~250 — actual 377 (`28c1f85`)
 - [x] T10b Live reading on plot detail: latest calibrated reading per sensor, seeded from `GET /plots/{plot_id}/readings?resolution=raw` and updated by `reading` events — route: delegated (OpenCode via Herdr, same session) — forecast ~300 — actual 299 (`cc282d2`)
+- Completeness unit (T11c, parent decision 2026-09-25, pending owner confirmation): keep the server's 0–1 ratio on the wire and document it in docs/04; the web formats it as a percentage. No API change.
 - Herdr sessions (owner, 2026-09-25): one writer session per feature. T9a–T9d complement each other and may share one; T10 is a new feature and should have started a fresh session (it did not — recorded, not repeated).
 
 - Review-fix rounds (T*b) reserved: forecast ~1,800
 
+- [ ] T11 E4 demo fixes (end-to-end demo 2026-09-25, see "End-to-end demo" below) — route: delegated (fresh OpenCode session via Herdr, RDD run by the writer per work-unit commit, consent relayed to the owner) — forecast ~500
+  - [ ] T11a Stack boots from compose (D1, D2, D3): build mounts readable under SELinux, `httpx` a runtime dependency, image ships `migrations/` + `alembic.ini`, one-shot `migrate` service before api/ingestor/worker
+  - [ ] T11b Server fixes (D4, D5, 5.1): simulator `--provision` outside pytest, recalibration refresh window aligned to buckets and job status honest, `--otp-code` usable in scripted runs
+  - [ ] T11c Completeness unit (D6): docs/04 states `completeness_24h` is a 0–1 ratio (server unchanged); web shows it as a rounded percentage; fixtures use real ratios
 ## Review (RDD)
 - Boundary: `e79d542`.
 - `fe85ae7` (feature doc): assessed passive, no review; boundary → `fe85ae7`.
@@ -97,6 +102,31 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - `989dce0` (doc): passive, boundary → `989dce0`. T10a `28c1f85`: medium, `under_budget` (377), pending in the slice.
 - T10a + T10b (`989dce0..cc282d2`, 701 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-d7f5466f4f7ccf82`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 4 SUGGESTION, non-blocking → issue #44, deferred. Boundary → `cc282d2`.
 
+## End-to-end demo (2026-09-25)
+Run by a fresh OpenCode session on `d4404c9` with `uvx podman-compose` (podman 5.8.7 rootless, SELinux Enforcing). Verification only: no tracked file changed. Full report kept in the session scratchpad; summary here.
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Stack up, api healthy, migrations at head | PASS with workarounds (D1–D3) | 5 services Up; `/health` 200; `alembic_version = 231a40930eb5` |
+| 2 | Seed user/org/farm/plot, bearer token | PASS | dev OTP from api log; `/otp/verify` 200; `/me` 200 |
+| 3 | Simulator → calibrated readings, duplicates ignored | PASS (`--claim-code`, not `--provision`: D4) | claim 201; `raw_value 2299.69 → value 20.0078` (two-point checked by hand); republish count 18 → 19 → 19 → 19 |
+| 4 | SSE `reading` live; other org 404 | PASS | 17 `event: reading` frames; cross-org 404; no token 401 |
+| 5 | Readings raw and hour | PASS | raw 18 points; hour 4 buckets after a manual aggregate refresh |
+| 6 | Recalibration recomputes forward | PASS (adjacent defect D5) | same row 20.0078 → 27.9969; job succeeded |
+| 7 | Node health | PASS (web formatting D6) | `last_seen_at` set, `completeness_24h` 0.198 |
+| 8 | Web Nodos + Humedad del suelo | PASS | Playwright: both headings with values |
+
+Covers the PENDING T4 compose/shared-subscription check and the T7 `worker` runtime check.
+
+Defects (CI and every review were green because no test exercises the built image or the server↔web contract):
+- D1 `server/Dockerfile:7-8` — `RUN --mount=type=bind` of `pyproject.toml`/`uv.lock` is unreadable under SELinux Enforcing (`user_home_t` vs `container_t`): build fails with EACCES. Origin E0, already on `main`.
+- D2 `server/pyproject.toml:29` + `farms/adapters/soilgrids.py:35` — `httpx` is dev-only but imported at api startup; the `--no-dev` image exits with `ModuleNotFoundError`. Origin E3, already on `main`.
+- D3 — nothing migrates: no compose step, no migration in the lifespan, and the final image has no `migrations/` or `alembic.ini`. With a fresh (or pytest-downgraded) volume the worker crash-loops (76 restarts, `procrastinate_prune_stalled_workers_v1` missing). Origin E0 + E4.
+- D4 `simulator/provision.py:18` — `--provision` fails outside pytest with `NoReferencedTableError` (`plot`, `organization` not in `Base.metadata`); tests pass only because Alembic's `env.py` imported every ORM first. Origin E4 T8.
+- D5 `telemetry/adapters/jobs.py:177-212` — a back-dated, non-latest calibration version yields a refresh window shorter than one bucket; `refresh_continuous_aggregate` raises "refresh window too small" after the recompute already committed, so readings change while the job ends `failed`. Origin E4 T7.
+- D6 `web/.../PlotNodesSection.tsx:52` vs `get_node_health.py:46` — server sends a 0–1 ratio, web appends `%` ("0.1979… %"); web fixtures use 98.4, a value the server never emits; docs/04:84 has no unit. Origin E4 T9b + doc gap.
+- Caveats: 5.1 `--otp-code` is unusable (the simulator requests a new OTP first, which replaces the code); `resolution=hour` needs the aggregate policy to run first; `battery_v`/`rssi` stay null (T3 decision); `pytest` downgrades the local DB to base on teardown (demo data lost).
+
 ## Acceptance criteria
 - The simulator publishes over MQTT, the ingestor stores calibrated `reading` rows (raw and calibrated), duplicates are ignored.
 - `curl -N /api/v1/stream?farm_id=…` shows `reading` events live; other orgs get 404.
@@ -124,8 +154,4 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-Web slice T9a–T10b done and reviewed (2026-09-25). Review boundary `cc282d2`. Writer session closed.
-
-1. End-to-end demo: `podman-compose -f infra/compose.yaml --profile seminar up` (api, ingestor, worker, broker), simulator publishes, readings land calibrated, SSE shows `reading` events, web claim + live reading. Covers the PENDING compose/shared-subscription/worker checks from T4 and T7.
-2. Stacked-to-main chained PRs of ~400 authored lines (`chained-pr`, `work-unit-commits`), merged in order.
-3. Owner decisions pending from the web slice: add a read endpoint for a sensor's calibrations (#43), add `sensor_id` to the `reading` event (#44), connection state for the stream (#44). Open follow-up issues: #33–#44.
+PRs #45–#56 open (stacked-to-main, one per ODD task, `size:exception`), CI green on all 12, not merged (2026-09-25). T11 in progress: fixes land as PR 13 on top of #56, then the chain merges in order.
