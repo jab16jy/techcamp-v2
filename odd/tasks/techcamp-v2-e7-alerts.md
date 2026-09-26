@@ -197,9 +197,10 @@ work unit (`domain-modeling`).
   `alert` (partial unique open index, `escalated_at`, `resolution_note`), `notification`
   (+ `created_at`, `sent_at`, `last_error`), `push_subscription`; ORM rows; docs/03 — route:
   Herdr AGY — forecast ~350 — actual 1,114 (`2fb93b6`; 517 of it tests)
-- [ ] T2 Alerts domain (pure): sustained window (D1), hysteresis and 60 min resolution (D2), state
+- [x] T2 Alerts domain (pure): sustained window (D1), hysteresis and 60 min resolution (D2), state
   transitions and escalation eligibility (2 h critical, 48 h `water_stress`), threshold per rule
-  code; docs/06 §3 — route: Herdr AGY — forecast ~350
+  code; docs/06 §3 — route: Herdr AGY — forecast ~350 — actual 788 (`18df6c0`) + review
+  correction 39 by the parent (`dceaec1`)
 - [ ] T3 Alert lifecycle: repository (org-filtered), open/update/resolve use cases writing alert +
   notification rows in one transaction (D4–D6), `NOTIFY plot_events` `alert.opened` /
   `alert.updated`, SSE hub pass-through — route: Herdr AGY — forecast ~450
@@ -256,6 +257,21 @@ work unit (`domain-modeling`).
   APPROVED and acknowledged (authority burned). 2 WARNING + 3 SUGGESTION, non-blocking → #95
   (frozen seed copy in the migration, CHECK/partial-index rejection tests, DB defaults, survival
   test, unused sync seed helper), fixed later in the epic. Boundary → `2fb93b6`.
+- T2 first lineage `review-d81163eb0bd38aa0` (`2fb93b6..18df6c0`): medium, standing grant; one
+  reliability lens → CRITICAL `R3-open-without-violation` (deterministic: `sustained_run` returned
+  0 for "no run", so a `min_duration = 0` rule opened on empty or healthy samples). Correction plan
+  40 lines; parent fix `dceaec1` (TDD: RED `assert <AlertAction.OPEN> == <AlertAction.NO_ACTION>`;
+  no run is now `None`). Targeted validation then failed twice with Gentle AI
+  `repository_context_unavailable: invalid rctx2 repository context` (retry-safe, nothing
+  mutated; worktree had the uncommitted feature doc — unproven cause). Owner chose "Stop here",
+  then asked to restart: lineage abandoned (`operator_disposition`, quarantined with its audit
+  record), feature doc committed (`504a682`) so the worktree was clean.
+- T2 fresh lineage `review-b7aa3a990b41271e` (`2fb93b6..504a682`, incl. the correction): medium,
+  standing grant; one reliability lens, APPROVED and acknowledged (authority burned). 3 WARNING +
+  1 SUGGESTION → #98 (48 h upgrade while recovering, resolved `current_alert`, gap tolerance in
+  `sustained_run`, untested coercions). Boundary → `504a682`.
+- Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
+  on a dirty worktree.
 
 ## Progress / evidence
 - 2026-09-26: docs read (AGENTS.md, docs/README, 00, 01, 03, 04, 05, 06 §1/§3/§4/§10, 09, 10,
@@ -267,4 +283,10 @@ work unit (`domain-modeling`).
   test teardown after `TRUNCATE organization … CASCADE`. RED: `ModuleNotFoundError: No module named
   'techcamp.alerts.adapters.orm'`. Checks (techcamp-e7-db): pytest 568 passed; ruff, format,
   mypy, lint-imports green. CodeGraph used, no fallback.
-- Next step: T2 (AGY, fresh session).
+- T2 `18df6c0` (AGY): RED `ImportError: cannot import name 'Alert' from 'techcamp.alerts.domain'`;
+  writer checks: pytest 577 passed; ruff, format, mypy, lint-imports green. Parent gate: tests/alerts
+  + tests/notifications 17 passed; ruff, format, mypy, lint-imports green; diff matches docs/06 §3
+  (sustained run, hysteresis, 60 min resolution, 48 h upgrade, manual resolve only from
+  acknowledged, 2 h escalation) and D1/D2/D12 bullets added to docs/06 §3.
+- T2 correction `dceaec1` (parent): tests/alerts 15 passed; ruff, format, mypy, lint-imports green.
+- Next step: resume T3 (AGY session `e7-t3`, paused during the T2 correction).
