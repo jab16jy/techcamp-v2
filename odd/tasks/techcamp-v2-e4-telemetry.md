@@ -58,8 +58,13 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T6b Fix T6 review findings (CRITICAL `R3-stream-holds-db-session` plus all WARNING/SUGGESTION, owner 2026-09-25) — route: delegated (sonnet-high) — forecast ~250 — actual 441 (`c6e7c69`)
 - [x] T7 Recalibration job: procrastinate setup, `worker` compose service, recompute `value` — route: delegated (sonnet-high) — forecast ~500 — actual 736 (`ab7a665`, excluding `uv.lock`)
 - [x] T8 Basic simulator CLI: claim or create node, backfill N days, 5 s live loop, raw ADC values — route: delegated (sonnet-high) — forecast ~550 — actual 923 (`8430135`) + review correction 36 (`bba9104`)
-- [ ] T9 Web nodes: QR scan + manual fallback, claim sheet (password once), node list + health, calibration form (via `impeccable`) — route: delegated (sonnet-high) — forecast ~2,100
-- [ ] T10 Web live reading on plot detail via `EventSource` — route: delegated (sonnet) — forecast ~550
+- T9 + T10 web slice, forecast ~2,200 authored lines (owner, 2026-09-25), split into work units of ~350–450 lines, one commit + one RDD assessment each. Route: delegated direct to an OpenCode writer in a Herdr pane, orchestrated by the parent (no `sonnet-high`, owner 2026-09-25); ODD sub-agents or OpenCode verify. Skills forwarded: `impeccable` (E1 design as-is), `find-docs`, `work-unit-commits`. Checks: `npm run lint`, `typecheck`, `test -- --run`, `build`, `size`.
+- [ ] T9a Nodes API client: `npm run gen:api` (generated `schema.d.ts`, excluded from counts), `features/nodes/api/nodesApi.ts` hooks for list, claim, patch, rotate, health, sensors, create calibration (docs/04:79-93), Vitest for each hook — forecast ~400
+- [ ] T9b Plot nodes list + health: "Nodos de la parcela" entry in `PlotDetailSheet` (docs/07:127), `NodesSheet` listing the plot's nodes with status, last seen, battery, RSSI, 24 h completeness — forecast ~400
+- [ ] T9c Claim flow: `ClaimNodeSheet` with manual claim code and QR scan through native `BarcodeDetector` when available (feature-detected, manual fallback), MQTT password shown once with copy action (docs/04:79, docs/07:128) — forecast ~450
+- [ ] T9d Calibration + credentials: node sensors list, `CalibrationSheet` (method `linear|two_point|polynomial`, `kind`, params, `rmse_pct`, `valid_from`; new version, never edit), rotate credentials with password shown once — forecast ~450
+- [ ] T10a Stream client: authenticated SSE hook for `GET /stream?farm_id=` (bearer token; `EventSource` cannot send headers — decision pending with the owner), reconnect with `Last-Event-ID`, keepalive tolerant — forecast ~250
+- [ ] T10b Live reading on plot detail: latest calibrated reading per sensor, seeded from `GET /plots/{plot_id}/readings?resolution=raw` and updated by `reading` events — forecast ~300
 - Review-fix rounds (T*b) reserved: forecast ~1,800
 
 ## Review (RDD)
@@ -103,9 +108,6 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-Paused 2026-09-25 by the owner after T8. Tree clean, review boundary `bba9104`.
+T9a in progress (2026-09-25). Review boundary `bba9104`.
 
-Resume T9 (web nodes) in the next session:
-1. Read this doc and the Engram mirror, `git log --oneline e79d542..HEAD`; Postgres: `podman start infra_postgres_1`.
-2. T9 is the largest task (forecast ~2,100): QR scan with native `BarcodeDetector` + manual code fallback, claim sheet (one-time password shown once), node list + health, calibration form. UI only through `impeccable`, E1 design as-is (docs/07:67, 127-128; ADR-0006); gaps flagged, not invented. Split into work units (e.g. T9a API client + node list/health, T9b claim flow + QR, T9c calibration form), one `sonnet-high` writer each with an essentials-only brief, web checks (`npm run lint`, `typecheck`, `test -- --run`, `build`, `size`).
-3. Then T10 (live reading via `EventSource`; must resolve stream auth, see T6 gap), end-to-end demo (compose, `worker`, MQTT shared subscription, simulator), then stacked-to-main PRs. Open follow-up issues: #33–#40.
+Execute T9a → T9b → T9c → T9d → T10a → T10b in order, one OpenCode writer at a time in a Herdr pane (single writer, shared files). After each: parent spot check, work-unit commit, `gentle-ai review assess --committed-only`. Then the end-to-end demo (compose, `worker`, MQTT shared subscription, simulator) and stacked-to-main PRs. Postgres: `podman start infra_postgres_1` (needed by `gen:api`? no — it only imports the app). Open follow-up issues: #33–#40.
