@@ -129,6 +129,20 @@ class SqlAlchemyWeatherRepository:
         )
         await self._session.commit()
 
+    async def is_cold(self, cell_id: int) -> bool:
+        """True when nothing has ever been stored for this cell.
+
+        A plot landing on a cold cell would serve an empty forecast until the
+        next 3 h run, so the plot write path defers a one-off fetch for it
+        (docs/06-diseno-detallado.md §6). One indexed probe on the
+        `weather_daily` primary key, which is far cheaper than the alternative
+        — a provider call on every plot write.
+        """
+        result = await self._session.execute(
+            select(WeatherDailyRow.cell_id).where(WeatherDailyRow.cell_id == cell_id).limit(1)
+        )
+        return result.scalar_one_or_none() is None
+
     async def list_daily(
         self, cell_id: int, from_day: datetime.date, to_day: datetime.date
     ) -> list[WeatherDay]:

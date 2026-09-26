@@ -94,6 +94,10 @@ services:
     environment:
       TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-techcamp}:${POSTGRES_PASSWORD:-techcamp}@postgres:5432/${POSTGRES_DB:-techcamp}
+      # procrastinate evaluates a periodic task's cron in the process's local
+      # time, and every job hour in the orchestration DAG is America/Bogota
+      # (docs/10-dag.md:156).
+      TZ: America/Bogota
     depends_on:
       postgres:
         condition: service_healthy
