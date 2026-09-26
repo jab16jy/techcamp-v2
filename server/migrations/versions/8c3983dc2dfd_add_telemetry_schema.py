@@ -18,6 +18,58 @@ down_revision: Union[str, Sequence[str], None] = 'ff21853418b8'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+TIMESCALE_STATEMENTS: tuple[str, ...] = (
+    "SELECT create_hypertable('reading', 'time', "
+    "chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE)",
+    "ALTER TABLE reading SET ("
+    "timescaledb.compress, "
+    "timescaledb.compress_segmentby = 'sensor_id', "
+    "timescaledb.compress_orderby = 'time DESC'"
+    ")",
+    "SELECT add_compression_policy('reading', INTERVAL '7 days', if_not_exists => true)",
+    """
+    CREATE MATERIALIZED VIEW IF NOT EXISTS reading_hourly
+    WITH (timescaledb.continuous) AS
+    SELECT
+        sensor_id,
+        time_bucket(INTERVAL '1 hour', time) AS bucket,
+        min(value) AS min_value,
+        max(value) AS max_value,
+        avg(value) AS avg_value,
+        count(value) AS reading_count
+    FROM reading
+    GROUP BY sensor_id, bucket
+    WITH NO DATA
+    """,
+    "SELECT add_continuous_aggregate_policy('reading_hourly', "
+    "start_offset => INTERVAL '3 hours', "
+    "end_offset => INTERVAL '1 hour', "
+    "schedule_interval => INTERVAL '1 hour', if_not_exists => true)",
+    """
+    CREATE MATERIALIZED VIEW IF NOT EXISTS reading_daily
+    WITH (timescaledb.continuous) AS
+    SELECT
+        sensor_id,
+        time_bucket(INTERVAL '1 day', time) AS bucket,
+        min(value) AS min_value,
+        max(value) AS max_value,
+        avg(value) AS avg_value,
+        count(value) AS reading_count
+    FROM reading
+    GROUP BY sensor_id, bucket
+    WITH NO DATA
+    """,
+    "SELECT add_continuous_aggregate_policy('reading_daily', "
+    "start_offset => INTERVAL '3 days', "
+    "end_offset => INTERVAL '1 hour', "
+    "schedule_interval => INTERVAL '1 hour', if_not_exists => true)",
+)
+"""The TimescaleDB half of `upgrade()`, every statement written to be safe to
+repeat (GitHub #33's retry path, see the `autocommit_block()` comment below).
+Module-level so `tests/telemetry/test_schema.py` can replay the real
+statements against an already-migrated schema instead of a copy of them that
+could drift (GitHub #34)."""
+
 
 def upgrade() -> None:
     """Upgrade schema."""
@@ -126,66 +178,8 @@ def upgrade() -> None:
     # disposable) before retrying. The statements below are made idempotent
     # so the retry itself, once past `create_table`, is safe to repeat.
     with op.get_context().autocommit_block():
-        op.execute(
-            "SELECT create_hypertable('reading', 'time', "
-            "chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE)"
-        )
-        op.execute(
-            "ALTER TABLE reading SET ("
-            "timescaledb.compress, "
-            "timescaledb.compress_segmentby = 'sensor_id', "
-            "timescaledb.compress_orderby = 'time DESC'"
-            ")"
-        )
-        op.execute(
-            "SELECT add_compression_policy('reading', INTERVAL '7 days', if_not_exists => true)"
-        )
-
-        op.execute(
-            """
-            CREATE MATERIALIZED VIEW IF NOT EXISTS reading_hourly
-            WITH (timescaledb.continuous) AS
-            SELECT
-                sensor_id,
-                time_bucket(INTERVAL '1 hour', time) AS bucket,
-                min(value) AS min_value,
-                max(value) AS max_value,
-                avg(value) AS avg_value,
-                count(value) AS reading_count
-            FROM reading
-            GROUP BY sensor_id, bucket
-            WITH NO DATA
-            """
-        )
-        op.execute(
-            "SELECT add_continuous_aggregate_policy('reading_hourly', "
-            "start_offset => INTERVAL '3 hours', "
-            "end_offset => INTERVAL '1 hour', "
-            "schedule_interval => INTERVAL '1 hour', if_not_exists => true)"
-        )
-
-        op.execute(
-            """
-            CREATE MATERIALIZED VIEW IF NOT EXISTS reading_daily
-            WITH (timescaledb.continuous) AS
-            SELECT
-                sensor_id,
-                time_bucket(INTERVAL '1 day', time) AS bucket,
-                min(value) AS min_value,
-                max(value) AS max_value,
-                avg(value) AS avg_value,
-                count(value) AS reading_count
-            FROM reading
-            GROUP BY sensor_id, bucket
-            WITH NO DATA
-            """
-        )
-        op.execute(
-            "SELECT add_continuous_aggregate_policy('reading_daily', "
-            "start_offset => INTERVAL '3 days', "
-            "end_offset => INTERVAL '1 hour', "
-            "schedule_interval => INTERVAL '1 hour', if_not_exists => true)"
-        )
+        for statement in TIMESCALE_STATEMENTS:
+            op.execute(statement)
 
 
 def downgrade() -> None:

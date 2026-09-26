@@ -92,10 +92,16 @@ async def _flush_node_updates(
     events in one pass, sharing the plot→farm lookup cache."""
     if not seen and not reading_events:
         return
+    updated: set[UUID] = set()
     if seen:
-        await nodes.mark_seen_batch(list(seen.values()))
+        updated = await nodes.mark_seen_batch(list(seen.values()))
     status_events: list[NodeStatusEvent] = []
     for update in seen.values():
+        if update.node_id not in updated:
+            # A newer `last_seen_at` was already stored (a Last Will that
+            # arrived after this message), so this status is stale: publishing
+            # it would move the node's state backwards for every SSE client.
+            continue
         farm_id = farm_cache.get(update.plot_id)
         if farm_id is None:
             plot = await plots.get_for_orgs(update.plot_id, [update.org_id])
@@ -131,7 +137,7 @@ async def ingest_uplinks(
     whatever `adapters/ingestor.py`'s batcher accumulated (500 msgs or 1s)."""
     stats = IngestStats()
     records: list[ReadingRecord] = []
-    reading_events: list[ReadingEvent] = []
+    reading_events: list[tuple[tuple[int, datetime], ReadingEvent]] = []
     seen: dict[UUID, NodeSeenUpdate] = {}
     sensor_cache: dict[UUID, dict[str, Sensor]] = {}
     farm_cache: dict[UUID, UUID] = {}
@@ -221,13 +227,16 @@ async def ingest_uplinks(
             )
             if value is not None:
                 reading_events.append(
-                    ReadingEvent(
-                        org_id=node.org_id,
-                        farm_id=farm_id,
-                        plot_id=node.plot_id,
-                        metric=sensor.metric,
-                        value=value,
-                        at=reading_time,
+                    (
+                        (sensor.id, reading_time),
+                        ReadingEvent(
+                            org_id=node.org_id,
+                            farm_id=farm_id,
+                            plot_id=node.plot_id,
+                            metric=sensor.metric,
+                            value=value,
+                            at=reading_time,
+                        ),
                     )
                 )
 
@@ -241,10 +250,15 @@ async def ingest_uplinks(
             status=NodeStatus.ONLINE,
         )
 
-    stats.inserted = await readings.insert_batch(records)
+    inserted = await readings.insert_batch(records)
+    stats.inserted = len(inserted)
+    # `ON CONFLICT DO NOTHING` skips a redelivered reading, and a QoS-1
+    # duplicate must not send a second `reading` event to the SSE fan-out
+    # (GitHub #36): only rows that actually landed are published.
+    new_events = [event for key, event in reading_events if key in inserted]
 
     await _flush_node_updates(
-        seen, reading_events, nodes=nodes, plots=plots, events=events, farm_cache=farm_cache
+        seen, new_events, nodes=nodes, plots=plots, events=events, farm_cache=farm_cache
     )
     return stats
 

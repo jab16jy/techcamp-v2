@@ -8,6 +8,7 @@ T5) — only the hypertable schema and repositories T3 needed.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import IntEnum, StrEnum
@@ -168,13 +169,44 @@ class UplinkPayload:
     """`channel_key -> raw_value` (docs/04-api.md:219)."""
 
 
+def _as_utc(value: datetime) -> datetime:
+    """`received_at` is the server's own clock, so a naive value is read as UTC
+    rather than crashing the comparison that follows it with a bare
+    `TypeError` (which would abort a whole ingest batch over an internal
+    detail, and counting the node's payload as malformed would blame it for
+    something it didn't send)."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _epoch_to_datetime(ts: int) -> datetime:
+    """An aware UTC `datetime` for a node-clock `ts`.
+
+    An epoch outside the representable range (overflow, or a clock that never
+    ticked) is a malformed payload, not a crash: docs/04-api.md:218's fallback
+    is for a `ts` that is *present* but skewed, so there is nothing to fall
+    back to and `datetime.fromtimestamp` would raise `OverflowError`/
+    `ValueError`/`OSError` into the ingest batch."""
+    try:
+        return datetime.fromtimestamp(ts, tz=UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise MalformedUplinkPayloadError(f"'ts' is outside the representable range: {ts}") from exc
+
+
 def parse_uplink(payload: dict[str, Any]) -> UplinkPayload:
     """Validate and parse a raw uplink payload into `UplinkPayload`.
 
     Unknown/missing `v` is rejected with `UnsupportedUplinkVersionError`
     (distinct from other shape errors) so the ingestor can discard and count
     it separately (docs/04-api.md:216)."""
+    if not isinstance(payload, dict):
+        raise MalformedUplinkPayloadError("payload must be a JSON object")
+
     version = payload.get("v")
+    if isinstance(version, bool) or (version is not None and not isinstance(version, int)):
+        # `True == 1` and `1.0 == 1`, so the version is type-checked like
+        # `seq`/`ts` instead of trusting a bare `!=`. An absent `v` stays an
+        # unsupported version, not a malformed payload.
+        raise MalformedUplinkPayloadError("'v' must be an integer")
     if version != SUPPORTED_UPLINK_VERSION:
         raise UnsupportedUplinkVersionError(version)
 
@@ -185,6 +217,8 @@ def parse_uplink(payload: dict[str, Any]) -> UplinkPayload:
     ts = payload.get("ts")
     if ts is not None and (not _is_number(ts) or not isinstance(ts, int)):
         raise MalformedUplinkPayloadError("'ts' must be an integer epoch or absent")
+    if ts is not None:
+        _epoch_to_datetime(ts)  # rejects an unrepresentable `ts` here, not mid-flush
 
     firmware = payload.get("fw")
     if not isinstance(firmware, str):
@@ -196,6 +230,11 @@ def parse_uplink(payload: dict[str, Any]) -> UplinkPayload:
     for key, value in channels.items():
         if not isinstance(key, str) or not _is_number(value):
             raise MalformedUplinkPayloadError(f"channel '{key}' must map to a number")
+        if isinstance(value, float) and not math.isfinite(value):
+            # `json` decodes NaN/Infinity by default; a non-finite raw value
+            # calibrates to a non-finite reading, which no quality flag
+            # describes (only `%` has a documented range, docs/06 §1).
+            raise MalformedUplinkPayloadError(f"channel '{key}' must map to a finite number")
 
     return UplinkPayload(
         version=version,
@@ -220,8 +259,9 @@ _FUTURE_TOLERANCE = timedelta(minutes=10)
 def resolve_reading_time(ts: int | None, received_at: datetime) -> tuple[datetime, ReadingQuality]:
     """docs/04-api.md:218: a missing or more-than-10-minutes-future `ts`
     falls back to `received_at` with `quality = 1`."""
+    received_at = _as_utc(received_at)
     if ts is not None:
-        at = datetime.fromtimestamp(ts, tz=UTC)
+        at = _epoch_to_datetime(ts)
         if at <= received_at + _FUTURE_TOLERANCE:
             return at, ReadingQuality.OK
     return received_at, ReadingQuality.TIMESTAMP_CORRECTED
@@ -277,7 +317,7 @@ def is_reading_too_old(ts: int, received_at: datetime) -> bool:
     """`True` when the node-clock `ts` is more than `MAX_READING_AGE` behind
     `received_at`. Only meaningful when `ts` is present; a missing `ts` is
     `resolve_reading_time`'s concern, not this one's."""
-    return datetime.fromtimestamp(ts, tz=UTC) < received_at - MAX_READING_AGE
+    return _epoch_to_datetime(ts) < _as_utc(received_at) - MAX_READING_AGE
 
 
 @dataclass(frozen=True, slots=True)

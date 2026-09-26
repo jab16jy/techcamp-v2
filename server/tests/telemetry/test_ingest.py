@@ -124,11 +124,52 @@ async def test_ingest_uplinks_is_idempotent_across_two_flushes(db_session: Async
     ports = await _ports(db_session)
     message = RawUplink(node_id=node_id, payload=_uplink_payload(), received_at=_RECEIVED_AT)
 
-    first = await ingest_uplinks([message], **ports)
-    second = await ingest_uplinks([message], **ports)
+    notifications: list[str] = []
+
+    def _on_notify(_connection: object, _pid: int, _channel: str, payload: str) -> None:
+        notifications.append(payload)
+
+    listener = await asyncpg.connect(dsn=_dsn())
+    await listener.add_listener("plot_events", _on_notify)
+    try:
+        first = await ingest_uplinks([message], **ports)
+        second = await ingest_uplinks([message], **ports)
+        await asyncio.sleep(0.2)
+    finally:
+        await listener.close()
 
     assert first.inserted == 1
     assert second.inserted == 0
+    # GitHub #36: the redelivered flush inserted nothing, so it must not
+    # re-notify the SSE fan-out with a duplicate `reading` event.
+    reading_notifications = [p for p in notifications if json.loads(p)["type"] == "reading"]
+    assert len(reading_notifications) == 1
+
+
+# -- GitHub #36: one unusable `ts` is classified, not fatal to the batch --
+
+
+async def test_ingest_uplinks_keeps_the_batch_when_one_ts_is_unusable(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id, node_id, sensor_id = await _claimed_node_with_sensor(db_session)
+    await _add_calibration(
+        db_session, org_id=org_id, sensor_id=sensor_id, valid_from=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    ports = await _ports(db_session)
+
+    stats = await ingest_uplinks(
+        [
+            RawUplink(
+                node_id=node_id, payload=_uplink_payload(ts=10**20), received_at=_RECEIVED_AT
+            ),
+            RawUplink(node_id=node_id, payload=_uplink_payload(seq=2), received_at=_RECEIVED_AT),
+        ],
+        **ports,
+    )
+
+    assert stats.counts["malformed_payload"] == 1
+    assert stats.inserted == 1  # the good message of the same batch still landed
 
 
 # -- future/missing ts → received_at + quality 1 --
@@ -423,6 +464,48 @@ async def test_ingest_status_messages_updates_node_and_publishes_event(
     payload = json.loads(notifications[0])
     assert payload["type"] == "node.status"
     assert payload["status"] == "offline"
+
+
+async def test_an_uplink_older_than_a_last_will_offline_publishes_no_status_event(
+    db_session: AsyncSession,
+) -> None:
+    """GitHub #36: the two batchers flush independently, so an uplink received
+    before a Last Will `offline` can be written after it. Neither the stored
+    node nor the SSE fan-out may go back to `online` with the older time."""
+    org_id, plot_id, node_id, sensor_id = await _claimed_node_with_sensor(db_session)
+    ports = await _ports(db_session)
+    nodes = SqlAlchemyNodeRepository(db_session)
+    uplink = RawUplink(
+        node_id=node_id,
+        payload=_uplink_payload(),
+        received_at=_RECEIVED_AT - timedelta(seconds=60),
+    )
+
+    notifications: list[str] = []
+
+    def _on_notify(_connection: object, _pid: int, _channel: str, payload: str) -> None:
+        notifications.append(payload)
+
+    listener = await asyncpg.connect(dsn=_dsn())
+    await listener.add_listener("plot_events", _on_notify)
+    try:
+        await ingest_status_messages(
+            [RawStatusMessage(node_id=node_id, payload=b"offline", received_at=_RECEIVED_AT)],
+            nodes=nodes,
+            plots=ports["plots"],
+            events=ports["events"],
+        )
+        await ingest_uplinks([uplink], **ports)
+        await asyncio.sleep(0.2)
+    finally:
+        await listener.close()
+
+    node = await nodes.get(node_id, org_id)
+    assert node is not None
+    assert node.status is NodeStatus.OFFLINE
+    assert node.last_seen_at == _RECEIVED_AT
+    statuses = [json.loads(p) for p in notifications]
+    assert [p["status"] for p in statuses if p["type"] == "node.status"] == ["offline"]
 
 
 async def test_ingest_status_messages_discards_malformed_status_without_raising(

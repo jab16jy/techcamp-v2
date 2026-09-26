@@ -7,7 +7,10 @@ broken downgrade fails the whole suite, not just a dedicated test.
 
 from __future__ import annotations
 
+import importlib.util
 from datetime import UTC, datetime
+from pathlib import Path
+from types import ModuleType
 
 import pytest
 from sqlalchemy import text
@@ -16,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import OrganizationRow
+from techcamp.shared.db import engine
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
 
@@ -102,6 +106,52 @@ async def test_reading_hourly_and_daily_continuous_aggregates_exist(
         )
     )
     assert result.scalars().all() == ["reading_daily", "reading_hourly"]
+
+
+# -- GitHub #34: the TimescaleDB block of `8c3983dc2dfd` is written to be
+# replay-safe (issue #33's recovery path re-runs it after the alembic stamp is
+# lost), and that claim had no test. Replaying the migration's own statements
+# against the already-migrated schema IS the retry the comment describes. --
+
+
+def _load_migration() -> ModuleType:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "migrations/versions/8c3983dc2dfd_add_telemetry_schema.py"
+    )
+    spec = importlib.util.spec_from_file_location("telemetry_schema_migration", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_timescale_block_of_the_telemetry_migration_is_replay_safe() -> None:
+    statements = _load_migration().TIMESCALE_STATEMENTS
+    assert statements, "the migration must expose the block it must survive repeating"
+
+    # `CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous)` and
+    # `add_continuous_aggregate_policy` cannot run inside a transaction block,
+    # same reason the migration wraps them in `autocommit_block()`.
+    async with engine.connect() as connecting:
+        connection = await connecting.execution_options(isolation_level="AUTOCOMMIT")
+        for statement in statements:
+            await connection.execute(text(statement))
+
+        result = await connection.execute(
+            text(
+                "SELECT proc_name, count(*) FROM timescaledb_information.jobs "
+                "WHERE proc_name IN ('policy_compression', 'policy_refresh_continuous_aggregate') "
+                "GROUP BY proc_name ORDER BY proc_name"
+            )
+        )
+    # One compression policy and one refresh policy per continuous aggregate:
+    # a replay that created duplicates (or lost the `if_not_exists` guards)
+    # would move these counts.
+    assert dict(result.all()) == {
+        "policy_compression": 1,
+        "policy_refresh_continuous_aggregate": 2,
+    }
 
 
 async def test_duplicate_reading_insert_with_on_conflict_do_nothing_keeps_one_row(
