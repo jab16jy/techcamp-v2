@@ -33,6 +33,7 @@ from techcamp.weather.adapters.jobs import (
     FORECAST_DAYS,
     QUEUE_NAME,
     REFRESH_TASK_NAME,
+    RETRY_WINDOW_DAYS,
     consolidate_active_cells,
     consolidate_cell,
     enqueue_day_consolidation,
@@ -460,6 +461,12 @@ async def test_the_daily_run_consolidates_yesterday_for_every_active_cell(
     await consolidate_active_cells(timestamp=0)
 
     yesterday = local_today() - datetime.timedelta(days=1)
+    # Neither cell has any observed row yet, so the retry window (issue #82)
+    # backfills the days before yesterday too, alongside yesterday itself.
+    expected_days = {
+        (yesterday - datetime.timedelta(days=offset)).isoformat()
+        for offset in range(RETRY_WINDOW_DAYS + 1)
+    }
     jobs = (
         await db_session.execute(
             text(
@@ -470,7 +477,7 @@ async def test_the_daily_run_consolidates_yesterday_for_every_active_cell(
         )
     ).all()
     assert {job.args["cell_id"] for job in jobs} == {first, second}
-    assert {job.args["day"] for job in jobs} == {yesterday.isoformat()}
+    assert {job.args["day"] for job in jobs} == expected_days
     assert all(job.queue_name == QUEUE_NAME for job in jobs)
     assert all(job.status == "todo" for job in jobs)
     assert {job.lock for job in jobs} == {f"consolidate:cell:{first}", f"consolidate:cell:{second}"}
@@ -478,6 +485,56 @@ async def test_the_daily_run_consolidates_yesterday_for_every_active_cell(
     # queueing lock, so a forecast still waiting to be fetched cannot swallow the
     # 03:00 run (and the two write different rows of the same cell anyway).
     assert all(job.lock.startswith("consolidate:") for job in jobs)
+
+
+async def test_the_daily_run_retries_a_degraded_day_within_the_retry_window(
+    db_session: AsyncSession,
+) -> None:
+    """Issue #82: a degraded consolidation (docs/06 §6: an Open-Meteo outage
+    keeps the stored rows and the task still ends `succeeded`) never stores the
+    observed row for that day, and nothing else retries it — the next 03:00 run
+    only consolidates the new "yesterday", leaving a permanent gap in
+    `weather_daily` that E6's water balance would read as missing rain/ET0.
+
+    The daily run must also re-consolidate any day in its retry window that
+    still has no observed (`is_forecast = false`) row, alongside its target
+    day, so a single missed run heals on the next one."""
+    cell_id = await _create_plot(db_session)
+    target = local_today() - datetime.timedelta(days=1)
+    degraded_day = target - datetime.timedelta(days=2)  # the outage's victim
+    repository = SqlAlchemyWeatherRepository(db_session)
+    # Every other day in the window already has its observed row, as if only
+    # `degraded_day`'s run had failed.
+    for offset in range(1, RETRY_WINDOW_DAYS + 1):
+        day = target - datetime.timedelta(days=offset)
+        if day == degraded_day:
+            continue
+        await repository.upsert_daily(
+            cell_id,
+            [
+                WeatherDay(
+                    day=day,
+                    is_forecast=False,
+                    et0_mm=4.0,
+                    rain_mm=0.0,
+                    tmin_c=24.0,
+                    tmax_c=33.0,
+                    rh_mean_pct=78.0,
+                    fetched_at=_STORED_AT,
+                )
+            ],
+        )
+
+    await consolidate_active_cells(timestamp=0)
+
+    jobs = (
+        await db_session.execute(
+            text("SELECT args FROM procrastinate_jobs WHERE task_name = :t ORDER BY id"),
+            {"t": CONSOLIDATE_TASK_NAME},
+        )
+    ).all()
+    queued_days = {job.args["day"] for job in jobs}
+    assert queued_days == {target.isoformat(), degraded_day.isoformat()}
 
 
 async def test_two_days_waiting_for_one_cell_are_both_queued(

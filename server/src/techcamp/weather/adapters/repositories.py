@@ -163,6 +163,30 @@ class SqlAlchemyWeatherRepository:
         )
         return [_day_from_row(row) for row in result]
 
+    async def missing_observed_days(
+        self, cell_id: int, from_day: datetime.date, to_day: datetime.date
+    ) -> list[datetime.date]:
+        """Days in the inclusive `[from_day, to_day]` window with no observed
+        (`is_forecast = false`) row for this cell — what the daily
+        consolidation retries alongside its target day, so a day degraded by a
+        provider outage (docs/06-diseno-detallado.md §6) does not stay a
+        permanent gap for E6's water balance (issue #82)."""
+        result = await self._session.execute(
+            select(WeatherDailyRow.day).where(
+                WeatherDailyRow.cell_id == cell_id,
+                WeatherDailyRow.is_forecast.is_(False),
+                WeatherDailyRow.day >= from_day,
+                WeatherDailyRow.day <= to_day,
+            )
+        )
+        observed = set(result.scalars())
+        total_days = (to_day - from_day).days + 1
+        return [
+            day
+            for offset in range(total_days)
+            if (day := from_day + datetime.timedelta(days=offset)) not in observed
+        ]
+
     async def active_cell_ids(self) -> list[int]:
         """Ids of the cells at least one plot points at: the cells the 3 h
         forecast job refreshes (docs/06-diseno-detallado.md §6). A cell nobody's
