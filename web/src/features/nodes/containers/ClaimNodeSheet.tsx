@@ -5,6 +5,7 @@ import { Input } from '../../../design-system/ui/input'
 import { ApiError } from '../../../lib/api/client'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useClaimNode, type NodeClaimResponse } from '../api/nodesApi'
+import { OneTimeSecret } from '../components/OneTimeSecret'
 
 type MqttCredentials = NodeClaimResponse['mqtt']
 
@@ -51,35 +52,6 @@ async function readQr(
   }
 }
 
-function CredentialRow({
-  label,
-  value,
-  copied,
-  onCopy,
-}: {
-  label: 'Usuario' | 'Contraseña'
-  value: string
-  copied: boolean
-  onCopy: () => void
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <p className="text-sm text-text-muted">{label}</p>
-        <p className="text-base break-all">{value}</p>
-      </div>
-      <Button
-        type="button"
-        variant="secondary"
-        onClick={onCopy}
-        aria-label={copied ? `${label} copiada` : `Copiar ${label.toLowerCase()}`}
-      >
-        {copied ? 'Copiado' : 'Copiar'}
-      </Button>
-    </div>
-  )
-}
-
 export interface ClaimNodeSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -96,7 +68,6 @@ export function ClaimNodeSheet({ open, onOpenChange, plotId }: ClaimNodeSheetPro
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [credentials, setCredentials] = useState<MqttCredentials | null>(null)
-  const [copied, setCopied] = useState<'Usuario' | 'Contraseña' | null>(null)
   const [scanning, setScanning] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -128,7 +99,6 @@ export function ClaimNodeSheet({ open, onOpenChange, plotId }: ClaimNodeSheetPro
       setCode('')
       setError(null)
       setCredentials(null)
-      setCopied(null)
     }
     onOpenChange(next)
   }
@@ -181,11 +151,6 @@ export function ClaimNodeSheet({ open, onOpenChange, plotId }: ClaimNodeSheetPro
     }
   }
 
-  function copy(field: 'Usuario' | 'Contraseña') {
-    if (!credentials) return
-    const value = field === 'Usuario' ? credentials.username : credentials.password
-    void navigator.clipboard.writeText(value).then(() => setCopied(field))
-  }
 
   const detector = barcodeDetector()
 
@@ -201,24 +166,12 @@ export function ClaimNodeSheet({ open, onOpenChange, plotId }: ClaimNodeSheetPro
       submitLoading={claim.isPending}
     >
       {credentials ? (
-        <div className="flex flex-col gap-3">
-          <p className="text-base text-severity-critical">
-            Copia las credenciales ahora: la contraseña se muestra una sola vez y no se volverá
-            a mostrar.
-          </p>
-          <CredentialRow
-            label="Usuario"
-            value={credentials.username}
-            copied={copied === 'Usuario'}
-            onCopy={() => copy('Usuario')}
-          />
-          <CredentialRow
-            label="Contraseña"
-            value={credentials.password}
-            copied={copied === 'Contraseña'}
-            onCopy={() => copy('Contraseña')}
-          />
-        </div>
+        <OneTimeSecret
+          fields={[
+            { label: 'Usuario', value: credentials.username },
+            { label: 'Contraseña', value: credentials.password },
+          ]}
+        />
       ) : (
         <>
           <label className="flex flex-col gap-2 text-base" htmlFor="claim-code">

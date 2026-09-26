@@ -5,6 +5,7 @@ import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useNodeHealth, useNodes, type NodeView } from '../api/nodesApi'
 import { ClaimNodeSheet } from './ClaimNodeSheet'
+import { NodeDetailSheet } from './NodeDetailSheet'
 
 /** `techcamp.telemetry.domain.models.NodeStatus` (server, T3), one plain word per value:
  * never color alone (docs/07). `StatusBadge` carries the plot water-balance states, not
@@ -27,13 +28,19 @@ function minutesAgo(iso: string): number {
   return Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000))
 }
 
-function NodeRow({ node }: { node: NodeView }) {
+function NodeRow({ node, onOpen }: { node: NodeView; onOpen: () => void }) {
   const healthQuery = useNodeHealth(node.id)
   const health = healthQuery.data
 
   return (
     <article className="flex flex-col gap-1">
-      <p className="text-base font-semibold">{node.dev_eui ?? node.id}</p>
+      <button
+        type="button"
+        className="self-start text-left text-base font-semibold underline"
+        onClick={onOpen}
+      >
+        {node.dev_eui ?? node.id}
+      </button>
       {healthQuery.isError ? (
         <p className="text-base text-severity-critical">{describeApiError(healthQuery.error)}</p>
       ) : (
@@ -61,6 +68,7 @@ function NodeRow({ node }: { node: NodeView }) {
  */
 export function PlotNodesSection({ plotId }: { plotId: string }) {
   const [claiming, setClaiming] = useState(false)
+  const [detail, setDetail] = useState<NodeView | null>(null)
   const nodesQuery = useNodes(plotId)
 
   return (
@@ -92,12 +100,15 @@ export function PlotNodesSection({ plotId }: { plotId: string }) {
         {nodesQuery.isSuccess && nodesQuery.data.length > 0 && (
           <div className="flex flex-col gap-4">
             {nodesQuery.data.map((node) => (
-              <NodeRow key={node.id} node={node} />
+              <NodeRow key={node.id} node={node} onOpen={() => setDetail(node)} />
             ))}
           </div>
         )}
       </section>
       <ClaimNodeSheet open={claiming} onOpenChange={setClaiming} plotId={plotId} />
+      {detail && (
+        <NodeDetailSheet open onOpenChange={(next) => !next && setDetail(null)} node={detail} />
+      )}
     </>
   )
 }
