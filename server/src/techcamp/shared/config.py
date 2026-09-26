@@ -29,3 +29,7 @@ def jwt_issuer() -> str:
 
 def jwt_audience() -> str:
     return os.environ.get("TECHCAMP_JWT_AUDIENCE", "techcamp-api")
+
+
+def open_meteo_api_key() -> str | None:
+    return os.environ.get("OPEN_METEO_API_KEY")
