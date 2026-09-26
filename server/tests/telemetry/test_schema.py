@@ -188,9 +188,31 @@ async def test_duplicate_reading_insert_with_on_conflict_do_nothing_keeps_one_ro
     assert raw_value == pytest.approx(2900.0)
 
 
-async def test_reading_quality_check_rejects_an_out_of_range_value(
+async def test_reading_quality_check_accepts_both_flags_set(db_session: AsyncSession) -> None:
+    """`quality` is bit flags (docs/03-modelo-datos.md:174): 3 is both the
+    timestamp-corrected and the out-of-range signal, not an invalid value."""
+    sensor_id = await _make_sensor(db_session)
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    await db_session.execute(
+        text(
+            "INSERT INTO reading (time, sensor_id, raw_value, value, received_at, quality) "
+            "VALUES (:time, :sensor_id, 1.0, 1.0, :time, 3)"
+        ),
+        {"time": at, "sensor_id": sensor_id},
+    )
+    await db_session.commit()
+
+    result = await db_session.execute(
+        text("SELECT quality FROM reading WHERE sensor_id = :sensor_id"), {"sensor_id": sensor_id}
+    )
+    assert result.scalar_one() == 3
+
+
+async def test_reading_quality_check_rejects_an_undocumented_value(
     db_session: AsyncSession,
 ) -> None:
+    """Only 0..3 are defined; any other value is a bug in the caller."""
     sensor_id = await _make_sensor(db_session)
     at = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -198,7 +220,7 @@ async def test_reading_quality_check_rejects_an_out_of_range_value(
         await db_session.execute(
             text(
                 "INSERT INTO reading (time, sensor_id, raw_value, value, received_at, quality) "
-                "VALUES (:time, :sensor_id, 1.0, 1.0, :time, 3)"
+                "VALUES (:time, :sensor_id, 1.0, 1.0, :time, 4)"
             ),
             {"time": at, "sensor_id": sensor_id},
         )

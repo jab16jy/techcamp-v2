@@ -171,7 +171,7 @@ erDiagram
     real raw_value
     real value
     timestamptz received_at
-    smallint quality "0 ok, 1 ts corregido, 2 fuera de rango"
+    smallint quality "bandas: 1 ts corregido, 2 fuera de rango, 3 ambos"
   }
   weather_cell {
     int id PK

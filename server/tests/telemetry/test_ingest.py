@@ -222,6 +222,36 @@ async def test_ingest_uplinks_falls_back_to_received_at_for_a_missing_ts(
     assert row.quality == 1
 
 
+async def test_ingest_uplinks_stores_both_quality_flags_when_both_apply(
+    db_session: AsyncSession,
+) -> None:
+    """docs/03-modelo-datos.md:174: `quality` carries both signals as flags
+    (1 ts corregido, 2 fuera de rango, 3 ambos). A missing `ts` and a
+    calibrated humidity over 100 % are independent, so both bits are kept."""
+    org_id, plot_id, node_id, sensor_id = await _claimed_node_with_sensor(db_session)
+    await _add_calibration(
+        db_session, org_id=org_id, sensor_id=sensor_id, valid_from=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    ports = await _ports(db_session)
+
+    stats = await ingest_uplinks(
+        [
+            RawUplink(
+                node_id=node_id,
+                payload=_uplink_payload(ts=None, m={"sm_10": 6000.0}),
+                received_at=_RECEIVED_AT,
+            )
+        ],
+        **ports,
+    )
+
+    assert stats.inserted == 1
+    result = await db_session.execute(text("SELECT value, quality FROM reading"))
+    row = result.one()
+    assert row.value == pytest.approx(120.0)  # 0.02 * 6000
+    assert row.quality == 3
+
+
 # -- >30-day ts discarded outright --
 
 

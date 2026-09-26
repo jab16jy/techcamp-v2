@@ -44,7 +44,7 @@
 | Falla | Detección | Respuesta automática | Dato perdido |
 |---|---|---|---|
 | Nodo sin conexión | `node_offline` después de 3 intervalos | Alerta al técnico | Ninguno si vuelve antes de 72 h |
-| Sensor descalibrado o dañado | Valores `quality = 2`; varianza cero durante 24 h | Alerta `sensor_suspect` al técnico; se excluye del balance hídrico | Ninguno (se guarda el crudo) |
+| Sensor descalibrado o dañado | Valores con la bandera 2 de `quality`; varianza cero durante 24 h | Alerta `sensor_suspect` al técnico; se excluye del balance hídrico | Ninguno (se guarda el crudo) |
 | Reloj del nodo desfasado | `ts` fuera de tolerancia | Se usa `received_at`, `quality = 1` | Precisión temporal del buffer |
 | Ingestor cae | `readyz`, métrica de lag del broker | Reinicio por Compose; el broker guarda los mensajes de la sesión persistente | ≤ 1 lote (ver [06 §1](06-diseno-detallado.md#1-ingesta-de-telemetría)) |
 | Worker cae | Edad del job pendiente más antiguo | Reinicio; los jobs se retoman (`SKIP LOCKED`) | Ninguno |

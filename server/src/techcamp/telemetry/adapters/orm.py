@@ -108,7 +108,7 @@ class ReadingRow(Base):
 
     __tablename__ = "reading"
     __table_args__ = (
-        CheckConstraint("quality in (0,1,2)", name="ck_reading_quality"),
+        CheckConstraint("quality in (0,1,2,3)", name="ck_reading_quality"),
         Index("ix_reading_sensor_time", "sensor_id", text("time DESC")),
     )
 

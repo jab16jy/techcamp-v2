@@ -44,8 +44,8 @@ sequenceDiagram
 |---|---|
 | Validación | Si `v` es desconocida, el `channel_key` no existe o el payload está mal formado, el mensaje se descarta, se cuenta en `ingest_rejected_total{reason}` y se guarda en `ingest_dead_letter` para diagnosticar. |
 | Tiempo | Si `ts` está en el futuro (> 10 min) o falta, se usa `received_at` con `quality = 1`. Si es anterior a 30 días, se descarta. Un `ts` que no se puede convertir a una fecha real (desbordamiento, o un reloj que nunca se inicializó) hace el payload mal formado y el mensaje se descarta: no hay `ts` válido que corregir, así que no aplica la corrección por `received_at`. |
-| Rango físico | Un valor calibrado fuera del rango de la variable (por ejemplo, humedad > 100 %) se guarda con `quality = 2` y no dispara alertas. |
-| Precedencia de `quality` (T4, gap) | Si una lectura cae en ambos casos (`ts` corregido y fuera de rango), se guarda `quality = 2`: fuera de rango es la señal más fuerte. Los docs no especificaban la precedencia. |
+| Rango físico | Un valor calibrado fuera del rango de la variable (por ejemplo, humedad > 100 %) activa la bandera 2 de `quality` y no dispara alertas. |
+| Los dos casos a la vez | `quality` es un campo de banderas ([03](03-modelo-datos.md), tabla `reading`): si la lectura cae en ambos casos (`ts` corregido y fuera de rango) se guarda `quality = 3` y cada bandera se lee por separado. Antes se guardaba solo `2` y la corrección de `ts` se perdía. |
 | Sin calibración vigente (T4, gap) | Si no hay `calibration` con `valid_from <= time` para el sensor, se guarda la lectura con `raw_value` y `value = null` (no se descarta). Los docs no cubrían este caso; el esquema ya modela `value` como nullable. |
 | Lote | Inserción en lote cada 500 mensajes o 1 s. Con 110 msg/s de pico (año 3) queda muy lejos del límite. |
 | Duplicados | La restricción `UNIQUE (sensor_id, time)` más `ON CONFLICT DO NOTHING` hace idempotente la entrega "al menos una vez" de QoS 1. Solo las lecturas realmente insertadas emiten un evento `reading`: una redelivery no inserta nada y, por tanto, no vuelve a notificar al fan-out por SSE. |
@@ -449,6 +449,6 @@ expected:
 - `expected` convierte cada escenario en una **prueba end-to-end**: CI corre el escenario y verifica las alertas y la recomendación esperadas.
 - Un test de dominio verifica, con los parámetros de suelo y cultivo de cada escenario, que `water_stress` abre cuando `Dr > RAW` y no antes.
 - La trayectoria sin ruido de cada escenario es la **verdad de referencia** para medir el error del balance hídrico ([11 §3](11-metricas.md#3-calidad-de-decisión)).
-- El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con `quality = 2`, huecos de `seq`).
+- El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con la bandera 2 de `quality`, huecos de `seq`).
 - Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather`) y quedan versionados: la demo funciona sin internet, salvo el asistente.
 
