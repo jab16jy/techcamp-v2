@@ -107,7 +107,7 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
   - [ ] T5b Daily consolidation of the previous day as observed; `POST /dev/jobs/weather:run` —
     route: Herdr OpenCode (same session as T5a) — forecast ~300
 - [ ] T6 Close: end-to-end check in the seminar stack (plot → cell → job → `GET /weather`),
-  feature doc final state — route: parent — forecast ~50
+  feature doc final state — route: Herdr AGY (fastest; owner 2026-09-26), on `feat/e5-weather-jobs` after lane A is merged in; parent reviews — forecast ~50
 
 ## Acceptance criteria
 - A plot gets a 0.1° cell; plots within the same cell share it; plots of different orgs share
