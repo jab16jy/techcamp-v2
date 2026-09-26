@@ -30,7 +30,7 @@ from techcamp.simulator.trajectory import raw_value_at
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, SensorRow
 from techcamp.telemetry.adapters.repositories import SqlAlchemyCalibrationRepository
 
-from .test_node_client import _make_plot, _member
+from .helpers import make_plot, member
 
 pytestmark = pytest.mark.anyio
 
@@ -117,8 +117,8 @@ async def test_run_refuses_to_publish_outside_the_seminar_profile(
 async def test_run_provisions_then_claims_calibrates_the_backfill_and_continues_seq_into_live(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    org_id, phone = await _member(db_session)
-    plot_id = await _make_plot(db_session, org_id)
+    org_id, phone = await member(db_session)
+    plot_id = await make_plot(db_session, org_id)
     otp_store.issue(phone)  # the scripted-run path: `--otp-code` (docs/04-api.md:173-174)
     otp_code = otp_store._codes[phone][0]
 
@@ -167,8 +167,7 @@ async def test_run_provisions_then_claims_calibrates_the_backfill_and_continues_
 
     # The live loop continues the same trajectory and the same counter, instead
     # of replaying the backfill's first point and restarting `seq`.
-    assert live_calls[0]["start_seq"] == _BACKFILL_COUNT + 1
-    assert live_calls[0]["start_index"] == _BACKFILL_COUNT
+    assert live_calls[0]["after"] == _BACKFILL_COUNT
     assert uplinks[-1]["m"]["sm_10"] == pytest.approx(raw_value_at(_BACKFILL_COUNT, seed=0))
     assert uplinks[-1]["m"]["sm_10"] != pytest.approx(raw_value_at(0, seed=0))
 

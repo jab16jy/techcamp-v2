@@ -3,6 +3,7 @@ port with an injected double — MQTT is external I/O (ADR-0002)."""
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -34,13 +35,13 @@ async def test_publish_backfill_publishes_one_uplink_per_timestamp_with_increasi
     publisher = _RecordingPublisher()
     now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 
-    next_seq = await publish_backfill(
-        publisher, _NODE_ID, sensors=_SENSORS, days=1, interval_s=900, seed=1, now=now, start_seq=1
+    published = await publish_backfill(
+        publisher, _NODE_ID, sensors=_SENSORS, days=1, interval_s=900, seed=1, now=now
     )
 
     assert len(publisher.uplinks) == 96  # 86400 / 900
     assert [u["seq"] for u in publisher.uplinks] == list(range(1, 97))
-    assert next_seq == 97
+    assert published == 96
     assert all(u["m"].keys() == {"sm_10"} for u in publisher.uplinks)
     assert publisher.uplinks[0]["ts"] < publisher.uplinks[-1]["ts"]
 
@@ -49,12 +50,12 @@ async def test_publish_backfill_is_a_no_op_for_zero_days() -> None:
     publisher = _RecordingPublisher()
     now = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 
-    next_seq = await publish_backfill(
-        publisher, _NODE_ID, sensors=_SENSORS, days=0, interval_s=900, seed=1, now=now, start_seq=5
+    published = await publish_backfill(
+        publisher, _NODE_ID, sensors=_SENSORS, days=0, interval_s=900, seed=1, now=now
     )
 
     assert publisher.uplinks == []
-    assert next_seq == 5
+    assert published == 0
 
 
 async def test_publish_live_publishes_one_uplink_per_iteration_sleeping_between_each() -> None:
@@ -69,7 +70,7 @@ async def test_publish_live_publishes_one_uplink_per_iteration_sleeping_between_
         _NODE_ID,
         sensors=_SENSORS,
         seed=1,
-        start_seq=97,
+        after=96,  # 96 points already published
         interval_s=5,
         iterations=3,
         sleep=_fake_sleep,
@@ -82,18 +83,17 @@ async def test_publish_live_publishes_one_uplink_per_iteration_sleeping_between_
 async def test_publish_live_continues_the_trajectory_after_the_backfill() -> None:
     """#40: the live loop used to restart at trajectory index 0, so the first
     live uplink replayed the backfill's first point (same sine phase, same
-    seeded noise) — a jump in the chart right where the backfill ends.
-    `start_index` offsets the trajectory only; `seq` is already offset by
-    `start_seq`, which `publish_backfill` returned."""
+    seeded noise) — a jump in the chart right where the backfill ends. One
+    `after` count drives both the trajectory and `seq` (#62), and the backfill's
+    own return value is that count."""
 
     async def _fake_sleep(seconds: float) -> None:
         pass
 
     publisher = _RecordingPublisher()
-    next_seq = await publish_backfill(
+    backfilled = await publish_backfill(
         publisher, _NODE_ID, sensors=_SENSORS, days=1, interval_s=900, seed=1, now=datetime.now(UTC)
     )
-    backfilled = next_seq - 1  # publish_backfill starts at seq 1
     publisher.uplinks.clear()
 
     await publish_live(
@@ -101,8 +101,7 @@ async def test_publish_live_continues_the_trajectory_after_the_backfill() -> Non
         _NODE_ID,
         sensors=_SENSORS,
         seed=1,
-        start_seq=next_seq,
-        start_index=backfilled,
+        after=backfilled,
         interval_s=5,
         iterations=2,
         sleep=_fake_sleep,
@@ -115,3 +114,16 @@ async def test_publish_live_continues_the_trajectory_after_the_backfill() -> Non
     # the old trajectory's first point, the one the live loop used to repeat
     assert publisher.uplinks[0]["m"]["sm_10"] != raw_value_at(0, seed=1)
     assert [u["seq"] for u in publisher.uplinks] == [97, 98]
+
+
+def test_publish_live_derives_seq_and_trajectory_from_one_continuation_count() -> None:
+    """#62 R2-coupled-trajectory-counters: `start_seq` and `start_index` were two
+    knobs the caller had to keep aligned by hand, and a wrong pair silently
+    replayed or skipped trajectory points while `seq` marched on. `after` is the
+    single continuation count both are derived from, so the misalignment is not
+    expressible."""
+    parameters = inspect.signature(publish_live).parameters
+
+    assert "start_seq" not in parameters
+    assert "start_index" not in parameters
+    assert parameters["after"].default == 0

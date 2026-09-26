@@ -16,7 +16,7 @@ from techcamp.identity.adapters.security.otp_store import otp_store
 from techcamp.main import app
 from techcamp.simulator.__main__ import _login
 
-from .test_node_client import _member
+from .helpers import member
 
 pytestmark = pytest.mark.anyio
 
@@ -40,7 +40,7 @@ def _recording_client() -> tuple[httpx.AsyncClient, list[str]]:
 async def test_login_with_an_otp_code_never_requests_a_new_one(
     db_session: AsyncSession,
 ) -> None:
-    _org_id, phone = await _member(db_session)
+    _org_id, phone = await member(db_session)
     otp_store.issue(phone)  # the code a scripted run fetches in advance
     code = otp_store._codes[phone][0]
 
@@ -57,7 +57,7 @@ async def test_login_without_an_otp_code_requests_one_and_prompts_for_it(
 ) -> None:
     """The interactive demo path must keep working: no code given means the
     simulator asks the api for one and reads it off the api console."""
-    _org_id, phone = await _member(db_session)
+    _org_id, phone = await member(db_session)
     prompts: list[str] = []
 
     def _fake_input(prompt: str) -> str:

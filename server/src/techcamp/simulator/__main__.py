@@ -104,7 +104,7 @@ async def run(args: argparse.Namespace) -> None:
         args.broker_host, args.broker_port, username=node.mqtt_username, password=node.mqtt_password
     ) as mqtt_client:
         publisher = MqttUplinkPublisher(mqtt_client)
-        next_seq = await publish_backfill(
+        backfilled = await publish_backfill(
             publisher,
             node.node_id,
             sensors=node.sensors,
@@ -113,20 +113,13 @@ async def run(args: argparse.Namespace) -> None:
             seed=args.seed,
             now=now,
         )
-        print(f"[sim] backfilled {next_seq - 1} uplink(s) for node {node.node_id}")
+        print(f"[sim] backfilled {backfilled} uplink(s) for node {node.node_id}")
         if args.live:
             print(f"[sim] live: publishing every {LIVE_INTERVAL_S}s (Ctrl+C to stop)")
+            # `after` carries the trajectory position and the `seq` counter at
+            # once, so the live loop cannot drift from the backfill it follows.
             await publish_live(
-                publisher,
-                node.node_id,
-                sensors=node.sensors,
-                seed=args.seed,
-                start_seq=next_seq,
-                # `publish_backfill` starts at seq 1, so the count of points it
-                # published is where the live loop has to continue the
-                # trajectory (docs/06 §10: "la lectura siguiente de la
-                # trayectoria") instead of replaying its first one.
-                start_index=next_seq - 1,
+                publisher, node.node_id, sensors=node.sensors, seed=args.seed, after=backfilled
             )
 
 
