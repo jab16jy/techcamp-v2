@@ -14,7 +14,11 @@ dependencies = [
     "fastapi>=0.141.1",
     "geoalchemy2>=0.20.0",
     "httpx>=0.28.1",
-    "procrastinate>=3.10.0",
+    # Pinned exactly, not a range: Alembic migration `231a40930eb5` applies
+    # `SchemaManager.get_schema()` from the *installed* library, so a floating
+    # range would apply a different schema to a database whose Alembic version
+    # is already recorded. Upgrading needs a new migration (see that file).
+    "procrastinate==3.10.0",
     "psycopg[binary]>=3.3.6",
     "pyjwt[crypto]>=2.14.0",
     "sqlalchemy[asyncio]>=2.0",

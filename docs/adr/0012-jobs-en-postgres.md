@@ -30,6 +30,7 @@ Usar **procrastinate** (cola de tareas async sobre PostgreSQL, con `SKIP LOCKED`
 
 - Rendimiento de la cola limitado por Postgres; alcanza con amplio margen para miles de jobs/día.
 - La biblioteca y su versión se confirman con la documentación vigente al implementar E0.
+- La versión se fija de forma exacta (`procrastinate==3.10.0` en `server/pyproject.toml` y `server/uv.lock`), no como rango: la migración Alembic `231a40930eb5` aplica el SQL que devuelve `SchemaManager.get_schema()` de la versión instalada, así que un rango flotante aplicaría a una base ya migrada un esquema distinto al registrado. Subir de versión requiere una migración nueva, escrita contra el esquema de la versión nueva y contra las migraciones propias de procrastinate (`procrastinate_migrations`), que esta migración no sigue.
 
 ## Relacionado
 

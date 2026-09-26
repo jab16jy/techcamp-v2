@@ -403,8 +403,9 @@ class SqlAlchemyCalibrationRepository:
         # enqueues the job that recomputes `value`/`quality` from
         # `valid_from`, including a sensor's very first calibration (it may
         # retroactively calibrate readings ingested before it existed). Same
-        # transaction as the version insert above, same commit below.
-        await enqueue_recalibration(self._session, calibration_id)
+        # transaction as the version insert above, same commit below. The job
+        # is locked per sensor so two versions of it never run at once.
+        await enqueue_recalibration(self._session, calibration_id, sensor_id)
         try:
             await self._session.commit()
         except IntegrityError as exc:
