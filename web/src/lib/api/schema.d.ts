@@ -206,6 +206,179 @@ export interface paths {
         patch: operations["patch_cycle_api_v1_cycles__cycle_id__patch"];
         trace?: never;
     };
+    "/api/v1/nodes:claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Claim Node */
+        post: operations["post_claim_node_api_v1_nodes_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Nodes */
+        get: operations["list_nodes_api_v1_nodes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch Node */
+        patch: operations["patch_node_api_v1_nodes__node_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/credentials:rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rotate Node Credentials */
+        post: operations["rotate_node_credentials_api_v1_nodes__node_id__credentials_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Health */
+        get: operations["get_health_api_v1_nodes__node_id__health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/sensors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Sensors */
+        get: operations["get_sensors_api_v1_nodes__node_id__sensors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sensors/{sensor_id}/calibrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Calibration */
+        post: operations["post_calibration_api_v1_sensors__sensor_id__calibrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plots/{plot_id}/readings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plot Readings
+         * @description docs/04-api.md:92-97: `raw` (≤ 2 days), `hour` (≤ 60 days) or `day`
+         *     (no documented upper limit).
+         */
+        get: operations["get_plot_readings_api_v1_plots__plot_id__readings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Events
+         * @description docs/04-api.md:180-189, ADR-0015: one `LISTEN plot_events` fan-out per
+         *     api process, filtered by `farm_id`.
+         *
+         *     The org-access check runs in its own short-lived session, opened and
+         *     closed here rather than through a yield-scoped `SessionDep`
+         *     (R3-stream-holds-db-session): FastAPI only tears a `yield` dependency
+         *     down after the whole response finishes, which for this never-ending
+         *     `StreamingResponse` means the session — and its pooled connection —
+         *     would stay checked out for as long as the client keeps the stream open,
+         *     starving every REST endpoint of connections.
+         *
+         *     `Last-Event-ID` (E4 T6 gap, docs are silent on replay): the browser sends
+         *     it automatically on reconnect; it is accepted and simply ignored here,
+         *     no replay is built.
+         */
+        get: operations["stream_events_api_v1_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dev/auth/otp": {
         parameters: {
             query?: never;
@@ -261,6 +434,57 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** CalibrationCreateRequest */
+        CalibrationCreateRequest: {
+            method: components["schemas"]["CalibrationMethod"];
+            kind: components["schemas"]["CalibrationKind"];
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Rmse Pct */
+            rmse_pct?: number | null;
+            /**
+             * Valid From
+             * Format: date-time
+             */
+            valid_from: string;
+        };
+        /**
+         * CalibrationKind
+         * @enum {string}
+         */
+        CalibrationKind: "lab" | "field";
+        /**
+         * CalibrationMethod
+         * @enum {string}
+         */
+        CalibrationMethod: "linear" | "two_point" | "polynomial";
+        /** CalibrationView */
+        CalibrationView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Sensor Id */
+            sensor_id: number;
+            /** Version */
+            version: number;
+            method: components["schemas"]["CalibrationMethod"];
+            kind: components["schemas"]["CalibrationKind"];
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Rmse Pct */
+            rmse_pct: number | null;
+            /**
+             * Valid From
+             * Format: date-time
+             */
+            valid_from: string;
+        };
         /** CropCycleCreateRequest */
         CropCycleCreateRequest: {
             /** Crop Id */
@@ -449,6 +673,106 @@ export interface components {
             /** Role */
             role: string;
         };
+        /** MqttCredentials */
+        MqttCredentials: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+        };
+        /** NodeClaimRequest */
+        NodeClaimRequest: {
+            /** Claim Code */
+            claim_code: string;
+            /**
+             * Plot Id
+             * Format: uuid
+             */
+            plot_id: string;
+        };
+        /** NodeClaimResponse */
+        NodeClaimResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Org Id */
+            org_id: string | null;
+            /** Plot Id */
+            plot_id: string | null;
+            transport: components["schemas"]["NodeTransport"];
+            /** Dev Eui */
+            dev_eui: string | null;
+            /** Firmware */
+            firmware: string | null;
+            /** Interval S */
+            interval_s: number;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Last Seen At */
+            last_seen_at: string | null;
+            status: components["schemas"]["NodeStatus"];
+            mqtt: components["schemas"]["MqttCredentials"];
+        };
+        /** NodeHealthView */
+        NodeHealthView: {
+            /** Last Seen At */
+            last_seen_at: string | null;
+            /** Battery V */
+            battery_v: number | null;
+            /** Rssi */
+            rssi: number | null;
+            /** Completeness 24H */
+            completeness_24h: number | null;
+        };
+        /** NodePage */
+        NodePage: {
+            /** Items */
+            items: components["schemas"]["NodeView"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** NodePatchRequest */
+        NodePatchRequest: {
+            /** Plot Id */
+            plot_id?: string | null;
+            status?: components["schemas"]["NodeStatus"] | null;
+        };
+        /**
+         * NodeStatus
+         * @enum {string}
+         */
+        NodeStatus: "provisioned" | "online" | "offline" | "retired";
+        /**
+         * NodeTransport
+         * @enum {string}
+         */
+        NodeTransport: "wifi" | "cellular" | "lorawan";
+        /** NodeView */
+        NodeView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Org Id */
+            org_id: string | null;
+            /** Plot Id */
+            plot_id: string | null;
+            transport: components["schemas"]["NodeTransport"];
+            /** Dev Eui */
+            dev_eui: string | null;
+            /** Firmware */
+            firmware: string | null;
+            /** Interval S */
+            interval_s: number;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Last Seen At */
+            last_seen_at: string | null;
+            status: components["schemas"]["NodeStatus"];
+        };
         /** OtpRequest */
         OtpRequest: {
             /** Phone */
@@ -460,6 +784,11 @@ export interface components {
             phone: string;
             /** Code */
             code: string;
+        };
+        /** PasswordResponse */
+        PasswordResponse: {
+            /** Password */
+            password: string;
         };
         /** PlotCreateRequest */
         PlotCreateRequest: {
@@ -512,6 +841,41 @@ export interface components {
             irrigation_efficiency: number | null;
             /** System Flow Lph */
             system_flow_lph: number | null;
+        };
+        /** ReadingSeriesView */
+        ReadingSeriesView: {
+            /** Sensor Id */
+            sensor_id: number;
+            /** Depth Cm */
+            depth_cm: number | null;
+            /** Points */
+            points: [
+                string,
+                number
+            ][];
+        };
+        /** ReadingsResponse */
+        ReadingsResponse: {
+            /** Series */
+            series: components["schemas"]["ReadingSeriesView"][];
+        };
+        /** SensorView */
+        SensorView: {
+            /** Id */
+            id: number;
+            /**
+             * Node Id
+             * Format: uuid
+             */
+            node_id: string;
+            /** Channel Key */
+            channel_key: string;
+            /** Metric */
+            metric: string;
+            /** Depth Cm */
+            depth_cm: number | null;
+            /** Unit */
+            unit: string;
         };
         /** SoilProfilePutRequest */
         SoilProfilePutRequest: {
@@ -1022,6 +1386,322 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CropCycleView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_claim_node_api_v1_nodes_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_nodes_api_v1_nodes_get: {
+        parameters: {
+            query: {
+                org_id: string;
+                plot_id?: string | null;
+                status?: components["schemas"]["NodeStatus"] | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_node_api_v1_nodes__node_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodePatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_node_credentials_api_v1_nodes__node_id__credentials_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_health_api_v1_nodes__node_id__health_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeHealthView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sensors_api_v1_nodes__node_id__sensors_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SensorView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_calibration_api_v1_sensors__sensor_id__calibrations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                sensor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalibrationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plot_readings_api_v1_plots__plot_id__readings_get: {
+        parameters: {
+            query: {
+                metric: string;
+                from: string;
+                to: string;
+                resolution: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_events_api_v1_stream_get: {
+        parameters: {
+            query: {
+                farm_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

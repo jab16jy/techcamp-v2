@@ -28,6 +28,19 @@ const CROPS = [
   { id: 2, code: 'yam', name_es: 'Ñame', kc_source: 'none', stages: [] },
 ]
 
+const NODE = {
+  id: 'node-1',
+  org_id: 'org-1',
+  plot_id: 'plot-1',
+  transport: 'wifi',
+  dev_eui: '70B3D5A3B0000001',
+  firmware: '1.0.0',
+  interval_s: 300,
+  claimed_at: '2026-09-01T12:00:00Z',
+  last_seen_at: '2026-09-25T10:00:00Z',
+  status: 'online',
+}
+
 function renderSheet(onOpenChange: (open: boolean) => void = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
@@ -37,11 +50,17 @@ function renderSheet(onOpenChange: (open: boolean) => void = vi.fn()) {
   )
 }
 
-/** Mocks `GET /crops` plus every other call the test provides by URL substring. */
+/** Mocks `GET /crops` plus every other call the test provides by URL substring. The nodes
+ * section asks for its own list on every render, so an empty page is the default here
+ * instead of a second `/nodes` key in every test. */
 function mockFetch(byUrl: Record<string, () => Response>) {
+  const routes: Record<string, () => Response> = {
+    '/nodes?': () => jsonResponse({ items: [], next_cursor: null }),
+    ...byUrl,
+  }
   vi.mocked(fetch).mockImplementation(async (input) => {
     const request = requestOf(input as Request)
-    const match = Object.entries(byUrl).find(([substr]) => request.url.includes(substr))
+    const match = Object.entries(routes).find(([substr]) => request.url.includes(substr))
     if (!match) throw new Error(`unexpected request: ${request.url}`)
     return match[1]()
   })
@@ -63,6 +82,25 @@ describe('PlotDetailSheet', () => {
     renderSheet()
 
     expect(screen.getByText('Todavía no hay datos de suelo en esta sesión.')).toBeInTheDocument()
+  })
+
+  it('lists the plot nodes with their health in the Nodos section', async () => {
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/nodes?': () => jsonResponse({ items: [NODE], next_cursor: null }),
+      '/health': () =>
+        jsonResponse({
+          last_seen_at: null,
+          battery_v: 3.9,
+          rssi: -78,
+          completeness_24h: 98.4,
+        }),
+    })
+    renderSheet()
+
+    expect(screen.getByRole('heading', { name: 'Nodos' })).toBeInTheDocument()
+    expect(await screen.findByText('70B3D5A3B0000001')).toBeInTheDocument()
+    expect(await screen.findByText('98.4 %')).toBeInTheDocument()
   })
 
   it('autofills the soil profile from SoilGrids', async () => {
@@ -291,12 +329,14 @@ describe('PlotDetailSheet', () => {
 
   it('shows error state with retry when crops request fails', async () => {
     let attempts = 0
-    vi.mocked(fetch).mockImplementation(async () => {
-      attempts += 1
-      if (attempts === 1) {
-        return jsonResponse({ type: 'about:blank', title: 'Server error', status: 500 }, 500)
-      }
-      return jsonResponse(CROPS)
+    mockFetch({
+      '/crops': () => {
+        attempts += 1
+        if (attempts === 1) {
+          return jsonResponse({ type: 'about:blank', title: 'Server error', status: 500 }, 500)
+        }
+        return jsonResponse(CROPS)
+      },
     })
     renderSheet()
 

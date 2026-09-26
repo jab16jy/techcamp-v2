@@ -58,8 +58,13 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - [x] T6b Fix T6 review findings (CRITICAL `R3-stream-holds-db-session` plus all WARNING/SUGGESTION, owner 2026-09-25) — route: delegated (sonnet-high) — forecast ~250 — actual 441 (`c6e7c69`)
 - [x] T7 Recalibration job: procrastinate setup, `worker` compose service, recompute `value` — route: delegated (sonnet-high) — forecast ~500 — actual 736 (`ab7a665`, excluding `uv.lock`)
 - [x] T8 Basic simulator CLI: claim or create node, backfill N days, 5 s live loop, raw ADC values — route: delegated (sonnet-high) — forecast ~550 — actual 923 (`8430135`) + review correction 36 (`bba9104`)
-- [ ] T9 Web nodes: QR scan + manual fallback, claim sheet (password once), node list + health, calibration form (via `impeccable`) — route: delegated (sonnet-high) — forecast ~2,100
-- [ ] T10 Web live reading on plot detail via `EventSource` — route: delegated (sonnet) — forecast ~550
+- T9 + T10 web slice, forecast ~2,200 authored lines (owner, 2026-09-25), split into work units of ~350–450 lines, one commit + one RDD assessment each. Route: delegated direct to an OpenCode writer in a Herdr pane, orchestrated by the parent (no `sonnet-high`, owner 2026-09-25); ODD sub-agents or OpenCode verify. Skills forwarded: `impeccable` (E1 design as-is), `find-docs`, `work-unit-commits`. Checks: `npm run lint`, `typecheck`, `test -- --run`, `build`, `size`.
+- [x] T9a Nodes API client: `npm run gen:api` (generated `schema.d.ts`, excluded from counts), `features/nodes/api/nodesApi.ts` hooks for list, claim, patch, rotate, health, sensors, create calibration (docs/04:79-93), Vitest for each hook — route: delegated (OpenCode via Herdr) — forecast ~400 — actual 415 authored + 680 generated (`5b7f4fb`)
+- [ ] T9b Plot nodes list + health: "Nodos de la parcela" entry in `PlotDetailSheet` (docs/07:127), `NodesSheet` listing the plot's nodes with status, last seen, battery, RSSI, 24 h completeness — forecast ~400
+- [ ] T9c Claim flow: `ClaimNodeSheet` with manual claim code and QR scan through native `BarcodeDetector` when available (feature-detected, manual fallback), MQTT password shown once with copy action (docs/04:79, docs/07:128) — forecast ~450
+- [ ] T9d Calibration + credentials: node sensors list, `CalibrationSheet` (method `linear|two_point|polynomial`, `kind`, params, `rmse_pct`, `valid_from`; new version, never edit), rotate credentials with password shown once — forecast ~450
+- [ ] T10a Stream client: authenticated SSE hook for `GET /stream?farm_id=` read with `fetch` + `ReadableStream` so the bearer token stays in the `Authorization` header (`EventSource` cannot send headers; owner decision 2026-09-25, no server change), reconnect with `Last-Event-ID`, keepalive tolerant — forecast ~250
+- [ ] T10b Live reading on plot detail: latest calibrated reading per sensor, seeded from `GET /plots/{plot_id}/readings?resolution=raw` and updated by `reading` events — forecast ~300
 - Review-fix rounds (T*b) reserved: forecast ~1,800
 
 ## Review (RDD)
@@ -81,6 +86,8 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - T7 (`57e3920..ab7a665`, 902 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-68ffa155134d67c5`, one reliability lens, APPROVED and acknowledged. 6 WARNING, non-blocking → issue #39, deferred. Boundary → `ab7a665`.
 - `fefb6a1` (doc): passive, boundary → `fefb6a1`.
 - T8 (`fefb6a1..8430135`, 923 lines): medium, `slice_budget_reached`; standing grant applied; lineage `review-addf445b089cc105`, one reliability lens → CRITICAL `R3-calibration-valid-from-after-backfill` (calibrations started at `now`, after every backfilled reading), refuter corroborated → correction plan of 40 lines → bounded correction `bba9104` (36 lines) → provider targeted validation APPROVED and acknowledged. 1 WARNING + 4 SUGGESTION, non-blocking → issue #40, deferred. Boundary → `bba9104`.
+- `c5c9315` (doc): passive, boundary → `c5c9315`.
+- T9a (`c5c9315..5b7f4fb`, 1,095 lines incl. 680 generated `schema.d.ts`): medium, `slice_budget_reached`; standing grant applied; lineage `review-6db1ef7a3452de71`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 2 SUGGESTION, non-blocking → issue #41, deferred. Boundary → `5b7f4fb`.
 
 ## Acceptance criteria
 - The simulator publishes over MQTT, the ingestor stores calibrated `reading` rows (raw and calibrated), duplicates are ignored.
@@ -90,6 +97,7 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - All server and web checks green.
 
 ## Progress / evidence
+- 2026-09-25: T9a (`5b7f4fb`): writer OpenCode in a Herdr pane. RED observed per hook against a stub module (7 failing behavioral assertions, e.g. `expected [] to have a length of 1`); lint, typecheck, `test -- --run` 106 passed, build, size 157.54/200 kB (writer); parent spot check `npm test -- --run src/features/nodes` 7 passed, typecheck clean. Gaps: docs/04:81 omits the required `org_id` and the `limit`/`cursor` paging of `GET /nodes`; `useNodes` reads `org_id` from the session (unlike `useFarms(orgId)`) and drops `next_cursor` (#41). `gen:api` also added `/readings` and `/stream` to the schema (used by T10).
 - 2026-09-24: branch `feat/e4-telemetry` created from `main` @ `e79d542`; feature doc created.
 - 2026-09-24: T1 done (`9b5dd96`): server pytest 227 passed, ruff, format, mypy, lint-imports green (writer). T1b (`1df9981`): pytest 234 passed, all server checks green (writer); parent spot check `uv run pytest tests/telemetry` 22 passed. Writer disclosed partial Read-before-CodeGraph during T1 exploration.
 - 2026-09-25: T8 (`8430135`): RED recorded per group, but only as `ModuleNotFoundError` for each new module (no failing behavior) — partial TDD deviation. pytest 391 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/simulator` 20 passed. Correction `bba9104`: RED `assert None is not None` (no calibration at the earliest backfill time), pytest 392 passed (writer); parent spot check `pytest tests/simulator` 21 passed. CLI `python -m techcamp.simulator`. Gaps (docs silent): no API provisions an unclaimed node, so `--provision` inserts node + sensor through the DB like the test fixtures; the dev OTP code is only printed on the api console, so `--otp-code` or an interactive prompt; non-`%` sensors get an identity linear calibration; re-running with the same claim code returns 409. aiomqtt 2.5.1 installed differs from the ctx7 docs (newer major); the code follows the installed signature.
@@ -103,9 +111,6 @@ E4 is on the critical path (E2 → E3 → E4 → E6 → E9) and unblocks E6 (irr
 - 2026-09-24: T1c (`8ba6fa7`, Refs #33): pytest 237 passed, ruff, format, mypy, lint-imports green (writer); parent spot check `pytest tests/telemetry` 25 passed. `add_version` org check lives in the repository (no application layer yet); `op.create_table` stays non-idempotent with a recovery comment.
 
 ## Next step
-Paused 2026-09-25 by the owner after T8. Tree clean, review boundary `bba9104`.
+T9a done, T9b in progress (2026-09-25). Review boundary `5b7f4fb`.
 
-Resume T9 (web nodes) in the next session:
-1. Read this doc and the Engram mirror, `git log --oneline e79d542..HEAD`; Postgres: `podman start infra_postgres_1`.
-2. T9 is the largest task (forecast ~2,100): QR scan with native `BarcodeDetector` + manual code fallback, claim sheet (one-time password shown once), node list + health, calibration form. UI only through `impeccable`, E1 design as-is (docs/07:67, 127-128; ADR-0006); gaps flagged, not invented. Split into work units (e.g. T9a API client + node list/health, T9b claim flow + QR, T9c calibration form), one `sonnet-high` writer each with an essentials-only brief, web checks (`npm run lint`, `typecheck`, `test -- --run`, `build`, `size`).
-3. Then T10 (live reading via `EventSource`; must resolve stream auth, see T6 gap), end-to-end demo (compose, `worker`, MQTT shared subscription, simulator), then stacked-to-main PRs. Open follow-up issues: #33–#40.
+Execute T9a → T9b → T9c → T9d → T10a → T10b in order, one OpenCode writer at a time in a Herdr pane (single writer, shared files). After each: parent spot check, work-unit commit, `gentle-ai review assess --committed-only`. Then the end-to-end demo (compose, `worker`, MQTT shared subscription, simulator) and stacked-to-main PRs. Postgres: `podman start infra_postgres_1`. Open follow-up issues: #33–#40.
