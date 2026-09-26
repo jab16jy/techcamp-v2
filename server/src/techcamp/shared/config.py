@@ -12,6 +12,13 @@ def database_url() -> str:
     )
 
 
+def psycopg_conninfo() -> str:
+    """`database_url()` without the `+asyncpg` SQLAlchemy driver suffix:
+    procrastinate's `PsycopgConnector` (ADR-0012) speaks plain libpq, not a
+    SQLAlchemy URL."""
+    return database_url().replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
 def is_seminar_profile() -> bool:
     return os.environ.get("TECHCAMP_PROFILE", "seminar") != "production"
 

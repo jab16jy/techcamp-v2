@@ -239,6 +239,34 @@ def classify_reading_range(unit: str, value: float) -> ReadingQuality:
     return ReadingQuality.OK
 
 
+def recalibrate_reading(
+    calibration: Calibration, raw_value: float, unit: str, previous_quality: ReadingQuality
+) -> tuple[float, ReadingQuality]:
+    """Recompute `(value, quality)` for one already-stored reading against a
+    (new) calibration version (docs/03-modelo-datos.md:461: recalibrating
+    recomputes `value` from `valid_from` forward), reusing `apply_calibration`
+    and `classify_reading_range` — same `max(ts, range)` precedence as
+    `ingest_uplinks` (out-of-range is the stronger signal).
+
+    `reading.quality` merges two independent signals into one column
+    (docs/03-modelo-datos.md:174), so the original timestamp-correction bit
+    isn't stored separately. `previous_quality` recovers it: `OK` and
+    `TIMESTAMP_CORRECTED` are unambiguous; a previous `OUT_OF_RANGE` can't
+    tell whether the timestamp was also corrected underneath it (T7 decision,
+    flagged doc gap: docs are silent here), so it's conservatively treated as
+    `TIMESTAMP_CORRECTED` rather than silently downgrading to a clean `OK`.
+    """
+    value = apply_calibration(calibration, raw_value)
+    ts_quality = (
+        ReadingQuality.OK
+        if previous_quality is ReadingQuality.OK
+        else ReadingQuality.TIMESTAMP_CORRECTED
+    )
+    range_quality = classify_reading_range(unit, value)
+    quality = ReadingQuality(max(int(ts_quality), int(range_quality)))
+    return value, quality
+
+
 MAX_READING_AGE = timedelta(days=30)
 """docs/06-diseno-detallado.md §1: "Si [ts] es anterior a 30 días, se
 descarta" — an outright discard by the ingestor, unlike the future-clock case

@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.shared.ids import uuid7
+from techcamp.telemetry.adapters.jobs import enqueue_recalibration
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, ReadingRow, SensorRow
 from techcamp.telemetry.domain.models import (
     Calibration,
@@ -364,6 +365,12 @@ class SqlAlchemyCalibrationRepository:
                 valid_from=valid_from,
             )
         )
+        # T7 (docs/03-modelo-datos.md:461, ADR-0012): recalibrating always
+        # enqueues the job that recomputes `value`/`quality` from
+        # `valid_from`, including a sensor's very first calibration (it may
+        # retroactively calibrate readings ingested before it existed). Same
+        # transaction as the version insert above, same commit below.
+        await enqueue_recalibration(self._session, calibration_id)
         try:
             await self._session.commit()
         except IntegrityError:
