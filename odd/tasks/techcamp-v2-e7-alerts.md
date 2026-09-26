@@ -119,6 +119,12 @@ alerts).
   none). Watch each writer with a poll that wakes on the first `blocked` and on an `idle`/`done`
   held ~45 s, confirmed by reading the pane; the moment a work-unit commit lands, assess it and
   follow `next_transition` verbatim when `review_due`; record the outcome under Review (RDD).
+- Parent gate before RDD (owner 2026-09-26): for every writer slice the parent runs, in the
+  worktree, the slice's targeted tests (`uv run pytest tests/alerts tests/notifications` or the
+  touched modules), `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`,
+  `uv run lint-imports`, and compares the slice's domain diff against the owning docs (docs/06
+  §3–§4, docs/03, ADR-0016, plus the unit's cited sections). Only then RDD. Results recorded per
+  slice under Progress.
 
 ## Decisions
 Readings closest to the docs; each one that changes a doc is written into that doc in the same
@@ -169,6 +175,11 @@ work unit (`domain-modeling`).
   `water_stress` alert upgraded at 48 h has been unacknowledged far longer than 2 h and escalates
   at the next check. Manual resolve only from `acknowledged` (docs/06 §3 diagram); invalid
   transitions → 409.
+- D14 docs/05 lists `alerts → telemetry, weather, risk, notifications` only, but alerts need the
+  plot soil, the farm technician and org members, and notifications need push subscriptions and
+  phones. T3 adds `alerts → farms`, `alerts → identity` and `notifications → identity` to docs/05
+  (no cycles: neither farms nor identity depends back). Cross-module writes share the
+  `AsyncSession` as E5 T2 did (`farms` → `weather` repository).
 - D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
