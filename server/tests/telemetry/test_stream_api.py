@@ -263,34 +263,32 @@ def test_app_boots_when_listener_connect_fails(monkeypatch: pytest.MonkeyPatch) 
     assert response.status_code == 200
 
 
-async def test_stream_route_subscribes_only_while_its_body_runs(
+async def test_stream_route_buffers_events_published_before_the_body_starts(
     db_session: AsyncSession,
 ) -> None:
-    """#38: the route used to subscribe before returning the response, so a
-    body that never starts (client gone, proxy dropped the response) left the
-    subscription behind — only the generator's `finally` unsubscribes.
+    """#63, `R3-delayed-stream-subscription-event-gap`: the route must subscribe
+    before returning, so an event published in the window between the route
+    returning and the body starting is buffered instead of lost. The
+    subscription is still released when the body never starts (see
+    `test_hub_releases_a_subscription_the_body_never_claims`).
 
     The route function is called directly because a `StreamingResponse` body
     that never ends can't be consumed through `TestClient` (module docstring).
     """
     org_id, user_id, _token = await _member(db_session, role="owner")
     farm_id = await _make_farm(db_session, org_id)
+    plot_id = uuid7()
     hub = PlotEventsHub()
 
     response = await stream_events(user_id=user_id, hub=hub, farm_id=farm_id)
 
-    assert hub.subscriber_count == 0, "an unstarted body must not hold a subscription"
+    assert hub.subscriber_count == 1, "the route subscribes, so no event can be lost"
+    hub.dispatch(_reading_payload(farm_id=farm_id, plot_id=plot_id))
 
     body = cast(AsyncIterator[bytes], response.body_iterator)
-    first = asyncio.ensure_future(body.__anext__())
-    deadline = asyncio.get_event_loop().time() + 5.0
-    while hub.subscriber_count == 0:
-        assert asyncio.get_event_loop().time() < deadline, "the body never subscribed"
-        await asyncio.sleep(0.01)
-    hub.dispatch(_reading_payload(farm_id=farm_id, plot_id=uuid7()))
-
-    chunk = await asyncio.wait_for(first, timeout=5.0)
+    chunk = await asyncio.wait_for(body.__anext__(), timeout=5.0)
     assert b"event: reading" in chunk
+    assert f'"plot_id": "{plot_id}"'.encode() in chunk
 
     await body.aclose()
     assert hub.subscriber_count == 0, "a client that leaves must release its subscription"

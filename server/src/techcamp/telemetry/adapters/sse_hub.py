@@ -13,6 +13,13 @@ still boots; a lost or failed connection is retried with bounded backoff
 (R3-listener-no-reconnect). A connection loss ends every open client stream
 (a `None` sentinel on its queue) so `EventSource` clients reconnect instead
 of looking alive while silent.
+
+A subscription is taken by the route, before the response exists, so an
+event published while the body is still starting is buffered instead of
+lost. The body then `claim()`s it on its first iteration, and its `finally`
+releases it; a body that never claims is released by the hub after
+`claim_timeout` (a client gone, a proxy that dropped the response) with the
+same `None` sentinel, so nothing is held forever (#38, #63).
 """
 
 from __future__ import annotations
@@ -38,6 +45,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_QUEUE_MAXSIZE = 100
 _BACKOFF_INITIAL_S = 1.0
 _BACKOFF_MAX_S = 30.0
+_CLAIM_TIMEOUT_S = 30.0
+"""How long a subscription may wait for its body to start before the hub
+releases it. A healthy response starts in milliseconds; anything slower than
+this means the client is gone, and holding the subscription would leak it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,13 +68,19 @@ def _dsn() -> str:
 
 class PlotEventsHub:
     def __init__(
-        self, *, backoff_initial: float = _BACKOFF_INITIAL_S, backoff_max: float = _BACKOFF_MAX_S
+        self,
+        *,
+        backoff_initial: float = _BACKOFF_INITIAL_S,
+        backoff_max: float = _BACKOFF_MAX_S,
+        claim_timeout: float = _CLAIM_TIMEOUT_S,
     ) -> None:
         self._connection: asyncpg.Connection[Any] | None = None
         self._subscribers: dict[UUID, tuple[UUID, asyncio.Queue[StreamEvent | None]]] = {}
+        self._claim_timers: dict[UUID, asyncio.TimerHandle] = {}
         self._next_id = count(1)
         self._backoff_initial = backoff_initial
         self._backoff_max = backoff_max
+        self._claim_timeout = claim_timeout
         self._reconnect_task: asyncio.Task[None] | None = None
         self._stopping = False
 
@@ -86,20 +103,35 @@ class PlotEventsHub:
             await self._connection.close()
             self._connection = None
         self._end_all_subscribers()
+        for client_id in list(self._claim_timers):
+            # Release, don't just disarm: a subscription no body ever claimed
+            # has no generator `finally` coming, so cancelling its timer alone
+            # would retain the subscriber and its queue forever
+            # (R3-stop-cancels-unclaimed-release).
+            self._release_unclaimed(client_id)
 
     def subscribe(
         self, farm_id: UUID, *, maxsize: int = _DEFAULT_QUEUE_MAXSIZE
     ) -> tuple[UUID, asyncio.Queue[StreamEvent | None]]:
+        """Take a subscription for a client that is about to get a response.
+        The body must `claim()` it once it starts; until then it is released
+        after `claim_timeout` (see the module docstring, #63)."""
         client_id = uuid4()
         queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue(maxsize=maxsize)
         self._subscribers[client_id] = (farm_id, queue)
+        self._claim_timers[client_id] = asyncio.get_running_loop().call_later(
+            self._claim_timeout, self._release_unclaimed, client_id
+        )
         return client_id, queue
 
-    def unsubscribe(self, client_id: UUID) -> None:
-        self._subscribers.pop(client_id, None)
+    def claim(self, client_id: UUID) -> None:
+        """The response body has started, so it owns this subscription from
+        here and its `finally` will release it."""
+        self._cancel_claim_timer(client_id)
 
-    def is_subscribed(self, client_id: UUID) -> bool:
-        return client_id in self._subscribers
+    def unsubscribe(self, client_id: UUID) -> None:
+        self._cancel_claim_timer(client_id)
+        self._subscribers.pop(client_id, None)
 
     @property
     def is_listening(self) -> bool:
@@ -113,6 +145,21 @@ class PlotEventsHub:
         """How many client streams are subscribed right now (#38: a client
         that never starts its body must not hold a subscription)."""
         return len(self._subscribers)
+
+    def _cancel_claim_timer(self, client_id: UUID) -> None:
+        timer = self._claim_timers.pop(client_id, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _release_unclaimed(self, client_id: UUID) -> None:
+        """A body that never starts would hold its subscription forever:
+        nothing would ever reach the generator's `finally`. Release it here
+        and push the "stream ended" sentinel, so a body that starts late ends
+        and its client reconnects instead of streaming silence (#63)."""
+        self._claim_timers.pop(client_id, None)
+        entry = self._subscribers.pop(client_id, None)
+        if entry is not None:
+            self._push(entry[1], None)
 
     async def _reconnect_loop(self) -> None:
         """Connect, retrying with bounded exponential backoff until it

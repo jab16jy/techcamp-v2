@@ -338,3 +338,28 @@ async def test_node_ownership_check_rejects_partial_ownership(
 
     with pytest.raises(IntegrityError):
         await db_session.commit()
+
+
+async def test_no_timescaledb_background_job_can_fire_during_a_test(
+    db_session: AsyncSession,
+) -> None:
+    """The compression/continuous-aggregate policies share a lock domain with
+    the rows a test writes and with the manual
+    `CALL refresh_continuous_aggregate(..., NULL, NULL)` a test runs: when a
+    policy fires mid-test, one side fails with `55P03 lock_not_available`
+    (`timescaledb_information.job_errors` recorded exactly that for
+    `reading_hourly`), and the run is no longer deterministic.
+
+    Tests drive the aggregates themselves, so `conftest._migrated_schema`
+    unschedules every policy of ours for the session (#63). TimescaleDB's own
+    internal jobs own no hypertable and are out of scope here."""
+    scheduled = (
+        await db_session.execute(
+            text(
+                "SELECT count(*) FROM timescaledb_information.jobs "
+                "WHERE scheduled AND hypertable_schema = 'public'"
+            )
+        )
+    ).scalar_one()
+
+    assert scheduled == 0, "a scheduled background job can fail a test mid-run"

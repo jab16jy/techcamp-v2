@@ -464,8 +464,11 @@ async def stream_events(
     it automatically on reconnect; it is accepted and simply ignored here,
     no replay is built.
 
-    The subscription is taken by the body itself (`stream_plot_events`), not
-    here: a body that never starts must not leave a subscription behind (#38).
+    The subscription is taken here, before the response exists, so an event
+    published while the body is still starting is buffered instead of lost
+    (#63). The body claims it on its first iteration and releases it in its
+    `finally`; a body that never starts leaves it to the hub's claim timeout
+    (#38), so a dropped response cannot hold a subscription forever.
     """
     async with async_session_factory() as session:
         farms = SqlAlchemyFarmRepository(session)
@@ -476,8 +479,9 @@ async def stream_events(
             )
         except FarmNotFoundError as exc:
             raise ProblemError(status=404, title="Farm not found") from exc
+    client_id, queue = hub.subscribe(farm_id)
     return StreamingResponse(
-        stream_plot_events(hub, farm_id),
+        stream_plot_events(hub, client_id, queue),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
