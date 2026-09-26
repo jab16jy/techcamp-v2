@@ -26,6 +26,7 @@ function sensorsQueryKey(nodeId: string) {
  * so callers get the full list (feature doc decision #41; a plot has few nodes). */
 async function fetchNodes(orgId: string, plotId: string | null): Promise<NodeView[]> {
   const items: NodeView[] = []
+  const seenCursors = new Set<string>()
   let cursor: string | null | undefined = undefined
   do {
     const query: { org_id: string; plot_id?: string; cursor?: string } = {
@@ -38,6 +39,12 @@ async function fetchNodes(orgId: string, plotId: string | null): Promise<NodeVie
     if (!res.data) throw new Error('empty response from /nodes')
     items.push(...res.data.items)
     cursor = res.data.next_cursor
+    if (cursor) {
+      if (seenCursors.has(cursor)) {
+        throw new Error(`repeated cursor in /nodes: ${cursor}`)
+      }
+      seenCursors.add(cursor)
+    }
   } while (cursor)
   return items
 }

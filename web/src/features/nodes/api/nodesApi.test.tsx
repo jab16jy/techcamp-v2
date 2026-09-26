@@ -98,6 +98,20 @@ describe('nodesApi', () => {
     expect(secondUrl).toContain('cursor=cursor-2')
   })
 
+  it('stops following next_cursor and fails if a cursor repeats', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse({ items: [NODE], next_cursor: 'loop-cursor' }))
+      .mockResolvedValueOnce(jsonResponse({ items: [NODE], next_cursor: 'loop-cursor' }))
+      .mockResolvedValueOnce(jsonResponse({ items: [NODE], next_cursor: null }))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    const { result } = renderHook(() => useNodes('plot-1'), { wrapper: wrapper(queryClient) })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(result.current.error?.message).toContain('repeated cursor in /nodes: loop-cursor')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+  })
+
   it('does not fetch nodes when no organization is active (orgId === null)', async () => {
     clearSession()
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

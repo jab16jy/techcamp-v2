@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, getToken, setSession } from './session'
-import { asReadingEvent, useFarmEvents, type FarmEvent } from './useFarmEvents'
+import { asReadingEvent, sleep, useFarmEvents, type FarmEvent } from './useFarmEvents'
 
 const READING_FRAME =
   'id: 7\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":42.5,"at":"2026-09-25T10:00:00Z"}\n\n'
@@ -132,6 +132,82 @@ describe('useFarmEvents', () => {
 
     expect(vi.mocked(fetch)).not.toHaveBeenCalled()
   })
+
+  it('does not reset backoff when the stream closes immediately without events', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(fetch).mockImplementation(() => Promise.resolve(streamResponse([])))
+
+      const { view } = renderEvents()
+
+      // 1st attempt connects immediately and ends with no events -> schedules sleep(1000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+
+      // Advance 1000ms: 2nd attempt connects and ends with no events -> schedules sleep(2000)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+
+      // Advance 1000ms: with backoff reset it would retry here (call 3), but it should still be sleeping
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+
+      // Advance another 1000ms (total 2000ms): 3rd attempt connects
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3)
+
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resets backoff when receiving keepalives on a quiet stream before dropping', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(streamResponse([]))
+        .mockResolvedValueOnce(streamResponse([':keepalive\n\n']))
+        .mockReturnValue(neverEnding())
+
+      const { view } = renderEvents()
+
+      // 1st attempt connects immediately and ends -> attempt = 1, schedules sleep(1000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+
+      // Advance 1000ms: 2nd attempt connects, receives keepalive, then ends.
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+
+      // Advance another 1000ms:
+      // With backoff reset on keepalive: schedules sleep(1000), so 3rd attempt connects now.
+      // Without reset: attempt was 2, schedules sleep(2000), so it would not connect yet.
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3)
+
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resets Last-Event-ID when an empty id field arrives so next reconnect sends no Last-Event-ID', async () => {
+    const frameWithId =
+      'id: 42\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":10,"at":"2026-09-25T10:00:00Z"}\n\n'
+    const frameWithEmptyId =
+      'id:\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":20,"at":"2026-09-25T10:01:00Z"}\n\n'
+
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(streamResponse([frameWithId, frameWithEmptyId]))
+      .mockReturnValue(neverEnding())
+
+    renderEvents()
+
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2), { timeout: 3000 })
+    const [input, init] = vi.mocked(fetch).mock.calls[1]
+    expect(requestHeaders(input, init).get('Last-Event-ID')).toBeNull()
+  })
 })
 
 describe('asReadingEvent', () => {
@@ -146,5 +222,23 @@ describe('asReadingEvent', () => {
     expect(asReadingEvent('plot-1')).toBeNull()
     expect(asReadingEvent({ plot_id: 'plot-1' })).toBeNull()
     expect(asReadingEvent({ ...READING, value: '42.5' })).toBeNull()
+  })
+})
+
+describe('sleep', () => {
+  it('removes its abort listener when the timer fires normally', async () => {
+    const controller = new AbortController()
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener')
+
+    await sleep(10, controller.signal)
+
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function))
+  })
+
+  it('wakes immediately if aborted during sleep', async () => {
+    const controller = new AbortController()
+    const promise = sleep(1000, controller.signal)
+    controller.abort()
+    await expect(promise).resolves.toBeUndefined()
   })
 })
