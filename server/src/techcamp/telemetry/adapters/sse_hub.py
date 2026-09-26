@@ -104,7 +104,11 @@ class PlotEventsHub:
             self._connection = None
         self._end_all_subscribers()
         for client_id in list(self._claim_timers):
-            self._cancel_claim_timer(client_id)
+            # Release, don't just disarm: a subscription no body ever claimed
+            # has no generator `finally` coming, so cancelling its timer alone
+            # would retain the subscriber and its queue forever
+            # (R3-stop-cancels-unclaimed-release).
+            self._release_unclaimed(client_id)
 
     def subscribe(
         self, farm_id: UUID, *, maxsize: int = _DEFAULT_QUEUE_MAXSIZE

@@ -341,6 +341,20 @@ async def test_hub_releases_a_subscription_the_body_never_claims() -> None:
     assert queue.get_nowait() is None, "a body that starts late must end, not stream silence"
 
 
+async def test_hub_stop_releases_a_subscription_the_body_never_claimed() -> None:
+    """`stop()` ends every open stream, so it must also drop the
+    subscriptions no body ever claimed: cancelling their release timer
+    without releasing them would retain a subscriber and its queue forever
+    (R3-stop-cancels-unclaimed-release)."""
+    hub = PlotEventsHub(claim_timeout=30.0)
+    _client_id, queue = hub.subscribe(uuid7())
+
+    await hub.stop()
+
+    assert hub.subscriber_count == 0
+    assert queue.get_nowait() is None
+
+
 async def test_stream_plot_events_releases_its_subscription_when_the_client_leaves() -> None:
     hub = PlotEventsHub()
     client_id, queue = hub.subscribe(uuid7())
