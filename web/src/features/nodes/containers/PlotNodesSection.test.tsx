@@ -129,6 +129,16 @@ describe('PlotNodesSection', () => {
     expect(await screen.findByText('node-1')).toBeInTheDocument()
   })
 
+  it('opens the claim sheet from the Agregar nodo action', async () => {
+    mockFetch({ '/nodes?': () => jsonResponse(nodePage([])) })
+    renderSection()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agregar nodo' }))
+
+    expect(await screen.findByRole('heading', { name: 'Agregar nodo' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Código del nodo/)).toBeInTheDocument()
+  })
+
   it('shows the empty state when the plot has no nodes', async () => {
     mockFetch({ '/nodes?': () => jsonResponse(nodePage([])) })
     renderSection()
