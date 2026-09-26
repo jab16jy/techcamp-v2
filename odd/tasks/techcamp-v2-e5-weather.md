@@ -78,21 +78,24 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
 - Cold start: a plot whose cell has never been fetched returns `[]`; creating a new cell defers a
   one-off fetch for it so data appears without waiting for the next 3 h run.
 - Active cells = cells referenced by at least one plot.
+- `weather_cell` gets `UNIQUE(lat, lon)` so `get_or_create_cell` is idempotent under concurrency; lat/lon go through `Decimal(str(v))` so a float never splits one cell into two (T1a; docs/03 updated in T1b).
+- Weather measures are nullable (Open-Meteo returns null for missing days); only `fetched_at` is NOT NULL. `stale` uses `max(fetched_at)` per cell. `WeatherDay` lives in domain from T1a; `stale` is computed, not stored (T1a).
+- `PlotRow.weather_cell_id` stays a plain Integer in the farms ORM (no farms→weather metadata edge); the FK exists in the DB (T1a).
 - Seminar calls the free Open-Meteo API; production uses the commercial endpoint with an API key
   (ADR-0021). Tests use `httpx.MockTransport` only.
 
 ## Tasks
 - [ ] T1 Weather schema and domain (lane A)
-  - [ ] T1a Migration from head `a3f1c7d92b40`: `weather_cell`, `weather_daily`, FK
-    `plot.weather_cell_id`; ORM rows; repository with `weather_daily` upsert — route: Herdr OpenCode — forecast ~350
+  - [x] T1a Migration from head `a3f1c7d92b40`: `weather_cell`, `weather_daily`, FK
+    `plot.weather_cell_id`; ORM rows; repository with `weather_daily` upsert — route: Herdr OpenCode — forecast ~350 — actual see evidence (`68d44ea`)
   - [ ] T1b Pure domain: 0.1° cell rounding, `WeatherDay`, `stale` rule (6 h) — route: Herdr OpenCode
     (same session as T1a) — forecast ~150
 - [ ] T2 Plot cell assignment (lane A): assign or reassign the cell on plot create/update of
   location; backfill existing plots; defer the cold-start fetch hook (no-op until T5) — route:
   Herdr OpenCode — forecast ~350
 - [ ] T3 Open-Meteo client (lane B)
-  - [ ] T3a `WeatherForecastPort` + `OpenMeteoAdapter`: daily variables, `past_days`, parsing,
-    `MockTransport` tests, seminar/production DI — route: Herdr AGY — forecast ~350
+  - [x] T3a `WeatherForecastPort` + `OpenMeteoAdapter`: daily variables, `past_days`, parsing,
+    `MockTransport` tests, seminar/production DI — route: Herdr AGY — forecast ~350 — actual 530 (`22e7dc0`, lane B)
   - [ ] T3b Timeout 10 s, 3 retries with backoff and jitter, circuit breaker — route: Herdr AGY
     (same session as T3a) — forecast ~250
 - [ ] T4 Weather API (lane A): `GET /plots/{plot_id}/weather?days=`, org isolation test, docs/04
@@ -115,7 +118,11 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
 - All server checks green; RDD per work-unit commit.
 
 ## Review (RDD)
-- Boundary: `9a06794`.
+- Boundary: `9a06794` (both lanes).
+- Lane A T1a (`9a06794..68d44ea`): medium, `slice_budget_reached`; standing grant applied by the OpenCode writer; one reliability lens, APPROVED with zero findings, acknowledged. Lane A boundary → `68d44ea`.
+- Lane B T3a (`9a06794..22e7dc0`, 530 lines): medium, `slice_budget_reached`; standing grant applied by the parent; lineage `review-98b481e046967cd6`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 3 SUGGESTION, non-blocking → issue #77, deferred. Lane B boundary → `22e7dc0`.
 
 ## Progress / evidence
+- T1a `68d44ea` (OpenCode): RDD approved, zero findings. Follow-up noticed: `tests/telemetry/test_jobs.py::test_two_queued_jobs_for_one_sensor_never_run_at_the_same_time` is order-flaky (~1 in 3 full runs).
+- T3a: `22e7dc0` feat(weather): add Open-Meteo forecast adapter — 530 lines (AGY). RED: `ModuleNotFoundError: No module named 'techcamp.weather.adapters.open_meteo'`. Checks (techcamp_e5b): pytest 494 passed; ruff check, format --check, mypy, lint-imports green.
 - 2026-09-26: E5 mapped (docs/03, 04, 05, 06 §6/§8/§10, 09, ADR-0009/0021). Feature doc created.
