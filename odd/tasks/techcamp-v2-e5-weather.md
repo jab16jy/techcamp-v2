@@ -118,16 +118,17 @@ Run in the seminar profile stack with `uvx podman-compose` (podman 5.8.7 rootles
 | 1 | Stack up, api healthy, migrations at head, worker TZ | PASS | 7 services Up; `/health` 200; `migrate` exited 0; `alembic_version = b7e2c9a41d38`; worker `TZ=America/Bogota` |
 | 2 | Seed user/org/farm, 2 plots in same 0.1° cell, 1 in other | PASS | dev OTP verified, bearer token; plots 1 & 2 share `weather_cell_id = 1` (10.9, -74.8); plot 3 gets `weather_cell_id = 3` (11.2, -74.2) |
 | 3 | Cold start: refresh job enqueued/ran, forecast served, 16 rows/cell | PASS | `weather.refresh_cell` succeeded; `GET /api/v1/plots/{id}/weather?days=7` returns 7 forecast days (`is_forecast=true`, `stale=false`); 16 forecast rows stored per cell in `weather_daily` |
-| 4 | Daily consolidation: `POST /dev/jobs/weather:run`, yesterday observed | PASS | jobs 3/4 (active cells fan-out) and per-cell jobs succeeded; yesterday (2026-09-25) stored with `is_forecast=false`; `GET .../weather?days=7` lists it before forecast |
+| 4 | Daily consolidation: `POST /dev/jobs/weather:run`, yesterday observed | PASS after re-run (parent) | fan-out and per-cell jobs ended `succeeded`, but only cell 1 stored 2026-09-25 as `is_forecast=false`: cell 3's fetches hit the transient outage below and were degraded (rows kept, job not failed). Parent re-ran `consolidate_cell(3, 2026-09-25)` in the worker once Open-Meteo answered: cell 3 now has 1 observed + 16 forecast rows. `GET .../weather?days=7` lists the observed day before the forecast |
 | 5 | Validation: days 0/17 → 422; other org → 404; no token → 401 | PASS | `days=0` 422 (`ge=1`), `days=17` 422 (`le=16`); cross-org plot 404; unauthenticated 401 |
 | 6 | Stale degradation: fetched_at 7 h back → stale: true; restore | PASS | SQL update to `NOW() - INTERVAL '7 hours'` → `stale: true`; restored to `NOW()` → `stale: false` |
-| 7 | Worker logs: no crash loop, no unhandled exceptions | PASS | 0 restarts across all containers; 14 procrastinate jobs succeeded, 0 failed; no unhandled weather exceptions |
+| 7 | Worker logs: no crash loop, no unhandled exceptions | PASS | 0 restarts across all containers; 14 procrastinate jobs succeeded, 0 failed; the weather errors are logged and handled (`Open-Meteo unavailable for cell N, keeping its stored rows`) |
 
 Defects:
 - None.
 
 Caveats:
-- The free Open-Meteo API can intermittently return 503 Service Unavailable or timeout under load/rate limiting; the worker handles this gracefully via `WeatherUnavailableError` and the in-adapter circuit breaker, serving the last cached data without crashing or failing the job.
+- Observed transient outage (parent check of the worker log): one `Open-Meteo connection error`, then several HTTP 200 responses with an empty body (`malformed Open-Meteo response: Expecting value: line 1 column 1`), then `OpenMeteoCircuitBreakerOpenError` for the remaining calls. Degradation worked as designed (docs/06 §6: stored rows kept, breaker open). The same calls from inside the worker container succeeded right after, sequentially and 4 at a time. Cause not proven (free API or rootless podman network).
+- A degraded consolidation ends `succeeded`, so a missing observed day is only visible in the log; the next 03:00 run does not retry an older day. Recovery today is `POST /dev/jobs/weather:run {day}` (seminar).
 - Pytest downgrades the local DB to base on teardown, so the compose stack database was migrated from base on first `migrate` run.
 
 ## Acceptance criteria
