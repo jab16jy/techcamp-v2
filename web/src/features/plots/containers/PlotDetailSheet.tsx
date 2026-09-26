@@ -463,7 +463,7 @@ function SoilMoistureSection({ plotId, farmId }: { plotId: string; farmId: strin
           {readings.map((reading) => (
             <div key={reading.sensorId} className="contents">
               <dt className="text-text-muted">{reading.depthCm === null ? '—' : `${reading.depthCm} cm`}</dt>
-              <dd>{reading.value} %</dd>
+              <dd>{reading.value.toFixed(1)} %</dd>
               <dd className="text-sm text-text-muted">{formatFreshness(minutesSince(reading.at))}</dd>
             </div>
           ))}
@@ -471,7 +471,7 @@ function SoilMoistureSection({ plotId, farmId }: { plotId: string; farmId: strin
       )}
       {live !== null && (
         <p className="text-base">
-          Última lectura del nodo: {live.value} % · {formatFreshness(minutesSince(live.at))}
+          Última lectura del nodo: {live.value.toFixed(1)} % · {formatFreshness(minutesSince(live.at))}
         </p>
       )}
     </section>
