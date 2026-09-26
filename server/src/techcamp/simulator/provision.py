@@ -14,6 +14,14 @@ import secrets
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Composition root, for the same reason `migrations/env.py` imports them: `NodeRow`
+# carries foreign keys into the farms and identity tables, and SQLAlchemy resolves
+# those against `Base.metadata` when it orders the flush. Importing only this
+# module's ORM left the targets unregistered, so `--provision` raised
+# `NoReferencedTableError` in a plain process — the test suite only passed because
+# Alembic's environment had already imported the same modules.
+from techcamp.farms.adapters import orm as _farms_orm  # noqa: F401
+from techcamp.identity.adapters import orm as _identity_orm  # noqa: F401
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
 

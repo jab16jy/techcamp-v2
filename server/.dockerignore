@@ -1,0 +1,8 @@
+# The build context is the whole server package; the host virtualenv and tool caches
+# must not leak into the image (they are rebuilt by `uv sync` inside the builder stage).
+.venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+**/__pycache__
+**/*.pyc

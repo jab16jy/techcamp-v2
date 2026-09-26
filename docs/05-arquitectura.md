@@ -218,9 +218,13 @@ flowchart LR
 
 ```bash
 cp .env.example .env                  # TECHCAMP_PROFILE=seminar, clave del LLM opcional
-docker compose --profile seminar up   # postgres, mosquitto, minio, api, ingestor, worker, web
+docker compose --profile seminar up   # postgres, migrate, mosquitto, minio, api, ingestor, worker, web
 sim run --scenario el-nino --backfill 14d --live
 ```
+
+El servicio `migrate` es de un solo uso: corre `alembic upgrade head` y termina con código 0.
+`api`, `ingestor` y `worker` arrancan solo cuando `migrate` termina bien
+(`service_completed_successfully`), así que un volumen nuevo queda migrado a la cabeza sin pasos manuales.
 
 La PWA queda en `http://localhost:5173`. Para abrirla en un teléfono se usa un túnel HTTPS (cloudflared o ngrok), porque el Service Worker y el push exigen HTTPS fuera de `localhost`.
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { formatFreshness, minutesSince } from '../../../design-system/components/format'
+import { formatFreshness, formatPercent, minutesSince } from '../../../design-system/components/format'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
 import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
@@ -49,7 +49,7 @@ function NodeRow({ node, onOpen }: { node: NodeView; onOpen: () => void }) {
           <dt className="text-text-muted">RSSI</dt>
           <dd>{withUnit(health?.rssi, 'dBm')}</dd>
           <dt className="text-text-muted">Completitud 24 h</dt>
-          <dd>{withUnit(health?.completeness_24h, '%')}</dd>
+          <dd>{formatPercent(health?.completeness_24h)}</dd>
         </dl>
       )}
     </article>

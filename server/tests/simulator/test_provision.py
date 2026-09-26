@@ -9,6 +9,10 @@ the DB session, rather than inventing a new HTTP endpoint."""
 
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +22,44 @@ from techcamp.telemetry.adapters.orm import SensorRow
 from techcamp.telemetry.adapters.repositories import SqlAlchemyNodeRepository
 
 pytestmark = pytest.mark.anyio
+
+_PROVISION_IN_A_PLAIN_PROCESS = """
+import asyncio
+
+from techcamp.shared.db import Base, async_session_factory
+from techcamp.simulator.provision import provision_unclaimed_node
+
+
+async def main() -> None:
+    # `NodeRow` points at `organization` and `plot`, and SQLAlchemy resolves
+    # foreign keys against `Base.metadata` when it orders the flush, so every
+    # ORM module that owns those tables has to be registered first.
+    missing = {"organization", "plot"} - set(Base.metadata.tables)
+    assert not missing, f"unregistered FK targets: {sorted(missing)}"
+    async with async_session_factory() as session:
+        print(await provision_unclaimed_node(session))
+
+
+asyncio.run(main())
+"""
+
+
+def test_provision_works_in_a_plain_process_and_not_only_under_pytest() -> None:
+    """D4: `--provision` raised `NoReferencedTableError` outside pytest, because
+    only Alembic's `migrations/env.py` imported the farms/identity ORM modules
+    that register the foreign-key targets. The test suite migrated the schema
+    before every test body, so that import had always happened for it. A
+    subprocess is the only honest reproduction: in-process, Alembic's metadata
+    is already loaded no matter what `provision` imports."""
+    result = subprocess.run(
+        [sys.executable, "-c", _PROVISION_IN_A_PLAIN_PROCESS],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert re.fullmatch(r"SIM-[0-9A-F]{8}", result.stdout.strip())
 
 
 async def test_provision_unclaimed_node_creates_a_claimable_node_with_one_sensor(

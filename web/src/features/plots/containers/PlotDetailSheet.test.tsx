@@ -122,14 +122,14 @@ describe('PlotDetailSheet', () => {
           last_seen_at: null,
           battery_v: 3.9,
           rssi: -78,
-          completeness_24h: 98.4,
+          completeness_24h: 0.198,
         }),
     })
     renderSheet()
 
     expect(screen.getByRole('heading', { name: 'Nodos' })).toBeInTheDocument()
     expect(await screen.findByText('70B3D5A3B0000001')).toBeInTheDocument()
-    expect(await screen.findByText('98.4 %')).toBeInTheDocument()
+    expect(await screen.findByText('19.8 %')).toBeInTheDocument()
   })
 
   it('autofills the soil profile from SoilGrids', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatFreshness, formatSyncStatus, minutesSince } from './format'
+import { formatFreshness, formatPercent, formatSyncStatus, minutesSince } from './format'
 
 describe('formatFreshness', () => {
   it('reports no data when minutesAgo is null', () => {
@@ -58,5 +58,24 @@ describe('minutesSince', () => {
 
   it('never goes negative for a clock ahead of ours', () => {
     expect(minutesSince(new Date(Date.now() + 60_000).toISOString())).toBe(0)
+  })
+})
+
+describe('formatPercent', () => {
+  it('shows a 0-1 ratio as a percentage with one decimal', () => {
+    expect(formatPercent(0.198)).toBe('19.8 %')
+  })
+
+  it('rounds a long float instead of printing it raw', () => {
+    expect(formatPercent(0.19791666666666666)).toBe('19.8 %')
+  })
+
+  it('keeps a whole percentage whole', () => {
+    expect(formatPercent(1)).toBe('100.0 %')
+  })
+
+  it('reports a bare dash, with no unit, for a missing ratio', () => {
+    expect(formatPercent(null)).toBe('—')
+    expect(formatPercent(undefined)).toBe('—')
   })
 })

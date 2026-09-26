@@ -81,7 +81,7 @@ POST   /nodes:claim                           { claim_code, plot_id } → Node &
 GET    /nodes?plot_id=&status=                → Page<Node>
 PATCH  /nodes/{node_id}                       { plot_id?, status? } → Node
 POST   /nodes/{node_id}/credentials:rotate    → { password }
-GET    /nodes/{node_id}/health                → { last_seen_at, battery_v, rssi, completeness_24h }
+GET    /nodes/{node_id}/health                → { last_seen_at, battery_v, rssi, completeness_24h }   # completeness_24h es una razón 0–1, no un porcentaje
 GET    /nodes/{node_id}/sensors               → Sensor[]
 POST   /sensors/{sensor_id}/calibrations      { method, kind: lab|field, params, rmse_pct?, valid_from } → Calibration   # crea una versión nueva
 ```

@@ -5,7 +5,7 @@
 refresh_continuous_aggregate(...)` needs an AUTOCOMMIT connection).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -62,6 +62,72 @@ async def _reading_state(db_session: AsyncSession, sensor_id: int, at: datetime)
         )
     ).one()
     return row.value, row.quality
+
+
+async def _aggregate_avg(db_session: AsyncSession, view: str, sensor_id: int, at: datetime):
+    bucket = timedelta(hours=1) if view == "reading_hourly" else timedelta(days=1)
+    return (
+        await db_session.execute(
+            text(
+                f"SELECT avg_value FROM {view} WHERE sensor_id = :sid "
+                "AND bucket = time_bucket(CAST(:bucket AS interval), CAST(:t AS timestamptz))"
+            ),
+            {"sid": sensor_id, "bucket": bucket, "t": at},
+        )
+    ).scalar_one()
+
+
+async def test_recalibrate_readings_succeeds_on_a_sub_bucket_window_and_refreshes_both_views(
+    db_session: AsyncSession,
+) -> None:
+    """D5: a non-latest version is bounded by the *next* version's
+    `valid_from`, so a back-dated calibration can own a window shorter than one
+    bucket. TimescaleDB rejected `refresh_continuous_aggregate` for it — but
+    only after the recompute had already committed, so procrastinate recorded
+    the job as `failed` while the readings were rewritten. Each view must be
+    refreshed over its own whole buckets, and the aggregates are asserted so a
+    fix that merely swallows the refresh error cannot pass."""
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_percentage_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+
+    # Two versions 12 minutes apart, so v2's window is [12:30, 12:42): shorter
+    # than the 1-hour and the 1-day bucket of the two views.
+    target_valid_from = datetime(2026, 3, 1, 12, 30, tzinfo=UTC)
+    target_id = None
+    for version, valid_from, scale in (
+        (1, datetime(2026, 2, 1, tzinfo=UTC), 1.0),
+        (2, target_valid_from, 5.0),
+        (3, datetime(2026, 3, 1, 12, 42, tzinfo=UTC), 1.0),
+    ):
+        created = await repo.add_version(
+            org_id=org_id,
+            sensor_id=sensor_id,
+            version=version,
+            method=CalibrationMethod.LINEAR,
+            kind=CalibrationKind.FIELD,
+            params={"scale": scale, "offset": 0.0},
+            rmse_pct=None,
+            valid_from=valid_from,
+        )
+        assert created is not None
+        if version == 2:
+            target_id = created.id
+
+    at = datetime(2026, 3, 1, 12, 35, tzinfo=UTC)
+    await _insert_reading(db_session, sensor_id, at=at, raw_value=10.0, value=10.0, quality=0)
+    await _refresh_aggregate("reading_hourly")
+    await _refresh_aggregate("reading_daily")
+    assert await _aggregate_avg(db_session, "reading_hourly", sensor_id, at) == 10.0
+
+    # Raises nothing: this is what procrastinate records as `succeeded`.
+    await recalibrate_readings(calibration_id=str(target_id))
+
+    # The committed recompute, and both aggregates agreeing with it.
+    assert await _reading_state(db_session, sensor_id, at) == (50.0, 0)
+    assert await _aggregate_avg(db_session, "reading_hourly", sensor_id, at) == 50.0
+    assert await _aggregate_avg(db_session, "reading_daily", sensor_id, at) == 50.0
 
 
 async def test_add_version_enqueues_the_recalibration_job(db_session: AsyncSession) -> None:
