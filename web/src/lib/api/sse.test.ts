@@ -97,6 +97,15 @@ describe('createSseParser', () => {
     expect(blocks).toHaveLength(2)
   })
 
+  it('does not notify onBlock for whitespace-only blocks', () => {
+    const blocks: number[] = []
+    const parser = createSseParser({ onBlock: () => blocks.push(1) })
+
+    // Stray blank lines are not a frame and must not reset the reconnect backoff.
+    parser.push('\n\n\n\n')
+    expect(blocks).toHaveLength(0)
+  })
+
   it('notifies onEventId when id changes or is reset', () => {
     const ids: (string | null)[] = []
     const parser = createSseParser({ onEventId: (id) => ids.push(id) })
