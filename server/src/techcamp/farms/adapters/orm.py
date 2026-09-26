@@ -102,7 +102,9 @@ class PlotRow(Base):
         nullable=False,
     )
     weather_cell_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    """No FK yet: `weather_cell` is owned by E5."""
+    """0.1 degree climate cell (docs/03-modelo-datos.md:100). The `weather_cell`
+    table is owned by E5, which added the foreign key; the mapping stays a plain
+    column so farms keeps no import edge to the weather module."""
     irrigation_system: Mapped[str] = mapped_column(String, nullable=False)
     irrigation_efficiency: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
     """Null in secano (docs/03-modelo-datos.md:102)."""

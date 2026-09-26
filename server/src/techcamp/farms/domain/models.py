@@ -90,7 +90,8 @@ class Plot:
     area_ha: float
     """Computed by the database from `boundary` (`ST_Area(boundary::geography) / 10000`)."""
     weather_cell_id: int | None
-    """No FK yet: `weather_cell` is owned by E5."""
+    """0.1 degree climate cell (docs/03-modelo-datos.md:100), `None` until the
+    plot is assigned one (E5 T2)."""
     irrigation_system: IrrigationSystem
     irrigation_efficiency: float | None
     system_flow_lph: float | None
