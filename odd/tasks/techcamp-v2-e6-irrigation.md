@@ -59,13 +59,15 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   `uv run mypy`, `uv run lint-imports`.
 - Test DB: own container `techcamp-e6-db`,
   `DATABASE_URL=postgresql+asyncpg://techcamp:techcamp@localhost:5436/techcamp`.
-- Writers through Herdr (owner 2026-09-26): `agy` for low–medium units (parent runs RDD on its
-  commits), `opencode` for medium–high units (runs its own RDD), `odd-worker` only for serious or
-  highly complex work. One session per task group.
+- Writers through Herdr (owner 2026-09-26): `agy` first — fastest and most capable, the default
+  writer (parent runs RDD on its commits); `opencode` only when a mid-to-high unit needs a bit
+  more (runs its own RDD); `odd-worker` only for complex work. One session per task group.
 - Triggers fired: mapping (4+ files: one Sonnet explorer, 2026-09-26), writer (every unit touches
   2+ non-trivial files).
 - Skills forwarded: `fastapi`, `pydantic`, `find-docs`, `work-unit-commits`, `chained-pr`,
   `systematic-debugging`, ponytail.
+- Split rule (owner 2026-09-26): units over ~300 lines split into a/b sub-units, one commit
+  each, as in E5; sub-units that belong to one functionality share one writer session.
 - Delivery: `stacked-to-main`, about 400 authored lines per PR, merged in order. Forecast ≈ 1,700
   authored lines (T1 450, T2 300, T3 450, T4 250, T5 250).
 - RDD: on (global). One `gentle-ai review assess --committed-only` per work-unit commit; first
@@ -87,16 +89,29 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
 - Weather: ET0 and rain for the day from the cell's observed row, else its forecast row; 48 h and
   7-day forecast sums from forecast rows. Weather older than 24 h marks low confidence in the
   `rationale` (docs/06 §6, E5 handoff).
+- Water-balance status threshold: `watch` applies when `0.8 * RAW <= Dr < RAW`; below `0.8 * RAW`
+  is `ok`. At or above `RAW`, irrigated plots report `irrigate` and rainfed plots report `stress`
+  (rainfed never reports `irrigate`, docs/04:75; `stress` when `Dr > RAW`, docs/04:75, ADR-0022).
+- Sensor representative depth tolerance: single sensor near `Zr/2` is evaluated with tolerance
+  `0.15 * Zr` (`ZR_HALF_TOLERANCE_RATIO = 0.15`), marked with ponytail as pending agronomic
+  validation (docs/06 §5).
 
 ## Tasks
-- [ ] T1 Domain FAO-56 math and recommendation decision, pure, with FAO-56 numeric examples
-  (docs/06 §5, ADR-0009/0022/0023). Writer: opencode (medium–high: numeric correctness).
+- [ ] T1 Domain FAO-56 rules, pure, with FAO-56 numeric examples (docs/06 §5,
+  ADR-0009/0022/0023). Writer: agy, one session for T1a–T1b, one commit each.
+  - [ ] T1a Balance math: Kc per day (development interpolated), ETc, TAW, adjusted p, RAW,
+    θ_stress, Pe, Dr model/observed, sensor weight K and assimilation.
+  - [ ] T1b Decision rules: recommendation kinds, depth and minutes, rainfed advice table,
+    water-balance status, rationale.
 - [ ] T2 `water_balance_daily` + `irrigation_recommendation` tables, migration (chained from
   `b7e2c9a41d38`), ORM, org-filtered repositories (docs/03:193-215, docs/09). Writer: agy.
-- [ ] T3 Daily balance use case per plot: gather cycle/crop/stages, soil, plot system, cell
-  weather, representative sensor + calibration → persist balance + recommendation; soil profile
-  read on the farms port; docs/06 §5 note on missing soil data (docs/06 §5, ADR-0022). Writer:
-  opencode.
+- [ ] T3 Daily balance use case per plot (docs/06 §5, ADR-0022). Writer: agy, one session for
+  T3a–T3b, one commit each.
+  - [ ] T3a Gather cycle/crop/stages, soil (read on the farms port), plot system, cell weather →
+    compute and persist balance + recommendation with K = 0; docs/06 §5 note on missing soil
+    data.
+  - [ ] T3b Representative sensor + active calibration → K and assimilation, `without_sensor`
+    flag.
 - [ ] T4 Daily job 04:30 America/Bogota with per-plot fan-out, `POST /dev/jobs/irrigation:run
   {day?}`, docs/04:181 update (docs/06 §5, ADR-0012). Writer: agy.
 - [ ] T5 `GET /plots/{id}/irrigation/recommendation?day=` and `GET /plots/{id}/water-balance`,
@@ -123,4 +138,4 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
 - Boundary: `a899aa6`.
 
 ## Next step
-T1 via opencode.
+T1 via agy.
