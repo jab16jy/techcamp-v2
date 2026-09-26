@@ -175,19 +175,19 @@ erDiagram
   }
   weather_cell {
     int id PK
-    numeric lat
+    numeric lat "celda de 0,1°; UNIQUE(lat, lon)"
     numeric lon
   }
   weather_daily {
     int cell_id PK, FK
     date day PK
     bool is_forecast PK
-    numeric et0_mm
-    numeric rain_mm
-    numeric tmin_c
-    numeric tmax_c
-    numeric rh_mean_pct
-    timestamptz fetched_at
+    numeric et0_mm "null si el proveedor no trae valor"
+    numeric rain_mm "null si el proveedor no trae valor"
+    numeric tmin_c "null si el proveedor no trae valor"
+    numeric tmax_c "null si el proveedor no trae valor"
+    numeric rh_mean_pct "null si el proveedor no trae valor"
+    timestamptz fetched_at "NOT NULL; reloj de la regla stale"
   }
   water_balance_daily {
     uuid plot_id PK, FK
@@ -383,6 +383,14 @@ erDiagram
 | Compresión | Después de 7 días, `segmentby = sensor_id`, `orderby = time DESC` | ~90 % de ahorro; las consultas típicas son por sensor y rango |
 | Crudo y calibrado | Se guardan ambos | Si cambia la calibración se recalcula `value` desde `raw_value` sin perder historia |
 | Formato | Angosto: una fila por variable | Los nodos tienen sensores distintos; una tabla ancha tendría columnas vacías |
+
+### `weather_cell` y `weather_daily`: la caché del proveedor
+
+| Aspecto | Decisión | Por qué |
+|---|---|---|
+| Tipo | Tablas normales de Postgres, **no** hypertable | `weather_daily` guarda una ventana acotada de 16 días por celda; no es una serie de alta frecuencia como `reading`, y el balance hídrico diario (E6) la lee como una relación común |
+| Unicidad de la celda | `UNIQUE (lat, lon)` | La celda es la caché de Open-Meteo ([docs/09](09-cuellos-de-botella.md#modos-de-falla)): sin unicidad, dos parcelas asignadas a la vez a la misma celda crean dos filas y dos llamadas al proveedor. Las coordenadas son el resultado de redondear a 0,1° ([docs/00](00-glosario.md)) |
+| Nulos | Las cinco medidas admiten `null`; solo `fetched_at` es `NOT NULL` | Open-Meteo devuelve `null` para un día del que no tiene valor; inventar un cero falsearía el balance hídrico. `fetched_at` sí es obligatorio porque es el reloj de la regla `stale` ([docs/06](06-diseno-detallado.md)) |
 
 ### `logbook_entry`: la tabla que se sincroniza offline
 
