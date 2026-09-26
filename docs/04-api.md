@@ -179,7 +179,7 @@ GET  /dev/outbox              → Notification[]    # SMS/WhatsApp simulados
 POST /dev/scenarios/{name}:load → 202             # lo usa el simulador para crear datos base y fixtures
 ```
 
-`weather` es el único nombre que encola los dos jobs de su agenda diaria —el refresco del pronóstico y la consolidación de `day` (por defecto, ayer)— y por eso responde `{ job_id, consolidate_job_id }` ([06-diseno-detallado.md §6](06-diseno-detallado.md#6-clima)); los demás nombres encolan un solo job. Un `day` que todavía no ha ocurrido se responde `422`.
+`weather` es el único nombre que encola los dos jobs de su agenda diaria —el refresco del pronóstico y la consolidación de `day` (por defecto, ayer)— y por eso responde `{ job_id, consolidate_job_id }` ([06-diseno-detallado.md §6](06-diseno-detallado.md#6-clima)); los demás nombres encolan un solo job. `day` debe ser un día ya transcurrido: hoy todavía es pronóstico y un día futuro no tiene clima observado, así que ambos se responden `422`.
 
 ## Stream (SSE)
 

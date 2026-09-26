@@ -155,6 +155,19 @@ async def test_the_route_rejects_a_day_that_has_not_happened(db_session: AsyncSe
     assert await _queued(db_session) == {}
 
 
+async def test_the_route_rejects_today(db_session: AsyncSession) -> None:
+    """Today is rejected, not only the future: today's weather is still a
+    forecast, and Open-Meteo answers `past_days=0, forecast_days=0` with zero
+    days (verified against the live API), so accepting today would answer 200 and
+    queue a consolidation that provably stores nothing — the seminar would see
+    success and no data."""
+    response = _client().post(_ROUTE, json={"day": local_today().isoformat()})
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+    assert await _queued(db_session) == {}
+
+
 async def test_the_route_rejects_a_day_that_is_not_a_day(db_session: AsyncSession) -> None:
     """A value that is not a date is FastAPI's own validation failure, which this
     repo answers as a plain JSON 422 (`shared/errors.py`'s validation handler),

@@ -26,7 +26,10 @@ from techcamp.weather.adapters.jobs import (
 
 router = APIRouter(prefix="/dev/jobs", tags=["dev-jobs"])
 
-_FUTURE_DAY_DETAIL = "A day that has not happened yet has no observed weather to consolidate."
+_UNCONSOLIDATED_DAY_DETAIL = (
+    "Only a day that is already over can be consolidated: today is still a forecast, "
+    "and Open-Meteo answers a request for past days only with the days it has passed."
+)
 
 
 class WeatherJobsRunRequest(BaseModel):
@@ -48,8 +51,12 @@ class WeatherJobsRunResponse(BaseModel):
 @router.post("/weather:run", response_model=WeatherJobsRunResponse)
 async def run_weather_jobs(payload: WeatherJobsRunRequest) -> WeatherJobsRunResponse:
     day = payload.day or previous_day()
-    if day > local_today():
-        raise ProblemError(status=422, title="Unprocessable day", detail=_FUTURE_DAY_DETAIL)
+    # `>=` today, not `>`: today's weather is still a forecast, and Open-Meteo
+    # answers `past_days=0, forecast_days=0` (which is what today would ask for)
+    # with zero days, so accepting it would queue a consolidation that provably
+    # stores nothing while the route reports success.
+    if day >= local_today():
+        raise ProblemError(status=422, title="Unprocessable day", detail=_UNCONSOLIDATED_DAY_DETAIL)
     # `queue` on every defer, not just on the task: procrastinate's `defer` builds
     # a job from the options it is handed and never from the task's own default
     # (`configure_task`), so without it both jobs would sit in the default queue
