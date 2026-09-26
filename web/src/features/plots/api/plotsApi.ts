@@ -140,6 +140,52 @@ export function useSoilProfile(plotId: string) {
   })
 }
 
+export interface LatestReading {
+  sensorId: number
+  depthCm: number | null
+  value: number
+  at: string
+}
+
+/** Short window, not the 2 days `raw` allows: this block shows the latest value, and a
+ * wider window would only cost points nobody reads. */
+const READINGS_WINDOW_MS = 2 * 60 * 60 * 1000
+
+export const SOIL_MOISTURE = 'soil_moisture'
+
+/** docs/04-api.md:92-97 `GET /plots/{plot_id}/readings` reduced to the newest calibrated
+ * point of each sensor series, which is all a "latest value" block needs. */
+async function fetchLatestReadings(plotId: string): Promise<LatestReading[]> {
+  const to = new Date()
+  const from = new Date(to.getTime() - READINGS_WINDOW_MS)
+  const { data, error } = await apiClient.GET('/api/v1/plots/{plot_id}/readings', {
+    params: {
+      path: { plot_id: plotId },
+      query: {
+        metric: SOIL_MOISTURE,
+        from: from.toISOString(),
+        to: to.toISOString(),
+        resolution: 'raw',
+      },
+    },
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from /plots/{plot_id}/readings')
+  return data.series.flatMap((series) => {
+    const last = series.points[series.points.length - 1]
+    return last === undefined
+      ? []
+      : [{ sensorId: series.sensor_id, depthCm: series.depth_cm, value: last[1], at: last[0] }]
+  })
+}
+
+export function useLatestReadings(plotId: string) {
+  return useQuery({
+    queryKey: ['latestReadings', plotId],
+    queryFn: () => fetchLatestReadings(plotId),
+  })
+}
+
 async function putSoil(plotId: string, input: SoilProfilePutRequest): Promise<SoilProfileView> {
   const { data, error } = await apiClient.PUT('/api/v1/plots/{plot_id}/soil', {
     params: { path: { plot_id: plotId } },

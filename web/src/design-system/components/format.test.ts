@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatFreshness, formatSyncStatus } from './format'
+import { formatFreshness, formatSyncStatus, minutesSince } from './format'
 
 describe('formatFreshness', () => {
   it('reports no data when minutesAgo is null', () => {
@@ -42,5 +42,21 @@ describe('formatSyncStatus', () => {
     expect(
       formatSyncStatus({ online: true, pendingCount: 1, lastDataMinutesAgo: null }),
     ).toBe('1 por subir · sin datos')
+  })
+})
+
+describe('minutesSince', () => {
+  it('reports whole minutes since an ISO timestamp', () => {
+    const twelveMinutesAgo = new Date(Date.now() - 12 * 60_000).toISOString()
+    expect(minutesSince(twelveMinutesAgo)).toBe(12)
+  })
+
+  it('reports no minutes for a missing or unparsable timestamp', () => {
+    expect(minutesSince(null)).toBeNull()
+    expect(minutesSince('not-a-date')).toBeNull()
+  })
+
+  it('never goes negative for a clock ahead of ours', () => {
+    expect(minutesSince(new Date(Date.now() + 60_000).toISOString())).toBe(0)
   })
 })

@@ -234,6 +234,9 @@ describe('PlotsScreen', () => {
       const url = requestUrl(input as Request)
       if (url.includes('/crops')) return jsonResponse([])
       if (url.includes('/nodes?')) return jsonResponse({ items: [], next_cursor: null })
+      if (url.includes('/readings')) return jsonResponse({ series: [] })
+      // A stream that never settles is an open farm stream.
+      if (url.includes('/stream')) return new Promise<Response>(() => {})
       if (url.includes('/farms/farm-1/plots')) {
         return jsonResponse([
           { id: 'plot-1', farm_id: 'farm-1', name: 'Lote Norte', area_ha: 1, irrigation_system: 'none' },
@@ -250,7 +253,9 @@ describe('PlotsScreen', () => {
     await waitFor(() => expect(screen.getByText('Lote Norte')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /Lote Norte/ }))
 
-    expect(screen.getByText('Suelo, ciclo de cultivo y nodos de esta parcela.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Humedad, suelo, ciclo de cultivo y nodos de esta parcela.'),
+    ).toBeInTheDocument()
     expect(screen.getAllByText('Lote Norte')).toHaveLength(2)
   })
 })

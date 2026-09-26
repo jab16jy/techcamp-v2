@@ -12,6 +12,10 @@ function requestOf(input: Request | string | URL): Request {
   return input as Request
 }
 
+function requestUrl(input: Request | string | URL): string {
+  return input instanceof Request ? input.url : String(input)
+}
+
 const CROPS = [
   {
     id: 1,
@@ -45,25 +49,50 @@ function renderSheet(onOpenChange: (open: boolean) => void = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={queryClient}>
-      <PlotDetailSheet open onOpenChange={onOpenChange} plotId="plot-1" plotName="Lote Norte" />
+      <PlotDetailSheet
+        open
+        onOpenChange={onOpenChange}
+        plotId="plot-1"
+        farmId="farm-1"
+        plotName="Lote Norte"
+      />
     </QueryClientProvider>,
   )
 }
 
-/** Mocks `GET /crops` plus every other call the test provides by URL substring. The nodes
- * section asks for its own list on every render, so an empty page is the default here
- * instead of a second `/nodes` key in every test. */
-function mockFetch(byUrl: Record<string, () => Response>) {
-  const routes: Record<string, () => Response> = {
-    '/nodes?': () => jsonResponse({ items: [], next_cursor: null }),
-    ...byUrl,
-  }
+type Route = () => Response | Promise<Response>
+
+/** The nodes and soil-moisture sections ask on every render and the stream is a
+ * long-lived request, so those three are defaulted instead of repeated in every test. */
+const DEFAULT_ROUTES: Record<string, Route> = {
+  '/nodes?': () => jsonResponse({ items: [], next_cursor: null }),
+  '/readings': () => jsonResponse({ series: [] }),
+  // A stream that never settles is an open farm stream.
+  '/stream': () => new Promise<Response>(() => {}),
+}
+
+/** Mocks `GET /crops` plus every other call the test provides by URL substring. A test's
+ * own route is looked up before the defaults, so it can override any of them. */
+function mockFetch(byUrl: Record<string, Route>) {
+  const routes = [...Object.entries(byUrl), ...Object.entries(DEFAULT_ROUTES)]
   vi.mocked(fetch).mockImplementation(async (input) => {
-    const request = requestOf(input as Request)
-    const match = Object.entries(routes).find(([substr]) => request.url.includes(substr))
-    if (!match) throw new Error(`unexpected request: ${request.url}`)
+    const url = requestUrl(input as Request)
+    const match = routes.find(([substr]) => url.includes(substr))
+    if (!match) throw new Error(`unexpected request: ${url}`)
     return match[1]()
   })
+}
+
+/** A farm stream that emits the given raw SSE text and then stays open. */
+function streamResponse(chunk: string): Promise<Response> {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(chunk))
+    },
+  })
+  return Promise.resolve(
+    new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+  )
 }
 
 describe('PlotDetailSheet', () => {
@@ -174,7 +203,7 @@ describe('PlotDetailSheet', () => {
     expect(screen.queryByRole('button', { name: 'Guardar suelo' })).not.toBeInTheDocument()
 
     const [request] = vi.mocked(fetch).mock.calls.find(([input]) =>
-      requestOf(input as Request).url.includes('/soil'),
+      requestUrl(input as Request).includes('/soil'),
     )!
     const body = await requestOf(request as Request).json()
     expect(body).toEqual({
@@ -399,7 +428,7 @@ describe('PlotDetailSheet', () => {
     expect(screen.getByText(/Maíz · sembrado el 2026-06-01/)).toBeInTheDocument()
 
     const cycleCalls = vi.mocked(fetch).mock.calls.filter(([input]) =>
-      requestOf(input as Request).url.includes('/cycles'),
+      requestUrl(input as Request).includes('/cycles'),
     )
     expect(cycleCalls).toHaveLength(1)
     expect(await requestOf(cycleCalls[0][0] as Request).json()).toEqual({
@@ -480,5 +509,77 @@ describe('PlotDetailSheet', () => {
     expect(screen.queryByText('Estado: Activo')).not.toBeInTheDocument()
     expect(screen.queryByText('Estado: Cosechado')).not.toBeInTheDocument()
     expect(patchCalls).toBe(1)
+  })
+
+  it('shows the latest soil moisture per depth from the readings query', async () => {
+    const twelveMinutesAgo = new Date(Date.now() - 12 * 60_000).toISOString()
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/readings': () =>
+        jsonResponse({
+          series: [
+            {
+              sensor_id: 1,
+              depth_cm: 20,
+              points: [
+                [new Date(Date.now() - 30 * 60_000).toISOString(), 44.1],
+                [twelveMinutesAgo, 42.5],
+              ],
+            },
+          ],
+        }),
+    })
+    renderSheet()
+
+    expect(await screen.findByText('42.5 %')).toBeInTheDocument()
+    expect(screen.getByText('20 cm')).toBeInTheDocument()
+    expect(screen.getByText('dato de hace 12 min')).toBeInTheDocument()
+
+    const url = vi
+      .mocked(fetch)
+      .mock.calls.map(([input]) => requestUrl(input as Request))
+      .find((candidate) => candidate.includes('/readings'))
+    expect(url).toContain('metric=soil_moisture')
+    expect(url).toContain('resolution=raw')
+  })
+
+  it('updates the live line when a reading event arrives for this plot', async () => {
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/readings': () =>
+        jsonResponse({ series: [{ sensor_id: 1, depth_cm: 20, points: [['2026-09-25T10:00:00Z', 42.5]] }] }),
+      '/stream': () =>
+        streamResponse(
+          `id: 7\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":51.2,"at":"${new Date().toISOString()}"}\n\n`,
+        ),
+    })
+    renderSheet()
+
+    // The live line is one <p> with three text nodes, so match its whole content.
+    expect(await screen.findByText(/Última lectura del nodo: 51\.2 %/)).toBeInTheDocument()
+  })
+
+  it('ignores a reading event for another plot', async () => {
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/readings': () =>
+        jsonResponse({ series: [{ sensor_id: 1, depth_cm: 20, points: [['2026-09-25T10:00:00Z', 42.5]] }] }),
+      '/stream': () =>
+        streamResponse(
+          `id: 8\nevent: reading\ndata: {"plot_id":"plot-9","metric":"soil_moisture","value":51.2,"at":"${new Date().toISOString()}"}\n\n`,
+        ),
+    })
+    renderSheet()
+
+    await screen.findByText('42.5 %')
+    expect(screen.queryByText(/51\.2/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Última lectura del nodo/)).not.toBeInTheDocument()
+  })
+
+  it('says so when the plot has no recent readings', async () => {
+    mockFetch({ '/crops': () => jsonResponse(CROPS) })
+    renderSheet()
+
+    expect(await screen.findByText('Sin lecturas recientes')).toBeInTheDocument()
   })
 })

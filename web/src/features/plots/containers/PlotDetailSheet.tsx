@@ -17,12 +17,16 @@ import {
 } from '../../../design-system/ui/select'
 import { ApiError } from '../../../lib/api/client'
 import { describeApiError } from '../../../lib/api/errorCopy'
+import { formatFreshness, minutesSince } from '../../../design-system/components/format'
+import { asReadingEvent, useFarmEvents } from '../../../lib/api/useFarmEvents'
 import { PlotNodesSection } from '../../nodes/containers/PlotNodesSection'
 import {
+  SOIL_MOISTURE,
   useActiveCycle,
   useAutofillSoil,
   useCreateCycle,
   useCrops,
+  useLatestReadings,
   usePatchCycle,
   usePutSoil,
   useSoilProfile,
@@ -34,6 +38,8 @@ export interface PlotDetailSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   plotId: string
+  /** The farm the plot belongs to: the SSE stream is filtered by farm (docs/04:180). */
+  farmId: string
   plotName: string
 }
 
@@ -413,6 +419,57 @@ function CycleSection({ plotId }: { plotId: string }) {
   )
 }
 
+
+/**
+ * Live soil moisture (docs/07 plot detail). The per-depth values come from
+ * `GET /plots/{plot_id}/readings`; a `reading` event only adds its own value, because the
+ * payload carries no `sensor_id`/`depth_cm` (docs/04:182) and a value must never be shown
+ * under a depth it did not come from.
+ */
+function SoilMoistureSection({ plotId, farmId }: { plotId: string; farmId: string }) {
+  const readingsQuery = useLatestReadings(plotId)
+  const [live, setLive] = useState<{ value: number; at: string } | null>(null)
+
+  useFarmEvents(farmId, (event) => {
+    if (event.event !== 'reading') return
+    const reading = asReadingEvent(event.data)
+    if (reading === null) return
+    if (reading.plot_id !== plotId || reading.metric !== SOIL_MOISTURE) return
+    setLive({ value: reading.value, at: reading.at })
+  })
+
+  const readings = readingsQuery.data ?? []
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-lg font-semibold">Humedad del suelo</h2>
+      {readingsQuery.isLoading && <p className="text-base text-text-muted">Cargando lecturas…</p>}
+      {readingsQuery.isError && (
+        <p className="text-base text-severity-critical">{describeApiError(readingsQuery.error)}</p>
+      )}
+      {readingsQuery.isSuccess && readings.length === 0 && live === null && (
+        <p className="text-base text-text-muted">Sin lecturas recientes</p>
+      )}
+      {readings.length > 0 && (
+        <dl className="grid grid-cols-3 gap-x-4 gap-y-1 text-base">
+          {readings.map((reading) => (
+            <div key={reading.sensorId} className="contents">
+              <dt className="text-text-muted">{reading.depthCm === null ? '—' : `${reading.depthCm} cm`}</dt>
+              <dd>{reading.value} %</dd>
+              <dd className="text-sm text-text-muted">{formatFreshness(minutesSince(reading.at))}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {live !== null && (
+        <p className="text-base">
+          Última lectura del nodo: {live.value} % · {formatFreshness(minutesSince(live.at))}
+        </p>
+      )}
+    </section>
+  )
+}
+
 /**
  * Plot detail (docs/07 mapa de pantallas: `plots --> plotd[Parcela: polígono, suelo,
  * ciclo]` and `plotd --> nodes[Nodos de la parcela]`; the polygon itself is T8's
@@ -420,15 +477,22 @@ function CycleSection({ plotId }: { plotId: string }) {
  * navigation node, T9). Opened from a plot row in `PlotsList` (entry point, replacing an
  * inert `<li>` with a button).
  */
-export function PlotDetailSheet({ open, onOpenChange, plotId, plotName }: PlotDetailSheetProps) {
+export function PlotDetailSheet({
+  open,
+  onOpenChange,
+  plotId,
+  farmId,
+  plotName,
+}: PlotDetailSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent>
         <SheetHeader>
           <SheetTitle>{plotName}</SheetTitle>
-          <SheetDescription>Suelo, ciclo de cultivo y nodos de esta parcela.</SheetDescription>
+          <SheetDescription>Humedad, suelo, ciclo de cultivo y nodos de esta parcela.</SheetDescription>
         </SheetHeader>
         <div className="flex flex-col gap-6">
+          <SoilMoistureSection plotId={plotId} farmId={farmId} />
           <SoilSection plotId={plotId} />
           <CycleSection plotId={plotId} />
           <PlotNodesSection plotId={plotId} />
