@@ -99,8 +99,8 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
     `MockTransport` tests, seminar/production DI — route: Herdr AGY — forecast ~350 — actual 530 (`22e7dc0`, lane B)
   - [x] T3b Timeout 10 s, 3 retries with backoff and jitter, circuit breaker — route: Herdr AGY
     (same session as T3a) — forecast ~250 — actual 404 (`b0e95e7`) + review correction 30 (`05c4f47`)
-- [ ] T4 Weather API (lane A): `GET /plots/{plot_id}/weather?days=`, org isolation test, docs/04
-  `WeatherDay` shape — route: Herdr AGY (parallel with T5) — forecast ~400
+- [x] T4 Weather API (lane A): `GET /plots/{plot_id}/weather?days=`, org isolation test, docs/04
+  `WeatherDay` shape — route: Herdr AGY (parallel with T5) — forecast ~400 — actual 552 (`f07d66f`)
 - [ ] T5 Weather jobs (branch `feat/e5-weather-jobs` = lane A @ `afbd9ab` + lane B merged; parallel with T4)
   - [ ] T5a 3 h forecast refresh per active cell, parallel per cell, keeps last data on failure;
     cold-start fetch for new cells — route: Herdr OpenCode — forecast ~400
@@ -125,6 +125,7 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
 
 - Lane A T1b + T2 (`68d44ea..68704fd`): T1b alone was `under_budget` (131 lines) and was reviewed with T2. Medium, `slice_budget_reached`; standing grant applied by the OpenCode writer; lineage `review-3128da3705bbd142`, one reliability lens → CRITICAL `R3-ATOMIC-PARTIAL-PLOT` (plot committed before its cell was assigned) and `R3-RACE-STALE-CELL` (cell computed from an older boundary under concurrent updates) → bounded correction `213605c` (80 lines: boundary and cell written in one statement, cell derived from the same WKT) → APPROVED and acknowledged. No WARNING/SUGGESTION. Lane A boundary → `213605c`.
 - Lane B T3b (`22e7dc0..b0e95e7`): medium, slice_budget_reached; standing grant applied; lineage review-d4e015438f4453ed, one reliability lens → CRITICAL `R3-double-count-failure` (each failed operation counted twice by the circuit breaker, opens at ceil(N/2)) → correction plan 40 lines → bounded correction `05c4f47` → targeted validation APPROVED and acknowledged. 3 WARNING + 1 SUGGESTION → #78, deferred. Lane B boundary → `05c4f47`. T5 note: jobs must share one adapter instance so the breaker state is shared.
+- Lane A T4 (`213605c..f07d66f`, 552 lines): medium, `slice_budget_reached`; standing grant applied by the parent; lineage `review-ccfbc447f0100ee9`, one reliability lens, APPROVED and acknowledged. 1 WARNING + 1 SUGGESTION, non-blocking → issue #79, deferred. Lane A boundary → `f07d66f`.
 
 ## Progress / evidence
 - T1a `68d44ea` (OpenCode): RDD approved, zero findings. Follow-up noticed: `tests/telemetry/test_jobs.py::test_two_queued_jobs_for_one_sensor_never_run_at_the_same_time` is order-flaky (~1 in 3 full runs).
@@ -132,4 +133,5 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
 - T1b `0a4db5d` (OpenCode): 9 pure domain tests; pytest 493 passed; all checks green; docs/03 records `UNIQUE(lat, lon)`, nullable measures, plain table.
 - T2 `68704fd` + `213605c` (OpenCode): cell = centroid of the plot polygon rounded to 0.1° (docs/06 §6 bullet added); farms repository calls the weather repository and `cell_for` (no port); backfill migration `b7e2c9a41d38` (downgrade intentionally empty: derived data); shared `tests/conftest.py` teardown now truncates `weather_cell`/`weather_daily`. pytest 500 passed; all checks green; parent spot check `lint-imports` kept.
 - T3b `b0e95e7` (AGY, ~404 lines). RED: `ImportError: cannot import name 'CircuitState'`. Checks (techcamp_e5b): pytest 502 passed; ruff, format, mypy, lint-imports green. Correction `05c4f47` (30 lines, AGY): RED threshold test then GREEN; pytest 503 passed; all checks green.
+- T4 `f07d66f` (AGY): RED `ModuleNotFoundError: No module named 'techcamp.weather.adapters.api'`; pytest 506 passed; ruff, format, mypy, lint-imports green; docs/04 records the `WeatherDay` shape, `days` 1..16, America/Bogota today and the `stale` rule. Follow-up noticed: intermittent Timescale teardown race (`DROP MATERIALIZED VIEW reading_hourly`: tuple concurrently updated).
 - 2026-09-26: E5 mapped (docs/03, 04, 05, 06 §6/§8/§10, 09, ADR-0009/0021). Feature doc created.
