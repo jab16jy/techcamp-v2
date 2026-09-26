@@ -32,7 +32,11 @@ DEFAULT_INTERVAL_S = 900
 async def provision_unclaimed_node(session: AsyncSession) -> str:
     """Inserts one unclaimed node with a single soil-moisture sensor
     (`sm_10`, `%`, matching docs/03-modelo-datos.md:463-467's own two-point
-    example) and returns its claim code."""
+    example) and returns its claim code.
+
+    One transaction for both rows: a node with no sensor is claimable but can
+    never publish a reading, which reads as a broken node in the seminar
+    instead of a failed provisioning."""
     node_id = uuid7()
     claim_code = f"SIM-{secrets.token_hex(4).upper()}"
     session.add(
@@ -51,7 +55,6 @@ async def provision_unclaimed_node(session: AsyncSession) -> str:
             status="provisioned",
         )
     )
-    await session.commit()
     session.add(
         SensorRow(
             node_id=node_id, channel_key="sm_10", metric="soil_moisture", depth_cm=10, unit="%"

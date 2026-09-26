@@ -43,3 +43,40 @@ def test_parse_args_accepts_provision_without_a_claim_code() -> None:
 
     assert args.claim_code is None
     assert args.provision is True
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "-0.5"])
+def test_parse_args_rejects_a_non_positive_backfill_days(value: str) -> None:
+    """#40: `--backfill-days 0` published nothing and reported "backfilled 0
+    uplink(s)", which reads like a working run instead of a typo."""
+
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--phone",
+                "+573001112233",
+                "--plot-id",
+                _PLOT_ID,
+                "--claim-code",
+                "CODE1",
+                "--backfill-days",
+                value,
+            ]
+        )
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_parse_args_rejects_a_non_positive_interval_s(value: str) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(
+            [
+                "--phone",
+                "+573001112233",
+                "--plot-id",
+                _PLOT_ID,
+                "--claim-code",
+                "CODE1",
+                "--interval-s",
+                value,
+            ]
+        )

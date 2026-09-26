@@ -51,6 +51,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.claim_code is None and not args.provision:
         parser.error("either --claim-code or --provision is required")
+    if args.backfill_days <= 0:
+        parser.error("--backfill-days must be greater than 0")
+    if args.interval_s <= 0:
+        parser.error("--interval-s must be greater than 0")
     return args
 
 
@@ -88,9 +92,13 @@ async def run(args: argparse.Namespace) -> None:
         # R3-calibration-valid-from-after-backfill: every backfilled uplink has
         # ts < now, so valid_from must cover the earliest one or ingest finds
         # no calibration for it (docs/06 §10; node_client.ensure_calibrations).
-        await ensure_calibrations(
-            client, token=token, node=node, valid_from=now - timedelta(days=args.backfill_days)
-        )
+        # An uplink `ts` is whole epoch seconds (docs/04-api.md:218) and the
+        # earliest one is `int((now - backfill_days).timestamp())`, so the window
+        # opens on that same whole second: keeping `now`'s microseconds would
+        # leave the first backfilled uplink a fraction of a second *before* it,
+        # and ingest would store it uncalibrated.
+        earliest_backfill_at = (now - timedelta(days=args.backfill_days)).replace(microsecond=0)
+        await ensure_calibrations(client, token=token, node=node, valid_from=earliest_backfill_at)
 
     async with aiomqtt.Client(
         args.broker_host, args.broker_port, username=node.mqtt_username, password=node.mqtt_password
@@ -109,7 +117,16 @@ async def run(args: argparse.Namespace) -> None:
         if args.live:
             print(f"[sim] live: publishing every {LIVE_INTERVAL_S}s (Ctrl+C to stop)")
             await publish_live(
-                publisher, node.node_id, sensors=node.sensors, seed=args.seed, start_seq=next_seq
+                publisher,
+                node.node_id,
+                sensors=node.sensors,
+                seed=args.seed,
+                start_seq=next_seq,
+                # `publish_backfill` starts at seq 1, so the count of points it
+                # published is where the live loop has to continue the
+                # trajectory (docs/06 §10: "la lectura siguiente de la
+                # trayectoria") instead of replaying its first one.
+                start_index=next_seq - 1,
             )
 
 

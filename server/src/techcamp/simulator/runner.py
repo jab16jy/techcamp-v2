@@ -56,6 +56,7 @@ async def publish_live(
     sensors: list[dict[str, Any]],
     seed: int,
     start_seq: int,
+    start_index: int = 0,
     interval_s: int = LIVE_INTERVAL_S,
     iterations: int | None = None,
     firmware: str = DEFAULT_FIRMWARE,
@@ -63,13 +64,16 @@ async def publish_live(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
     """Publishes the trajectory's next point every `interval_s` (default 5s,
-    docs/06 §10), with `ts = now`. `iterations=None` (the CLI default) runs
-    until cancelled (Ctrl+C); a finite count makes this testable without a
-    real wait."""
+    docs/06 §10), with `ts = now`. `start_index` is how many trajectory points
+    a preceding `publish_backfill` already published, so the live loop continues
+    that trajectory instead of replaying its first point (docs/06 §10: "la
+    lectura siguiente de la trayectoria" in the live loop). `iterations=None`
+    (the CLI default) runs until cancelled (Ctrl+C); a finite count makes this
+    testable without a real wait."""
     index = 0
     while iterations is None or index < iterations:
         channels = {
-            sensor["channel_key"]: raw_value_at(index, seed=seed + j)
+            sensor["channel_key"]: raw_value_at(start_index + index, seed=seed + j)
             for j, sensor in enumerate(sensors)
         }
         payload = build_uplink(

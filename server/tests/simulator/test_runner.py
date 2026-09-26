@@ -11,6 +11,7 @@ from uuid import UUID
 import pytest
 
 from techcamp.simulator.runner import publish_backfill, publish_live
+from techcamp.simulator.trajectory import raw_value_at
 
 pytestmark = pytest.mark.anyio
 
@@ -76,3 +77,41 @@ async def test_publish_live_publishes_one_uplink_per_iteration_sleeping_between_
 
     assert [u["seq"] for u in publisher.uplinks] == [97, 98, 99]
     assert sleeps == [5, 5, 5]
+
+
+async def test_publish_live_continues_the_trajectory_after_the_backfill() -> None:
+    """#40: the live loop used to restart at trajectory index 0, so the first
+    live uplink replayed the backfill's first point (same sine phase, same
+    seeded noise) — a jump in the chart right where the backfill ends.
+    `start_index` offsets the trajectory only; `seq` is already offset by
+    `start_seq`, which `publish_backfill` returned."""
+
+    async def _fake_sleep(seconds: float) -> None:
+        pass
+
+    publisher = _RecordingPublisher()
+    next_seq = await publish_backfill(
+        publisher, _NODE_ID, sensors=_SENSORS, days=1, interval_s=900, seed=1, now=datetime.now(UTC)
+    )
+    backfilled = next_seq - 1  # publish_backfill starts at seq 1
+    publisher.uplinks.clear()
+
+    await publish_live(
+        publisher,
+        _NODE_ID,
+        sensors=_SENSORS,
+        seed=1,
+        start_seq=next_seq,
+        start_index=backfilled,
+        interval_s=5,
+        iterations=2,
+        sleep=_fake_sleep,
+    )
+
+    assert [u["m"]["sm_10"] for u in publisher.uplinks] == [
+        raw_value_at(96, seed=1),
+        raw_value_at(97, seed=1),
+    ]
+    # the old trajectory's first point, the one the live loop used to repeat
+    assert publisher.uplinks[0]["m"]["sm_10"] != raw_value_at(0, seed=1)
+    assert [u["seq"] for u in publisher.uplinks] == [97, 98]
