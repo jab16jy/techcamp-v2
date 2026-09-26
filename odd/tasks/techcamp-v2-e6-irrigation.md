@@ -111,8 +111,12 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
     `test_decide_recommendation_irrigated_irrigate_depth_and_minutes` (ImportError:
     WATCH_THRESHOLD_RATIO). Checks: `pytest tests/irrigation` 26 → 36 passed, ruff, format, mypy,
     lint-imports green. Both REDs are collection errors of a new module, the weakest RED form.
-- [ ] T2 `water_balance_daily` + `irrigation_recommendation` tables, migration (chained from
+- [x] T2 `water_balance_daily` + `irrigation_recommendation` tables, migration (chained from
   `b7e2c9a41d38`), ORM, org-filtered repositories (docs/03:193-215, docs/09). Writer: agy.
+  - Evidence (agy): `e2ec0db`, migration `d8a2f1c4e9b7`; RED
+    `test_upsert_and_read_back_water_balance` (ModuleNotFoundError: irrigation.adapters.orm);
+    `pytest tests/irrigation` 42 passed, ruff, format, mypy, lint-imports green. Plain tables
+    (docs/03:391).
 - [ ] T3 Daily balance use case per plot (docs/06 §5, ADR-0022). Writer: agy, one session for
   T3a–T3b, one commit each.
   - [ ] T3a Gather cycle/crop/stages, soil (read on the farms port), plot system, cell weather →
@@ -147,6 +151,10 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
 - T1 `f8ba925..bb9833a` (1,190 lines, medium, slice budget reached): lineage
   `review-4d3bbc733433ca8a`, lens review-reliability, approved, acknowledged (authority burned).
   5 non-blocking findings (4 WARNING, 1 SUGGESTION) → #94. Boundary: `bb9833a`.
+- T2 `bb9833a..e2ec0db` (853 lines, medium): lineage `review-edbd90727cd79f30`, review-reliability,
+  approved, acknowledged. 6 non-blocking (4 WARNING, 2 SUGGESTION) → #96;
+  R3-repo-commits-non-atomic folded into T3a (atomic balance + recommendation write).
+  Boundary: `e2ec0db`.
 
 ## Next step
-T2 via agy (running); then T3a–T3b via agy.
+T3a–T3b via agy (one session).
