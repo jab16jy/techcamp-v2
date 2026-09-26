@@ -27,4 +27,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute('ALTER TABLE reading DROP CONSTRAINT ck_reading_quality')
+    # `3` is both signals at once; the previous representation had one value
+    # per signal and kept only the stronger one, so fold `3` into `2` before
+    # narrowing the constraint, or the ALTER fails on existing rows.
+    op.execute('UPDATE reading SET quality = 2 WHERE quality = 3')
     op.execute('ALTER TABLE reading ADD CONSTRAINT ck_reading_quality CHECK (quality in (0,1,2))')
