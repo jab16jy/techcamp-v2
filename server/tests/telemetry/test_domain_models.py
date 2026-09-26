@@ -392,3 +392,20 @@ def test_validate_reading_range_accepts_day_beyond_60_days() -> None:
     """docs/04-api.md:97 gives `day` no documented upper limit."""
     start = datetime(2026, 1, 1, tzinfo=UTC)
     validate_reading_range(ReadingResolution.DAY, start, start + timedelta(days=365))
+
+
+def test_validate_reading_range_rejects_naive_boundaries() -> None:
+    """docs/04-api.md:20 dates are ISO 8601 in UTC, so both boundaries carry an
+    offset. A naive value would be resolved against the session timezone."""
+    start = datetime(2026, 1, 1)
+    with pytest.raises(InvalidReadingRangeError):
+        validate_reading_range(ReadingResolution.RAW, start, start + timedelta(days=1))
+
+
+def test_validate_reading_range_rejects_mixed_timezone_awareness() -> None:
+    """One aware and one naive boundary raises `TypeError` on comparison (#37:
+    a 500 instead of a 422), so it must be rejected before comparing."""
+    with pytest.raises(InvalidReadingRangeError):
+        validate_reading_range(
+            ReadingResolution.RAW, datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2)
+        )

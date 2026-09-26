@@ -101,6 +101,19 @@ class PlotEventsHub:
     def is_subscribed(self, client_id: UUID) -> bool:
         return client_id in self._subscribers
 
+    @property
+    def is_listening(self) -> bool:
+        """Whether `LISTEN plot_events` is registered on a live connection.
+        `start()` connects in the background, so boot says nothing about
+        readiness: a `NOTIFY` published before this flips is lost (#38)."""
+        return self._connection is not None
+
+    @property
+    def subscriber_count(self) -> int:
+        """How many client streams are subscribed right now (#38: a client
+        that never starts its body must not hold a subscription)."""
+        return len(self._subscribers)
+
     async def _reconnect_loop(self) -> None:
         """Connect, retrying with bounded exponential backoff until it
         succeeds or `stop()` cancels this task."""
@@ -109,15 +122,32 @@ class PlotEventsHub:
             try:
                 await self._connect()
                 return
-            except OSError:
+            except (OSError, asyncpg.PostgresError):
+                # Postgres refuses connections for reasons that are not I/O
+                # errors: the server is still starting up, credentials were
+                # rotated, too many connections. Catching only `OSError` let
+                # those kill the task, and the hub stayed silent forever while
+                # clients kept getting keepalives (#38).
                 logger.warning("plot_events: LISTEN connect failed, retrying in %.1fs", delay)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self._backoff_max)
 
     async def _connect(self) -> None:
         connection = await asyncpg.connect(dsn=_dsn())
+        try:
+            await connection.add_listener("plot_events", self._on_notify)
+        except BaseException:
+            # `add_listener` failed, or `stop()` cancelled us between the
+            # connect and the assignment below: `self._connection` never gets
+            # this connection, so nobody else can close it (#38). The
+            # termination listener is registered after, so closing it here
+            # can't fire `_on_terminated` — that would end every live stream
+            # and start a second reconnect loop beside the one already
+            # retrying.
+            with contextlib.suppress(Exception):
+                await connection.close()
+            raise
         connection.add_termination_listener(self._on_terminated)
-        await connection.add_listener("plot_events", self._on_notify)
         self._connection = connection
 
     def _on_terminated(self, _connection: object) -> None:

@@ -17,7 +17,7 @@ El sistema tiene tres contratos:
 | Errores | `application/problem+json` (RFC 9457): `type`, `title`, `status`, `detail`, `errors[]`. |
 | Paginación | Por cursor: `?limit=50&cursor=<opaco>` → `{ "items": [], "next_cursor": "…" }`. |
 | Idempotencia | Todo `POST` que crea algo acepta `Idempotency-Key`; la sincronización usa además los UUID del cliente. |
-| Tiempo | ISO 8601 en UTC. Los rangos son `from` inclusivo y `to` exclusivo. |
+| Tiempo | ISO 8601 en UTC, siempre con offset (`Z` u offset explícito). Los rangos son `from` inclusivo y `to` exclusivo; un valor sin offset responde `422`. |
 | Unidades | En el nombre del campo: `depth_mm`, `temp_c`, `area_ha`. |
 | Límites de uso | 120 solicitudes/min por usuario; asistente 10 preguntas/día por usuario; respuesta `429` con `Retry-After`. |
 | Versionado | Por ruta (`/v1`). Solo se agregan campos; cualquier cambio incompatible va a `/v2`. |
@@ -95,6 +95,8 @@ GET /plots/{plot_id}/weather?days=7           → WeatherDay[]   # pronóstico +
 ```
 
 La resolución se elige según el rango: `raw` hasta 2 días, `hour` hasta 60 días y `day` para más. Si se pide `raw` con un rango mayor, el servidor responde `422`, para proteger la base.
+
+`metric` es una de las variables del [glosario](00-glosario.md) (`soil_moisture`, `soil_temp`, `air_temp`, `air_rh`, `rain`, `water_flow`, `battery_v`, `rssi`); una métrica desconocida responde `422` y no una serie vacía, que sería indistinguible de una parcela sin sensores de esa variable. La consulta recorre hasta 500 nodos de la parcela, por encima de lo que la escala de [02-estimaciones](02-estimaciones.md) necesita.
 
 ### Riego
 

@@ -109,9 +109,10 @@ class InvalidPlotError(Exception):
 
 class InvalidReadingRangeError(Exception):
     """Raised by `GET /plots/{plot_id}/readings` (docs/04-api.md:92-97) for a
-    `from`/`to` range that isn't `to` strictly after `from`, or a resolution
-    requested over a range wider than it supports: `raw` up to 2 days,
-    `hour` up to 60 days. `day` has no documented upper limit."""
+    `from`/`to` range whose boundaries are not both timezone-aware, that isn't
+    `to` strictly after `from`, or a resolution requested over a range wider
+    than it supports: `raw` up to 2 days, `hour` up to 60 days. `day` has no
+    documented upper limit."""
 
     def __init__(self, detail: str) -> None:
         self.detail = detail
