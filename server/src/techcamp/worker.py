@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from techcamp.shared.jobs import app
 from techcamp.telemetry.adapters import jobs as _telemetry_jobs  # noqa: F401  registers tasks
+from techcamp.weather.adapters import jobs as _weather_jobs  # noqa: F401  registers tasks
 
 
 def main() -> None:
-    app.run_worker(queues=[_telemetry_jobs.QUEUE_NAME])
+    app.run_worker(queues=[_telemetry_jobs.QUEUE_NAME, _weather_jobs.QUEUE_NAME])
 
 
 if __name__ == "__main__":

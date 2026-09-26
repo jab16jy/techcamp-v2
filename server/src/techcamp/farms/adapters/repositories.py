@@ -42,6 +42,7 @@ from techcamp.farms.domain.models import (
     SoilProfile,
     SoilProfileSource,
 )
+from techcamp.weather.adapters.jobs import enqueue_forecast_refresh
 from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
 from techcamp.weather.domain.models import cell_for
 
@@ -294,7 +295,16 @@ class SqlAlchemyPlotRepository:
             )
         ).one()
         lat, lon = row
-        return await self._cells.get_or_create_cell(*cell_for(lat, lon))
+        cell_id = await self._cells.get_or_create_cell(*cell_for(lat, lon))
+        if await self._cells.is_cold(cell_id):
+            # Cold start: a cell nothing has ever been fetched for would serve an
+            # empty forecast until the next 3 h run (docs/06-diseno-detallado.md
+            # §6), so this plot's own transaction also defers a one-off fetch for
+            # it (ADR-0012). Never required for correctness — the 3 h fan-out
+            # covers the cell as soon as the plot is committed — and a cell that
+            # already has data spends no provider call here.
+            await enqueue_forecast_refresh(self._session, cell_id)
+        return cell_id
 
     async def get_centroid(self, plot_id: UUID, org_id: UUID) -> tuple[float, float]:
         """(lon, lat) of `ST_Centroid(boundary)` (T5: SoilGrids query point).
