@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
@@ -412,6 +414,41 @@ async def test_add_version_duplicate_sensor_and_version_raises_and_keeps_session
     found = await repo.get_latest_valid_at(sensor_id, org_id, datetime(2026, 6, 1, tzinfo=UTC))
     assert found is not None
     assert found.version == 1
+
+
+async def test_add_version_propagates_an_integrity_error_that_is_not_the_version_race(
+    db_session: AsyncSession,
+) -> None:
+    """GitHub #61: only `uq_calibration_sensor_version` may become a retryable
+    409. `MAX(version) + 1` is the only thing here that can collide, but this
+    commit also carries the `procrastinate_jobs` insert (T7), so an unrelated
+    integrity failure must surface as a server error instead of a 409 the
+    client retries forever. A `method` outside the documented enum trips
+    `ck_calibration_method` at this same commit."""
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+
+    class _UndocumentedMethod:
+        value = "factory"
+
+    with pytest.raises(IntegrityError):
+        await repo.add_version(
+            org_id=org_id,
+            sensor_id=sensor_id,
+            version=1,
+            method=cast(CalibrationMethod, _UndocumentedMethod()),
+            kind=CalibrationKind.LAB,
+            params={"scale": 1.0, "offset": 0.0},
+            rmse_pct=None,
+            valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    # nothing landed, and the rollback the repository still does leaves the
+    # session usable
+    later = datetime(2026, 6, 1, tzinfo=UTC)
+    assert await repo.get_latest_valid_at(sensor_id, org_id, later) is None
 
 
 async def test_get_latest_valid_at_hides_calibrations_of_other_orgs(

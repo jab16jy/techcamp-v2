@@ -508,6 +508,55 @@ async def test_an_uplink_older_than_a_last_will_offline_publishes_no_status_even
     assert [p["status"] for p in statuses if p["type"] == "node.status"] == ["offline"]
 
 
+async def test_a_last_will_offline_older_than_a_newer_uplink_publishes_only_the_uplink_status(
+    db_session: AsyncSession,
+) -> None:
+    """GitHub #58: the inverse ordering of the test above, the one the uplink
+    batcher produces when it flushes first and the broker's retained Last Will
+    arrives behind it. The uplink's newer `last_seen_at` is already stored, so
+    the `offline` is stale: the node stays `online` and the fan-out carries only
+    the uplink's own status (a rejected update must never publish a
+    `node.status` that moves every SSE client's state backwards)."""
+    org_id, _plot_id, node_id, _sensor_id = await _claimed_node_with_sensor(db_session)
+    ports = await _ports(db_session)
+    nodes = SqlAlchemyNodeRepository(db_session)
+
+    notifications: list[str] = []
+
+    def _on_notify(_connection: object, _pid: int, _channel: str, payload: str) -> None:
+        notifications.append(payload)
+
+    listener = await asyncpg.connect(dsn=_dsn())
+    await listener.add_listener("plot_events", _on_notify)
+    try:
+        await ingest_uplinks(
+            [RawUplink(node_id=node_id, payload=_uplink_payload(), received_at=_RECEIVED_AT)],
+            **ports,
+        )
+        await ingest_status_messages(
+            [
+                RawStatusMessage(
+                    node_id=node_id,
+                    payload=b"offline",
+                    received_at=_RECEIVED_AT - timedelta(seconds=60),
+                )
+            ],
+            nodes=nodes,
+            plots=ports["plots"],
+            events=ports["events"],
+        )
+        await asyncio.sleep(0.2)
+    finally:
+        await listener.close()
+
+    node = await nodes.get(node_id, org_id)
+    assert node is not None
+    assert node.status is NodeStatus.ONLINE
+    assert node.last_seen_at == _RECEIVED_AT
+    statuses = [json.loads(p) for p in notifications]
+    assert [p["status"] for p in statuses if p["type"] == "node.status"] == ["online"]
+
+
 async def test_ingest_status_messages_discards_malformed_status_without_raising(
     db_session: AsyncSession,
 ) -> None:
