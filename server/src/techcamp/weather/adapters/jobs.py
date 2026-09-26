@@ -75,7 +75,13 @@ def previous_day() -> datetime.date:
 
 
 async def _defer_cell_job(
-    session: AsyncSession, *, task_name: str, key: str, cell_id: int, args: dict[str, object]
+    session: AsyncSession,
+    *,
+    task_name: str,
+    key: str,
+    cell_id: int,
+    args: dict[str, object],
+    queueing_suffix: str = "",
 ) -> None:
     """Defers one per-cell weather job over `session`, inside whatever
     transaction the caller already has open.
@@ -86,10 +92,11 @@ async def _defer_cell_job(
     `procrastinate_jobs_queueing_lock_idx_v1` (unique, partial on
     `status = 'todo'`) refuses a second enqueue while one is still waiting — so a
     cold start, a plot write and the 3 h fan-out racing on the same cell collapse
-    into one job. Cells stay independent, so they still run in parallel
-    (docs/09-cuellos-de-botella.md:29). `key` separates the two kinds of work on
-    a cell, so a forecast still waiting to be fetched cannot swallow the 03:00
-    consolidation.
+    into one job. `queueing_suffix` narrows only the queueing lock, for work that
+    is distinct per argument (one consolidation per day). Cells stay
+    independent, so they still run in parallel (docs/09-cuellos-de-botella.md:29).
+    `key` separates the two kinds of work on a cell, so a forecast still waiting
+    to be fetched cannot swallow the 03:00 consolidation.
 
     That index is also why this runs inside a savepoint. procrastinate's own
     `Task.defer` catches the duplicate and raises `AlreadyEnqueued`, which a
@@ -114,7 +121,7 @@ async def _defer_cell_job(
                     "task_name": task_name,
                     "priority": 0,
                     "lock": f"{key}:cell:{cell_id}",
-                    "queueing_lock": f"{key}:cell:{cell_id}",
+                    "queueing_lock": f"{key}:cell:{cell_id}{queueing_suffix}",
                     "args": json.dumps(args),
                 },
             )
@@ -141,13 +148,15 @@ async def enqueue_forecast_refresh(session: AsyncSession, cell_id: int) -> None:
 async def enqueue_day_consolidation(
     session: AsyncSession, cell_id: int, day: datetime.date
 ) -> None:
-    """Defers `weather.consolidate_cell` for one cell and one day."""
+    """Defers `weather.consolidate_cell` for one cell and one day. Two days
+    waiting for one cell are two jobs, so the day is part of the queueing lock."""
     await _defer_cell_job(
         session,
         task_name=CONSOLIDATE_TASK_NAME,
         key="consolidate",
         cell_id=cell_id,
         args={"cell_id": cell_id, "day": day.isoformat()},
+        queueing_suffix=f":{day.isoformat()}",
     )
 
 

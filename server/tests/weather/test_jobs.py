@@ -35,6 +35,7 @@ from techcamp.weather.adapters.jobs import (
     REFRESH_TASK_NAME,
     consolidate_active_cells,
     consolidate_cell,
+    enqueue_day_consolidation,
     local_today,
     refresh_active_cells,
     refresh_cell,
@@ -477,6 +478,32 @@ async def test_the_daily_run_consolidates_yesterday_for_every_active_cell(
     # queueing lock, so a forecast still waiting to be fetched cannot swallow the
     # 03:00 run (and the two write different rows of the same cell anyway).
     assert all(job.lock.startswith("consolidate:") for job in jobs)
+
+
+async def test_two_days_waiting_for_one_cell_are_both_queued(
+    db_session: AsyncSession,
+) -> None:
+    """A second day asked for while the first is still waiting is a different
+    job, not a duplicate: the queueing lock carries the day, while `lock` stays
+    per cell so the two still run one after the other."""
+    cell_id = await _create_plot(db_session)
+    first = local_today() - datetime.timedelta(days=2)
+    second = local_today() - datetime.timedelta(days=1)
+
+    await enqueue_day_consolidation(db_session, cell_id, first)
+    await enqueue_day_consolidation(db_session, cell_id, second)
+
+    jobs = (
+        await db_session.execute(
+            text(
+                "SELECT args, lock, queueing_lock FROM procrastinate_jobs "
+                "WHERE task_name = :t AND status = 'todo' ORDER BY id"
+            ),
+            {"t": CONSOLIDATE_TASK_NAME},
+        )
+    ).all()
+    assert [job.args["day"] for job in jobs] == [first.isoformat(), second.isoformat()]
+    assert {job.lock for job in jobs} == {f"consolidate:cell:{cell_id}"}
 
 
 async def test_a_day_is_stored_as_observed_and_its_forecast_row_is_left_alone(
