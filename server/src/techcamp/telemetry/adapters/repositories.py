@@ -33,6 +33,7 @@ from techcamp.telemetry.domain.models import (
     NodeStatusEvent,
     NodeTransport,
     ReadingEvent,
+    ReadingPoint,
     ReadingRecord,
     Sensor,
 )
@@ -413,6 +414,50 @@ class SqlAlchemyReadingRepository:
         result = cast(CursorResult[Any], await self._session.execute(stmt))
         await self._session.commit()
         return result.rowcount
+
+    async def query_raw(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        result = await self._session.execute(
+            select(ReadingRow.time, ReadingRow.value)
+            .where(
+                ReadingRow.sensor_id == sensor_id,
+                ReadingRow.time >= start,
+                ReadingRow.time < end,
+                ReadingRow.value.is_not(None),
+            )
+            .order_by(ReadingRow.time)
+        )
+        return [ReadingPoint(time=row.time, value=row.value) for row in result]
+
+    async def _query_aggregate(
+        self, view: str, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        """`view` is always one of the two continuous-aggregate names below,
+        never caller input (docs/03-modelo-datos.md:372: `reading_hourly`/
+        `reading_daily`), so interpolating it into the query text carries no
+        injection risk; neither view is mapped as an ORM `Base` subclass
+        (`adapters/orm.py`'s module docstring), so `text()` is the plain way
+        to read them."""
+        result = await self._session.execute(
+            text(
+                f"SELECT bucket, avg_value FROM {view} "
+                "WHERE sensor_id = :sensor_id AND bucket >= :start AND bucket < :end "
+                "AND reading_count > 0 ORDER BY bucket"
+            ),
+            {"sensor_id": sensor_id, "start": start, "end": end},
+        )
+        return [ReadingPoint(time=row.bucket, value=row.avg_value) for row in result]
+
+    async def query_hourly(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        return await self._query_aggregate("reading_hourly", sensor_id, start=start, end=end)
+
+    async def query_daily(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        return await self._query_aggregate("reading_daily", sensor_id, start=start, end=end)
 
 
 class SqlAlchemyPlotEventsNotifier:

@@ -18,6 +18,7 @@ from techcamp.identity.domain.models import Role
 from techcamp.telemetry.domain.errors import (
     InsufficientRoleError,
     InvalidCalibrationParamsError,
+    InvalidReadingRangeError,
     MalformedUplinkPayloadError,
     UnsupportedUplinkVersionError,
 )
@@ -276,6 +277,44 @@ class NodeSeenUpdate:
     plot_id: UUID
     last_seen_at: datetime
     status: NodeStatus
+
+
+class ReadingResolution(StrEnum):
+    """`GET /plots/{plot_id}/readings?resolution=` (docs/04-api.md:92)."""
+
+    RAW = "raw"
+    HOUR = "hour"
+    DAY = "day"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadingPoint:
+    """One `[t, value]` point (docs/04-api.md:93): the calibrated `value` for
+    `raw`, or the bucket average for `hour`/`day` (T5 decision, doc gap: the
+    documented point shape carries one value, not separate avg/min/max, so
+    aggregated points use the bucket's average)."""
+
+    time: datetime
+    value: float
+
+
+MAX_RAW_RANGE = timedelta(days=2)
+"""docs/04-api.md:97: "`raw` hasta 2 días"."""
+
+MAX_HOUR_RANGE = timedelta(days=60)
+"""docs/04-api.md:97: "`hour` hasta 60 días"."""
+
+
+def validate_reading_range(resolution: ReadingResolution, start: datetime, end: datetime) -> None:
+    """docs/04-api.md:20 (`from` inclusive, `to` exclusive) and :97 (resolution
+    range limits). `day` has no documented upper limit ("`day` para más")."""
+    if end <= start:
+        raise InvalidReadingRangeError("`to` must be after `from`")
+    span = end - start
+    if resolution is ReadingResolution.RAW and span > MAX_RAW_RANGE:
+        raise InvalidReadingRangeError("raw resolution is limited to a 2-day range")
+    if resolution is ReadingResolution.HOUR and span > MAX_HOUR_RANGE:
+        raise InvalidReadingRangeError("hour resolution is limited to a 60-day range")
 
 
 @dataclass(frozen=True, slots=True)
