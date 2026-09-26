@@ -97,6 +97,7 @@ export function PlotsScreen() {
           open
           onOpenChange={(open) => !open && setSelectedPlot(null)}
           plotId={selectedPlot.id}
+          farmId={selectedPlot.farm_id}
           plotName={selectedPlot.name}
         />
       )}

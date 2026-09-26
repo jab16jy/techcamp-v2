@@ -23,3 +23,12 @@ export function formatSyncStatus({ online, pendingCount, lastDataMinutesAgo }: S
   clauses.push(formatFreshness(lastDataMinutesAgo))
   return clauses.join(' · ')
 }
+
+/** Whole minutes since an ISO timestamp, for `formatFreshness`'s input. A clock ahead of
+ * ours reads as 0, never as a negative age. */
+export function minutesSince(iso: string | null): number | null {
+  if (iso === null) return null
+  const elapsed = Date.now() - Date.parse(iso)
+  if (Number.isNaN(elapsed)) return null
+  return Math.max(0, Math.round(elapsed / 60_000))
+}

@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, getToken, setSession } from './session'
-import { useFarmEvents, type FarmEvent } from './useFarmEvents'
+import { asReadingEvent, useFarmEvents, type FarmEvent } from './useFarmEvents'
 
 const READING_FRAME =
   'id: 7\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":42.5,"at":"2026-09-25T10:00:00Z"}\n\n'
@@ -131,5 +131,20 @@ describe('useFarmEvents', () => {
     renderEvents(null)
 
     expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+})
+
+describe('asReadingEvent', () => {
+  const READING = { plot_id: 'plot-1', metric: 'soil_moisture', value: 42.5, at: '2026-09-25T10:00:00Z' }
+
+  it('narrows a reading payload', () => {
+    expect(asReadingEvent(READING)).toEqual(READING)
+  })
+
+  it('rejects a payload that is not the documented reading shape', () => {
+    expect(asReadingEvent(null)).toBeNull()
+    expect(asReadingEvent('plot-1')).toBeNull()
+    expect(asReadingEvent({ plot_id: 'plot-1' })).toBeNull()
+    expect(asReadingEvent({ ...READING, value: '42.5' })).toBeNull()
   })
 })

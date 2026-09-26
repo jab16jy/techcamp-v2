@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { formatFreshness } from '../../../design-system/components/format'
+import { formatFreshness, minutesSince } from '../../../design-system/components/format'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
 import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
@@ -23,11 +23,6 @@ function withUnit(value: number | null | undefined, unit: string): string {
   return value === null || value === undefined ? '—' : `${value} ${unit}`
 }
 
-/** Minutes since an ISO timestamp, for `formatFreshness`'s connection-honesty clause. */
-function minutesAgo(iso: string): number {
-  return Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000))
-}
-
 function NodeRow({ node, onOpen }: { node: NodeView; onOpen: () => void }) {
   const healthQuery = useNodeHealth(node.id)
   const health = healthQuery.data
@@ -48,7 +43,7 @@ function NodeRow({ node, onOpen }: { node: NodeView; onOpen: () => void }) {
           <dt className="text-text-muted">Estado</dt>
           <dd>{NODE_STATUS_LABELS[node.status]}</dd>
           <dt className="text-text-muted">Última conexión</dt>
-          <dd>{health?.last_seen_at ? formatFreshness(minutesAgo(health.last_seen_at)) : '—'}</dd>
+          <dd>{health?.last_seen_at ? formatFreshness(minutesSince(health.last_seen_at)) : '—'}</dd>
           <dt className="text-text-muted">Batería</dt>
           <dd>{withUnit(health?.battery_v, 'V')}</dd>
           <dt className="text-text-muted">RSSI</dt>

@@ -104,3 +104,23 @@ function parseData(data: string): unknown {
     return data
   }
 }
+
+export interface ReadingEventData {
+  plot_id: string
+  metric: string
+  value: number
+  at: string
+}
+
+/** Narrows `data: unknown` to the `reading` payload the server sends (docs/04-api.md:182,
+ * reduced by `sse_hub._to_stream_event`). Note what it does NOT carry: `sensor_id` and
+ * `depth_cm`, so a live reading cannot be attributed to a depth. */
+export function asReadingEvent(data: unknown): ReadingEventData | null {
+  if (typeof data !== 'object' || data === null) return null
+  const record = data as Record<string, unknown>
+  if (typeof record.plot_id !== 'string') return null
+  if (typeof record.metric !== 'string') return null
+  if (typeof record.value !== 'number') return null
+  if (typeof record.at !== 'string') return null
+  return { plot_id: record.plot_id, metric: record.metric, value: record.value, at: record.at }
+}
