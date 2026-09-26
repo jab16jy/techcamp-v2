@@ -50,8 +50,9 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
   `uv run pytest` (server/).
 - Other checks: `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`,
   `uv run lint-imports`.
-- Route: delegated direct. Writers through Herdr: OpenCode for technical units (runs its own RDD),
-  AGY for light units (parent runs RDD). Claude subagents use `odd-worker` (owner 2026-09-26,
+- Route: delegated direct. Writers through Herdr: AGY for light and moderately complex units (fast;
+  no RDD access, so the parent runs RDD per commit; owner 2026-09-26), OpenCode for heavy units
+  (runs its own RDD). Every AGY unit records its evidence here: commit, RED line, checks. Claude subagents use `odd-worker` (owner 2026-09-26,
   replaces `sonnet-high`). One Herdr session per task group (T1a–T1b share); a new task number
   gets a fresh session. Triggers fired: mapping (10+ docs, one Sonnet explorer), writer (each unit
   touches 2+ non-trivial files).
@@ -83,18 +84,17 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
 ## Tasks
 - [ ] T1 Weather schema and domain (lane A)
   - [ ] T1a Migration from head `a3f1c7d92b40`: `weather_cell`, `weather_daily`, FK
-    `plot.weather_cell_id`; ORM rows; repository with `weather_daily` upsert — route: Herdr
-    OpenCode — forecast ~350
-  - [ ] T1b Pure domain: 0.1° cell rounding, `WeatherDay`, `stale` rule (6 h) — route: Herdr
-    OpenCode (same session as T1a) — forecast ~150
+    `plot.weather_cell_id`; ORM rows; repository with `weather_daily` upsert — route: Herdr OpenCode — forecast ~350
+  - [ ] T1b Pure domain: 0.1° cell rounding, `WeatherDay`, `stale` rule (6 h) — route: Herdr OpenCode
+    (same session as T1a) — forecast ~150
 - [ ] T2 Plot cell assignment (lane A): assign or reassign the cell on plot create/update of
   location; backfill existing plots; defer the cold-start fetch hook (no-op until T5) — route:
   Herdr OpenCode — forecast ~350
 - [ ] T3 Open-Meteo client (lane B)
   - [ ] T3a `WeatherForecastPort` + `OpenMeteoAdapter`: daily variables, `past_days`, parsing,
-    `MockTransport` tests, seminar/production DI — route: Herdr OpenCode — forecast ~350
-  - [ ] T3b Timeout 10 s, 3 retries with backoff and jitter, circuit breaker — route: Herdr
-    OpenCode (same session as T3a) — forecast ~250
+    `MockTransport` tests, seminar/production DI — route: Herdr AGY — forecast ~350
+  - [ ] T3b Timeout 10 s, 3 retries with backoff and jitter, circuit breaker — route: Herdr AGY
+    (same session as T3a) — forecast ~250
 - [ ] T4 Weather API (lane A): `GET /plots/{plot_id}/weather?days=`, org isolation test, docs/04
   `WeatherDay` shape — route: Herdr OpenCode — forecast ~400
 - [ ] T5 Weather jobs (after lanes merge)
