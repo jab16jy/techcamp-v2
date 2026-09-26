@@ -6,6 +6,7 @@ from techcamp.farms.adapters.api.router import router as farms_router
 from techcamp.identity.adapters.api.router import router as identity_router
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.errors import register_error_handlers
+from techcamp.telemetry.adapters.api.router import router as telemetry_router
 
 app = FastAPI(title="TechCamp v2")
 register_error_handlers(app)
@@ -13,6 +14,7 @@ register_error_handlers(app)
 # The REST API is served under /api/v1 (docs/04-api.md: "Versionado: por ruta").
 app.include_router(identity_router, prefix="/api/v1")
 app.include_router(farms_router, prefix="/api/v1")
+app.include_router(telemetry_router, prefix="/api/v1")
 
 if is_seminar_profile():
     # /dev routes only exist in the seminar profile (ADR-0021); still part of
