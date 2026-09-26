@@ -523,7 +523,7 @@ describe('PlotDetailSheet', () => {
               depth_cm: 20,
               points: [
                 [new Date(Date.now() - 30 * 60_000).toISOString(), 44.1],
-                [twelveMinutesAgo, 42.5],
+                [twelveMinutesAgo, 42.4567],
               ],
             },
           ],
@@ -550,7 +550,7 @@ describe('PlotDetailSheet', () => {
         jsonResponse({ series: [{ sensor_id: 1, depth_cm: 20, points: [['2026-09-25T10:00:00Z', 42.5]] }] }),
       '/stream': () =>
         streamResponse(
-          `id: 7\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":51.2,"at":"${new Date().toISOString()}"}\n\n`,
+          `id: 7\nevent: reading\ndata: {"plot_id":"plot-1","metric":"soil_moisture","value":51.2345,"at":"${new Date().toISOString()}"}\n\n`,
         ),
     })
     renderSheet()
