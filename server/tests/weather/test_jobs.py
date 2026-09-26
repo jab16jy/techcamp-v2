@@ -621,6 +621,33 @@ async def test_a_window_edge_day_is_not_queued_and_an_explicit_day_shifts_the_wi
     assert yesterday.isoformat() not in queued_days
 
 
+async def test_a_retried_day_at_the_far_edge_of_the_window_is_stored(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3-retry-heal-not-proved-end-to-end (issue #92, second RDD review of
+    aadf7a2..03ac914): the other retry-window tests only prove the daily run
+    *enqueues* a job for a missing day, never that `consolidate_cell` actually
+    stores its observed row when that job runs. Pins it at the far edge of the
+    window, target − RETRY_WINDOW_DAYS — the day furthest back the retry ever
+    reaches, and the one `past_days` (jobs.py) most needs to get right."""
+    target = local_today() - datetime.timedelta(days=1)
+    far_edge_day = target - datetime.timedelta(days=RETRY_WINDOW_DAYS)
+    cell_id = await _create_plot(db_session)
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_body_for([far_edge_day]))
+
+    _use_adapter(monkeypatch, _adapter_responding(_handler))
+
+    await consolidate_cell(cell_id=cell_id, day=far_edge_day.isoformat())
+
+    assert requests[0].url.params["past_days"] == str(RETRY_WINDOW_DAYS + 1)
+    stored = await _stored_days(db_session, cell_id)
+    assert [(day, is_forecast) for day, is_forecast, _, _ in stored] == [(far_edge_day, False)]
+
+
 async def test_two_days_waiting_for_one_cell_are_both_queued(
     db_session: AsyncSession,
 ) -> None:
