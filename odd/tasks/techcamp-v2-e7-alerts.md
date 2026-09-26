@@ -115,6 +115,10 @@ alerts).
   branch point `a899aa6`. Consent for new-feature candidates: standing grant. Blocking findings:
   bounded correction. Non-blocking: one issue per review round (`review-follow-up`, `epic:e7`,
   `area:*`, `type:*`), fixed later in the epic by the same session, commits `Refs #N`.
+- RDD ownership (owner 2026-09-26): the parent runs RDD for every slice a writer delivers (AGY has
+  none). Watch each writer with a poll that wakes on the first `blocked` and on an `idle`/`done`
+  held ~45 s, confirmed by reading the pane; the moment a work-unit commit lands, assess it and
+  follow `next_transition` verbatim when `review_due`; record the outcome under Review (RDD).
 
 ## Decisions
 Readings closest to the docs; each one that changes a doc is written into that doc in the same
@@ -161,6 +165,13 @@ work unit (`domain-modeling`).
 - D11 Factory rules are read-only for orgs (`PATCH` of an `org_id = null` rule → 404); orgs add
   their own threshold rules with `POST /alert-rules` (role `owner`). `flood_risk` /
   `drought_risk` rows are seeded; no evaluator until E10.
+- D12 The 2 h escalation clock runs from `opened_at` (no extra "critical since" column): a
+  `water_stress` alert upgraded at 48 h has been unacknowledged far longer than 2 h and escalates
+  at the next check. Manual resolve only from `acknowledged` (docs/06 §3 diagram); invalid
+  transitions → 409.
+- D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
+  `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
+  agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
 
 ## Open questions
 - Q1 Plot-alert recipients: docs name the technician for node alerts and escalations and the
@@ -171,10 +182,10 @@ work unit (`domain-modeling`).
   its job. Decide with E6 when T10 starts.
 
 ## Tasks
-- [ ] T1 Schema: migration from `b7e2c9a41d38` for `alert_rule` (+ factory rules seeded),
+- [x] T1 Schema: migration from `b7e2c9a41d38` for `alert_rule` (+ factory rules seeded),
   `alert` (partial unique open index, `escalated_at`, `resolution_note`), `notification`
   (+ `created_at`, `sent_at`, `last_error`), `push_subscription`; ORM rows; docs/03 — route:
-  Herdr AGY — forecast ~350
+  Herdr AGY — forecast ~350 — actual 1,114 (`2fb93b6`; 517 of it tests)
 - [ ] T2 Alerts domain (pure): sustained window (D1), hysteresis and 60 min resolution (D2), state
   transitions and escalation eligibility (2 h critical, 48 h `water_stress`), threshold per rule
   code; docs/06 §3 — route: Herdr AGY — forecast ~350
@@ -229,10 +240,20 @@ work unit (`domain-modeling`).
 
 ## Review (RDD)
 - Boundary: `a899aa6`.
+- T1 (`a899aa6..2fb93b6`, 1,352 lines incl. the plan commit): medium, `slice_budget_reached`;
+  standing grant applied by the parent; lineage `review-d45b8465e54dc0d2`, one reliability lens,
+  APPROVED and acknowledged (authority burned). 2 WARNING + 3 SUGGESTION, non-blocking → #95
+  (frozen seed copy in the migration, CHECK/partial-index rejection tests, DB defaults, survival
+  test, unused sync seed helper), fixed later in the epic. Boundary → `2fb93b6`.
 
 ## Progress / evidence
 - 2026-09-26: docs read (AGENTS.md, docs/README, 00, 01, 03, 04, 05, 06 §1/§3/§4/§10, 09, 10,
   ADR-0002/0003/0012/0015/0016/0021/0022, E5 feature doc); code mapped (Sonnet mapper, Alembic
   head verified by the parent: `b7e2c9a41d38`; `alerts`/`notifications` are empty skeletons).
   Feature doc created with 11 tasks (14 units).
-- Next step: T1 (AGY).
+- T1 `2fb93b6` (AGY): migration `…f8a0b2c1` from `b7e2c9a41d38`; factory rules seeded from
+  `alerts/adapters/seed.py` (deterministic uuid5 ids, `ON CONFLICT DO NOTHING`), re-seeded by the
+  test teardown after `TRUNCATE organization … CASCADE`. RED: `ModuleNotFoundError: No module named
+  'techcamp.alerts.adapters.orm'`. Checks (techcamp-e7-db): pytest 568 passed; ruff, format,
+  mypy, lint-imports green. CodeGraph used, no fallback.
+- Next step: T2 (AGY, fresh session).
