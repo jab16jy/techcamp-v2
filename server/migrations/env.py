@@ -20,6 +20,7 @@ from techcamp.farms.adapters import orm as farms_orm  # noqa: E402,F401
 from techcamp.identity.adapters import orm as identity_orm  # noqa: E402,F401
 from techcamp.shared.config import database_url  # noqa: E402
 from techcamp.shared.db import Base  # noqa: E402
+from techcamp.telemetry.adapters import orm as telemetry_orm  # noqa: E402,F401
 
 target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", database_url())
