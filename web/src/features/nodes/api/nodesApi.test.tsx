@@ -80,6 +80,49 @@ describe('nodesApi', () => {
     expect(url).toContain('plot_id=plot-1')
   })
 
+  it('follows next_cursor until exhausted and returns all items across pages', async () => {
+    const node2 = { ...NODE, id: 'node-2' }
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse({ items: [NODE], next_cursor: 'cursor-2' }))
+      .mockResolvedValueOnce(jsonResponse({ items: [node2], next_cursor: null }))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    const { result } = renderHook(() => useNodes('plot-1'), { wrapper: wrapper(queryClient) })
+
+    await waitFor(() => expect(result.current.data).toHaveLength(2))
+    expect(result.current.data?.map((n) => n.id)).toEqual(['node-1', 'node-2'])
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+    const firstUrl = requestUrl(vi.mocked(fetch).mock.calls[0][0] as Request)
+    const secondUrl = requestUrl(vi.mocked(fetch).mock.calls[1][0] as Request)
+    expect(firstUrl).not.toContain('cursor=')
+    expect(secondUrl).toContain('cursor=cursor-2')
+  })
+
+  it('does not fetch nodes when no organization is active (orgId === null)', async () => {
+    clearSession()
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    const { result } = renderHook(() => useNodes('plot-1'), { wrapper: wrapper(queryClient) })
+
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(result.current.data).toBeUndefined()
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('does not fetch node health when nodeId is empty', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result } = renderHook(() => useNodeHealth(''), { wrapper: wrapper(queryClient) })
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('does not fetch node sensors when nodeId is empty', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result } = renderHook(() => useNodeSensors(''), { wrapper: wrapper(queryClient) })
+    expect(result.current.fetchStatus).toBe('idle')
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
   it('refetches the nodes list after a successful claim', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(jsonResponse(nodePage([])))

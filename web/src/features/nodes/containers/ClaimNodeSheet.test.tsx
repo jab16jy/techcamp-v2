@@ -119,6 +119,19 @@ describe('ClaimNodeSheet', () => {
     expect(await screen.findByRole('button', { name: /Contraseña copiada/ })).toBeInTheDocument()
   })
 
+  it('shows error when copying password to clipboard fails', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('Permission denied'))
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    mockFetch({ 'nodes:claim': () => jsonResponse(CLAIMED_NODE, 201) })
+    renderSheet()
+
+    await claimWithCode('ABC-123')
+    await screen.findByText('mqtt-secret')
+    fireEvent.click(screen.getByRole('button', { name: 'Copiar contraseña' }))
+
+    expect(await screen.findByText('No se pudo copiar al portapapeles.')).toBeInTheDocument()
+  })
+
   it('shows dedicated copy when the claim code is not found', async () => {
     mockFetch({
       'nodes:claim': () =>
@@ -221,6 +234,50 @@ describe('ClaimNodeSheet', () => {
     rerender(false)
 
     expect(stopTrack).toHaveBeenCalled()
+  })
+
+  it('does not leak camera stream when starting a scan while one is already in flight', async () => {
+    const stopFirstTrack = vi.fn()
+    const stopSecondTrack = vi.fn()
+    let callCount = 0
+    let resolveFirstStream!: (stream: { getTracks: () => { stop: typeof stopFirstTrack }[] }) => void
+    const firstStreamPromise = new Promise<{ getTracks: () => { stop: typeof stopFirstTrack }[] }>((resolve) => {
+      resolveFirstStream = resolve
+    })
+
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockImplementation(async () => {
+          callCount += 1
+          if (callCount === 1) {
+            return firstStreamPromise
+          }
+          return { getTracks: () => [{ stop: stopSecondTrack }] }
+        }),
+      },
+    })
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(undefined),
+    })
+    class SilentDetector {
+      detect = vi.fn(async () => [] as { rawValue: string }[])
+    }
+    vi.stubGlobal('BarcodeDetector', SilentDetector)
+    mockFetch({ 'nodes:claim': () => jsonResponse(CLAIMED_NODE, 201) })
+    renderSheet()
+
+    // First click: triggers getUserMedia which stays pending
+    fireEvent.click(screen.getByRole('button', { name: 'Escanear QR' }))
+    // Second click while first is in flight
+    fireEvent.click(screen.getByRole('button', { name: 'Escanear QR' }))
+
+    // Now resolve first stream
+    resolveFirstStream({ getTracks: () => [{ stop: stopFirstTrack }] })
+
+    // First stream must be stopped to avoid camera leak
+    await waitFor(() => expect(stopFirstTrack).toHaveBeenCalled())
   })
 
   it('discards the credentials when the sheet is closed and reopened', async () => {

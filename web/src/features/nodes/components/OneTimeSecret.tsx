@@ -10,6 +10,18 @@ export interface OneTimeField {
  * with the copy the technician needs, and never cached or stored. */
 export function OneTimeSecret({ fields }: { fields: OneTimeField[] }) {
   const [copied, setCopied] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleCopy(field: OneTimeField) {
+    try {
+      await navigator.clipboard.writeText(field.value)
+      setCopied(field.label)
+      setError(null)
+    } catch {
+      setCopied(null)
+      setError('No se pudo copiar al portapapeles.')
+    }
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -25,9 +37,7 @@ export function OneTimeSecret({ fields }: { fields: OneTimeField[] }) {
           <Button
             type="button"
             variant="secondary"
-            onClick={() => {
-              void navigator.clipboard.writeText(field.value).then(() => setCopied(field.label))
-            }}
+            onClick={() => void handleCopy(field)}
             aria-label={
               copied === field.label ? `${field.label} copiada` : `Copiar ${field.label.toLowerCase()}`
             }
@@ -36,6 +46,7 @@ export function OneTimeSecret({ fields }: { fields: OneTimeField[] }) {
           </Button>
         </div>
       ))}
+      {error && <p className="text-base text-severity-critical">{error}</p>}
     </div>
   )
 }
