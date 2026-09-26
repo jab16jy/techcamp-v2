@@ -45,6 +45,11 @@ mypy_path = "src"
 packages = ["techcamp"]
 strict = true
 
+[[tool.mypy.overrides]]
+# asyncpg ships no stubs/py.typed marker (E4 T6: the raw `LISTEN` connection).
+module = "asyncpg.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

@@ -96,16 +96,20 @@ cover irrigation math. Vitest for web units; Playwright for e2e and scenarios ar
 - Organic Driven Development: one feature doc per epic at `odd/tasks/<feature>.md`, in the build
   order of docs/10. Branch per epic.
 - Conventional Commits, no AI attribution. Work-unit commits, receipt-driven review per commit.
-- Review findings of severity WARNING or blocking go to the GitHub issue tracker: one issue per
-  epic review round, labels `review-follow-up`, `epic:eN`, `area:*`, `type:*`, linked from the
-  feature doc's "Review (RDD)" section and referenced (`Refs #N`) by the fixing commit.
+- Blocking review findings are fixed immediately, in the review's bounded correction, before the
+  next task.
+- Non-blocking review findings (WARNING, SUGGESTION) go to the GitHub issue tracker and are fixed
+  later, not in an immediate fix task: one issue per epic review round, labels
+  `review-follow-up`, `epic:eN`, `area:*`, `type:*`, linked from the feature doc's "Review (RDD)"
+  section and referenced (`Refs #N`) by the fixing commit.
 - Delivery: stacked-to-main chained PRs of about 400 authored lines, merged in order.
 - Skills: the Agent Teams Lite registry `.atl/skill-registry.md` (local, gitignored; rebuild with
   `gentle-ai skill-registry refresh`) is the skill index. Delegators pick matching skills there
   and pass their exact `SKILL.md` paths to subagents.
-- Project-mandated skills: `impeccable` (UI), `domain-modeling` (ADR, glossary), `tdd`,
+- Project-mandated skills: `impeccable` (UI), `domain-modeling` (ADR, glossary),
   `work-unit-commits` and `chained-pr` (delivery), `find-docs` (library docs),
-  `systematic-debugging` (bugs), `playwright-cli` (e2e).
+  `systematic-debugging` (bugs), `playwright-cli` (e2e). TDD needs no skill: the ODD workflow
+  runs RED → GREEN → REFACTOR itself (see Testing).
 - Repo-level skills live in `.claude/skills/`, pinned by `skills-lock.json`; restore with
   `npx skills experimental_install`. `fastapi` and `pydantic` are upstream copies: leave them
   unedited and let the docs win where they diverge. Here that means SQLAlchemy 2 async (not

@@ -1,5 +1,8 @@
 """FastAPI app entrypoint for the `api` process (ADR-0002)."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from techcamp.farms.adapters.api.router import router as farms_router
@@ -7,8 +10,23 @@ from techcamp.identity.adapters.api.router import router as identity_router
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.errors import register_error_handlers
 from techcamp.telemetry.adapters.api.router import router as telemetry_router
+from techcamp.telemetry.adapters.sse_hub import PlotEventsHub
 
-app = FastAPI(title="TechCamp v2")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """One `LISTEN plot_events` connection for the process lifetime
+    (docs/04-api.md:180-189, ADR-0015), fanned out to SSE clients."""
+    hub = PlotEventsHub()
+    await hub.start()
+    app.state.plot_events_hub = hub
+    try:
+        yield
+    finally:
+        await hub.stop()
+
+
+app = FastAPI(title="TechCamp v2", lifespan=lifespan)
 register_error_handlers(app)
 
 # The REST API is served under /api/v1 (docs/04-api.md: "Versionado: por ruta").
