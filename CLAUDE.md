@@ -6,6 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Claude Code
 
-- Delegated ODD work runs on the `sonnet-high` subagent (`.claude/agents/sonnet-high.md`, local and gitignored).
+- Delegated ODD work runs on the `odd-worker` subagent (`.claude/agents/odd-worker.md`, local and gitignored).
 - `ponytail` (minimal implementation) is a Claude Code plugin skill, so it is missing from the ATL
   registry; apply it to implementation work anyway.
