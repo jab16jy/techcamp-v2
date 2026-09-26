@@ -43,11 +43,24 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, stored_hash: str) -> bool:
     """Not called by any T3 endpoint (Mosquitto, not this API, checks MQTT
     credentials in production); kept next to `hash_password` so a test can
-    prove a generated password matches its own stored hash."""
-    algorithm, n, r, p, salt_hex, hash_hex = stored_hash.split("$")
-    if algorithm != "scrypt":
+    prove a generated password matches its own stored hash.
+
+    A stored hash this function can't read is a failed verification, never a
+    raised `ValueError`: the format is self-describing, so a value that didn't
+    come from `hash_password` (an older cost, a truncated write) must not
+    escape as a 500."""
+    try:
+        algorithm, n, r, p, salt_hex, hash_hex = stored_hash.split("$")
+        if algorithm != "scrypt":
+            return False
+        derived = hashlib.scrypt(
+            password.encode(),
+            salt=bytes.fromhex(salt_hex),
+            n=int(n),
+            r=int(r),
+            p=int(p),
+            dklen=_DKLEN,
+        )
+    except ValueError:
         return False
-    derived = hashlib.scrypt(
-        password.encode(), salt=bytes.fromhex(salt_hex), n=int(n), r=int(r), p=int(p), dklen=_DKLEN
-    )
     return secrets.compare_digest(derived.hex(), hash_hex)

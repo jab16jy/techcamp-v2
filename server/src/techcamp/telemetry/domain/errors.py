@@ -74,6 +74,19 @@ class NodeAlreadyClaimedError(Exception):
         super().__init__(f"Node with claim code {claim_code!r} is already claimed")
 
 
+class CalibrationVersionConflictError(Exception):
+    """Raised when a `POST /sensors/{sensor_id}/calibrations` loses the race for
+    the next `version` to another request (docs/03-modelo-datos.md:461:
+    calibration is versioned and never edited in place, so the version is
+    `uq_calibration_sensor_version`). T3-follow-up decision: a conflicting
+    state on an otherwise well-formed request is a `409` the client retries,
+    not a `500`."""
+
+    def __init__(self, sensor_id: int) -> None:
+        self.sensor_id = sensor_id
+        super().__init__(f"Sensor {sensor_id} calibration version conflict")
+
+
 class SensorNotFoundError(Exception):
     """Raised when a sensor isn't visible to the caller (see
     `NodeNotFoundError`)."""

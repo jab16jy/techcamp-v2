@@ -1,5 +1,9 @@
 """`POST /sensors/{sensor_id}/calibrations` (docs/04-api.md:88): validates
 params with T2's pure domain function and inserts the next version.
+
+The insert is a separate statement from the `MAX(version) + 1` read, so a
+concurrent POST can claim the same version: `CalibrationVersionConflictError`
+(both versions rolled back) is the router's `409`, the client retries.
 """
 
 from __future__ import annotations
@@ -17,8 +21,8 @@ from techcamp.telemetry.domain.models import (
     Calibration,
     CalibrationKind,
     CalibrationMethod,
-    apply_calibration,
     ensure_can_write,
+    validate_calibration_params,
 )
 
 
@@ -65,8 +69,9 @@ async def add_calibration(
         valid_from=valid_from,
     )
     # T2's pure domain function (`InvalidCalibrationParamsError` -> 422 in the
-    # router): `raw` is arbitrary here, only used to exercise the params.
-    apply_calibration(candidate, raw=0.0)
+    # router), checked per method: the params are stored as they arrive, so a
+    # coefficient the method can't use has to be rejected before the insert.
+    validate_calibration_params(candidate)
     created = await calibrations.add_version(
         org_id=org_id,
         sensor_id=sensor_id,
@@ -77,5 +82,8 @@ async def add_calibration(
         rmse_pct=rmse_pct,
         valid_from=valid_from,
     )
-    assert created is not None  # org_id was just confirmed to own sensor_id above
+    if created is None:
+        # `add_version` re-checks the sensor's org in its own statement; losing
+        # that means the sensor left the caller's org between the two reads.
+        raise SensorNotFoundError(sensor_id)
     return created

@@ -1,7 +1,6 @@
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
@@ -13,6 +12,7 @@ from techcamp.telemetry.adapters.repositories import (
     SqlAlchemyNodeRepository,
     SqlAlchemySensorRepository,
 )
+from techcamp.telemetry.domain.errors import CalibrationVersionConflictError
 from techcamp.telemetry.domain.models import (
     CalibrationKind,
     CalibrationMethod,
@@ -350,6 +350,34 @@ async def test_add_version_is_scoped_to_the_sensors_org(db_session: AsyncSession
     )
 
 
+async def test_claim_matches_zero_rows_for_an_already_claimed_node(
+    db_session: AsyncSession,
+) -> None:
+    """The `org_id IS NULL` guard is the whole point of `claim`: a second claim
+    of the same node must update nothing (docs/06-diseno-detallado.md §2,
+    `claim_code` is single-use)."""
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id, claim_code="RACECLAIM")
+    repo = SqlAlchemyNodeRepository(db_session)
+
+    assert (
+        await repo.claim(
+            node_id,
+            org_id=uuid7(),
+            plot_id=plot_id,
+            credential_hash="hashed",
+            claimed_at=datetime(2026, 2, 1, tzinfo=UTC),
+        )
+        is None
+    )
+
+    # the rollback the lost race forces leaves the session usable and the node
+    # untouched
+    still = await repo.get(node_id, org_id)
+    assert still is not None
+    assert still.org_id == org_id
+
+
 async def test_add_version_duplicate_sensor_and_version_raises_and_keeps_session_usable(
     db_session: AsyncSession,
 ) -> None:
@@ -368,7 +396,7 @@ async def test_add_version_duplicate_sensor_and_version_raises_and_keeps_session
         valid_from=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(CalibrationVersionConflictError):
         await repo.add_version(
             org_id=org_id,
             sensor_id=sensor_id,
