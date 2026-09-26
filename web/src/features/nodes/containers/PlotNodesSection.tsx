@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { formatFreshness } from '../../../design-system/components/format'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
 import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useNodeHealth, useNodes, type NodeView } from '../api/nodesApi'
+import { ClaimNodeSheet } from './ClaimNodeSheet'
 
 /** `techcamp.telemetry.domain.models.NodeStatus` (server, T3), one plain word per value:
  * never color alone (docs/07). `StatusBadge` carries the plot water-balance states, not
@@ -56,38 +58,46 @@ function NodeRow({ node }: { node: NodeView }) {
  * "Nodos de la parcela" (docs/07 mapa de pantallas: `plotd --> nodes[…]`), rendered as the
  * third section of the plot detail sheet next to soil and cycle: the list is short and the
  * plot is already on screen, so a second stacked sheet would only hide its own context.
- * T9c's "Agregar nodo" action goes next to the header, once the claim flow exists.
  */
 export function PlotNodesSection({ plotId }: { plotId: string }) {
+  const [claiming, setClaiming] = useState(false)
   const nodesQuery = useNodes(plotId)
 
   return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-lg font-semibold">Nodos</h2>
-      {nodesQuery.isLoading && <p className="text-base text-text-muted">Cargando nodos…</p>}
-      {nodesQuery.isError && (
-        <div className="flex flex-col gap-2">
-          <p className="text-base text-severity-critical">{describeApiError(nodesQuery.error)}</p>
-          <div>
-            <Button type="button" variant="secondary" onClick={() => nodesQuery.refetch()}>
-              Reintentar
-            </Button>
+    <>
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Nodos</h2>
+          <Button type="button" variant="secondary" onClick={() => setClaiming(true)}>
+            Agregar nodo
+          </Button>
+        </div>
+        {nodesQuery.isLoading && <p className="text-base text-text-muted">Cargando nodos…</p>}
+        {nodesQuery.isError && (
+          <div className="flex flex-col gap-2">
+            <p className="text-base text-severity-critical">{describeApiError(nodesQuery.error)}</p>
+            <div>
+              <Button type="button" variant="secondary" onClick={() => nodesQuery.refetch()}>
+                Reintentar
+              </Button>
+            </div>
           </div>
-        </div>
-      )}
-      {nodesQuery.isSuccess && nodesQuery.data.length === 0 && (
-        <EmptyState
-          title="Sin nodos"
-          description="Esta parcela todavía no tiene nodos vinculados."
-        />
-      )}
-      {nodesQuery.isSuccess && nodesQuery.data.length > 0 && (
-        <div className="flex flex-col gap-4">
-          {nodesQuery.data.map((node) => (
-            <NodeRow key={node.id} node={node} />
-          ))}
-        </div>
-      )}
-    </section>
+        )}
+        {nodesQuery.isSuccess && nodesQuery.data.length === 0 && (
+          <EmptyState
+            title="Sin nodos"
+            description="Esta parcela todavía no tiene nodos vinculados."
+          />
+        )}
+        {nodesQuery.isSuccess && nodesQuery.data.length > 0 && (
+          <div className="flex flex-col gap-4">
+            {nodesQuery.data.map((node) => (
+              <NodeRow key={node.id} node={node} />
+            ))}
+          </div>
+        )}
+      </section>
+      <ClaimNodeSheet open={claiming} onOpenChange={setClaiming} plotId={plotId} />
+    </>
   )
 }
