@@ -39,6 +39,18 @@ services:
     volumes:
       - minio-data:/data
 
+  migrate:
+    build:
+      context: ../server
+    profiles: [seminar]
+    command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    environment:
+      TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-techcamp}:${POSTGRES_PASSWORD:-techcamp}@postgres:5432/${POSTGRES_DB:-techcamp}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: ../server
@@ -51,6 +63,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   ingestor:
     build:
@@ -68,6 +82,8 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
 
   worker:
     build:
@@ -81,6 +97,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   web:
     build:
