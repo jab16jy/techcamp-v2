@@ -42,6 +42,8 @@ from techcamp.farms.domain.models import (
     SoilProfile,
     SoilProfileSource,
 )
+from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
+from techcamp.weather.domain.models import cell_for
 
 
 def _farm_from_row(row: Row[Any]) -> Farm:
@@ -172,6 +174,10 @@ class SqlAlchemyFarmRepository:
 class SqlAlchemyPlotRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        # Same session, so the cell row and the plot row are written in one
+        # place. E5 owns the `weather_cell` table; farms only reads it through
+        # this repository (the ORM column stays a plain Integer, docs/03:100).
+        self._cells = SqlAlchemyWeatherRepository(session)
 
     async def get(self, plot_id: UUID, org_id: UUID) -> Plot | None:
         result = await self._session.execute(
@@ -224,6 +230,7 @@ class SqlAlchemyPlotRepository:
             )
         )
         await self._session.commit()
+        await self._assign_cell(plot_id, org_id)
         plot = await self.get(plot_id, org_id)
         assert plot is not None
         return plot
@@ -251,9 +258,35 @@ class SqlAlchemyPlotRepository:
             )
         )
         await self._session.commit()
+        # Assigned on every update, not only when the boundary moved: resolving
+        # the same coordinates again is the same row, so an untouched location
+        # costs one idempotent upsert instead of a `boundary changed` flag
+        # threaded through the port.
+        await self._assign_cell(plot_id, org_id)
         plot = await self.get(plot_id, org_id)
         assert plot is not None
         return plot
+
+    async def _assign_cell(self, plot_id: UUID, org_id: UUID) -> None:
+        """Point the plot at the 0.1° cell its location falls in
+        (docs/06-diseno-detallado.md §6): plots are grouped so the cell, not
+        the plot, is what the provider is queried for
+        (docs/09-cuellos-de-botella.md:39).
+
+        The representative point is the polygon centroid, the same point
+        `get_centroid` already treats as the plot's location (the SoilGrids
+        query point), so the cell E5 assigns is the cell the rest of the code
+        reads. The grid rule itself stays in one place, `cell_for` (weather
+        domain, T1b).
+        """
+        lon, lat = await self.get_centroid(plot_id, org_id)
+        cell_id = await self._cells.get_or_create_cell(*cell_for(lat, lon))
+        await self._session.execute(
+            update(PlotRow)
+            .where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
+            .values(weather_cell_id=cell_id)
+        )
+        await self._session.commit()
 
     async def get_centroid(self, plot_id: UUID, org_id: UUID) -> tuple[float, float]:
         """(lon, lat) of `ST_Centroid(boundary)` (T5: SoilGrids query point).

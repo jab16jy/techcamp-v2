@@ -253,6 +253,7 @@ Las reglas y sus textos están **pendientes de validación agronómica**:
 ## 6. Clima
 
 - Las parcelas se agrupan en **celdas de 0,1°** (`weather_cell`). Se consulta una vez por celda, no por parcela.
+- La celda de una parcela es la del **centroide** de su polígono, redondeado a 0,1°: el mismo punto que la consulta de suelo, así que la parcela y su clima nunca se contradicen. La celda es compartida entre organizaciones.
 - Un job cada 3 h actualiza el pronóstico de las celdas activas, y uno diario consolida el día anterior como observado (`is_forecast = false`).
 - Llamadas externas con `httpx`: timeout de 10 s, 3 reintentos con backoff y jitter, y circuit breaker.
 - **Degradación:** si Open-Meteo falla se usa el último dato guardado, marcado `stale`, y la interfaz muestra la hora del dato. Una recomendación de riego con clima de más de 24 h de antigüedad se marca como de baja confianza.

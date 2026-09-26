@@ -8,7 +8,6 @@ upgrade or downgrade fails the whole suite, not just a dedicated test.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -35,19 +34,6 @@ _POINT = "SRID=4326;POINT(-74.1 10.9)"
 _BOUNDARY = (
     "SRID=4326;POLYGON((-74.10 10.90, -74.10 10.91, -74.09 10.91, -74.09 10.90, -74.10 10.90))"
 )
-
-
-@pytest.fixture
-async def db_session(db_session: AsyncSession) -> AsyncIterator[AsyncSession]:
-    """Also clears the weather tables: they carry no `org_id`, so the shared
-    `db_session` teardown (which truncates `organization ... CASCADE`) never
-    reaches them and cells would leak between tests."""
-    yield db_session
-    # A test that expected an IntegrityError leaves the session mid-rollback;
-    # clear it so the truncate below runs instead of raising PendingRollbackError.
-    await db_session.rollback()
-    await db_session.execute(text("TRUNCATE weather_daily, weather_cell CASCADE"))
-    await db_session.commit()
 
 
 async def _make_plot(db_session: AsyncSession, *, weather_cell_id: int | None) -> UUID:
