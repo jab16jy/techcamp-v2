@@ -107,17 +107,37 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
     cold-start fetch for new cells — route: Herdr OpenCode — forecast ~400 — actual 643 (`705af4d`)
   - [x] T5b Daily consolidation of the previous day as observed; `POST /dev/jobs/weather:run` —
     route: Herdr OpenCode (same session as T5a) — forecast ~300 — actual 697 (`8bf2aec`) + writer correction 28 (`6eecb2f`) + parent fix 50 (`7470287`)
-- [ ] T6 Close: end-to-end check in the seminar stack (plot → cell → job → `GET /weather`),
+- [x] T6 Close: end-to-end check in the seminar stack (plot → cell → job → `GET /weather`),
   feature doc final state — route: Herdr AGY (fastest; owner 2026-09-26), on `feat/e5-weather-jobs` after lane A is merged in; parent reviews — forecast ~50
 
+## End-to-end demo (2026-09-26)
+Run in the seminar profile stack with `uvx podman-compose` (podman 5.8.7 rootless, SELinux Enforcing). Verification only: no tracked source file changed.
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | Stack up, api healthy, migrations at head, worker TZ | PASS | 7 services Up; `/health` 200; `migrate` exited 0; `alembic_version = b7e2c9a41d38`; worker `TZ=America/Bogota` |
+| 2 | Seed user/org/farm, 2 plots in same 0.1° cell, 1 in other | PASS | dev OTP verified, bearer token; plots 1 & 2 share `weather_cell_id = 1` (10.9, -74.8); plot 3 gets `weather_cell_id = 3` (11.2, -74.2) |
+| 3 | Cold start: refresh job enqueued/ran, forecast served, 16 rows/cell | PASS | `weather.refresh_cell` succeeded; `GET /api/v1/plots/{id}/weather?days=7` returns 7 forecast days (`is_forecast=true`, `stale=false`); 16 forecast rows stored per cell in `weather_daily` |
+| 4 | Daily consolidation: `POST /dev/jobs/weather:run`, yesterday observed | PASS | jobs 3/4 (active cells fan-out) and per-cell jobs succeeded; yesterday (2026-09-25) stored with `is_forecast=false`; `GET .../weather?days=7` lists it before forecast |
+| 5 | Validation: days 0/17 → 422; other org → 404; no token → 401 | PASS | `days=0` 422 (`ge=1`), `days=17` 422 (`le=16`); cross-org plot 404; unauthenticated 401 |
+| 6 | Stale degradation: fetched_at 7 h back → stale: true; restore | PASS | SQL update to `NOW() - INTERVAL '7 hours'` → `stale: true`; restored to `NOW()` → `stale: false` |
+| 7 | Worker logs: no crash loop, no unhandled exceptions | PASS | 0 restarts across all containers; 14 procrastinate jobs succeeded, 0 failed; no unhandled weather exceptions |
+
+Defects:
+- None.
+
+Caveats:
+- The free Open-Meteo API can intermittently return 503 Service Unavailable or timeout under load/rate limiting; the worker handles this gracefully via `WeatherUnavailableError` and the in-adapter circuit breaker, serving the last cached data without crashing or failing the job.
+- Pytest downgrades the local DB to base on teardown, so the compose stack database was migrated from base on first `migrate` run.
+
 ## Acceptance criteria
-- A plot gets a 0.1° cell; plots within the same cell share it; plots of different orgs share
+- [x] A plot gets a 0.1° cell; plots within the same cell share it; plots of different orgs share
   cells but never see each other's plots.
-- The refresh job stores 16 forecast days per active cell; consolidation stores yesterday as
+- [x] The refresh job stores 16 forecast days per active cell; consolidation stores yesterday as
   observed.
-- With Open-Meteo down, `GET /plots/{id}/weather` returns the last data with `stale: true` and its
+- [x] With Open-Meteo down, `GET /plots/{id}/weather` returns the last data with `stale: true` and its
   `fetched_at`; the circuit breaker opens after repeated failures.
-- All server checks green; RDD per work-unit commit.
+- [x] All server checks green; RDD per work-unit commit.
 
 ## Review (RDD)
 - Boundary: `9a06794` (both lanes).
@@ -132,6 +152,7 @@ E5 depends only on E3 and unblocks E6 (irrigation), E7 (alerts), E10 (risk model
 - Jobs T5b fresh review (`705af4d..7470287`): medium, `slice_budget_reached`; standing grant applied by the parent; lineage `review-83dc33d263530aae`, one reliability lens, APPROVED and acknowledged. 2 WARNING + 2 SUGGESTION, non-blocking → issue #81, deferred. Jobs boundary → `7470287`.
 
 ## Progress / evidence
+- 2026-09-26: T6 end-to-end demo in the seminar stack: stack boot, plot cell assignment, cold-start refresh, daily consolidation, validation, and stale degradation all verified; 14/14 procrastinate jobs succeeded; 0 container restarts; 0 defects.
 - T1a `68d44ea` (OpenCode): RDD approved, zero findings. Follow-up noticed: `tests/telemetry/test_jobs.py::test_two_queued_jobs_for_one_sensor_never_run_at_the_same_time` is order-flaky (~1 in 3 full runs).
 - T3a: `22e7dc0` feat(weather): add Open-Meteo forecast adapter — 530 lines (AGY). RED: `ModuleNotFoundError: No module named 'techcamp.weather.adapters.open_meteo'`. Checks (techcamp_e5b): pytest 494 passed; ruff check, format --check, mypy, lint-imports green.
 - T1b `0a4db5d` (OpenCode): 9 pure domain tests; pytest 493 passed; all checks green; docs/03 records `UNIQUE(lat, lon)`, nullable measures, plain table.
