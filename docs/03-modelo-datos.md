@@ -458,7 +458,7 @@ Solo un tercio de las UPA con cultivos usa riego, así que el modelo sirve a las
 
 ### Calibración
 
-La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectura se aplica la calibración vigente según `valid_from`. Recalibrar crea una versión nueva y un job recalcula `value` desde `valid_from`. El `kind` (`lab` o `field`) indica dónde se calibró y decide cuánto pesa el sensor en el balance hídrico: sin calibración de campo, el sensor no corrige el balance.
+La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectura se aplica la calibración vigente según `valid_from`; si dos versiones comparten el mismo `valid_from` (el esquema solo garantiza único `(sensor_id, version)`), gana la de `version` mayor. Recalibrar crea una versión nueva y un job recalcula `value` desde `valid_from` hasta el `valid_from` de la versión siguiente con ese mismo criterio, de modo que el rango recalculado es exactamente el que la lectura consulta después; los jobs se bloquean por sensor, así que dos versiones del mismo sensor nunca se recalculan a la vez. El `kind` (`lab` o `field`) indica dónde se calibró y decide cuánto pesa el sensor en el balance hídrico: sin calibración de campo, el sensor no corrige el balance.
 
 | Método | `params` | Uso |
 |---|---|---|

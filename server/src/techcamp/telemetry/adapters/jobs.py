@@ -21,7 +21,8 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import Table, bindparam, select, text, update
+from procrastinate import RetryStrategy
+from sqlalchemy import Table, and_, bindparam, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from techcamp.shared.db import async_session_factory, engine
@@ -52,7 +53,9 @@ migration `8c3983dc2dfd`. TimescaleDB requires a refresh window of at least one
 bucket, so each view is refreshed over whole buckets of its own width."""
 
 
-async def enqueue_recalibration(session: AsyncSession, calibration_id: UUID) -> None:
+async def enqueue_recalibration(
+    session: AsyncSession, calibration_id: UUID, sensor_id: int
+) -> None:
     """Defers `recalibrate_readings` by calling procrastinate's own
     `procrastinate_defer_jobs_v1` SQL function over `session` directly
     (verified via ctx7 against procrastinate's `schema.sql`) instead of
@@ -62,7 +65,16 @@ async def enqueue_recalibration(session: AsyncSession, calibration_id: UUID) -> 
     server-side and fire the same way regardless of which client inserted
     the row, so the worker picks this job up exactly as if procrastinate's
     own Python API had deferred it. `queueing_lock` keys the job identity to
-    this calibration version (idempotent re-enqueue, ADR-0012)."""
+    this calibration version (idempotent re-enqueue, ADR-0012).
+
+    `lock` is per *sensor*, not per version: two versions of the same sensor
+    recompute overlapping ranges, so running them together would let the older
+    one overwrite the newer one's values. procrastinate's
+    `procrastinate_fetch_job_v2` refuses a job whose `lock` is already held by
+    a `doing` job, which serializes them. It has to be set on the row here
+    rather than as `@app.task(lock=...)`: a task's `lock` is only a default for
+    `Task.defer`, and this path never goes through it. Sensors are independent,
+    so their jobs still run in parallel."""
     await session.execute(
         text(
             "SELECT procrastinate_defer_jobs_v1("
@@ -73,7 +85,7 @@ async def enqueue_recalibration(session: AsyncSession, calibration_id: UUID) -> 
             "queue_name": QUEUE_NAME,
             "task_name": TASK_NAME,
             "priority": 0,
-            "lock": None,
+            "lock": f"recalibrate:sensor:{sensor_id}",
             "queueing_lock": f"recalibrate:{calibration_id}",
             "args": json.dumps({"calibration_id": str(calibration_id)}),
         },
@@ -117,15 +129,34 @@ async def _sensor_unit(session: AsyncSession, sensor_id: int) -> str | None:
 
 
 async def _next_valid_from(
-    session: AsyncSession, sensor_id: int, valid_from: datetime
+    session: AsyncSession, sensor_id: int, valid_from: datetime, version: int
 ) -> datetime | None:
     """The next calibration version's `valid_from` after this one, if any —
     bounds the range this version is in force for (docs/03-modelo-
-    datos.md:461). `None` when this is the sensor's most recent version."""
+    datos.md:461). `None` when this is the sensor's most recent version.
+
+    Ordered by `(valid_from, version)`, the same order
+    `SqlAlchemyCalibrationRepository.get_latest_valid_at` reads the effective
+    calibration with, so a job recomputes exactly the range that read path would
+    later attribute to this version. Comparing on `valid_from` alone would leave
+    two versions that share one `valid_from` (legal: only `(sensor_id, version)`
+    is unique) each treating their range as open-ended, and the superseded
+    version's job would then overwrite the newer one's values. With the tie-break
+    in the comparison, the superseded version's range ends where it begins and its
+    job is a no-op — the higher version wins, as the read path already does."""
     result = await session.execute(
         select(CalibrationRow.valid_from)
-        .where(CalibrationRow.sensor_id == sensor_id, CalibrationRow.valid_from > valid_from)
-        .order_by(CalibrationRow.valid_from.asc())
+        .where(
+            CalibrationRow.sensor_id == sensor_id,
+            or_(
+                CalibrationRow.valid_from > valid_from,
+                and_(
+                    CalibrationRow.valid_from == valid_from,
+                    CalibrationRow.version > version,
+                ),
+            ),
+        )
+        .order_by(CalibrationRow.valid_from.asc(), CalibrationRow.version.asc())
         .limit(1)
     )
     return result.scalar_one_or_none()
@@ -228,9 +259,25 @@ async def _refresh_aggregates(start: datetime, end: datetime | None) -> None:
             )
 
 
-@app.task(name=TASK_NAME, queue=QUEUE_NAME)
+@app.task(
+    name=TASK_NAME,
+    queue=QUEUE_NAME,
+    retry=RetryStrategy(max_attempts=3, linear_wait=5),
+)
 async def recalibrate_readings(calibration_id: str) -> None:
-    """The worker task deferred by `enqueue_recalibration`."""
+    """The worker task deferred by `enqueue_recalibration`.
+
+    The retry policy covers the one step that can fail after the work is
+    already durable: the aggregate refresh runs on its own AUTOCOMMIT connection
+    after the recompute has committed, so a transient failure there used to
+    leave the aggregates inconsistent with the readings forever, on a job
+    procrastinate had already recorded as `failed`. Retrying the whole task is
+    safe — `_recompute_range` is idempotent over the same range
+    (`recalibrate_reading` is pure) — so the retry only redoes the refresh, and
+    it is the worker that reads this policy off the task definition, whether the
+    job was deferred here or through the SQL function above. The backoff is
+    linear, not immediate: the failure being retried is a database hiccup, and
+    an immediate retry would meet the same one."""
     cal_uuid = UUID(calibration_id)
     async with async_session_factory() as session:
         calibration = await _load_calibration(session, cal_uuid)
@@ -239,7 +286,9 @@ async def recalibrate_readings(calibration_id: str) -> None:
         unit = await _sensor_unit(session, calibration.sensor_id)
         if unit is None:
             return  # sensor gone too
-        range_end = await _next_valid_from(session, calibration.sensor_id, calibration.valid_from)
+        range_end = await _next_valid_from(
+            session, calibration.sensor_id, calibration.valid_from, calibration.version
+        )
         touched = await _recompute_range(
             session, calibration=calibration, unit=unit, range_end=range_end
         )

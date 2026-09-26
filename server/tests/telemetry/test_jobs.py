@@ -8,10 +8,13 @@ refresh_continuous_aggregate(...)` needs an AUTOCOMMIT connection).
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from procrastinate.jobs import Job
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from techcamp.telemetry.adapters.jobs import recalibrate_readings
+from techcamp.shared.jobs import app
+from techcamp.telemetry.adapters import jobs as jobs_module
+from techcamp.telemetry.adapters.jobs import TASK_NAME, recalibrate_readings
 from techcamp.telemetry.adapters.orm import SensorRow
 from techcamp.telemetry.adapters.repositories import SqlAlchemyCalibrationRepository
 from techcamp.telemetry.domain.models import CalibrationKind, CalibrationMethod
@@ -75,6 +78,44 @@ async def _aggregate_avg(db_session: AsyncSession, view: str, sensor_id: int, at
             {"sid": sensor_id, "bucket": bucket, "t": at},
         )
     ).scalar_one()
+
+
+async def _fetch_recalibration_job(db_session: AsyncSession) -> int | None:
+    """One `procrastinate_fetch_job_v2` call, as the worker makes it: a fresh
+    worker row, the `telemetry` queue, and the id of the job it is allowed to
+    run (`None` when the queue's locks keep it from running anything)."""
+    worker_id = (
+        await db_session.execute(
+            text("INSERT INTO procrastinate_workers (last_heartbeat) VALUES (now()) RETURNING id")
+        )
+    ).scalar_one()
+    return (
+        await db_session.execute(
+            text(
+                "SELECT id FROM procrastinate_fetch_job_v2("
+                "ARRAY['telemetry']::character varying[], :wid)"
+            ),
+            {"wid": worker_id},
+        )
+    ).scalar_one_or_none()
+
+
+def _job(*, attempts: int) -> Job:
+    """A `todo` job of this task, as the retry strategy sees it."""
+    return Job(
+        id=1,
+        status="todo",
+        queue="telemetry",
+        priority=0,
+        lock=None,
+        queueing_lock=None,
+        task_name=TASK_NAME,
+        task_kwargs={},
+        scheduled_at=None,
+        attempts=attempts,
+        abort_requested=False,
+        worker_id=None,
+    )
 
 
 async def test_recalibrate_readings_succeeds_on_a_sub_bucket_window_and_refreshes_both_views(
@@ -151,7 +192,7 @@ async def test_add_version_enqueues_the_recalibration_job(db_session: AsyncSessi
     job = (
         await db_session.execute(
             text(
-                "SELECT queue_name, task_name, args, status FROM procrastinate_jobs "
+                "SELECT queue_name, task_name, args, status, lock FROM procrastinate_jobs "
                 "WHERE queueing_lock = :lock"
             ),
             {"lock": f"recalibrate:{created.id}"},
@@ -162,6 +203,173 @@ async def test_add_version_enqueues_the_recalibration_job(db_session: AsyncSessi
     assert job.task_name == "telemetry.recalibrate_readings"
     assert job.args == {"calibration_id": str(created.id)}
     assert job.status == "todo"
+    assert job.lock == f"recalibrate:sensor:{sensor_id}"
+
+
+async def test_two_queued_jobs_for_one_sensor_never_run_at_the_same_time(
+    db_session: AsyncSession,
+) -> None:
+    """#39: jobs were deferred with `lock=None`, so two queued versions of the
+    same sensor could be fetched together and race.
+
+    Asserted through `procrastinate_fetch_job_v2` — the SQL procrastinate's own
+    worker calls, which refuses a job whose `lock` is already held by a `doing`
+    job (`procrastinate_jobs_lock_idx_v1` backs the same rule) — instead of
+    only reading the `lock` column back, so this fails if the per-sensor lock
+    stops being what serializes them.
+    """
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_percentage_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+
+    calibration_ids = []
+    for version, valid_from in (
+        (1, datetime(2026, 1, 1, tzinfo=UTC)),
+        (2, datetime(2026, 2, 1, tzinfo=UTC)),
+    ):
+        created = await repo.add_version(
+            org_id=org_id,
+            sensor_id=sensor_id,
+            version=version,
+            method=CalibrationMethod.LINEAR,
+            kind=CalibrationKind.FIELD,
+            params={"scale": 1.0, "offset": 0.0},
+            rmse_pct=None,
+            valid_from=valid_from,
+        )
+        assert created is not None
+        calibration_ids.append(created.id)
+
+    locks = (
+        (
+            await db_session.execute(
+                text(
+                    "SELECT lock FROM procrastinate_jobs "
+                    "WHERE queueing_lock = ANY(ARRAY[:a, :b]) ORDER BY id ASC"
+                ),
+                {
+                    "a": f"recalibrate:{calibration_ids[0]}",
+                    "b": f"recalibrate:{calibration_ids[1]}",
+                },
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert locks == [f"recalibrate:sensor:{sensor_id}"] * 2
+
+    # Two workers, the fetch its worker would run: the first takes the older
+    # job (id ASC), and while it is `doing` the sensor's lock keeps the second
+    # one out of reach.
+    first = await _fetch_recalibration_job(db_session)
+    second = await _fetch_recalibration_job(db_session)
+    assert first is not None
+    assert second is None
+
+    # Finishing the first releases the lock for the second.
+    await db_session.execute(
+        text("SELECT procrastinate_finish_job_v1(:id, 'succeeded', false)"),
+        {"id": first},
+    )
+    assert await _fetch_recalibration_job(db_session) is not None
+
+
+async def test_the_highest_version_wins_a_valid_from_tie(db_session: AsyncSession) -> None:
+    """#39: with two versions sharing a `valid_from`, both computed an
+    open-ended range, so a job for the older version rewrote the newer one's
+    values. `get_latest_valid_at` already breaks such a tie by highest version
+    (docs/03-modelo-datos.md:461), so the job's range must use the same rule:
+    the superseded version owns nothing and its job is a no-op.
+    """
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_percentage_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+
+    shared_valid_from = datetime(2026, 2, 1, tzinfo=UTC)
+    older = newer = None
+    for version, scale in ((1, 2.0), (2, 7.0)):
+        created = await repo.add_version(
+            org_id=org_id,
+            sensor_id=sensor_id,
+            version=version,
+            method=CalibrationMethod.LINEAR,
+            kind=CalibrationKind.FIELD,
+            params={"scale": scale, "offset": 0.0},
+            rmse_pct=None,
+            valid_from=shared_valid_from,
+        )
+        assert created is not None
+        if version == 1:
+            older = created
+        else:
+            newer = created
+    assert older is not None and newer is not None
+
+    at = datetime(2026, 2, 10, tzinfo=UTC)
+    await _insert_reading(db_session, sensor_id, at=at, raw_value=10.0, value=10.0, quality=0)
+
+    await recalibrate_readings(calibration_id=str(newer.id))
+    assert await _reading_state(db_session, sensor_id, at) == (70.0, 0)
+
+    # The superseded version's job runs after it: it must not overwrite.
+    await recalibrate_readings(calibration_id=str(older.id))
+    assert await _reading_state(db_session, sensor_id, at) == (70.0, 0)
+
+
+async def test_a_refresh_failure_after_the_commit_is_retried(db_session: AsyncSession) -> None:
+    """#39: the readings commit before the aggregates are refreshed and the task
+    had no retry policy, so one transient refresh failure left the aggregates
+    inconsistent with readings that were already durable — permanently, since
+    the job was recorded as `failed`.
+
+    Two halves: the refresh failure does not roll the recompute back (which is
+    what makes a retry safe rather than a duplicate write), and procrastinate
+    actually reschedules the job when it happens.
+    """
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_percentage_sensor(db_session, node_id)
+    repo = SqlAlchemyCalibrationRepository(db_session)
+
+    v1 = await repo.add_version(
+        org_id=org_id,
+        sensor_id=sensor_id,
+        version=1,
+        method=CalibrationMethod.LINEAR,
+        kind=CalibrationKind.LAB,
+        params={"scale": 5.0, "offset": 0.0},
+        rmse_pct=None,
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert v1 is not None
+
+    at = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    await _insert_reading(db_session, sensor_id, at=at, raw_value=10.0, value=10.0, quality=0)
+    await _refresh_aggregate("reading_hourly")
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise ConnectionError("aggregate refresh unavailable")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(jobs_module, "_refresh_aggregates", _boom)
+    try:
+        with pytest.raises(ConnectionError):
+            await recalibrate_readings(calibration_id=str(v1.id))
+    finally:
+        monkeypatch.undo()
+
+    # The recompute is durable, so retrying the job only redoes the refresh.
+    assert await _reading_state(db_session, sensor_id, at) == (50.0, 0)
+    assert await _aggregate_avg(db_session, "reading_hourly", sensor_id, at) == 10.0
+
+    # procrastinate's own decision (what its worker calls on a failed job) is
+    # to reschedule — and to stop instead of retrying forever.
+    task = app.tasks[TASK_NAME]
+    failure = ConnectionError("aggregate refresh unavailable")
+    assert task.get_retry_exception(exception=failure, job=_job(attempts=0)) is not None
+    assert task.get_retry_exception(exception=failure, job=_job(attempts=99)) is None
 
 
 async def test_recalibrate_readings_recomputes_within_bounds_and_reclassifies_quality(
