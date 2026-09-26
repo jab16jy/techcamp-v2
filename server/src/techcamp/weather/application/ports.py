@@ -1,4 +1,4 @@
-"""Repository ports the weather application layer depends on (never on adapters).
+"""Application ports and data structures for the weather module.
 
 Hexagonal layering per ADR-0002 and ADR-0003: application defines the
 interfaces it needs, adapters implement them.
@@ -6,10 +6,53 @@ interfaces it needs, adapters implement them.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from techcamp.weather.domain.models import WeatherDay
+
+
+@dataclass(frozen=True, slots=True)
+class DailyWeatherRow:
+    """Application dataclass representing one day of daily weather data.
+
+    Defined in application (not domain; lane A owns domain — parent reconciles
+    later per E5 T3 brief).
+    """
+
+    day: date
+    et0_mm: float | None
+    rain_mm: float | None
+    tmin_c: float | None
+    tmax_c: float | None
+    rh_mean_pct: float | None
+
+
+class WeatherUnavailableError(Exception):
+    """Base error raised when external weather data cannot be fetched."""
+
+    def __init__(self, detail: str, *, upstream_status: int | None = None) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.upstream_status = upstream_status
+
+
+@runtime_checkable
+class WeatherForecastPort(Protocol):
+    """External I/O port for fetching daily weather data (past + forecast).
+
+    ADR-0002: external I/O needing a test double.
+    """
+
+    async def fetch_daily(
+        self,
+        lat: float,
+        lon: float,
+        *,
+        past_days: int = 0,
+        forecast_days: int = 7,
+    ) -> list[DailyWeatherRow]: ...
 
 
 class WeatherRepository(Protocol):
