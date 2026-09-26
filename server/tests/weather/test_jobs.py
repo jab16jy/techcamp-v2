@@ -537,6 +537,90 @@ async def test_the_daily_run_retries_a_degraded_day_within_the_retry_window(
     assert queued_days == {target.isoformat(), degraded_day.isoformat()}
 
 
+async def test_a_degraded_day_holding_only_a_forecast_row_is_still_queued(
+    db_session: AsyncSession,
+) -> None:
+    """R3-forecast-row-not-proved-missing (issue #91, review of aadf7a2): in
+    production the 3 h refresh already stores a forecast row for every day in
+    its window, so a degraded day's own leftover forecast row must not be
+    mistaken for its observed one — only an `is_forecast = false` row may count
+    as consolidated, or the retry would silently never fire for a real
+    degraded day."""
+    cell_id = await _create_plot(db_session)
+    target = local_today() - datetime.timedelta(days=1)
+    degraded_day = target - datetime.timedelta(days=2)
+    await _store_forecast_day(db_session, cell_id, degraded_day, et0_mm=3.0)
+
+    await consolidate_active_cells(timestamp=0)
+
+    jobs = (
+        await db_session.execute(
+            text("SELECT args FROM procrastinate_jobs WHERE task_name = :t ORDER BY id"),
+            {"t": CONSOLIDATE_TASK_NAME},
+        )
+    ).all()
+    queued_days = {job.args["day"] for job in jobs}
+    assert degraded_day.isoformat() in queued_days
+
+
+async def test_running_the_daily_job_twice_does_not_duplicate_pending_jobs(
+    db_session: AsyncSession,
+) -> None:
+    """R3-repeated-enqueue-of-pending-day (issue #91, review of aadf7a2): the
+    same missing day is reconsidered on every daily run while its job may
+    still be `todo`. `_defer_cell_job` already absorbs the duplicate queueing
+    lock in a savepoint, so a second run before the first run's jobs are
+    picked up must not raise and must not queue any day twice."""
+    cell_id = await _create_plot(db_session)
+    target = local_today() - datetime.timedelta(days=1)
+
+    await consolidate_active_cells(timestamp=0)
+    await consolidate_active_cells(timestamp=0)  # first run's jobs are still `todo`
+
+    jobs = (
+        await db_session.execute(
+            text("SELECT args, status FROM procrastinate_jobs WHERE task_name = :t ORDER BY id"),
+            {"t": CONSOLIDATE_TASK_NAME},
+        )
+    ).all()
+    days = [job.args["day"] for job in jobs]
+    assert len(days) == len(set(days))  # no day queued twice
+    assert target.isoformat() in days
+    assert all(job.args["cell_id"] == cell_id for job in jobs)
+    assert all(job.status == "todo" for job in jobs)
+
+
+async def test_a_window_edge_day_is_not_queued_and_an_explicit_day_shifts_the_window(
+    db_session: AsyncSession,
+) -> None:
+    """SUGGESTION R3-window-boundary-untested (issue #91, review of aadf7a2):
+    the retry window is exactly `RETRY_WINDOW_DAYS` days before the target and
+    no further, and an explicit `day` (docs/04-api.md:177) moves the whole
+    window with it, not just the target — a day the worker was down for can be
+    consolidated with its own retry window, not "yesterday"'s."""
+    await _create_plot(db_session)
+    explicit_target = local_today() - datetime.timedelta(days=10)
+    just_outside = explicit_target - datetime.timedelta(days=RETRY_WINDOW_DAYS + 1)
+    just_inside = explicit_target - datetime.timedelta(days=RETRY_WINDOW_DAYS)
+
+    await consolidate_active_cells(timestamp=0, day=explicit_target.isoformat())
+
+    jobs = (
+        await db_session.execute(
+            text("SELECT args FROM procrastinate_jobs WHERE task_name = :t ORDER BY id"),
+            {"t": CONSOLIDATE_TASK_NAME},
+        )
+    ).all()
+    queued_days = {job.args["day"] for job in jobs}
+    assert just_outside.isoformat() not in queued_days
+    assert just_inside.isoformat() in queued_days
+    assert explicit_target.isoformat() in queued_days
+    # The window followed the explicit `day`, not "yesterday": today's own
+    # yesterday falls outside it and must not be queued.
+    yesterday = local_today() - datetime.timedelta(days=1)
+    assert yesterday.isoformat() not in queued_days
+
+
 async def test_two_days_waiting_for_one_cell_are_both_queued(
     db_session: AsyncSession,
 ) -> None:
