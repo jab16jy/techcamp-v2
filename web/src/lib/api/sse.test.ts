@@ -85,4 +85,23 @@ describe('createSseParser', () => {
       { event: 'message', data: 'second' },
     ])
   })
+
+  it('notifies onBlock on keepalive comments and data frames', () => {
+    const blocks: number[] = []
+    const parser = createSseParser({ onBlock: () => blocks.push(1) })
+
+    parser.push(':keepalive\n\n')
+    expect(blocks).toHaveLength(1)
+
+    parser.push('event: reading\ndata: 1\n\n')
+    expect(blocks).toHaveLength(2)
+  })
+
+  it('notifies onEventId when id changes or is reset', () => {
+    const ids: (string | null)[] = []
+    const parser = createSseParser({ onEventId: (id) => ids.push(id) })
+
+    parser.push('id: 42\ndata: first\n\nid:\ndata: second\n\n')
+    expect(ids).toEqual(['42', null])
+  })
 })

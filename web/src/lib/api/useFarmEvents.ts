@@ -71,15 +71,21 @@ export function useFarmEvents(farmId: string | null, onEvent: (event: FarmEvent)
           if (response.status === 404) return
           if (!response.ok || response.body === null) throw new Error(`stream: ${response.status}`)
 
-          const parser = createSseParser()
+          const parser = createSseParser({
+            initialLastEventId: lastEventId,
+            onBlock: () => {
+              attempt = 0
+            },
+            onEventId: (id) => {
+              lastEventId = id
+            },
+          })
           const decoder = new TextDecoder()
           const reader = response.body.getReader()
           for (;;) {
             const { done, value } = await reader.read()
             if (done) break
             for (const event of parser.push(decoder.decode(value, { stream: true }))) {
-              attempt = 0
-              if (event.id !== undefined) lastEventId = event.id
               handlerRef.current({ id: event.id, event: event.event, data: parseData(event.data) })
             }
           }

@@ -107,6 +107,7 @@ export function ClaimNodeSheet({ open, onOpenChange, plotId }: ClaimNodeSheetPro
 
   async function startScan() {
     setError(null)
+    // Invariant: stopScan bumps scanTokenRef, which cancels any in-flight scan loop.
     stopScan()
     const token = scanTokenRef.current
     let stream: MediaStream

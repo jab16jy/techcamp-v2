@@ -4,6 +4,12 @@ export interface SseEvent {
   data: string
 }
 
+export interface SseParserOptions {
+  initialLastEventId?: string | null
+  onBlock?: () => void
+  onEventId?: (id: string | null) => void
+}
+
 export interface SseParser {
   /** Feeds a decoded text chunk and returns every event completed by it. */
   push: (chunk: string) => SseEvent[]
@@ -45,9 +51,9 @@ function parseBlock(
  * whole events out. Chunk boundaries can fall anywhere, CRLF and LF both work, and
  * `data:` lines are joined with newlines as the spec requires.
  */
-export function createSseParser(): SseParser {
+export function createSseParser(options?: SseParserOptions): SseParser {
   let buffer = ''
-  let lastEventId: string | undefined
+  let lastEventId: string | undefined = options?.initialLastEventId ?? undefined
 
   return {
     push(chunk: string): SseEvent[] {
@@ -57,8 +63,14 @@ export function createSseParser(): SseParser {
       while (end !== -1) {
         const block = buffer.slice(0, end)
         buffer = buffer.slice(end + 2)
+        if (block.trim() !== '') {
+          options?.onBlock?.()
+        }
         const parsed = parseBlock(block, lastEventId)
-        lastEventId = parsed.lastEventId
+        if (parsed.lastEventId !== lastEventId) {
+          lastEventId = parsed.lastEventId
+          options?.onEventId?.(lastEventId ?? null)
+        }
         if (parsed.event) events.push(parsed.event)
         end = buffer.indexOf('\n\n')
       }
