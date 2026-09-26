@@ -53,6 +53,16 @@ FORECAST_DAYS = 16
 largest `days` `GET /plots/{id}/weather` accepts (docs/01-requisitos.md:34), so
 one fetch is enough for every `days` any consumer can ask for."""
 
+RETRY_WINDOW_DAYS = 7
+"""How many days before the daily run's target day it also checks for a
+missing observed row (docs/06-diseno-detallado.md §6, issue #82). A degraded
+consolidation (a provider outage) keeps the stored rows and still ends
+`succeeded`, so the day it was consolidating never gets an `is_forecast =
+false` row and nothing else retries it — the next 03:00 run only consolidated
+the new "yesterday", leaving a gap `weather_daily` never fills. A small
+constant, not a config knob: the DAG runs daily, so a gap this window cannot
+repair needs a human notice, not a longer queue."""
+
 _LOCAL = ZoneInfo("America/Bogota")
 """The zone the orchestration DAG fixes every job hour to
 (docs/10-dag.md:156), and so the zone a "day" means here. The provider answers
@@ -278,11 +288,23 @@ async def consolidate_active_cells(timestamp: int, day: str | None = None) -> No
     `telemetry`'s task takes a `calibration_id` string). The cron hands over
     only `timestamp`, so `day` stays optional; `POST /dev/jobs/weather:run`
     (docs/04-api.md:177) is what passes one.
+
+    Besides the target day, it also retries any day in the `RETRY_WINDOW_DAYS`
+    before it that still has no observed row (issue #82): a day a previous run
+    degraded on (docs/06 §6: an Open-Meteo outage keeps the stored rows and
+    still ends `succeeded`) is otherwise never retried by anything.
     """
     target = datetime.date.fromisoformat(day) if day else previous_day()
+    window_start = target - datetime.timedelta(days=RETRY_WINDOW_DAYS)
+    window_end = target - datetime.timedelta(days=1)
     async with async_session_factory() as session:
-        for cell_id in await SqlAlchemyWeatherRepository(session).active_cell_ids():
+        repository = SqlAlchemyWeatherRepository(session)
+        for cell_id in await repository.active_cell_ids():
             await enqueue_day_consolidation(session, cell_id, target)
+            for missing_day in await repository.missing_observed_days(
+                cell_id, window_start, window_end
+            ):
+                await enqueue_day_consolidation(session, cell_id, missing_day)
         await session.commit()
 
 
