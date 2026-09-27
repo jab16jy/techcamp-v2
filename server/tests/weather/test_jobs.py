@@ -25,6 +25,7 @@ from techcamp.farms.adapters.orm import FarmRow
 from techcamp.farms.adapters.repositories import SqlAlchemyPlotRepository
 from techcamp.farms.domain.models import IrrigationSystem
 from techcamp.identity.adapters.orm import OrganizationRow
+from techcamp.shared.dates import local_today
 from techcamp.shared.ids import uuid7
 from techcamp.shared.jobs import app
 from techcamp.weather.adapters import jobs as jobs_module
@@ -37,7 +38,6 @@ from techcamp.weather.adapters.jobs import (
     consolidate_active_cells,
     consolidate_cell,
     enqueue_day_consolidation,
-    local_today,
     refresh_active_cells,
     refresh_cell,
 )

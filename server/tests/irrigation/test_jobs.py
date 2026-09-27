@@ -33,7 +33,6 @@ from techcamp.irrigation.adapters.jobs import (
     RUN_DAILY_PLOTS_TASK_NAME,
     RUN_PLOT_BALANCE_TASK_NAME,
     _defer_plot_job,
-    local_today,
     run_daily_plots,
     run_plot_balance,
 )
@@ -42,6 +41,7 @@ from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyWaterBalanceRepository,
 )
 from techcamp.main import app
+from techcamp.shared.dates import local_today
 from techcamp.shared.ids import uuid7
 from techcamp.weather.adapters.orm import WeatherDailyRow
 from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository

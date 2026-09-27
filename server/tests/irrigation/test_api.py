@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from itertools import count
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,11 +30,10 @@ from techcamp.irrigation.domain.models import (
     WaterBalanceDay,
 )
 from techcamp.main import app
+from techcamp.shared.dates import BOGOTA_TZ as _BOGOTA_TZ
 from techcamp.shared.ids import uuid7
 
 pytestmark = pytest.mark.anyio
-
-_BOGOTA_TZ = ZoneInfo("America/Bogota")
 _POINT = "SRID=4326;POINT(-74.1 10.9)"
 _BOUNDARY = (
     "SRID=4326;POLYGON((-74.10 10.90, -74.10 10.91, -74.09 10.91, -74.09 10.90, -74.10 10.90))"

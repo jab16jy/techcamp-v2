@@ -7,8 +7,6 @@ All expected values are hand-derived and documented in arithmetic comments.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
-
 import pytest
 
 from techcamp.farms.domain.models import CropStage, KcSource
@@ -40,7 +38,6 @@ from techcamp.irrigation.domain.models import (
     determine_sensor_weight,
     evaluate_rainfed_advice,
     is_sensor_depth_representative,
-    local_today,
     stage_for_cycle_day,
 )
 
@@ -995,26 +992,3 @@ def test_compute_kc_for_cycle_day_fails_loudly_on_unknown_stage_name() -> None:
     # stage_for_cycle_day does not look up by name, so it silently disagrees
     # (this is exactly the scenario R3-005 wants caught elsewhere, not fixed here).
     assert stage_for_cycle_day(stages, day_of_cycle=5) == "inicial"
-
-
-# --- 15. local_today (docs/04-api.md:63-75, docs/06 §5; R3-local-today-untested) ---
-
-
-def test_local_today_early_utc_instant_is_previous_bogota_date() -> None:
-    """An instant between 00:00 and 05:00 UTC is 19:00-23:59 the previous day in
-    America/Bogota (UTC-5, no DST), so it must map to the previous Bogota date.
-    """
-    now = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)  # 2026-09-26 22:00 Bogota
-    assert local_today(now) == date(2026, 9, 26)
-
-
-def test_local_today_naive_input_is_treated_as_utc() -> None:
-    """A naive `now` (no tzinfo) is read as UTC, matching how the application layer
-    stores and passes instants (docstring; docs/06 §5).
-    """
-    naive_now = datetime(2026, 9, 27, 3, 0)  # no tzinfo -> treated as UTC
-    assert local_today(naive_now) == date(2026, 9, 26)
-
-    # A naive instant late enough in UTC stays on the same Bogota date.
-    naive_now_late = datetime(2026, 9, 27, 20, 0)  # 15:00 Bogota, same day
-    assert local_today(naive_now_late) == date(2026, 9, 27)

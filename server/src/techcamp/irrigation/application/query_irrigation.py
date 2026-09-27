@@ -22,8 +22,8 @@ from techcamp.irrigation.domain.models import (
     StoredIrrigationRecommendation,
     WaterBalanceStatus,
     compute_water_balance_status,
-    local_today,
 )
+from techcamp.shared.dates import local_today
 
 
 @dataclass(frozen=True, slots=True)

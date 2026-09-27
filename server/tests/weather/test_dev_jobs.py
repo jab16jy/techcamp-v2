@@ -18,11 +18,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.main import app
+from techcamp.shared.dates import local_today
 from techcamp.weather.adapters.jobs import (
     CONSOLIDATE_ACTIVE_CELLS_TASK_NAME,
     QUEUE_NAME,
     REFRESH_ACTIVE_CELLS_TASK_NAME,
-    local_today,
 )
 
 pytestmark = pytest.mark.anyio
