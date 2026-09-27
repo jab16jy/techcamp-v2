@@ -8,14 +8,17 @@ adapter). Evaluation of these rules is T5; here they are only stored and read.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import timedelta
-from typing import Any
 from uuid import UUID
 
 from techcamp.alerts.application.ports import AlertRuleRepository
 from techcamp.alerts.domain.errors import AlertRuleNotFoundError
-from techcamp.alerts.domain.models import AlertRule, Severity, ensure_can_manage_rules
+from techcamp.alerts.domain.models import (
+    AlertRule,
+    AlertRuleChanges,
+    Severity,
+    ensure_can_manage_rules,
+)
 from techcamp.identity.application.ports import MembershipRepository
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.shared.ids import uuid7
@@ -74,12 +77,11 @@ async def update_rule(
     *,
     user_id: UUID,
     rule_id: UUID,
-    changes: dict[str, Any],
+    changes: AlertRuleChanges,
     rules: AlertRuleRepository,
     memberships: MembershipRepository,
 ) -> AlertRule:
-    """Change the thresholds of a rule, by (`threshold`, `hysteresis`,
-    `min_duration`, `severity`) the caller stated.
+    """Change only the thresholds the caller stated (R3-001).
 
     Same reasoning as `farms.resolve_plot_access`: the route has no `org_id`, so
     the rule is looked up in every org the caller belongs to (never the factory
@@ -90,4 +92,4 @@ async def update_rule(
     if rule is None or rule.org_id is None:
         raise AlertRuleNotFoundError(rule_id)
     ensure_can_manage_rules(roles_by_org[rule.org_id])
-    return await rules.update(replace(rule, **changes))
+    return await rules.update(rule.id, rule.org_id, changes)

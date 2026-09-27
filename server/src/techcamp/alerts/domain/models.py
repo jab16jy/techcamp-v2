@@ -101,6 +101,17 @@ class AlertRule:
 
 
 @dataclass(frozen=True, slots=True)
+class AlertRuleChanges:
+    """Only the rule fields the caller stated (R3-001): `None` means "not
+    stated", never "clear it", so two PATCHes cannot revert each other."""
+
+    threshold: float | None = None
+    hysteresis: float | None = None
+    min_duration: timedelta | None = None
+    severity: Severity | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Alert:
     """Alert entity value (docs/03:284-297; docs/06 §3).
 

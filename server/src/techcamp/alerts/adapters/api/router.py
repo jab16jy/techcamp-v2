@@ -27,6 +27,7 @@ from techcamp.alerts.domain import (
     Alert,
     AlertNotFoundError,
     AlertRule,
+    AlertRuleChanges,
     AlertRuleNotFoundError,
     AlertState,
     InsufficientRoleError,
@@ -287,11 +288,16 @@ async def patch_alert_rule(
     """D11: a factory rule or another org's rule is 404, never 403."""
     raw = payload.model_dump(exclude_unset=True)
     _reject_explicit_null(raw)
-    if "min_duration_min" in raw:
-        raw["min_duration"] = timedelta(minutes=raw.pop("min_duration_min"))
+    stated = raw.get("min_duration_min")
+    changes = AlertRuleChanges(
+        threshold=raw.get("threshold"),
+        hysteresis=raw.get("hysteresis"),
+        min_duration=None if stated is None else timedelta(minutes=stated),
+        severity=raw.get("severity"),
+    )
     try:
         rule = await update_rule(
-            user_id=user_id, rule_id=rule_id, changes=raw, rules=rules, memberships=memberships
+            user_id=user_id, rule_id=rule_id, changes=changes, rules=rules, memberships=memberships
         )
     except AlertRuleNotFoundError as exc:
         raise ProblemError(status=404, title="Alert rule not found") from exc

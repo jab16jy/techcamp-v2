@@ -28,6 +28,7 @@ from techcamp.alerts.domain.errors import InvalidAlertRuleError
 from techcamp.alerts.domain.models import (
     Alert,
     AlertRule,
+    AlertRuleChanges,
     AlertState,
     InvalidAlertTransitionError,
     Severity,
@@ -453,16 +454,20 @@ class SqlAlchemyAlertRuleRepository:
             ) from exc
         return rule
 
-    async def update(self, rule: AlertRule) -> AlertRule:
-        await self._session.execute(
-            update(AlertRuleRow)
-            .where(AlertRuleRow.id == rule.id, AlertRuleRow.org_id == rule.org_id)
-            .values(
-                threshold=_numeric(rule.threshold),
-                hysteresis=_numeric(rule.hysteresis),
-                min_duration_min=int(rule.min_duration.total_seconds() // 60),
-                severity=rule.severity.value,
-            )
-        )
-        await self._session.commit()
-        return rule
+    async def update(self, rule_id: UUID, org_id: UUID, changes: AlertRuleChanges) -> AlertRule:
+        """Write only the columns `changes` states (R3-001), then re-read."""
+        values: dict[str, Any] = {}
+        where = (AlertRuleRow.id == rule_id, AlertRuleRow.org_id == org_id)
+        if changes.threshold is not None:
+            values["threshold"] = _numeric(changes.threshold)
+        if changes.hysteresis is not None:
+            values["hysteresis"] = _numeric(changes.hysteresis)
+        if changes.min_duration is not None:
+            values["min_duration_min"] = int(changes.min_duration.total_seconds() // 60)
+        if changes.severity is not None:
+            values["severity"] = changes.severity.value
+        if values:
+            await self._session.execute(update(AlertRuleRow).where(*where).values(**values))
+            await self._session.commit()
+        result = await self._session.execute(select(AlertRuleRow).where(*where))
+        return _rule_from_row(result.scalar_one())

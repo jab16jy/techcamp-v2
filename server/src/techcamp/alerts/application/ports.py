@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.alerts.domain.models import Alert, AlertRule, AlertState, Severity
+from techcamp.alerts.domain.models import Alert, AlertRule, AlertRuleChanges, AlertState, Severity
 from techcamp.notifications.application import NotificationDraft
 
 
@@ -117,6 +117,7 @@ class AlertRuleRepository(Protocol):
         """Insert one org's threshold rule."""
         ...
 
-    async def update(self, rule: AlertRule) -> AlertRule:
-        """Persist the changed thresholds of a rule the caller may manage."""
+    async def update(self, rule_id: UUID, org_id: UUID, changes: AlertRuleChanges) -> AlertRule:
+        """Persist only the fields `changes` states, so two concurrent PATCHes
+        of different fields cannot revert each other (R3-001)."""
         ...

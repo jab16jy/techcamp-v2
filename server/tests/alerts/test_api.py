@@ -6,6 +6,9 @@ organization responds 404, never 403, and `GET /alerts` lists one org only.
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -16,7 +19,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.orm import AlertRuleRow
-from techcamp.alerts.adapters.repositories import SqlAlchemyAlertRepository
+from techcamp.alerts.adapters.repositories import (
+    SqlAlchemyAlertRepository,
+    SqlAlchemyAlertRuleRepository,
+)
 from techcamp.alerts.application import open_alert
 from techcamp.alerts.domain import Alert, AlertRule, AlertState, Severity
 from techcamp.farms.adapters.orm import CropRow, FarmRow, PlotRow
@@ -503,6 +509,38 @@ async def test_patching_an_alert_rule_as_producer_is_403(db_session: AsyncSessio
         await db_session.execute(select(AlertRuleRow).where(AlertRuleRow.id == UUID(rule_id)))
     ).scalar_one()
     assert float(unchanged.threshold) == 34.0
+
+
+async def test_concurrent_rule_patches_of_different_fields_both_survive(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3-001: two PATCHes decided on the same snapshot must not revert each other."""
+    org = await _org(db_session)
+    headers = _auth(org.tokens["owner"])
+    rule_id = _client().post("/alert-rules", json=_rule_body(org), headers=headers).json()["id"]
+    both_read = threading.Barrier(2, timeout=10)
+    original = SqlAlchemyAlertRuleRepository.get_for_orgs
+
+    async def _after_read(self, rule_id: UUID, org_ids: Sequence[UUID]) -> AlertRule:
+        rule = await original(self, rule_id, org_ids)
+        both_read.wait()  # both requests decide on the very same snapshot
+        return rule
+
+    monkeypatch.setattr(SqlAlchemyAlertRuleRepository, "get_for_orgs", _after_read)
+
+    def _patch(body: dict[str, float]):
+        return _client().patch(f"/alert-rules/{rule_id}", json=body, headers=headers)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(_patch, {"threshold": 36.5}),
+            pool.submit(_patch, {"hysteresis": 2.0}),
+        ]
+        assert [future.result().status_code for future in futures] == [200, 200]
+
+    stmt = select(AlertRuleRow).where(AlertRuleRow.org_id == org.org_id)
+    row = (await db_session.execute(stmt)).scalar_one()
+    assert (float(row.threshold), float(row.hysteresis)) == (36.5, 2.0)
 
 
 async def test_patching_an_alert_rule_to_null_is_422(db_session: AsyncSession) -> None:
