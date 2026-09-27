@@ -229,12 +229,13 @@ work unit (`domain-modeling`).
   `alert.updated`, SSE hub pass-through — route: Herdr OpenCode (rework; AGY draft rejected) —
   forecast ~650 — actual `1d62ba6` (872 prod / 759 tests) + corrections `75e3630`, `2a46a2b`,
   `1355487` (parent, 89 lines incl. the handoff doc)
-- [ ] Q1 Quality unit for #95 (T1: frozen seed copy in the migration, CHECK/partial-index
+- [x] Q1 Quality unit for #95 (T1: frozen seed copy in the migration, CHECK/partial-index
   rejection tests, DB defaults, deterministic survival test, drop `seed_factory_rules_sync`) and
   #98 (T2: 48 h upgrade only while the violation run is active, resolved `current_alert` as none,
   `max_gap` = 3 × `interval_s` gap/freshness rule in `sustained_run` written to docs/06 §3, remove
   coercions/alias/`Decimal | float`) — brief `.git-brief-e7-Q1.md` — route: Herdr OpenCode
-  `e7-q1` — forecast ~250
+  `e7-q1` — forecast ~250 — actual 932 (`3fc9b93` 441, `a32a0d0` 491; production 234 / tests 698:
+  frozen seed copy + tests); #95 and #98 closed
 - [ ] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
   `GET/POST/PATCH /alert-rules`, `POST/DELETE /push-subscriptions`; org isolation tests;
   docs/04 shapes — route: Herdr OpenCode — forecast ~450
@@ -331,6 +332,13 @@ work unit (`domain-modeling`).
   R3-003, R3-004 → #112. Boundary → `1355487` (rebased `8890c5e`).
 - Re-chain `6dafb0b` (`8890c5e..6dafb0b`, 29 lines): medium, `review_due: false`,
   `under_budget` — stays pending in the slice until a later commit reaches the budget.
+- Q1 (`8890c5e..a32a0d0`, incl. re-chain `6dafb0b` and parent docs; 979 lines): medium
+  (`executable_change` on the migration), `slice_budget_reached`; OpenCode `e7-q1` ran its own RDD,
+  standing grant; lineage `review-c9b320d3dc674756`, one reliability lens, APPROVED and acknowledged
+  (authority burned), no correction. 2 WARNING non-blocking → #113 (seed `metric`/`hysteresis`/
+  `crop_id` not pinned independently; DB-default test bounded by process clock). Boundary →
+  `a32a0d0`.
+- Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -358,6 +366,16 @@ work unit (`domain-modeling`).
 - T3 closed 2026-09-26: lineage `review-52ae082b2d0f892b` acknowledged; issue #112 filed.
 - Rebase 2026-09-26 (parent): full checks on `6dafb0b` — pytest 687 passed; ruff, format, mypy,
   lint-imports green; `alembic heads` = `d4e6f8a0b2c1`.
+- Q1 2026-09-26 (OpenCode `e7-q1`): first RED `TypeError: decide_alert() got an unexpected keyword
+  argument 'max_gap'`; writer checks pytest 702 passed, ruff, format, mypy, lint-imports green.
+  Parent gate on `a32a0d0`: tests/alerts + notifications + test_sse_stream 93 passed; ruff, format,
+  mypy, lint-imports green; diff matches docs/06 §3 (new gap/freshness bullet) and docs/03. Gap rule
+  as implemented: a gap > `max_gap` restarts the run (zero-length run, not `None`); a stale latest
+  sample is `None`. Note: the `a32a0d0` body says the adapter converts `Numeric` → `float` for rules;
+  today only the test helper does — the rule-loading adapter (T4/T5) must do it.
 - Next step (handoff 2026-09-26): ~~close T3's lineage `review-52ae082b2d0f892b`, file T3 issue
   (R3-003, R3-004 + new WARNINGs)~~, ~~rebase onto `main` @ `b627b66` (re-chain `d4e6f8a0b2c1` onto
-  `d8a2f1c4e9b7`)~~, quality unit for #95/#98, then T4. Handoff prompt: `.git-brief-e7-handoff.md`.
+  `d8a2f1c4e9b7`)~~, ~~quality unit for #95/#98~~, then T4 (brief `.git-brief-e7-T4.md` written;
+  add D15 to Decisions before launching it: `list_alerts` takes `org_id`; `acknowledge`/
+  `resolve_manually` drop `farm_id` and take the alert's own farm; push endpoint upsert re-binds
+  to the caller). Owner paused after Q1 (2026-09-26). Handoff prompt: `.git-brief-e7-handoff.md`.
