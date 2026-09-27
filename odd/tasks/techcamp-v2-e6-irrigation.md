@@ -95,16 +95,28 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
 - Sensor representative depth tolerance: single sensor near `Zr/2` is evaluated with tolerance
   `0.15 * Zr` (`ZR_HALF_TOLERANCE_RATIO = 0.15`), marked with ponytail as pending agronomic
   validation (docs/06 §5).
+- T2 persistence: `water_balance_daily` and `irrigation_recommendation` are plain tables (no
+  hypertable). Job-side writes and previous-day read are org-agnostic
+  (`CropCycleRepository.get_active_for_plot` pattern); user reads filter by `plot.org_id`.
 
 ## Tasks
-- [ ] T1 Domain FAO-56 rules, pure, with FAO-56 numeric examples (docs/06 §5,
+- [x] T1 Domain FAO-56 rules, pure, with FAO-56 numeric examples (docs/06 §5,
   ADR-0009/0022/0023). Writer: agy, one session for T1a–T1b, one commit each.
-  - [ ] T1a Balance math: Kc per day (development interpolated), ETc, TAW, adjusted p, RAW,
+  - [x] T1a Balance math: Kc per day (development interpolated), ETc, TAW, adjusted p, RAW,
     θ_stress, Pe, Dr model/observed, sensor weight K and assimilation.
-  - [ ] T1b Decision rules: recommendation kinds, depth and minutes, rainfed advice table,
+  - [x] T1b Decision rules: recommendation kinds, depth and minutes, rainfed advice table,
     water-balance status, rationale.
-- [ ] T2 `water_balance_daily` + `irrigation_recommendation` tables, migration (chained from
+  - Evidence (agy): T1a `b02c59d` — RED `test_kc_initial_stage_returns_initial_kc`
+    (ModuleNotFoundError: techcamp.irrigation.domain.models); T1b `bb9833a` — RED
+    `test_decide_recommendation_irrigated_irrigate_depth_and_minutes` (ImportError:
+    WATCH_THRESHOLD_RATIO). Checks: `pytest tests/irrigation` 26 → 36 passed, ruff, format, mypy,
+    lint-imports green. Both REDs are collection errors of a new module, the weakest RED form.
+- [x] T2 `water_balance_daily` + `irrigation_recommendation` tables, migration (chained from
   `b7e2c9a41d38`), ORM, org-filtered repositories (docs/03:193-215, docs/09). Writer: agy.
+  - Evidence (agy): `e2ec0db`, migration `d8a2f1c4e9b7`; RED
+    `test_upsert_and_read_back_water_balance` (ModuleNotFoundError: irrigation.adapters.orm);
+    `pytest tests/irrigation` 42 passed, ruff, format, mypy, lint-imports green. Plain tables
+    (docs/03:391).
 - [ ] T3 Daily balance use case per plot (docs/06 §5, ADR-0022). Writer: agy, one session for
   T3a–T3b, one commit each.
   - [ ] T3a Gather cycle/crop/stages, soil (read on the farms port), plot system, cell weather →
@@ -135,7 +147,14 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   created.
 
 ## Review (RDD)
-- Boundary: `a899aa6`.
+- `f8ba925` feature doc: passive, boundary advanced.
+- T1 `f8ba925..bb9833a` (1,190 lines, medium, slice budget reached): lineage
+  `review-4d3bbc733433ca8a`, lens review-reliability, approved, acknowledged (authority burned).
+  5 non-blocking findings (4 WARNING, 1 SUGGESTION) → #94. Boundary: `bb9833a`.
+- T2 `bb9833a..e2ec0db` (853 lines, medium): lineage `review-edbd90727cd79f30`, review-reliability,
+  approved, acknowledged. 6 non-blocking (4 WARNING, 2 SUGGESTION) → #96;
+  R3-repo-commits-non-atomic folded into T3a (atomic balance + recommendation write).
+  Boundary: `e2ec0db`.
 
 ## Next step
-T1 via agy.
+T3a–T3b via agy (one session).

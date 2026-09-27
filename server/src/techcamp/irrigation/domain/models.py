@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from typing import Any, Protocol
+from uuid import UUID
 
 
 class RecommendationKind(StrEnum):
@@ -77,6 +79,24 @@ class StageLike(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class WaterBalanceDay:
+    """Daily root zone water balance for a plot (docs/03:192-205)."""
+
+    plot_id: UUID
+    day: date
+    etc_mm: float
+    effective_rain_mm: float
+    irrigation_mm: float
+    taw_mm: float
+    raw_mm: float
+    depletion_model_mm: float
+    depletion_mm: float
+    soil_moisture_obs_pct: float | None
+    assimilation_k: float
+    stress_moisture_pct: float
+
+
+@dataclass(frozen=True, slots=True)
 class IrrigationRecommendation:
     """Irrigation recommendation for a plot on a given day (docs/03:206-215)."""
 
@@ -85,6 +105,9 @@ class IrrigationRecommendation:
     duration_min: int | None
     advice: tuple[RainfedAdvice, ...] | tuple[str, ...]
     rationale: dict[str, Any]
+    id: UUID | None = None
+    plot_id: UUID | None = None
+    day: date | None = None
 
 
 def stage_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> str:

@@ -18,9 +18,11 @@ if config.config_file_name is not None:
 # Import every module's ORM mappings so they register on Base.metadata.
 from techcamp.farms.adapters import orm as farms_orm  # noqa: E402,F401
 from techcamp.identity.adapters import orm as identity_orm  # noqa: E402,F401
+from techcamp.irrigation.adapters import orm as irrigation_orm  # noqa: E402,F401
 from techcamp.shared.config import database_url  # noqa: E402
 from techcamp.shared.db import Base  # noqa: E402
 from techcamp.telemetry.adapters import orm as telemetry_orm  # noqa: E402,F401
+from techcamp.weather.adapters import orm as weather_orm  # noqa: E402,F401
 
 target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", database_url())

@@ -78,7 +78,8 @@ async def db_session() -> AsyncIterator[AsyncSession]:
         # otherwise leak from one test into the next.
         await conn.execute(
             text(
-                "TRUNCATE membership, app_user, organization, weather_daily, weather_cell "
+                "TRUNCATE membership, app_user, organization, weather_daily, weather_cell, "
+                "irrigation_recommendation, water_balance_daily "
                 "RESTART IDENTITY CASCADE"
             )
         )
