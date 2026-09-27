@@ -9,7 +9,7 @@ notifications, so this one is separate.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -17,6 +17,19 @@ from uuid import UUID
 
 from techcamp.alerts.domain.models import Alert, AlertRule, AlertRuleChanges, AlertState, Severity
 from techcamp.notifications.application import NotificationDraft
+
+type UnitOfWorkRecovery = Callable[[], Awaitable[None]]
+"""D24: put the shared unit of work back in a usable state after one plot's
+evaluation raised.
+
+The plot loop keeps going on the same `AsyncSession`, and a failed statement
+leaves that session in a failed-transaction state, so every read after it would
+raise `PendingRollbackError` — the per-plot isolation would be cosmetic and the
+whole batch would go undecided in silence. The adapter supplies the session's own
+rollback: it discards only the failed plot's uncommitted work (the alerts of the
+plots already decided are committed, ADR-0016), and it raises if the session
+cannot be recovered, which is the one case where re-queueing the batch is right.
+"""
 
 
 @dataclass(frozen=True, slots=True)

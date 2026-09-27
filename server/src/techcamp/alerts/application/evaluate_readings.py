@@ -19,6 +19,10 @@ this hook inside its flush, so one plot that raises would re-queue the whole
 batch, fail the same way on every attempt and silence the alerts of every other
 plot sharing it. The failed plot is decided again by its next batch, because the
 evaluation is stateless (D1, D16).
+
+The loop keeps going on one shared `AsyncSession`, so a failure that came from the
+database leaves that session unusable: `recover` rolls it back before the next
+plot runs, or the per-plot isolation would be cosmetic (D24).
 """
 
 from __future__ import annotations
@@ -29,7 +33,11 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from techcamp.alerts.application.ports import AlertRepository, AlertRuleRepository
+from techcamp.alerts.application.ports import (
+    AlertRepository,
+    AlertRuleRepository,
+    UnitOfWorkRecovery,
+)
 from techcamp.alerts.application.use_cases import (
     open_alert,
     resolve_automatically,
@@ -87,6 +95,7 @@ async def evaluate_landed_readings(
     plots: PlotRepository,
     soils: SoilProfileRepository,
     alerts: AlertRepository,
+    recover: UnitOfWorkRecovery,
 ) -> None:
     """Decide every reading-threshold rule of the plots the batch just landed.
 
@@ -103,6 +112,11 @@ async def evaluate_landed_readings(
     silence the alerts of every plot sharing it. The failed plot is not lost —
     the evaluation is stateless over the stored readings, so its next batch
     decides it again.
+
+    `recover` runs after the log and before the next plot: a failure that came
+    from the database leaves the shared session in a failed-transaction state,
+    and without the rollback every later plot would raise `PendingRollbackError`
+    and be swallowed here, which is the silence this isolation exists to prevent.
     """
     org_by_plot: dict[UUID, UUID] = {}
     at_by_plot: dict[UUID, datetime] = {}
@@ -133,6 +147,7 @@ async def evaluate_landed_readings(
                 plot_id,
                 org_id,
             )
+            await recover()
 
 
 async def _evaluate_plot(

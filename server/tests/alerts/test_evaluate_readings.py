@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.evaluate_readings import build_evaluator
@@ -225,6 +225,28 @@ class _SensorsFailingForOneNode(SqlAlchemySensorRepository):
         return await super().list_for_node(node_id, org_id)
 
 
+class _SensorsFailingAtTheDatabaseForOneNode(SqlAlchemySensorRepository):
+    """Raises a REAL database error for one node, which is the failure the
+    per-plot isolation has to survive.
+
+    A failed statement leaves the shared `AsyncSession` in a failed-transaction
+    state, so every read after it raises `PendingRollbackError` until something
+    rolls it back. A plain `RuntimeError` cannot reproduce that, and it is the
+    case that would defeat the isolation: the loop would keep going, every later
+    plot would fail the same way, each failure would be logged and swallowed, and
+    the flush would report success with nothing decided.
+    """
+
+    def __init__(self, session: AsyncSession, *, failing_node_id: UUID) -> None:
+        super().__init__(session)
+        self._failing_node_id = failing_node_id
+
+    async def list_for_node(self, node_id: UUID, org_id: UUID) -> list[Sensor]:
+        if node_id == self._failing_node_id:
+            await self._session.execute(text("SELECT * FROM a_relation_that_does_not_exist"))
+        return await super().list_for_node(node_id, org_id)
+
+
 # -- heat_stress: air_temp > 35 °C sustained 3 h (docs/06 §3) --
 
 
@@ -418,10 +440,44 @@ async def test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot(
         plots=SqlAlchemyPlotRepository(db_session),
         soils=SqlAlchemySoilProfileRepository(db_session),
         alerts=SqlAlchemyAlertRepository(db_session),
+        recover=db_session.rollback,
     )
 
     # The negative assertion too: silence is the dangerous failure here, so the
     # plot that failed must show no alert AND the next one must show its own.
+    assert await _alerts(db_session, failing) == []
+    assert [(code, state) for code, state, _ in await _alerts(db_session, following)] == [
+        ("heat_stress", AlertState.OPEN)
+    ]
+
+
+async def test_a_database_failure_in_one_plot_does_not_silence_the_next_plot(
+    db_session: AsyncSession,
+) -> None:
+    failing = await _make_plot(db_session, metric="air_temp")
+    following = await _make_plot(db_session, metric="air_temp")
+    failing_at = await _store_series(db_session, failing, end=_START, values=[38.0] * 13)
+    following_at = await _store_series(db_session, following, end=_START, values=[38.0] * 13)
+
+    # The failure comes from the database, so it leaves the session the whole
+    # loop shares in a failed-transaction state. `recover` is the session's own
+    # rollback, exactly what `build_evaluator` injects: without it the second
+    # plot could not even be read, and the broad `except` would swallow that too.
+    await evaluate_landed_readings(
+        events=[
+            _event(failing, at=failing_at, metric="air_temp"),
+            _event(following, at=following_at, metric="air_temp"),
+        ],
+        rules=SqlAlchemyAlertRuleRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        sensors=_SensorsFailingAtTheDatabaseForOneNode(db_session, failing_node_id=failing.node_id),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        plots=SqlAlchemyPlotRepository(db_session),
+        soils=SqlAlchemySoilProfileRepository(db_session),
+        alerts=SqlAlchemyAlertRepository(db_session),
+        recover=db_session.rollback,
+    )
+
     assert await _alerts(db_session, failing) == []
     assert [(code, state) for code, state, _ in await _alerts(db_session, following)] == [
         ("heat_stress", AlertState.OPEN)

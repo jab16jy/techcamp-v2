@@ -49,6 +49,9 @@ def build_evaluator(session: AsyncSession) -> AfterFlush:
             plots=SqlAlchemyPlotRepository(session),
             soils=SqlAlchemySoilProfileRepository(session),
             alerts=SqlAlchemyAlertRepository(session),
+            # D24: the plot loop shares this session, so a database failure has to
+            # leave it usable before the next plot runs.
+            recover=session.rollback,
         )
 
     return after_flush

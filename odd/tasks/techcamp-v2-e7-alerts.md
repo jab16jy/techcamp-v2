@@ -276,11 +276,21 @@ work unit (`domain-modeling`).
   batch, never the alert: the evaluation is stateless over the stored readings (D1, D16), so the
   plot's next batch decides it again, and a failure of the flush itself, BEFORE the hook, still
   re-queues so R3-RetrySkipsAlertEvaluation keeps holding. docs/06 §1 now names both halves. The
-  same unit hoists `sensors.list_for_node` out of the per-rule loop (`_sensors_by_metric`, once
-  per plot): every rule of a plot asks the same question of the same nodes, so N × R sensor reads
-  become N, with the readings still read per rule because each rule has its own window. Same
-  behavior, and the sample semantics are deliberately untouched — what a plot rule MEANS over
-  several sensors is still undecided (#131).
+  catch is only half the isolation, and the RDD round proved it: the plot loop shares ONE
+  `AsyncSession`, so a failure that came from the DATABASE leaves that session in a
+  failed-transaction state and every later plot raises `PendingRollbackError` — which the same
+  broad `except` logs and swallows, closing the batch with nothing decided and the flush reported
+  successful (the exact silence the change exists to remove). So the evaluator takes a
+  `UnitOfWorkRecovery` port and the adapter injects the session's own `rollback`: it discards
+  only the failed plot's uncommitted work (the alerts of the plots already decided are committed,
+  ADR-0016) and it raises when the session cannot be recovered, which is the one case where
+  re-queueing the batch is the right answer. A SAVEPOINT was rejected on purpose: the alert write
+  commits the shared session itself (`repositories.py:293`), so a nested scope would be committed
+  from under itself. The same unit hoists `sensors.list_for_node` out of the per-rule loop
+  (`_sensors_by_metric`, once per plot): every rule of a plot asks the same question of the same
+  nodes, so N × R sensor reads become N, with the readings still read per rule because each rule
+  has its own window. Same behavior, and the sample semantics are deliberately untouched — what a
+  plot rule MEANS over several sensors is still undecided (#131).
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
@@ -538,14 +548,40 @@ work unit (`domain-modeling`).
   `gentle_review_capture` must omit `workspaceRoot` — the collect-binding route is registered
   under the session cwd, so passing the E7 worktree was refused as "different session route".
   Boundary → `577a405`.
-- T5c (`f1270a7..19780b3`, 5 files, 189 changed lines): the writer owns its own RDD from the
+- T5c (`f1270a7..19780b3` + `4c1f7ae`, the correction): the writer owns its own RDD from the
   `e7-t5-isolation` worktree on branch `fix/e7-t5-plot-isolation`, per-slice committed range with
   base `f1270a7`. `gentle-ai review assess --base-ref f1270a7 --committed-only --json`:
   **medium** (`executable_change` on `alerts/adapters/evaluate_readings.py`), 189 changed lines,
-  `review_due: false` / `under_budget` — under the standing per-task budget this range would stay
-  pending in the slice; the owner asked for the review explicitly in the T5c brief, so the
-  lifecycle was entered anyway through the selectorless STATUS (which is the only authority that
-  may offer a START). Standing consent grant applied (owner's default for feature candidates).
+  `review_due: false` / `under_budget` — under the standing per-task budget this range would have
+  stayed pending in the slice; the owner asked for the review explicitly in the T5c brief, so the
+  lifecycle was entered anyway through the STATUS preflight, which is the only authority that may
+  offer a START. Standing consent grant applied (owner's default for feature candidates).
+  - Getting the per-slice range took one detour worth keeping: passing `--base-ref f1270a7` to
+    `review start` with the inspect's whole-branch `target-evidence` was refused
+    (`stale_target_identity`, `mutation_outcome: not_started`, retry-safe) because the slice has
+    its own base tree. The fix is that **`review status` takes `--base-ref` and `--committed-only`
+    too**: deriving the transition from `review status --base-ref f1270a7 --committed-only
+    --next-transition` returns a correctly derived target (6 paths, base tree `5d3f91dd`) with its
+    own lineage. The inspect's own default is the merge-base with `main`, so it offers the whole
+    E7 branch and never the slice.
+  - Lineage `review-65545eee48bdaf7f`, medium, ONE reliability lens, and it earned its keep:
+    **CRITICAL `R3-transaction-poisoning`**, real and exactly the gap this doc's own D24 now
+    records. The per-plot `except Exception` was cosmetic for any failure that came from the
+    DATABASE: the plot loop shares one `AsyncSession`, the failed statement leaves it in a
+    failed-transaction state, and every later plot raised `PendingRollbackError` into the same
+    broad `except`, so the batch closed with nothing decided and the flush reported success. Fix
+    `4c1f7ae`: the `UnitOfWorkRecovery` port injected by the adapter with `session.rollback`, plus
+    `test_a_database_failure_in_one_plot_does_not_silence_the_next_plot`, which raises a REAL
+    database error (a plain `RuntimeError` cannot reproduce a poisoned session — the reviewer's
+    second evidence point, which is the reason the test suite did not see this).
+  - **Terminal, and the slice is NOT approved.** The provider downgraded the finding to
+    `unknown_causality` (`unverified_location`) instead of corroborating it as candidate-caused, so
+    it never offered the correction-plan slot: the lineage is `escalated` /
+    `native_stop_required` with `action: stop`, authority burned never, nothing acknowledged. That
+    matches T5's and T3's endings in this store. The fix is therefore an ordinary work-unit commit
+    and not a native bounded correction, and the parent owns the decision to accept it.
+  - Re-running RDD on this slice would need a fresh lineage, which the owner may or may not want
+    for a 2-commit, ~230-line correction; not done unilaterally.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
@@ -604,14 +640,18 @@ work unit (`domain-modeling`).
   - TDD: the pin `test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot` is written
     in `tests/alerts/test_evaluate_readings.py` (a `_SensorsFailingForOneNode` double raises at the
     sensor port the evaluator already uses; both plots carry the same 3 h heat run, and the test
-    asserts the failed plot opened NOTHING and the next one opened its own). **Neither RED nor
-    GREEN was observed: the owner deferred every suite run to T11/final verification
-    (2026-09-27, time pressure), so no database was started here. T11 owns the execution.**
-  - Static checks run in `server/` on `19780b3`: `uv run ruff check`: All checks passed;
-    `uv run ruff format --check`: 228 files already formatted; `uv run mypy`: Success, no issues
-    in 154 source files; `uv run lint-imports`: 1 contract kept, 0 broken (hexagonal layers per
-    module KEPT). `telemetry` still does not import `alerts`, and the isolation is inside
-    `alerts`.
+    asserts the failed plot opened NOTHING and the next one opened its own), and after the review
+    `test_a_database_failure_in_one_plot_does_not_silence_the_next_plot`
+    (`_SensorsFailingAtTheDatabaseForOneNode` raises a real database error, the only failure that
+    poisons the shared session). **Neither RED nor GREEN was observed: the owner deferred every
+    suite run to T11/final verification (2026-09-27, time pressure), so no database was started
+    here. T11 owns the execution of all three tests.**
+  - Static checks run in `server/` on `19780b3` and again on the correction `4c1f7ae` (identical
+    results both times): `uv run ruff check`: All checks passed; `uv run ruff format --check`:
+    228 files already formatted; `uv run mypy`: Success, no issues in 154 source files;
+    `uv run lint-imports`: 1 contract kept, 0 broken (hexagonal layers per module KEPT).
+    `telemetry` still does not import `alerts`, the isolation is inside `alerts`, and the session
+    rollback is injected from the adapter, so `application` never names the session.
   - #131 opened for the open product question (a plot rule over several sensors of one plot:
     per node, aggregate, or merged series) — the merged series today makes the healthy value the
     last sample, so `sustained_run` answers `None` every time and the rule can never open. Labels
