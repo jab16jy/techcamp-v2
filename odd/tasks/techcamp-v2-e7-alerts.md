@@ -230,7 +230,10 @@ work unit (`domain-modeling`).
   field capacity (the signal E4/E6 already store), and the severity is decided WHEN THE ALERT
   OPENS, not by opening `warning` and upgrading: one write, one notification, the right severity
   from the start. `decide_alert`'s UPGRADE branch stays hardcoded to `water_stress`, so the
-  evaluator passes the severity to `open_alert` instead of a second write.
+  evaluator passes the severity to `open_alert` instead of a second write. The saturation test is
+  a PROXY and docs/06 §3 says so: true saturation is soil ABOVE field capacity, and reading "at
+  or above" fires at the boundary rather than past it, so it errs toward alerting a plot that is
+  merely at capacity. Pending agronomist validation, in the same spirit as D13.
 - D21 T6a sweeps nodes per organization: the periodic job reads the org ids and defers one job
   per org, exactly like the existing per-cell (`_defer_cell_job`) and per-plot
   (`_defer_plot_job`) fan-outs, with the same `procrastinate_defer_jobs_v1` inside
