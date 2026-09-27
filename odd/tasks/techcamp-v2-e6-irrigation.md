@@ -147,7 +147,14 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   repositories), `jobs.py` reuses the domain local-day helper, `is`/`is not` against StrEnum members
   → `==`/`!=` (RDD R3-kc-source-identity-check, #102). Writer: opencode. Weather's own Bogota
   duplicates are pre-existing E5 code → #103.
-- [ ] T6 Full suite + checks, delivery slices (chained PRs).
+- [x] T6 Full suite + checks, delivery slices (chained PRs).
+  - Full suite on `ccabf7c` (verify worktree, DB `techcamp_verify`): 636 passed. No web changes.
+  - Owner authorized push + PRs (not merge), delegated to OpenCode. Stacked chain, E5 #87 format,
+    `size:exception` on every slice (407–1030 lines), label `epic:e6`:
+    #104 `e6/01-fao56-balance-math` → main; #105 `e6/02-decision-rules`; #106
+    `e6/03-balance-persistence`; #107 `e6/04-daily-balance`; #108 `e6/05-sensor-assimilation`;
+    #109 `e6/06-daily-job`; #110 `e6/07-irrigation-api`; #111 `e6/08-quality-close` (each based
+    on the previous). Follow-ups stay open: #94 #96 #97 #99 #100 #101 #102, weather #103.
 
 ## Acceptance criteria
 - FAO-56 numeric examples pass for TAW, RAW with adjusted p, ETc and the daily Dr update.
@@ -204,4 +211,4 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   assertion against a plain-string regression).
 
 ## Next step
-T6: full suite (running), then delivery slices.
+Owner merges #104 → #111 in order (retarget each to `main` after its parent merges). Then the review follow-up issues, and the irrigation push wiring once E7's outbox is on main.
