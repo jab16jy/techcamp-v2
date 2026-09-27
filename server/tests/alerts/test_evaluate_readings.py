@@ -310,6 +310,24 @@ async def test_another_orgs_rule_never_opens_for_this_plot(
     assert all(state == AlertState.OPEN for _, state, _ in alerts)
 
 
+# -- only the "Umbral sobre lecturas" row of docs/06 §3 is decided here (D17) --
+
+
+async def test_the_rules_of_the_other_docs_sources_never_open_from_the_ingestor(
+    db_session: AsyncSession,
+) -> None:
+    # `fungal_risk` also needs a 20-30 °C mean, `node_battery_low` reads a node
+    # column and `heavy_rain_forecast` the weather cell: none of them is a plot
+    # reading threshold, so a window full of qualifying readings opens nothing.
+    for metric, value in (("air_rh", 90.0), ("battery_v", 3.0), ("rain", 60.0)):
+        plot = await _make_plot(db_session, metric=metric)
+        at = await _store_series(db_session, plot, end=_START, values=[value] * 61)
+
+        await _landed(db_session, plot, at=at, metric=metric)
+
+        assert await _alerts(db_session, plot) == []
+
+
 # -- a reading outside the physical range does not trigger alerts (docs/06 §1) --
 
 

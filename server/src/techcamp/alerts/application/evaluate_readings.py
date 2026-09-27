@@ -1,12 +1,12 @@
 """Reading-threshold rules decided right after each ingest batch (docs/06 §3,
 "Umbral sobre lectura"; D1, D2, D9).
 
-The rule set is data: a rule with a metric and a `(`<`, `>`)` operator is a
-reading threshold, so `heat_stress`, `waterlogging` and an org's own rules are
-decided by the same code, and the seeded worker rules (no metric) are skipped
-without a case per rule. `water_stress` is inert here by construction: its
-threshold is `None` until T10 supplies the plot's `stress_moisture_pct`, so
-`decide_alert` answers `NO_ACTION`.
+The rule set is data: `plot_rule_metric` (D17) says which of a plot's rules
+this source decides, so `heat_stress`, `waterlogging` and an org's own rules are
+decided by the same code, and the rules of the other four sources of docs/06 §3
+are skipped without a case per rule. `water_stress` is inert here until T10
+supplies the plot's `stress_moisture_pct` (its threshold is `None`, so
+`decide_alert` answers `NO_ACTION`).
 
 The use case supplies inputs and calls the right lifecycle use case (D9); the
 domain owns every decision. The whole window is read back from `reading`
@@ -28,7 +28,13 @@ from techcamp.alerts.application.use_cases import (
     resolve_automatically,
     upgrade_to_critical,
 )
-from techcamp.alerts.domain import RESOLUTION_WINDOW, AlertAction, AlertRule, decide_alert
+from techcamp.alerts.domain import (
+    RESOLUTION_WINDOW,
+    AlertAction,
+    AlertRule,
+    decide_alert,
+    plot_rule_metric,
+)
 from techcamp.farms.application.ports import PlotRepository, SoilProfileRepository
 from techcamp.telemetry.application.ports import NodeRepository, ReadingRepository, SensorRepository
 from techcamp.telemetry.domain.models import ReadingEvent
@@ -48,14 +54,18 @@ after the batch's own newest reading: that sample is the evidence the decision
 is about."""
 
 
-def _reading_threshold_rules(rules: Sequence[AlertRule]) -> list[tuple[AlertRule, str]]:
-    """The `(rule, metric)` pairs this evaluator decides.
+def _plot_rules(rules: Sequence[AlertRule]) -> list[tuple[AlertRule, str]]:
+    """The `(rule, metric)` pairs this evaluator decides: a plot rule (D17) with
+    an operator `decide_alert` can compare, one pair per rule to read readings
+    for.
 
-    docs/06 §3 "Umbral sobre lecturas" as data: a metric plus a `(`<`, `>`)`
-    operator is a reading threshold, everything else (node health, forecast,
-    model) is decided by its own source.
+    The rule code, never a per-rule branch: the codes of the other four sources
+    of docs/06 §3 are excluded by the domain, and an operator outside `(`<`,
+    `>`)` leaves `decide_alert` nothing to compare.
     """
-    return [(r, m) for r in rules if (m := r.metric) is not None and r.operator in ("<", ">")]
+    return [
+        (r, m) for r in rules if (m := plot_rule_metric(r)) is not None and r.operator in ("<", ">")
+    ]
 
 
 async def evaluate_landed_readings(
@@ -107,7 +117,7 @@ async def _evaluate_plot(
     soils: SoilProfileRepository,
     alerts: AlertRepository,
 ) -> None:
-    threshold_rules = _reading_threshold_rules(await rules.list_for_org(plot.org_id))
+    threshold_rules = _plot_rules(await rules.list_for_org(plot.org_id))
     if not threshold_rules:
         return
     plot_nodes = await nodes.list_for_org(plot.org_id, plot_id=plot.id, limit=_MAX_NODES_PER_PLOT)

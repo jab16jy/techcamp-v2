@@ -8,6 +8,7 @@ from techcamp.alerts.domain.errors import (
 )
 from techcamp.alerts.domain.models import (
     ESCALATION_DELAY,
+    NON_PLOT_RULE_CODES,
     RESOLUTION_WINDOW,
     WATER_STRESS_UPGRADE_AFTER,
     Alert,
@@ -24,12 +25,14 @@ from techcamp.alerts.domain.models import (
     is_clear_met,
     is_condition_met,
     is_eligible_for_escalation,
+    plot_rule_metric,
     resolve_threshold,
     sustained_run,
 )
 
 __all__ = [
     "ESCALATION_DELAY",
+    "NON_PLOT_RULE_CODES",
     "RESOLUTION_WINDOW",
     "WATER_STRESS_UPGRADE_AFTER",
     "Alert",
@@ -50,6 +53,7 @@ __all__ = [
     "is_clear_met",
     "is_condition_met",
     "is_eligible_for_escalation",
+    "plot_rule_metric",
     "resolve_threshold",
     "sustained_run",
 ]

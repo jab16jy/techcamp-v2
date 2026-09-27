@@ -77,6 +77,22 @@ WATER_STRESS_UPGRADE_AFTER = timedelta(hours=48)
 ESCALATION_DELAY = timedelta(hours=2)
 """D12: critical open alert escalated to technician after 2 h from opened_at."""
 
+NON_PLOT_RULE_CODES: frozenset[str] = frozenset(
+    {
+        # docs/06 §3 has five sources and only "Umbral sobre lecturas" is
+        # decided over a plot's sensor readings; these codes belong to the other
+        # four (node health, forecast, model, balance), so they never carry a
+        # plot reading threshold (D17).
+        "fungal_risk",
+        "heavy_rain_forecast",
+        "flood_risk",
+        "drought_risk",
+        "node_offline",
+        "node_battery_low",
+    }
+)
+"""The rule codes the reading-threshold source of docs/06 §3 does not decide."""
+
 
 @dataclass(frozen=True, slots=True)
 class AlertRule:
@@ -291,6 +307,25 @@ def is_eligible_for_escalation(alert: Alert, now: datetime) -> bool:
         and alert.escalated_at is None
         and now - alert.opened_at >= ESCALATION_DELAY
     )
+
+
+def plot_rule_metric(rule: AlertRule) -> str | None:
+    """The sensor metric a plot reading threshold is decided on, or `None` when
+    the rule belongs to another source of docs/06 §3.
+
+    `alert_rule` has no `source` column (docs/03:272-283), so the code is the
+    discriminator today: the codes of the other four sources are data in
+    `NON_PLOT_RULE_CODES`, never a branch per rule. Their metric is a second
+    half this source never reads (`fungal_risk` also needs a 20-30 °C mean,
+    docs/06 §3), a node column (`node_battery_low`) or a weather-cell value
+    (`heavy_rain_forecast`), so deciding them here would be a wrong alert.
+
+    `water_stress` **is** a plot rule: docs/06 §3 gives it the plot's θ_estrés
+    and T10 supplies `stress_moisture_pct`, which is why it is not listed.
+    """
+    if rule.code in NON_PLOT_RULE_CODES:
+        return None
+    return rule.metric
 
 
 def _condition_run(

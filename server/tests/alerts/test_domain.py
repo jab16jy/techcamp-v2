@@ -18,6 +18,7 @@ from techcamp.alerts.domain import (
     is_clear_met,
     is_condition_met,
     is_eligible_for_escalation,
+    plot_rule_metric,
     resolve_threshold,
     sustained_run,
 )
@@ -644,3 +645,30 @@ def test_zero_duration_rule_opens_only_on_a_violating_latest_sample():
     assert decide_alert(battery, [], t0, max_gap=_MAX_GAP).action == AlertAction.NO_ACTION
     assert decide_alert(battery, [(t0, 3.9)], t0, max_gap=_MAX_GAP).action == AlertAction.NO_ACTION
     assert decide_alert(battery, [(t0, 3.3)], t0, max_gap=_MAX_GAP).action == AlertAction.OPEN
+
+
+def test_only_the_plot_rules_of_the_ingestor_source_carry_a_metric():
+    # docs/06 §3 has five sources; these six codes belong to the other four
+    # (node health, forecast, model, balance), so a plot reading threshold is
+    # never decided on them even with a metric of their own (D17).
+    other_sources = {
+        "fungal_risk": "air_rh",
+        "heavy_rain_forecast": "rain",
+        "flood_risk": None,
+        "drought_risk": None,
+        "node_offline": None,
+        "node_battery_low": "battery_v",
+    }
+    for code, metric in other_sources.items():
+        assert plot_rule_metric(_rule(code, metric=metric, operator=">")) is None
+
+    # A plot rule keeps its metric, and `water_stress` is one of them: T10 gives
+    # it the plot's `stress_moisture_pct` threshold.
+    assert plot_rule_metric(_rule("heat_stress", metric="air_temp", operator=">")) == "air_temp"
+    assert plot_rule_metric(_rule("waterlogging", metric="soil_moisture", operator=">")) == (
+        "soil_moisture"
+    )
+    assert plot_rule_metric(_rule("water_stress", metric="soil_moisture", operator="<")) == (
+        "soil_moisture"
+    )
+    assert plot_rule_metric(_rule("custom_humidity", metric="air_rh", operator=">")) == "air_rh"
