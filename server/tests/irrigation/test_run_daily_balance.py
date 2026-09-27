@@ -12,10 +12,11 @@ Tests against real Postgres with TDD:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
@@ -34,7 +35,10 @@ from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyIrrigationRecommendationRepository,
     SqlAlchemyWaterBalanceRepository,
 )
-from techcamp.irrigation.application.run_daily_balance import run_daily_balance
+from techcamp.irrigation.application.run_daily_balance import (
+    DailyBalanceResult,
+    run_daily_balance,
+)
 from techcamp.irrigation.domain.models import RainfedAdvice, RecommendationKind, WaterBalanceDay
 from techcamp.shared.db import engine
 from techcamp.shared.ids import uuid7
@@ -1007,6 +1011,217 @@ async def test_sensor_assimilation_two_sensors_averaged(db_session: AsyncSession
     assert result.recommendation is not None
     assert result.recommendation.rationale.get("without_sensor") is False
     assert result.recommendation.rationale.get("k") == pytest.approx(0.5)
+
+
+# --- Issue #99 T4 Sensor assimilation tests ---
+
+
+@dataclass(frozen=True)
+class SensorSpec:
+    depth_cm: int | None = 30
+    metric: str = "soil_moisture"
+    calibration_kind: str = "field"
+    readings: Sequence[tuple[datetime, float, int]] = ()
+
+
+async def _setup_plot_with_sensors(
+    db_session: AsyncSession,
+    sensors: Sequence[SensorSpec],
+    *,
+    target_day: date = date(2026, 9, 25),
+    now: datetime | None = None,
+) -> tuple[UUID, UUID]:
+    """Creates a plot with weather, node, and the specified field-calibrated sensors + readings."""
+    ref_time = now or datetime(target_day.year, target_day.month, target_day.day, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=ref_time)
+
+    node_id = uuid7()
+    db_session.add(
+        NodeRow(
+            id=node_id,
+            org_id=org_id,
+            plot_id=plot_id,
+            transport="lorawan",
+            claim_code=f"claim-{uuid4().hex[:6]}",
+            credential_hash="hash",
+            interval_s=900,
+            status="online",
+            claimed_at=ref_time - timedelta(days=10),
+            last_seen_at=ref_time,
+        )
+    )
+    await db_session.flush()
+
+    for s in sensors:
+        sensor_row = SensorRow(
+            node_id=node_id,
+            channel_key=f"s_{s.metric}_{s.depth_cm}_{uuid4().hex[:6]}",
+            metric=s.metric,
+            depth_cm=s.depth_cm,
+            unit="pct" if s.metric == "soil_moisture" else "c",
+        )
+        db_session.add(sensor_row)
+        await db_session.flush()
+
+        db_session.add(
+            CalibrationRow(
+                id=uuid7(),
+                sensor_id=sensor_row.id,
+                version=1,
+                method="linear",
+                kind=s.calibration_kind,
+                params={"scale": 1.0, "offset": 0.0},
+                rmse_pct=None,
+                valid_from=ref_time - timedelta(days=10),
+            )
+        )
+        for t, val, qual in s.readings:
+            db_session.add(
+                ReadingRow(
+                    time=t,
+                    sensor_id=sensor_row.id,
+                    raw_value=val,
+                    value=val,
+                    received_at=t,
+                    quality=qual,
+                )
+            )
+
+    await db_session.commit()
+    return org_id, plot_id
+
+
+async def _run_plot_daily_balance(
+    db_session: AsyncSession,
+    plot_id: UUID,
+    target_day: date = date(2026, 9, 25),
+    *,
+    now: datetime | None = None,
+) -> DailyBalanceResult:
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+    return result
+
+
+async def test_sensor_assimilation_rerun_with_now_far_from_d_gives_same_result(
+    db_session: AsyncSession,
+) -> None:
+    """D2: Freshness and calibration lookup anchor to local day D-1 end, not now."""
+    target_day = date(2026, 9, 25)
+    now_day_d = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t1 = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t1, 16.0, 0)])],
+        target_day=target_day,
+        now=now_day_d,
+    )
+
+    res_initial = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now_day_d)
+    assert not res_initial.skipped
+    assert res_initial.balance is not None
+    assert res_initial.balance.assimilation_k == pytest.approx(0.5)
+
+    now_rerun = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    res_rerun = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now_rerun)
+    assert not res_rerun.skipped
+    assert res_rerun.balance is not None
+    assert res_rerun.balance.assimilation_k == pytest.approx(0.5)
+    assert res_rerun.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+    expected_dr_obs = 1000.0 * (0.23 - 0.16) * 0.6
+    expected_dr = res_rerun.balance.depletion_model_mm + 0.5 * (
+        expected_dr_obs - res_rerun.balance.depletion_model_mm
+    )
+    assert res_rerun.balance.depletion_mm == pytest.approx(expected_dr)
+
+
+async def test_sensor_assimilation_reading_at_0200_utc_day_d_belongs_to_local_d_minus_1(
+    db_session: AsyncSession,
+) -> None:
+    """D3: A reading at 02:00 UTC of day D is 21:00 Bogota of day D-1, so it belongs to D-1."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 25, 2, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, 16.0, 0)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+
+
+async def test_sensor_assimilation_out_of_range_reading_excluded_from_daily_mean(
+    db_session: AsyncSession,
+) -> None:
+    """D3: Out-of-range reading (quality & 2 != 0) is excluded from sensor daily mean."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t1 = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+    t2 = datetime(2026, 9, 24, 14, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t1, 16.0, 0), (t2, 99.0, 2)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+
+
+async def test_sensor_assimilation_sensor_with_no_valid_readings_or_nan_mean_yields_k_zero(
+    db_session: AsyncSession,
+) -> None:
+    """R3-daily-value-none: Sensor with out-of-range readings falls back to K=0, no TypeError."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, 999.0, 2)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
 
 
 # --- Issue #115 round 1 findings ---

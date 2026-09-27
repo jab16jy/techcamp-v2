@@ -36,6 +36,7 @@ from techcamp.telemetry.domain.models import (
     NodeTransport,
     ReadingEvent,
     ReadingPoint,
+    ReadingQuality,
     ReadingRecord,
     Sensor,
 )
@@ -473,6 +474,25 @@ class SqlAlchemyReadingRepository:
                 ReadingRow.time >= start,
                 ReadingRow.time < end,
                 ReadingRow.value.is_not(None),
+            )
+            .order_by(ReadingRow.time)
+        )
+        return [ReadingPoint(time=row.time, value=row.value) for row in result]
+
+    async def query_valid_raw(
+        self, sensor_id: int, org_id: UUID, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        result = await self._session.execute(
+            select(ReadingRow.time, ReadingRow.value)
+            .join(SensorRow, SensorRow.id == ReadingRow.sensor_id)
+            .join(NodeRow, NodeRow.id == SensorRow.node_id)
+            .where(
+                ReadingRow.sensor_id == sensor_id,
+                NodeRow.org_id == org_id,
+                ReadingRow.time >= start,
+                ReadingRow.time < end,
+                ReadingRow.value.is_not(None),
+                ReadingRow.quality.bitwise_and(int(ReadingQuality.OUT_OF_RANGE)) == 0,
             )
             .order_by(ReadingRow.time)
         )

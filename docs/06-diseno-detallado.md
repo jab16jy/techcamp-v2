@@ -187,7 +187,7 @@ Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8) ([ADR-
 | Calibración `field` y profundidad representativa | 0,5 (valor inicial; se ajusta con el error modelo − observado registrado) |
 
 - **Profundidad representativa:** un sensor cerca de la mitad de la zona de raíces (Zr/2), o el promedio de dos sensores a profundidades distintas dentro de ella. Un sensor a 10 cm no representa la raíz del maíz (1,0–1,7 m en FAO-56). La tolerancia alrededor de Zr/2 y las profundidades por cultivo están pendientes de validación agronómica.
-- **Sensor representativo** es el que cumple las condiciones de `K > 0`: lectura válida en 24 h, profundidad representativa y calibración `field`. Solo ese sensor alimenta la regla `water_stress` sobre lecturas.
+- **Sensor representativo** es el que cumple las condiciones de `K > 0`: lectura válida en 24 h, profundidad representativa y calibración `field`. Solo ese sensor alimenta la regla `water_stress` sobre lecturas. Una **lectura válida** es aquella con valor calibrado y sin la bandera de fuera de rango (`reading.quality` bit 2 excluido, [03](03-modelo-datos.md#calibración)). La ventana del promedio diario del sensor y el chequeo de lectura en 24 h corresponden al día local D−1 en America/Bogota (00:00–24:00 local, convertido a instantes UTC) y se anclan al final de ese día local (no a la hora de corrida `now`, para que una reejecución o backfill sea determinista; D2 y D3).
 - `K` es fijo por tipo de calibración. Si el error modelo − observado sigue alto con datos reales, el paso siguiente es un filtro de Kalman que estime `K` cada día a partir de la varianza del modelo y del sensor.
 
 ```mermaid
