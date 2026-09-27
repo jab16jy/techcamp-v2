@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from sqlalchemy import select
@@ -16,17 +17,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.evaluate_readings import build_evaluator
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
-from techcamp.alerts.adapters.repositories import SqlAlchemyAlertRuleRepository
+from techcamp.alerts.adapters.repositories import (
+    SqlAlchemyAlertRepository,
+    SqlAlchemyAlertRuleRepository,
+)
+from techcamp.alerts.application import evaluate_landed_readings
 from techcamp.alerts.domain import AlertRule, AlertState, Severity
 from techcamp.farms.adapters.orm import FarmRow, PlotRow, SoilProfileRow
-from techcamp.farms.adapters.repositories import SqlAlchemySoilProfileRepository
+from techcamp.farms.adapters.repositories import (
+    SqlAlchemyPlotRepository,
+    SqlAlchemySoilProfileRepository,
+)
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.domain.models import Role
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
-from techcamp.telemetry.adapters.repositories import SqlAlchemyReadingRepository
+from techcamp.telemetry.adapters.repositories import (
+    SqlAlchemyNodeRepository,
+    SqlAlchemyReadingRepository,
+    SqlAlchemySensorRepository,
+)
 from techcamp.telemetry.application.ingest_uplinks import AfterFlush
-from techcamp.telemetry.domain.models import ReadingEvent, ReadingRecord
+from techcamp.telemetry.domain.models import ReadingEvent, ReadingRecord, Sensor
 
 pytestmark = pytest.mark.anyio
 
@@ -196,6 +208,23 @@ async def _rule(
     )
 
 
+class _SensorsFailingForOneNode(SqlAlchemySensorRepository):
+    """The real sensor read, except that it raises for one node.
+
+    The failure is injected at a port the evaluator already uses, so the batch
+    is otherwise exactly what the ingestor hands the hook.
+    """
+
+    def __init__(self, session: AsyncSession, *, failing_node_id: UUID) -> None:
+        super().__init__(session)
+        self._failing_node_id = failing_node_id
+
+    async def list_for_node(self, node_id: UUID, org_id: UUID) -> list[Sensor]:
+        if node_id == self._failing_node_id:
+            raise RuntimeError("sensor read failed")
+        return await super().list_for_node(node_id, org_id)
+
+
 # -- heat_stress: air_temp > 35 °C sustained 3 h (docs/06 §3) --
 
 
@@ -356,6 +385,45 @@ async def test_a_batch_decides_each_plot_at_its_own_newest_reading(
         ("heat_stress", AlertState.OPEN)
     ]
     assert [(code, state) for code, state, _ in await _alerts(db_session, stale)] == [
+        ("heat_stress", AlertState.OPEN)
+    ]
+
+
+# -- one plot's failure is isolated: the plots after it are still decided --
+
+
+async def test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot(
+    db_session: AsyncSession,
+) -> None:
+    failing = await _make_plot(db_session, metric="air_temp")
+    following = await _make_plot(db_session, metric="air_temp")
+    # Both plots carry the same 3 h heat run, so the only reason the first one
+    # opens nothing is the failure injected at its sensor read.
+    failing_at = await _store_series(db_session, failing, end=_START, values=[38.0] * 13)
+    following_at = await _store_series(db_session, following, end=_START, values=[38.0] * 13)
+
+    # The hook is awaited inside the ingestor's flush: an exception here would
+    # re-queue the whole batch and fail identically on every attempt (a poison
+    # batch), silencing every plot that shares it. The evaluation of each plot is
+    # isolated, so this call must not raise.
+    await evaluate_landed_readings(
+        events=[
+            _event(failing, at=failing_at, metric="air_temp"),
+            _event(following, at=following_at, metric="air_temp"),
+        ],
+        rules=SqlAlchemyAlertRuleRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        sensors=_SensorsFailingForOneNode(db_session, failing_node_id=failing.node_id),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        plots=SqlAlchemyPlotRepository(db_session),
+        soils=SqlAlchemySoilProfileRepository(db_session),
+        alerts=SqlAlchemyAlertRepository(db_session),
+    )
+
+    # The negative assertion too: silence is the dangerous failure here, so the
+    # plot that failed must show no alert AND the next one must show its own.
+    assert await _alerts(db_session, failing) == []
+    assert [(code, state) for code, state, _ in await _alerts(db_session, following)] == [
         ("heat_stress", AlertState.OPEN)
     ]
 

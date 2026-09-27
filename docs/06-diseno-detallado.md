@@ -51,6 +51,7 @@ sequenceDiagram
 | Duplicados | La restricción `UNIQUE (sensor_id, time)` más `ON CONFLICT DO NOTHING` hace idempotente la entrega "al menos una vez" de QoS 1. Solo las lecturas realmente insertadas emiten un evento `reading`: una redelivery no inserta nada y, por tanto, no vuelve a notificar al fan-out por SSE. |
 | Estado del nodo | `UPDATE node SET last_seen_at, status` solo avanza: se aplica únicamente si el `last_seen_at` guardado es más antiguo. Los lotes de uplink y de status se vacían por separado, así que un uplink recibido antes de un Last Will `offline` puede escribirse después; sin esta guarda el nodo volvería a `online` con una fecha más antigua. |
 | Huecos | Un salto en `seq` incrementa `ingest_gap_total`. La completitud diaria por nodo es un SLI ([11-metricas](11-metricas.md)). |
+| Fallo al evaluar | La evaluación de cada parcela va aislada: si al decidir sus reglas algo lanza (datos malformados, una aserción), el error se registra con su parcela y el lote sigue con las demás, que abren sus alertas con normalidad. Esa parcela no se pierde: como la evaluación es sin estado (D16), su siguiente lote vuelve a decidirla. Un fallo del lote anterior a la evaluación sí reencola el lote para reintentarlo. |
 
 > **Límite conocido:** la librería MQTT confirma el mensaje al recibirlo, así que si el ingestor cae entre la confirmación y la inserción se pierde como máximo un lote (≤ 1 s). Se detecta como hueco de `seq`. Si la completitud baja del SLO, se pasa a confirmación manual después del `INSERT`.
 

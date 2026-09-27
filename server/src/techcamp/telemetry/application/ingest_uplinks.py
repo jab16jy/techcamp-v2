@@ -152,11 +152,13 @@ async def ingest_uplinks(
 
     `after_flush` (D9) is awaited after the batch and the node updates are
     committed, in its own transaction (D16). It is awaited with the readings
-    this batch processed, not only the ones `insert_batch` returned: a flush
-    that fails in the hook is re-queued and re-decided at once instead of
-    waiting for the node's next batch, and deciding the same window twice is
-    idempotent (`open_alert` returns the alert already open, and a resolved one
-    is no `current_alert`).
+    this batch processed, not only the ones `insert_batch` returned: a failure
+    BEFORE the hook (the flush itself) re-queues the batch and re-decides it at
+    once instead of waiting for the node's next batch, and deciding the same
+    window twice is idempotent (`open_alert` returns the alert already open, and
+    a resolved one is no `current_alert`). A failure INSIDE the hook is the
+    evaluator's own business: it isolates the plot that failed, so the batch is
+    not re-queued and the remaining plots of the batch are still decided.
     """
     stats = IngestStats()
     records: list[ReadingRecord] = []
