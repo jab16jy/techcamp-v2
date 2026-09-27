@@ -187,13 +187,24 @@ work unit (`domain-modeling`).
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
 
+## E6 coordination (2026-09-26)
+- E6 merged to `main` (PRs #104–#111, `main` @ `b627b66`): `water_balance_daily` (`plot_id`, `day`,
+  `depletion_mm`, `raw_mm`, `stress_moisture_pct`, `assimilation_k`, `soil_moisture_obs_pct`, …)
+  and `irrigation_recommendation`, written by the daily irrigation job at 04:30 America/Bogota
+  (the run for day D writes the balance row for D−1; docs/06 §5). Rainfed stress boundary:
+  `Dr > RAW` (docs/04:75). E6 Alembic head `d8a2f1c4e9b7`.
+- Plan: rebase `feat/e7-alerts` onto `main` right after T3 closes (no writer active), re-chain
+  T1's migration `d4e6f8a0b2c1` from `b7e2c9a41d38` onto `d8a2f1c4e9b7`, full checks, then T4.
+- The informative irrigation push (docs/06 §5) stays an E6 follow-up to wire through this outbox
+  once E7 is on `main`.
+
 ## Open questions
 - Q1 Plot-alert recipients: docs name the technician for node alerts and escalations and the
   producer for plot alerts, but not whether `owner` also receives plot alerts. D4 includes owners
   (small orgs: the owner is often the producer). Owner to confirm.
 - Q2 `water_stress` trigger b (`Dr > RAW` from the balance): E7 evaluates it in an alerts job after
-  E6's 04:30 balance job, reading `water_balance_daily`; E6 may prefer to call it at the end of
-  its job. Decide with E6 when T10 starts.
+  E6's 04:30 balance job, reading `water_balance_daily` (the row for D−1); E6 did not wire a call
+  into its job, so the alerts job stands (settled 2026-09-26 with the E6 coordination note).
 
 ## Tasks
 - [x] T1 Schema: migration from `b7e2c9a41d38` for `alert_rule` (+ factory rules seeded),
