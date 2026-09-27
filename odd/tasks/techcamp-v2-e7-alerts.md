@@ -373,8 +373,9 @@ work unit (`domain-modeling`).
   non-trivial files) and preparation (the sensor read and the sample semantics were mapped with
   CodeGraph `explore` on `ingest_uplinks` / `after_flush` / `evaluate_landed_readings` /
   `_evaluate_plot` / `_samples` and on `sustained_run` before any grep or read, no fallback) —
-  forecast ~120 — actual 189 changed lines in one commit (`19780b3`: 76 production / 76 tests /
-  1 docs line) + decision D24 — **PENDING, tests written but execution deferred to T11** (owner
+  forecast ~120 — actual 246 changed lines over two commits (`19780b3`: 189 changed lines, 76
+  production / 76 tests / 1 docs line; `ed8583a`: 150 changed lines, the review correction) +
+  decision D24 — **PENDING, tests written but execution deferred to T11** (owner
   decision 2026-09-27, time pressure): no database was started and no test suite was run in this
   worktree, so neither RED nor GREEN was observed here; the four static checks are green (see
   Progress / evidence). The pin is `test_a_plot_whose_evaluation_raises_does_not_silence_the_
@@ -548,7 +549,7 @@ work unit (`domain-modeling`).
   `gentle_review_capture` must omit `workspaceRoot` — the collect-binding route is registered
   under the session cwd, so passing the E7 worktree was refused as "different session route".
   Boundary → `577a405`.
-- T5c (`f1270a7..19780b3` + `4c1f7ae`, the correction): the writer owns its own RDD from the
+- T5c (`f1270a7..19780b3` + `ed8583a`, the correction): the writer owns its own RDD from the
   `e7-t5-isolation` worktree on branch `fix/e7-t5-plot-isolation`, per-slice committed range with
   base `f1270a7`. `gentle-ai review assess --base-ref f1270a7 --committed-only --json`:
   **medium** (`executable_change` on `alerts/adapters/evaluate_readings.py`), 189 changed lines,
@@ -570,7 +571,7 @@ work unit (`domain-modeling`).
     DATABASE: the plot loop shares one `AsyncSession`, the failed statement leaves it in a
     failed-transaction state, and every later plot raised `PendingRollbackError` into the same
     broad `except`, so the batch closed with nothing decided and the flush reported success. Fix
-    `4c1f7ae`: the `UnitOfWorkRecovery` port injected by the adapter with `session.rollback`, plus
+    `ed8583a`: the `UnitOfWorkRecovery` port injected by the adapter with `session.rollback`, plus
     `test_a_database_failure_in_one_plot_does_not_silence_the_next_plot`, which raises a REAL
     database error (a plain `RuntimeError` cannot reproduce a poisoned session — the reviewer's
     second evidence point, which is the reason the test suite did not see this).
@@ -646,7 +647,7 @@ work unit (`domain-modeling`).
     poisons the shared session). **Neither RED nor GREEN was observed: the owner deferred every
     suite run to T11/final verification (2026-09-27, time pressure), so no database was started
     here. T11 owns the execution of all three tests.**
-  - Static checks run in `server/` on `19780b3` and again on the correction `4c1f7ae` (identical
+  - Static checks run in `server/` on `19780b3` and again on the correction `ed8583a` (identical
     results both times): `uv run ruff check`: All checks passed; `uv run ruff format --check`:
     228 files already formatted; `uv run mypy`: Success, no issues in 154 source files;
     `uv run lint-imports`: 1 contract kept, 0 broken (hexagonal layers per module KEPT).
