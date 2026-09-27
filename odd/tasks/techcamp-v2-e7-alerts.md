@@ -96,12 +96,15 @@ alerts).
   `npm run typecheck`, `npm test -- --run`, `npm run build`, `npm run size`.
 - Route: delegated direct. Planner/orchestrator: this Claude Code session (Opus 5.5, owner
   2026-09-26). Writers through Herdr, one tab per writer, one session per task group; a new task
-  number gets a fresh session. Writer priority (owner 2026-09-26, relayed by the E6
-  orchestrator): **AGY is the default writer** (the parent runs RDD on its commits and records its
-  evidence: commit, RED line, checks); OpenCode only for mid-to-high units that need something
-  slightly better (runs its own RDD); the Claude `odd-worker` subagent only for complex units.
-  Writers never plan. Triggers fired: mapping (12+ docs and 5 modules, one Sonnet mapper),
-  writer (every unit touches 2+ non-trivial files).
+  number gets a fresh session. Writer rule (owner 2026-09-26, supersedes the AGY-first rule):
+  **OpenCode is the primary writer for every implementation unit; AGY is no longer used**; the
+  Claude `odd-worker` subagent only for complex units. Writers never plan. Triggers fired: mapping
+  (12+ docs and 5 modules, one Sonnet mapper), writer (every unit touches 2+ non-trivial files).
+- Slice flow: OpenCode commits and waits → the parent runs its checks (targeted tests, ruff,
+  format, mypy, lint-imports) and compares the diff with the owning docs → quality issues
+  (duplication, loose types, dead fallbacks, doc contradictions) are fixed immediately by the same
+  OpenCode session → the parent says go → OpenCode runs its own RDD and reports → the parent files
+  non-blocking findings as one issue per review round (fixed later) and records the outcome.
 - Skills forwarded: `fastapi`, `pydantic`, `find-docs`, `work-unit-commits`, `systematic-debugging`,
   ponytail; `impeccable` for T9 only (E1 design frozen: reuse, no visual changes);
   `domain-modeling` whenever a unit changes docs/03, docs/04 or docs/06.
@@ -206,40 +209,41 @@ work unit (`domain-modeling`).
   `.git-brief-e7-T3-rework.md`, ~650 forecast; architecture and size rules added to the common
   brief): repository (org-filtered), open/update/resolve use cases writing alert +
   notification rows in one transaction (D4–D6), `NOTIFY plot_events` `alert.opened` /
-  `alert.updated`, SSE hub pass-through — route: Herdr AGY — forecast ~450
+  `alert.updated`, SSE hub pass-through — route: Herdr OpenCode (rework; AGY draft rejected) —
+  forecast ~650
 - [ ] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
   `GET/POST/PATCH /alert-rules`, `POST/DELETE /push-subscriptions`; org isolation tests;
-  docs/04 shapes — route: Herdr AGY — forecast ~450
+  docs/04 shapes — route: Herdr OpenCode — forecast ~450
 - [ ] T5 Reading rules in the ingestor: after-flush hook (D9), `heat_stress`, `waterlogging`
   (field capacity + 5 from the plot soil), org custom threshold rules; open and resolve on each
-  batch — route: Herdr OpenCode (cross-module wiring in the hot path) — forecast ~450
+  batch — route: Herdr OpenCode — forecast ~450
 - [ ] T6 Worker rules
   - [ ] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
-    `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Herdr AGY —
+    `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Herdr OpenCode —
     forecast ~350
   - [ ] T6b `heavy_rain_forecast` after the 3 h refresh (D10), critical with saturated soil;
-    `fungal_risk` daily — route: Herdr AGY (same session as T6a) — forecast ~400
+    `fungal_risk` daily — route: Herdr OpenCode (same session as T6a) — forecast ~400
 - [ ] T7 Notifications outbox
   - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
-    `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode (delivery guarantee) —
+    `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
     forecast ~450
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
-    subscription and tries the next channel — route: Herdr AGY — forecast ~300
+    subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
     fallback to the alternate channel, grouping and quiet hours at send (D6) — route: Herdr
     OpenCode (same session as T7a) — forecast ~400
 - [ ] T8 Escalation job: critical unacknowledged ≥ 2 h → `escalated_at` + SMS to the technician
-  (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr AGY — forecast ~300
+  (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr OpenCode — forecast ~300
 - [ ] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
   registration against `POST /push-subscriptions`, one entry point reusing E1 primitives — route:
-  Herdr AGY + `impeccable` — forecast ~300
+  Herdr OpenCode + `impeccable` — forecast ~300
 - [ ] T10 `water_stress` (after E6's `water_balance_daily` is on `main`; rebase first): trigger a
   over readings vs `stress_moisture_pct` with a representative sensor, trigger b `Dr > RAW`
   without one (ADR-0022, Q2) — route: Herdr OpenCode — forecast ~450
 - [ ] T11 Close: scenario-A integration test (readings through ingest → `heat_stress` and
   `water_stress` open → push via the fake sender → escalation SMS in `/dev/outbox`), retries and
-  escalation proven; seminar-stack demo; final report — route: Herdr AGY — forecast ~250
+  escalation proven; seminar-stack demo; final report — route: Herdr OpenCode — forecast ~250
 
 ## Acceptance criteria
 - [ ] One non-resolved alert per rule and plot/node, enforced by a partial unique index.
