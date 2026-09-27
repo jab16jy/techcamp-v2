@@ -10,21 +10,24 @@ spans them (D14, the `farms` → `weather` precedent of E5 T2).
 
 from __future__ import annotations
 
+import decimal
 import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Row, func, select, text, update
+from sqlalchemy import CursorResult, Row, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.alerts.application.ports import AlertTarget
+from techcamp.alerts.domain.errors import InvalidAlertRuleError
 from techcamp.alerts.domain.models import (
     Alert,
+    AlertRule,
     AlertState,
     InvalidAlertTransitionError,
     Severity,
@@ -367,3 +370,99 @@ def _to_row(alert: Alert) -> AlertRow:
         resolution_note=alert.resolution_note,
         outcome=alert.outcome,
     )
+
+
+def _rule_from_row(row: AlertRuleRow) -> AlertRule:
+    """The `Numeric` thresholds of `alert_rule` become the floats the domain compares."""
+    return AlertRule(
+        id=row.id,
+        org_id=row.org_id,
+        code=row.code,
+        metric=row.metric,
+        operator=row.operator,
+        threshold=float(row.threshold) if row.threshold is not None else None,
+        hysteresis=float(row.hysteresis),
+        min_duration=timedelta(minutes=row.min_duration_min),
+        severity=Severity(row.severity),
+        crop_id=row.crop_id,
+    )
+
+
+def _numeric(value: float | None) -> decimal.Decimal | None:
+    """`Decimal(str(value))`, never `Decimal(value)`: the float's binary
+    expansion would write 34.500000000000000444089209850062616169452667236328125
+    into a `Numeric`."""
+    return None if value is None else decimal.Decimal(str(value))
+
+
+class SqlAlchemyAlertRuleRepository:
+    """CRUD of `alert_rule` (docs/03:272-283; D11).
+
+    Separate from `SqlAlchemyAlertRepository` because a rule write is a single
+    row in its own transaction: it never opens an alert, an outbox row or a
+    `NOTIFY` (the lifecycle repository owns those).
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_for_org(self, org_id: UUID) -> list[AlertRule]:
+        """The factory rules (`org_id is null`, every org reads them) plus this
+        org's own, by code."""
+        result = await self._session.execute(
+            select(AlertRuleRow)
+            .where(or_(AlertRuleRow.org_id.is_(None), AlertRuleRow.org_id == org_id))
+            .order_by(AlertRuleRow.code)
+        )
+        return [_rule_from_row(row) for row in result.scalars()]
+
+    async def get_for_orgs(self, rule_id: UUID, org_ids: Sequence[UUID]) -> AlertRule | None:
+        """A rule of one of `org_ids`; a factory rule is never one (D11)."""
+        if not org_ids:
+            return None
+        result = await self._session.execute(
+            select(AlertRuleRow).where(AlertRuleRow.id == rule_id, AlertRuleRow.org_id.in_(org_ids))
+        )
+        row = result.scalar_one_or_none()
+        return _rule_from_row(row) if row is not None else None
+
+    async def create(self, rule: AlertRule) -> AlertRule:
+        self._session.add(
+            AlertRuleRow(
+                id=rule.id,
+                org_id=rule.org_id,
+                code=rule.code,
+                metric=rule.metric,
+                operator=rule.operator,
+                threshold=_numeric(rule.threshold),
+                hysteresis=_numeric(rule.hysteresis) or decimal.Decimal(0),
+                min_duration_min=int(rule.min_duration.total_seconds() // 60),
+                severity=rule.severity.value,
+                crop_id=rule.crop_id,
+            )
+        )
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            # A `crop_id` (or `org_id`) that doesn't exist is a client error, not
+            # a 500: the membership already proved the org, so the reference
+            # data is what failed. The database message is not echoed back.
+            await self._session.rollback()
+            raise InvalidAlertRuleError(
+                f"Rule {rule.id} references data that does not exist"
+            ) from exc
+        return rule
+
+    async def update(self, rule: AlertRule) -> AlertRule:
+        await self._session.execute(
+            update(AlertRuleRow)
+            .where(AlertRuleRow.id == rule.id, AlertRuleRow.org_id == rule.org_id)
+            .values(
+                threshold=_numeric(rule.threshold),
+                hysteresis=_numeric(rule.hysteresis),
+                min_duration_min=int(rule.min_duration.total_seconds() // 60),
+                severity=rule.severity.value,
+            )
+        )
+        await self._session.commit()
+        return rule

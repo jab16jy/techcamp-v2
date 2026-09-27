@@ -57,6 +57,17 @@ def ensure_can_manage_alert(role: Role) -> None:
         raise InsufficientRoleError(role)
 
 
+def ensure_can_manage_rules(role: Role) -> None:
+    """D11, D15: only an `owner` creates or patches an org's alert rules.
+
+    A rule decides when an org's farm is notified, so it is the org owner's
+    call; every other role reads the rules (`GET /alert-rules`) and nothing
+    more.
+    """
+    if role != Role.OWNER:
+        raise InsufficientRoleError(role)
+
+
 RESOLUTION_WINDOW = timedelta(minutes=60)
 """D2: resolution condition sustained for 60 minutes (domain constant)."""
 

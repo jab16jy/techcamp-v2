@@ -40,6 +40,7 @@ from techcamp.alerts.domain import (
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.adapters.repositories import SqlAlchemyMembershipRepository
+from techcamp.identity.domain.errors import NotAMemberError
 from techcamp.identity.domain.models import Role
 from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.adapters.repositories import SqlAlchemyNotificationRepository
@@ -395,7 +396,6 @@ async def test_acknowledge_then_resolve_manually_stores_the_note(
     acknowledged = await acknowledge(
         user_id=org.producer,
         alert_id=alert.id,
-        farm_id=org.farm_id,
         at=_MORNING + timedelta(minutes=1),
         alerts=alerts,
         memberships=memberships,
@@ -408,7 +408,6 @@ async def test_acknowledge_then_resolve_manually_stores_the_note(
     resolved = await resolve_manually(
         user_id=org.owner,
         alert_id=alert.id,
-        farm_id=org.farm_id,
         note="Válvula abierta",
         at=_MORNING + timedelta(minutes=2),
         alerts=alerts,
@@ -433,7 +432,6 @@ async def test_an_alert_of_another_org_is_not_found(
         await acknowledge(
             user_id=other.owner,
             alert_id=alert.id,
-            farm_id=org.farm_id,
             at=_MORNING,
             alerts=alerts,
             memberships=memberships,
@@ -442,7 +440,6 @@ async def test_an_alert_of_another_org_is_not_found(
         await resolve_manually(
             user_id=other.owner,
             alert_id=alert.id,
-            farm_id=org.farm_id,
             note=None,
             at=_MORNING,
             alerts=alerts,
@@ -462,7 +459,6 @@ async def test_a_viewer_may_not_acknowledge_or_resolve(
         await acknowledge(
             user_id=org.viewer,
             alert_id=alert.id,
-            farm_id=org.farm_id,
             at=_MORNING,
             alerts=alerts,
             memberships=memberships,
@@ -471,7 +467,6 @@ async def test_a_viewer_may_not_acknowledge_or_resolve(
         await resolve_manually(
             user_id=org.viewer,
             alert_id=alert.id,
-            farm_id=org.farm_id,
             note=None,
             at=_MORNING,
             alerts=alerts,
@@ -492,7 +487,6 @@ async def test_manual_resolve_from_open_is_an_invalid_transition(
         await resolve_manually(
             user_id=org.owner,
             alert_id=alert.id,
-            farm_id=org.farm_id,
             note="cerrada",
             at=_MORNING,
             alerts=alerts,
@@ -518,7 +512,6 @@ async def test_opened_and_updated_reach_plot_events_and_the_sse_hub(
         await acknowledge(
             user_id=org.owner,
             alert_id=alert.id,
-            farm_id=org.farm_id,
             at=_MORNING,
             alerts=alerts,
             memberships=memberships,
@@ -581,25 +574,48 @@ async def test_list_alerts_filters_and_pages_by_cursor(
     def _ids(alerts_found: list[Alert]) -> set[UUID]:
         return {alert.id for alert in alerts_found}
 
-    mine = await list_alerts(user_id=org.owner, alerts=alerts, memberships=memberships)
+    mine = await list_alerts(
+        user_id=org.owner, org_id=org.org_id, alerts=alerts, memberships=memberships
+    )
     assert _ids(mine) == {water.id, heat.id, node.id}  # never the other org's alert
 
     by_plot = await list_alerts(
-        user_id=org.owner, plot_id=org.plot_id, alerts=alerts, memberships=memberships
+        user_id=org.owner,
+        org_id=org.org_id,
+        plot_id=org.plot_id,
+        alerts=alerts,
+        memberships=memberships,
     )
     assert _ids(by_plot) == {water.id, heat.id}
 
     still_open = await list_alerts(
-        user_id=org.owner, state=AlertState.ACKNOWLEDGED, alerts=alerts, memberships=memberships
+        user_id=org.owner,
+        org_id=org.org_id,
+        state=AlertState.ACKNOWLEDGED,
+        alerts=alerts,
+        memberships=memberships,
     )
     assert still_open == []
 
-    page = await list_alerts(user_id=org.owner, limit=2, alerts=alerts, memberships=memberships)
+    page = await list_alerts(
+        user_id=org.owner, org_id=org.org_id, limit=2, alerts=alerts, memberships=memberships
+    )
     assert [alert.id for alert in page] == sorted({water.id, heat.id, node.id}, reverse=True)[:2]
     rest = await list_alerts(
-        user_id=org.owner, limit=2, cursor=page[-1].id, alerts=alerts, memberships=memberships
+        user_id=org.owner,
+        org_id=org.org_id,
+        limit=2,
+        cursor=page[-1].id,
+        alerts=alerts,
+        memberships=memberships,
     )
     assert [alert.id for alert in rest] == [min({water.id, heat.id, node.id})]
+
+    # D15: the org is the caller's to name, and only one they belong to.
+    with pytest.raises(NotAMemberError):
+        await list_alerts(
+            user_id=other.owner, org_id=org.org_id, alerts=alerts, memberships=memberships
+        )
 
 
 async def test_a_stale_transition_does_not_overwrite_a_newer_row(
