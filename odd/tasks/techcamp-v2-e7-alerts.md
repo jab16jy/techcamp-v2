@@ -660,7 +660,10 @@ work unit (`domain-modeling`).
     do not exist in this repository's label set and creating labels was not authorized, so the
     nearest existing labels were used.
 - Next step: the parent merges `fix/e7-t5-plot-isolation` into `feat/e7-alerts` (no push, no merge
-  from this worktree), and T11 runs the suites these tests were written for. T6b
+  from this worktree), and T11 runs the suites these tests were written for. Merge note: `f1270a7`
+  is an ancestor of `feat/e7-alerts`' HEAD, so it is a fast-forward, and T5c shares NO source file
+  with T6b — the only file both branches touched is `docs/06-diseno-detallado.md` (T5c's row "Fallo
+  al evaluar" in §1's table), so that is the single conflict to resolve at merge. T6b
   (`heavy_rain_forecast` after the 3 h refresh, `fungal_risk` daily) is running in the other
   worktree, with D10 already settling the cadence question — a separate alerts periodic a few
   minutes after the refresh, NOT a call from the weather job, because docs/05 has no
