@@ -228,6 +228,8 @@ flowchart TD
 - **`rationale`** guarda los números usados (ET0, Kc y su `kc_source`, p, RAW, Dr modelado y asimilado, `K`, pronóstico). Lo muestra la interfaz y lo usa el asistente para explicar la recomendación. Un Kc `approximate` se muestra como tal.
 - Con sensor representativo, `water_stress` la abre la regla sobre lecturas contra el θ_estrés del día; sin él, la abre este job cuando `Dr > RAW` ([§3](#3-evaluación-de-alertas)). Vale igual en secano.
 - El error entre modelo y observación es el SLI "error de humedad" ([11-metricas](11-metricas.md)).
+- **Semántica temporal de la corrida:** una corrida para el día local D (America/Bogota) calcula la fila de balance para D−1 con el clima observado consolidado de ese día (o pronóstico si falta el observado, señalado en el `rationale`); y guarda la recomendación para el día D a partir de Dr(D−1), evaluando la lluvia pronosticada a 48 h (D..D+1) y a 7 días (D..D+6) y la ET0 pronosticada a 7 días. El día del ciclo es `(D−1 − sown_on).days + 1`; el balance previo es el de D−2 (`Dr_prev = 0` si falta). Clima con `fetched_at` de más de 24 h se marca `low_confidence` en el `rationale`.
+- **Datos de suelo incompletos:** si el `soil_profile` de la parcela carece de θFC, θWP o `root_depth_cm` (Zr), no se guarda fila de balance ni recomendación para el día; el job registra la omisión.
 
 ### Parcelas de secano
 

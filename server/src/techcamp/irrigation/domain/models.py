@@ -73,9 +73,14 @@ WATCH_THRESHOLD_RATIO: float = 0.8
 class StageLike(Protocol):
     """Structural protocol for crop stages (matches farms.domain.models.CropStage)."""
 
-    stage: str
-    length_days: int
-    kc: float
+    @property
+    def stage(self) -> str: ...
+
+    @property
+    def length_days(self) -> int: ...
+
+    @property
+    def kc(self) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,6 +396,10 @@ def decide_recommendation(
         "forecast_rain_7d_mm": forecast_rain_7d_mm,
         "forecast_et0_7d_mm": forecast_et0_7d_mm,
     }
+    if "low_confidence" in ctx:
+        rationale["low_confidence"] = ctx["low_confidence"]
+    if "missing_observed_weather" in ctx:
+        rationale["missing_observed_weather"] = ctx["missing_observed_weather"]
 
     # Branch: no active cycle
     if not has_active_cycle:

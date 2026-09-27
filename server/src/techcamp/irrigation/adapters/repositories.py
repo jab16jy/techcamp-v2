@@ -116,7 +116,7 @@ class SqlAlchemyWaterBalanceRepository:
             },
         )
         await self._session.execute(stmt)
-        await self._session.commit()
+        await self._session.flush()
 
     async def get_for_plot(
         self, plot_id: UUID, day: datetime.date, org_id: UUID | None = None
@@ -214,7 +214,7 @@ class SqlAlchemyIrrigationRecommendationRepository:
             },
         ).returning(IrrigationRecommendationRow)
         result = await self._session.execute(upsert_stmt)
-        await self._session.commit()
+        await self._session.flush()
         saved_row = result.scalar_one()
         return _recommendation_from_row(saved_row)
 
