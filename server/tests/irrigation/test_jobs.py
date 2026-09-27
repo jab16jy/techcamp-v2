@@ -19,6 +19,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from asyncpg.exceptions import UniqueViolationError
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -281,19 +282,23 @@ async def test_defer_plot_job_reraises_other_integrity_error(
 ) -> None:
     """_defer_plot_job re-raises any IntegrityError that is NOT the queueing lock
 
-    (R3-broad-integrityerror-swallow).
+    (R3-broad-integrityerror-swallow, R3-reraise-test-skips-constraint-name-branch).
+    Chains a real asyncpg UniqueViolationError with a different constraint_name
+    to prove that the constraint_name check is executed.
     """
     plot_id = uuid7()
 
-    class _OtherAsyncpgError(Exception):
-        constraint_name = "procrastinate_jobs_pkey"
+    unique_cause = UniqueViolationError(
+        "duplicate key value violates unique constraint 'procrastinate_jobs_pkey'"
+    )
+    unique_cause.constraint_name = "procrastinate_jobs_pkey"
+    driver_error = Exception("driver error")
+    driver_error.__cause__ = unique_cause
 
     other_error = IntegrityError(
         statement="SELECT procrastinate_defer_jobs_v1(...)",
         params={},
-        orig=_OtherAsyncpgError(
-            "duplicate key violates unique constraint 'procrastinate_jobs_pkey'"
-        ),
+        orig=driver_error,
     )
 
     async def _failing_execute(*args: object, **kwargs: object) -> None:
