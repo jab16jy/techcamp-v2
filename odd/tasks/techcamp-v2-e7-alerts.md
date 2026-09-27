@@ -271,9 +271,12 @@ work unit (`domain-modeling`).
   `GET/POST/PATCH /alert-rules`, `POST/DELETE /push-subscriptions`; org isolation tests;
   docs/04 shapes — route: Pi subagent (same session, no Herdr tab) — forecast ~450 — actual
   1,540 (`e15b969`; 857 production / 672 tests / 11 docs) + correction 119 (`577a405`)
-- [ ] T5 Reading rules in the ingestor: after-flush hook (D9), `heat_stress`, `waterlogging`
+- [x] T5 Reading rules in the ingestor: after-flush hook (D9), `heat_stress`, `waterlogging`
   (field capacity + 5 from the plot soil), org custom threshold rules; open and resolve on each
-  batch — route: Herdr OpenCode — forecast ~450
+  batch — route: Pi subagent (same session, no Herdr tab) — forecast ~450 — actual 4 commits,
+  1,059 authored (`7e98815` 721, `4e7201d` 111, `db19ece` 109, `a204e92` 118) + decisions
+  D16, D17 — **validation pending**: the lineage is closed at `correction_required` because the
+  correction-plan capture is refused (see Review (RDD))
 - [ ] T6 Worker rules
   - [ ] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
     `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Herdr OpenCode —
@@ -370,6 +373,34 @@ work unit (`domain-modeling`).
   (authority burned), no correction. 2 WARNING non-blocking → #113 (seed `metric`/`hysteresis`/
   `crop_id` not pinned independently; DB-default test bounded by process clock). Boundary →
   `a32a0d0`.
+- T5 (`a8f2ea2..a204e92`, 17 files, 947 changed lines): medium, one reliability lens. Two CRITICAL
+  findings, both real, both fixed; the targeted validation could not run (tooling, see below), so
+  the slice is NOT approved yet.
+  - `R3-MixedPlotTimestamp` (deterministic, introduced): `evaluate_landed_readings` used ONE global
+    `at` for the whole batch, so a plot whose newest reading was earlier was judged at another
+    plot's timestamp and `sustained_run` dropped its series as stale. The parent wrote that defect
+    into the T5 brief ("`at` is the batch's latest reading time"); the fix is per-plot `at`
+    (`a204e92`).
+  - `R3-RetrySkipsAlertEvaluation` (inferential, behavior-activated): the hook was called only
+    with the newly inserted readings, so a re-queued batch (nothing inserts, so `new_events` is
+    empty) skipped the evaluation entirely — D16's "the next batch re-evaluates" only holds while
+    the node keeps sending NEW readings. The hook now runs with the batch's own readings, which is
+    idempotent; the SSE fan-out still publishes only landed rows (QoS-1 dedupe, #36).
+  - Also fixed before the review, both found by the parent gate, both with a test:
+    `4e7201d` (docs/06 §1: a flag-2 reading must not feed a rule; a new `query_valid_raw` read on
+    the telemetry port, flag 1 preserved, the API path unchanged) and `db19ece` (D17: the plot
+    evaluator selected rules by "has a metric and an operator", which also selected
+    `fungal_risk` — it WOULD have opened from the ingestor on a pure RH run, ignoring the
+    20–30 °C half of its condition and stealing T6b's rule).
+  - **Tooling blocker (2026-09-27, unresolved):** `gentle_review_capture` refuses the
+    correction-plan slot with "collectBinding is unknown, expired, or belongs to a different
+    session route", on both workspace roots and on both serializations of the binding, while the
+    same route worked for the reviewer, refuter and (in T4) the plan slot. The lineage is
+    therefore stuck at `correction_required` with the fixes committed; the targeted validation
+    that would close it is never offered. T4's identical slot was captured only after several
+    retries, so this is flaky, not a rule I am violating. Both CRITICALs are fixed and gated
+    (static checks green, 30 targeted tests); what is missing is the provider's validation, not
+    the fix.
 - T4 (`5dbae1d..e15b969`, 24 files, 1,576 changed lines): medium, one reliability lens. START
   requested the per-slice committed range (`baseRef 5dbae1d`, `committedOnly`), not the
   whole-branch range the inspect offered, per the per-slice decision above. Lineage
@@ -433,5 +464,11 @@ work unit (`domain-modeling`).
   full suite 727 passed, ruff, format, mypy, lint-imports green. The writer changed the planned
   sequential test for a barrier-synchronised concurrent pair, because a sequential PATCH cannot
   observe the defect (each request would read a fresh row) — accepted, it is the stronger test.
-- Next step: T5 (reading rules in the ingestor, D9) — brief not written yet; #95, #98, #112, #113
-  and #114 stay open for later in the epic.
+- Next step: T6a (node health every 5 min), the brief is being written from the mapping scout
+  (job framework, node data, recipients, test seams). Two invariants learned from T5's CRITICALs
+  go into the brief: a decision that reads a window is taken at the newest sample of ITS OWN
+  target (never a global batch time), and every test of a behaviour carries the negative
+  assertion too (it must not decide with another target's data), because in an alerting system
+  the dangerous failure is silence, not an exception — which is why the whole suite was green
+  through both bugs. #95, #98, #112, #113 and #114 stay open for later in the epic; T5's
+  non-blocking findings and the `alert_rule.source` column follow-up are filed with the round.
