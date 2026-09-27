@@ -477,19 +477,44 @@ work unit (`domain-modeling`).
   registered task on the queue the worker listens to, and the node-health sweep must be
   `*/5 * * * *`.
   Same shape as T3's `DISTINCT ON` false positive, also refuted from the source.
-  **Lineage NOT CLOSED 2026-09-27 — maintainer decision, not a fix.** The host switch that
-  closed T6b did not apply here: the CLI re-offers `recovery_authorization` (`scope_changed`),
-  NOT the correction-plan slot, on two consecutive read-only STATUS calls on the same binding
-  (`--lineage review-23ebe1e7dc220953 --base-ref 1f268cf --committed-only`). Frozen tier medium,
-  budget 200, authority target `sha256:125c8200…` vs current candidate `sha256:799bb481…` — the
-  worktree now carries T6b's commits, so the live candidate no longer matches the frozen one
-  and native classifies the difference as a scope change. Recovery needs the owner's
-  maintainer authorization, which this operator does not have; no `recover`, `abandon` or
-  `reclaim` was run. The guard test `37f6be9` is correct on its own merits and its suite is
-  green, but it is NOT covered by an acknowledged review: `37f6be9` is T6b's BASE, so T6b's
-  range starts after it, and T6a's range ends at `21fb000`, also before it. So `37f6be9` is
-  the one commit no acknowledged lineage has reviewed, and this is why the T6a lineage
-  matters — it is the only binding that can carry it.
+  **Lineage NOT CLOSED 2026-09-27 — maintainer-authorized, then refused by the CLI.** The host
+  switch that closed T6b did not apply here: the CLI re-offers `recovery_authorization`
+  (`scope_changed`), NOT the correction-plan slot, on every read-only STATUS call on the same
+  binding (`--lineage review-23ebe1e7dc220953 --base-ref 1f268cf --committed-only`). Frozen tier
+  medium, budget 200, authority target `sha256:125c8200…` vs current candidate `sha256:799bb481…`
+  — the worktree now carries T6b's commits, so the live candidate no longer matches the frozen
+  one and native classifies the difference as a scope change. `review inspect-authority` reports
+  the authority `valid: true`, `complete: true`, **0 recovery edges**: nothing is corrupt, the
+  lineage is simply waiting on a maintainer artifact.
+  - The owner authorized the `scope_changed` recovery (actor `jab16jy`), and it is still refused.
+    `review recover` demands an "exact LF-only `gentle-ai.review-recovery-authorization/v1`
+    binding", and that binding is **not discoverable from the CLI surface**: `review schema`
+    only emits `capture-result-dry-run`, `refuter`, `reviewer` and `validator`; the STATUS input
+    carries the schema NAME only, never its fields. The documented field set was tried in both
+    documented variants and both were refused, verbatim:
+    - without `successor_lineage`: `correction-required scope recovery requires an exact
+      maintainer authorization binding`
+    - with `successor_lineage: review-411621a8a31dfb6b`: same refusal
+    Guessing undocumented fields against an exact-match validator would be forging maintainer
+    authority, so the operator stopped. Flag-level refusals fixed along the way (none mutated
+    anything): `--successor-lineage` is required despite the help calling it "optional native";
+    `--reason`/`--actor` are required again when the binding carries them;
+    `--expected-untracked-inventory` must be dropped; and **`--base-ref` is pinned to the
+    predecessor's base (`1f268cf`)**, so the minimal `21fb000` scope is refused too
+    (`recovery base-ref does not match predecessor base`) — a scope recovery therefore always
+    reviews T6a + the guard test + the parent fix + T6b.
+    Post-attempt state, verified: `inspect-authority` still 0 edges and valid, T6a still
+    `correction_required`/`recover`, and the successor id does not exist
+    (`applicability: unrelated`). Nothing was abandoned, recovered or reclaimed.
+  - The guard test `37f6be9` is correct on its own merits and its suite is green, but it is NOT
+    covered by an acknowledged review: `37f6be9` is T6b's BASE, so T6b's range starts after it,
+    and T6a's range ends at `21fb000`, also before it. So `37f6be9` is the one commit no
+    acknowledged lineage has reviewed, and this is why the T6a lineage matters — it is the only
+    binding that can carry it.
+  - **Bounded check re-run 2026-09-27** (owner's request): `uv run pytest tests/alerts` against
+    `techcamp-e7-db` on 5437 → **109 passed**, 2 third-party deprecation warnings
+    (starlette/httpx), 52s. Suite green with the guard test in it, which is evidence for the
+    test's correctness but NOT a substitute for its review.
   - Parent gate on `21fb000`: static checks green, 9 targeted tests; the writer's single full run
     (748 passed) is the slice's. Two writer deviations, both accepted as improvements: the domain
     decision takes `heard_run` instead of `rule` (the 60-minute clear run is NOT computable from
@@ -531,10 +556,11 @@ work unit (`domain-modeling`).
     --agent opencode --lineage <id> --base-ref <base> --committed-only --next-transition`
     re-offers the slot with provider-issued `submission.argument_tokens`. **The workaround: run
     the lifecycle from the OpenCode host through the `gentle-ai` CLI with `--agent opencode`,
-    never through the Pi wrapper.** It closed T6b end to end. T6a still does not close through
-    it, for an unrelated reason (it asks for `scope_changed` recovery, see its entry above), and
-    T5 was not attempted. The Pi wrapper defect itself remains; #133 stays open and the owner
-    fixes the tooling on that side.
+    never through the Pi wrapper.** It closed T6b end to end. T6a reaches a DIFFERENT wall: it
+    asks for a `scope_changed` recovery, and even with the owner's authorization the CLI refuses
+    the exact `gentle-ai.review-recovery-authorization/v1` binding because that binding is not
+    discoverable from the CLI surface (see its entry above). T5 was not attempted. The Pi
+    wrapper defect itself remains; #133 stays open and the owner fixes the tooling on that side.
 - T4 (`5dbae1d..e15b969`, 24 files, 1,576 changed lines): medium, one reliability lens. START
   requested the per-slice committed range (`baseRef 5dbae1d`, `committedOnly`), not the
   whole-branch range the inspect offered, per the per-slice decision above. Lineage
@@ -601,9 +627,9 @@ work unit (`domain-modeling`).
 - Next step: T7a (the outbox dispatcher: sender port, claim with `FOR UPDATE SKIP LOCKED`, backoff
   1 min / 5 min / 30 min / 2 h and 5 attempts, the per-minute sweep, the seminar SMS adapter and
   `GET /dev/outbox`, D7/D8), then T7b, T7c, T8, T9, T10, T11. T6a and T6b are code-complete and
-  gated; T6b's lineage is closed and acknowledged from the OpenCode host, T6a's needs the
-  owner's maintainer authorization for a `scope_changed` recovery, and T5's was not attempted,
-  so the delivery boundary is `016df59`.
+  gated; T6b's lineage is closed and acknowledged from the OpenCode host, T6a's recovery is
+  maintainer-authorized but the CLI refuses the undiscoverable authorization binding (see its
+  entry above), and T5's was not attempted, so the delivery boundary is `016df59`.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
