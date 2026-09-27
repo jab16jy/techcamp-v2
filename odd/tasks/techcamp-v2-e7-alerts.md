@@ -186,6 +186,16 @@ work unit (`domain-modeling`).
 - D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
+- D23 T6b's two rules run on their own alerts periodics (D10), and the hours docs/10 §3 does
+  not name are fixed here: the forecast rules at `10 */3 * * *` (ten minutes after the 3 h refresh
+  begins) and `fungal_risk` at `45 4 * * *` (after the 04:30 balance, before the 05:00 morning
+  push). The forecast cron carries one honest assumption: it reads whatever `weather_daily` holds
+  ten minutes after the refresh began, so a slower provider leaves one round reading the previous
+  forecast — the job is idempotent and the next round catches up, which is why the parent does not
+  prefer a hook inside the refresh (D10's reason, no `weather → alerts` edge, also holds). The
+  fan-out is per organization like T6a (D21), with a per-run cache keyed by cell id so plots
+  sharing a cell read the forecast rows once, and no cross-org plot read: a weather cell is shared
+  by design.
 - D22 The 60-minute resolution window belongs to the RULES WITH A SERIES. docs/06 §3's
   "resolución automática ... sostenida durante 60 minutos" exists because a reading rule is
   evaluated over a time series and the clear condition needs to hold, not flicker.
