@@ -178,12 +178,12 @@ Estos endpoints no se registran en el perfil `production` ([ADR-0021](adr/0021-p
 ```
 POST /dev/auth/otp            { phone } → 204     # el código se imprime en la consola del api
 POST /dev/auth/otp/verify     { phone, code } → { access_token, token_type }   # 401 si el código es inválido o expiró
-POST /dev/jobs/{name}:run     { day? } → { job_id }   # weather, water-balance, irrigation, risk, metrics
+POST /dev/jobs/{name}:run     { day? } → { job_id }   # weather, irrigation, risk, metrics
 GET  /dev/outbox              → Notification[]    # SMS/WhatsApp simulados
 POST /dev/scenarios/{name}:load → 202             # lo usa el simulador para crear datos base y fixtures
 ```
 
-`weather` es el único nombre que encola los dos jobs de su agenda diaria —el refresco del pronóstico y la consolidación de `day` (por defecto, ayer)— y por eso responde `{ job_id, consolidate_job_id }` ([06-diseno-detallado.md §6](06-diseno-detallado.md#6-clima)); los demás nombres encolan un solo job. `day` debe ser un día ya transcurrido: hoy todavía es pronóstico y un día futuro no tiene clima observado, así que ambos se responden `422`.
+`weather` es el único nombre que encola los dos jobs de su agenda diaria —el refresco del pronóstico y la consolidación de `day` (por defecto, ayer)— y por eso responde `{ job_id, consolidate_job_id }` ([06-diseno-detallado.md §6](06-diseno-detallado.md#6-clima)); los demás nombres encolan un solo job. En `weather`, `day` debe ser un día ya transcurrido: hoy todavía es pronóstico y un día futuro no tiene clima observado, así que ambos se responden `422`. En `irrigation`, un solo job calcula el balance (D−1) y la recomendación (D); `day` toma por defecto el día de hoy (local) y un día posterior a hoy responde `422` porque el día de balance (D−1) debe haber terminado.
 
 ## Stream (SSE)
 
