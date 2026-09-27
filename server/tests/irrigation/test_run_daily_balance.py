@@ -1343,3 +1343,136 @@ async def test_skip_crop_stage_empty(db_session: AsyncSession) -> None:
         "crop_stage_invalid",
         crops=_FakeCropRepositoryWithBadStage(empty_stage_crop),
     )
+
+
+async def test_skip_plot_not_found(db_session: AsyncSession) -> None:
+    await _assert_skipped_no_rows(db_session, uuid7(), date(2026, 9, 25), "plot_not_found")
+
+
+async def test_skip_plot_has_no_weather_cell(db_session: AsyncSession) -> None:
+    org_id = uuid7()
+    db_session.add(OrganizationRow(id=org_id, name="Test Org", kind="individual"))
+    await db_session.commit()
+    farm_id = uuid7()
+    db_session.add(
+        FarmRow(
+            id=farm_id, org_id=org_id, name="Test Farm", municipality_code="47001", location=_POINT
+        )
+    )
+    await db_session.commit()
+    plot_id = uuid7()
+    db_session.add(
+        PlotRow(
+            id=plot_id,
+            org_id=org_id,
+            farm_id=farm_id,
+            name="No Cell",
+            boundary=_BOUNDARY,
+            weather_cell_id=None,
+            irrigation_system="drip",
+            irrigation_efficiency=Decimal("0.90"),
+            system_flow_lph=Decimal("1000.0"),
+        )
+    )
+    await db_session.commit()
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, date(2026, 9, 25), "plot_has_no_weather_cell"
+    )
+
+
+async def test_skip_no_active_cycle_on_irrigated_plot(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", has_cycle=False, day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, target_day, "no_active_cycle_on_irrigated_plot"
+    )
+
+
+async def test_skip_crop_not_found(db_session: AsyncSession) -> None:
+    """R3-skip-branches-untested: the crop lookup returning None (e.g. deleted
+    between the cycle read and this job run) skips this plot rather than crashing.
+    Faked at the port, since `crop_cycle.crop_id` has a real FK to `crop`.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    @dataclass
+    class _NoCropRepository:
+        async def get(self, crop_id: int) -> Crop | None:
+            return None
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, target_day, "crop_not_found", crops=_NoCropRepository()
+    )
+
+
+async def test_skip_missing_weather_for_balance_day(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, _cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    # No weather rows created at all.
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, target_day, "missing_weather_for_balance_day"
+    )
+
+
+async def test_skip_cycle_not_started(db_session: AsyncSession) -> None:
+    """R3-skip-branches-untested: a cycle sown after the balance day (D-1) skips
+    instead of computing a negative cycle day."""
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, days_sown_ago=0, day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "cycle_not_started")
+
+
+async def test_skip_soil_incomplete_missing_wilting_point(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, has_soil=False, day=target_day
+    )
+    db_session.add(
+        SoilProfileRow(
+            plot_id=plot_id,
+            source="lab",
+            texture="sandy_loam",
+            field_capacity_pct=Decimal("23.0"),
+            wilting_point_pct=None,
+            root_depth_cm=Decimal("60.0"),
+        )
+    )
+    await db_session.commit()
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "soil_profile_incomplete")
+
+
+async def test_skip_soil_incomplete_missing_root_depth(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, has_soil=False, day=target_day
+    )
+    db_session.add(
+        SoilProfileRow(
+            plot_id=plot_id,
+            source="lab",
+            texture="sandy_loam",
+            field_capacity_pct=Decimal("23.0"),
+            wilting_point_pct=Decimal("9.0"),
+            root_depth_cm=None,
+        )
+    )
+    await db_session.commit()
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "soil_profile_incomplete")
