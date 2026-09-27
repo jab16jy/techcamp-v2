@@ -154,7 +154,9 @@ def upgrade() -> None:
         sa.Column("operator", sa.String(), nullable=True),
         sa.Column("threshold", sa.Numeric(), nullable=True),
         sa.Column("hysteresis", sa.Numeric(), server_default=sa.text("0"), nullable=False),
-        sa.Column("min_duration_min", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column(
+            "min_duration_min", sa.Integer(), server_default=sa.text("0"), nullable=False
+        ),
         sa.Column("severity", sa.String(), nullable=False),
         sa.Column("crop_id", sa.Integer(), sa.ForeignKey("crop.id"), nullable=True),
         sa.CheckConstraint("operator in ('<', '>')", name="ck_alert_rule_operator"),
@@ -216,8 +218,12 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "num_nonnulls(plot_id, node_id) = 1", name="ck_alert_target_exactly_one"
         ),
-        sa.CheckConstraint("state in ('open', 'acknowledged', 'resolved')", name="ck_alert_state"),
-        sa.CheckConstraint("severity in ('info', 'warning', 'critical')", name="ck_alert_severity"),
+        sa.CheckConstraint(
+            "state in ('open', 'acknowledged', 'resolved')", name="ck_alert_state"
+        ),
+        sa.CheckConstraint(
+            "severity in ('info', 'warning', 'critical')", name="ck_alert_severity"
+        ),
         sa.CheckConstraint("outcome in ('confirmed', 'false_alarm')", name="ck_alert_outcome"),
     )
     op.create_index(
@@ -257,7 +263,9 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("channel", sa.String(), nullable=False),
-        sa.Column("status", sa.String(), server_default=sa.text("'pending'"), nullable=False),
+        sa.Column(
+            "status", sa.String(), server_default=sa.text("'pending'"), nullable=False
+        ),
         sa.Column("attempts", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column(
             "next_attempt_at",
