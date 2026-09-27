@@ -477,7 +477,7 @@ def test_decide_recommendation_no_active_cycle() -> None:
         decide_recommendation(
             has_active_cycle=False,
             is_rainfed=False,
-            kc_source=KcSource.FAO56,
+            kc_source=KcSource.FAO56.value,
             dr=0.0,
             raw=50.0,
             irrigation_efficiency=0.9,
@@ -496,7 +496,7 @@ def test_decide_recommendation_no_active_cycle() -> None:
     rec = decide_recommendation(
         has_active_cycle=False,
         is_rainfed=True,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=0.0,
         raw=50.0,
         irrigation_efficiency=None,
@@ -521,7 +521,7 @@ def test_decide_recommendation_no_kc() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.NONE,
+        kc_source=KcSource.NONE.value,
         dr=30.0,
         raw=50.0,
         irrigation_efficiency=0.9,
@@ -545,7 +545,7 @@ def test_decide_recommendation_irrigated_not_needed() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=30.0,
         raw=50.0,
         irrigation_efficiency=0.9,
@@ -568,7 +568,7 @@ def test_decide_recommendation_irrigated_postpone() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=55.0,
         raw=50.0,
         irrigation_efficiency=0.9,
@@ -602,7 +602,7 @@ def test_decide_recommendation_irrigated_irrigate_depth_and_minutes() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=54.0,
         raw=50.0,
         irrigation_efficiency=0.90,
@@ -633,7 +633,7 @@ def test_decide_recommendation_irrigated_duration_rounding() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.LOCAL,
+        kc_source=KcSource.LOCAL.value,
         dr=45.0,
         raw=40.0,
         irrigation_efficiency=0.75,
@@ -660,7 +660,7 @@ def test_decide_recommendation_rationale_contents() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.APPROXIMATE,
+        kc_source=KcSource.APPROXIMATE.value,
         dr=54.0,
         raw=50.0,
         irrigation_efficiency=0.90,

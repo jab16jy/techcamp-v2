@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 
@@ -81,6 +81,14 @@ class StageLike(Protocol):
 
     @property
     def kc(self) -> float: ...
+
+
+KcSourceCode = Literal["fao56", "local", "approximate", "none"]
+"""Provenance of a crop's Kc values, as the persisted string (docs/03-modelo-datos.md:446).
+
+Mirrors the member values of `farms.domain.models.KcSource`, declared literally
+because this domain imports nothing from other modules. The application layer
+translates the enum to one of these codes at the call boundary."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,7 +366,7 @@ def evaluate_rainfed_advice(
 def decide_recommendation(
     has_active_cycle: bool,
     is_rainfed: bool,
-    kc_source: Any,
+    kc_source: KcSourceCode,
     dr: float,
     raw: float,
     irrigation_efficiency: float | None,
@@ -377,14 +385,13 @@ def decide_recommendation(
         or None when a plot with an irrigation system has no active crop cycle.
     """
     ctx = rationale_context or {}
-    source_str = kc_source.value if hasattr(kc_source, "value") else str(kc_source).lower()
 
     k_val = ctx.get("k", K_ASSIMILATION_NONE)
     rationale = {
         "et0_mm": ctx.get("et0_mm"),
         "kc": ctx.get("kc"),
-        "kc_source": source_str,
-        "kc_approximate": source_str == "approximate",
+        "kc_source": kc_source,
+        "kc_approximate": kc_source == "approximate",
         "p": ctx.get("p"),
         "raw_mm": raw if has_active_cycle else None,
         "taw_mm": ctx.get("taw_mm"),
@@ -422,7 +429,7 @@ def decide_recommendation(
         )
 
     # Branch: missing validated Kc
-    if source_str == "none":
+    if kc_source == "none":
         return IrrigationRecommendation(
             kind=RecommendationKind.NO_KC,
             depth_mm=None,

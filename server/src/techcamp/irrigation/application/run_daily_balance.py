@@ -5,6 +5,7 @@ Computes the water balance row for D-1 and stores the irrigation recommendation 
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
@@ -24,6 +25,7 @@ from techcamp.irrigation.domain.models import (
     K_ASSIMILATION_DEFAULT,
     K_ASSIMILATION_NONE,
     IrrigationRecommendation,
+    KcSourceCode,
     WaterBalanceDay,
     assimilate_depletion,
     compute_adjusted_p,
@@ -46,6 +48,74 @@ from techcamp.telemetry.application.ports import (
     SensorRepository,
 )
 from techcamp.weather.application.ports import WeatherRepository
+from techcamp.weather.domain.models import WeatherDay
+
+_KC_SOURCE_CODES: Mapping[KcSource, KcSourceCode] = {
+    KcSource.FAO56: "fao56",
+    KcSource.LOCAL: "local",
+    KcSource.APPROXIMATE: "approximate",
+    KcSource.NONE: "none",
+}
+"""Translation from the farms `KcSource` enum to the irrigation domain's
+`KcSourceCode`, the plain string the rationale persists (docs/06 §5).
+
+Declared here, in the one layer allowed to know both modules, because mypy widens
+`KcSource.value` to `str` and would reject it against `KcSourceCode`. Spelling
+the table out keeps the compiler checking both sides instead of silencing the
+error with a `cast`. mypy cannot enforce exhaustiveness, so a member added to
+`KcSource` later raises `KeyError` here rather than persisting a wrong code."""
+
+
+@dataclass(frozen=True, slots=True)
+class ForecastSummary:
+    """Forecast totals and freshness the recommendation decision reads.
+
+    Covers the `[D, D+6]` forecast window of the recommendation day `D`, from
+    the already-fetched daily weather rows (docs/06 §5; E5 handoff). The rows
+    themselves differ per branch (`from_day` is `D` or `D-1`), so the window is
+    filtered here rather than in the query.
+    """
+
+    rain_48h_mm: float
+    rain_7d_mm: float
+    et0_7d_mm: float
+    low_confidence: bool
+
+
+def _summarize_forecast(
+    weather_rows: Sequence[WeatherDay],
+    *,
+    d_rec: date,
+    now: datetime,
+) -> ForecastSummary:
+    """Sum the 48 h and 7-day forecast rain, the 7-day forecast ET0, and flag
+    rows fetched more than 24 h ago as low confidence (docs/06 §5, §6).
+    """
+    d_plus_6 = d_rec + timedelta(days=6)
+    return ForecastSummary(
+        rain_48h_mm=sum(
+            float(r.rain_mm)
+            for r in weather_rows
+            if r.is_forecast
+            and r.day in (d_rec, d_rec + timedelta(days=1))
+            and r.rain_mm is not None
+        ),
+        rain_7d_mm=sum(
+            float(r.rain_mm)
+            for r in weather_rows
+            if r.is_forecast and d_rec <= r.day <= d_plus_6 and r.rain_mm is not None
+        ),
+        et0_7d_mm=sum(
+            float(r.et0_mm)
+            for r in weather_rows
+            if r.is_forecast and d_rec <= r.day <= d_plus_6 and r.et0_mm is not None
+        ),
+        low_confidence=any(
+            (now - r.fetched_at) > timedelta(hours=24)
+            for r in weather_rows
+            if r.fetched_at is not None
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,32 +184,7 @@ async def run_daily_balance(
         weather_rows = await weather.list_daily(
             plot.weather_cell_id, from_day=d_rec, to_day=d_rec + timedelta(days=6)
         )
-        rain_48h = sum(
-            float(r.rain_mm)
-            for r in weather_rows
-            if r.is_forecast
-            and r.day in (d_rec, d_rec + timedelta(days=1))
-            and r.rain_mm is not None
-        )
-        rain_7d = sum(
-            float(r.rain_mm)
-            for r in weather_rows
-            if r.is_forecast
-            and d_rec <= r.day <= d_rec + timedelta(days=6)
-            and r.rain_mm is not None
-        )
-        et0_7d = sum(
-            float(r.et0_mm)
-            for r in weather_rows
-            if r.is_forecast
-            and d_rec <= r.day <= d_rec + timedelta(days=6)
-            and r.et0_mm is not None
-        )
-        is_low_confidence = any(
-            (now - r.fetched_at) > timedelta(hours=24)
-            for r in weather_rows
-            if r.fetched_at is not None
-        )
+        forecast = _summarize_forecast(weather_rows, d_rec=d_rec, now=now)
         rec = decide_recommendation(
             has_active_cycle=False,
             is_rainfed=True,
@@ -149,11 +194,11 @@ async def run_daily_balance(
             irrigation_efficiency=None,
             area_m2=plot.area_ha * 10000.0,
             system_flow_lph=None,
-            forecast_rain_48h_mm=rain_48h,
-            forecast_rain_7d_mm=rain_7d,
-            forecast_et0_7d_mm=et0_7d,
+            forecast_rain_48h_mm=forecast.rain_48h_mm,
+            forecast_rain_7d_mm=forecast.rain_7d_mm,
+            forecast_et0_7d_mm=forecast.et0_7d_mm,
             stage="",
-            rationale_context={"low_confidence": is_low_confidence},
+            rationale_context={"low_confidence": forecast.low_confidence},
         )
         saved_rec: IrrigationRecommendation | None = None
         if rec is not None:
@@ -171,50 +216,25 @@ async def run_daily_balance(
         )
 
     # Branch: kc_source is none -> no_kc recommendation, skip balance row
-    if crop.kc_source is KcSource.NONE or str(crop.kc_source).lower() == "none":
+    if crop.kc_source is KcSource.NONE:
         weather_rows = await weather.list_daily(
             plot.weather_cell_id, from_day=d_balance, to_day=d_rec + timedelta(days=6)
         )
-        rain_48h = sum(
-            float(r.rain_mm)
-            for r in weather_rows
-            if r.is_forecast
-            and r.day in (d_rec, d_rec + timedelta(days=1))
-            and r.rain_mm is not None
-        )
-        rain_7d = sum(
-            float(r.rain_mm)
-            for r in weather_rows
-            if r.is_forecast
-            and d_rec <= r.day <= d_rec + timedelta(days=6)
-            and r.rain_mm is not None
-        )
-        et0_7d = sum(
-            float(r.et0_mm)
-            for r in weather_rows
-            if r.is_forecast
-            and d_rec <= r.day <= d_rec + timedelta(days=6)
-            and r.et0_mm is not None
-        )
-        is_low_confidence = any(
-            (now - r.fetched_at) > timedelta(hours=24)
-            for r in weather_rows
-            if r.fetched_at is not None
-        )
+        forecast = _summarize_forecast(weather_rows, d_rec=d_rec, now=now)
         rec = decide_recommendation(
             has_active_cycle=True,
             is_rainfed=(plot.irrigation_system == IrrigationSystem.NONE),
-            kc_source=crop.kc_source,
+            kc_source=_KC_SOURCE_CODES[crop.kc_source],
             dr=0.0,
             raw=0.0,
             irrigation_efficiency=plot.irrigation_efficiency,
             area_m2=plot.area_ha * 10000.0,
             system_flow_lph=plot.system_flow_lph,
-            forecast_rain_48h_mm=rain_48h,
-            forecast_rain_7d_mm=rain_7d,
-            forecast_et0_7d_mm=et0_7d,
+            forecast_rain_48h_mm=forecast.rain_48h_mm,
+            forecast_rain_7d_mm=forecast.rain_7d_mm,
+            forecast_et0_7d_mm=forecast.et0_7d_mm,
             stage="",
-            rationale_context={"low_confidence": is_low_confidence},
+            rationale_context={"low_confidence": forecast.low_confidence},
         )
         saved_rec = None
         if rec is not None:
@@ -265,25 +285,7 @@ async def run_daily_balance(
         float(weather_d_minus_1.rain_mm) if weather_d_minus_1.rain_mm is not None else 0.0
     )
 
-    forecast_rain_48h = sum(
-        float(r.rain_mm)
-        for r in weather_rows
-        if r.is_forecast and r.day in (d_rec, d_rec + timedelta(days=1)) and r.rain_mm is not None
-    )
-    forecast_rain_7d = sum(
-        float(r.rain_mm)
-        for r in weather_rows
-        if r.is_forecast and d_rec <= r.day <= d_rec + timedelta(days=6) and r.rain_mm is not None
-    )
-    forecast_et0_7d = sum(
-        float(r.et0_mm)
-        for r in weather_rows
-        if r.is_forecast and d_rec <= r.day <= d_rec + timedelta(days=6) and r.et0_mm is not None
-    )
-
-    is_low_confidence = any(
-        (now - r.fetched_at) > timedelta(hours=24) for r in weather_rows if r.fetched_at is not None
-    )
+    forecast = _summarize_forecast(weather_rows, d_rec=d_rec, now=now)
 
     # Balance calculation for D-1
     day_of_cycle = (d_balance - cycle.sown_on).days + 1
@@ -374,15 +376,15 @@ async def run_daily_balance(
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=(plot.irrigation_system == IrrigationSystem.NONE),
-        kc_source=crop.kc_source,
+        kc_source=_KC_SOURCE_CODES[crop.kc_source],
         dr=dr_assimilated,
         raw=raw,
         irrigation_efficiency=plot.irrigation_efficiency,
         area_m2=plot.area_ha * 10000.0,
         system_flow_lph=plot.system_flow_lph,
-        forecast_rain_48h_mm=forecast_rain_48h,
-        forecast_rain_7d_mm=forecast_rain_7d,
-        forecast_et0_7d_mm=forecast_et0_7d,
+        forecast_rain_48h_mm=forecast.rain_48h_mm,
+        forecast_rain_7d_mm=forecast.rain_7d_mm,
+        forecast_et0_7d_mm=forecast.et0_7d_mm,
         stage=stage,
         rationale_context={
             "et0_mm": et0_d_minus_1,
@@ -391,7 +393,7 @@ async def run_daily_balance(
             "taw_mm": taw,
             "dr_model": dr_model,
             "k": k,
-            "low_confidence": is_low_confidence,
+            "low_confidence": forecast.low_confidence,
             "missing_observed_weather": missing_observed,
         },
     )
