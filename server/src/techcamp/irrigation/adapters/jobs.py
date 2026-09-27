@@ -16,6 +16,7 @@ import json
 import logging
 from uuid import UUID
 
+from asyncpg.exceptions import UniqueViolationError
 from procrastinate import RetryStrategy
 from sqlalchemy import or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -50,6 +51,17 @@ logger = logging.getLogger(__name__)
 QUEUE_NAME = "irrigation"
 RUN_DAILY_PLOTS_TASK_NAME = "irrigation.run_daily_plots"
 RUN_PLOT_BALANCE_TASK_NAME = "irrigation.run_plot_balance"
+QUEUEING_LOCK_INDEX = "procrastinate_jobs_queueing_lock_idx_v1"
+
+
+def _is_queueing_lock_violation(exc: IntegrityError) -> bool:
+    """Check if the IntegrityError is caused by duplicate queueing_lock.
+
+    Under asyncpg, the driver error is chained as `exc.orig.__cause__`, an
+    `asyncpg.exceptions.UniqueViolationError` carrying `constraint_name`.
+    """
+    cause = exc.orig.__cause__ if exc.orig is not None else None
+    return isinstance(cause, UniqueViolationError) and cause.constraint_name == QUEUEING_LOCK_INDEX
 
 
 def local_today() -> datetime.date:
@@ -104,7 +116,8 @@ async def _defer_plot_job(
     for the same day while one is already pending is deduplicated by Postgres's partial unique
     index (`procrastinate_jobs_queueing_lock_idx_v1`).
     Runs inside a savepoint (`begin_nested`) so that an IntegrityError on duplicate enqueue is
-    caught and logged without aborting the caller's transaction.
+    caught and logged without aborting the caller's transaction; any unrelated IntegrityError
+    is re-raised.
     """
     try:
         async with session.begin_nested():
@@ -123,7 +136,9 @@ async def _defer_plot_job(
                     "args": json.dumps(args),
                 },
             )
-    except IntegrityError:
+    except IntegrityError as exc:
+        if not _is_queueing_lock_violation(exc):
+            raise
         logger.warning(
             "irrigation: job for plot %s with suffix %s already queued",
             plot_id,
