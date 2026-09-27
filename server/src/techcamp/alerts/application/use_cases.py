@@ -9,7 +9,6 @@ stream the change is published to (ADR-0015), so every caller states it.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -88,14 +87,14 @@ async def upgrade_to_critical(
 
     An alert that is already critical is returned untouched: the upgrade happens
     once, so a re-evaluated or repeated call must not send a second critical
-    notice. Two evaluators upgrading at once contend on the same row, and the
-    one that loses gets the winner's critical alert back rather than a second
-    notice.
+    notice. A resolved alert is refused (`InvalidAlertTransitionError`). Two
+    evaluators upgrading at once contend on the same row, and the one that
+    loses gets the winner's critical alert back rather than a second notice.
     """
     alert = await _load(alert_id, org_id, alerts)
     if alert.severity is Severity.CRITICAL:
         return alert
-    upgraded = replace(alert, severity=Severity.CRITICAL)
+    upgraded = alert.upgrade_to_critical()
     target = await alerts.get_target_context(plot_id=alert.plot_id, node_id=alert.node_id)
     try:
         return await alerts.save(

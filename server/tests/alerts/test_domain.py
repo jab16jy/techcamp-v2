@@ -247,6 +247,11 @@ def test_alert_transitions_and_errors():
     with pytest.raises(InvalidAlertTransitionError, match="only allowed from open or acknowledged"):
         resolved_manual.resolve_automatically(t2)
 
+    # 4. Upgrade to critical only while open or acknowledged (D5)
+    assert acked.upgrade_to_critical().severity == Severity.CRITICAL
+    with pytest.raises(InvalidAlertTransitionError, match="Cannot upgrade a resolved alert"):
+        resolved_manual.upgrade_to_critical()
+
 
 def test_upgrade_at_48h_for_water_stress():
     t0 = datetime(2026, 9, 20, 8, 0, tzinfo=UTC)

@@ -694,3 +694,49 @@ async def test_two_concurrent_upgrades_write_one_critical_outbox_set() -> None:
     assert (first.severity, second.severity) == (Severity.CRITICAL, Severity.CRITICAL)
     assert len(rows) == 4  # 2 warning + 2 critical, never a second critical set
     assert len([row for row in rows if row.next_attempt_at == later]) == 2
+
+
+async def test_a_resolved_alert_is_not_upgraded_to_critical(
+    db_session: AsyncSession, alerts: SqlAlchemyAlertRepository
+) -> None:
+    """A resolved warning stays closed: no critical, no second notice (R3-002)."""
+    org = await _make_org(db_session)
+    alert = await _open_plot_alert(db_session, alerts, org, "water_stress", _MORNING)
+    await resolve_automatically(
+        alert_id=alert.id,
+        org_id=org.org_id,
+        farm_id=org.farm_id,
+        at=_MORNING + timedelta(hours=1),
+        alerts=alerts,
+    )
+
+    with pytest.raises(InvalidAlertTransitionError):
+        await upgrade_to_critical(
+            alert_id=alert.id,
+            org_id=org.org_id,
+            at=_MORNING + timedelta(hours=48),
+            alerts=alerts,
+        )
+
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert (row.state, row.severity) == ("resolved", "warning")
+    assert len(await _rows(db_session, alert.id)) == 2
+
+
+async def test_the_pending_group_is_each_users_newest_push_row(
+    db_session: AsyncSession, alerts: SqlAlchemyAlertRepository
+) -> None:
+    """D6: the group a new row joins is the newest pending push per user.
+
+    Pins the `DISTINCT ON (user_id) … ORDER BY user_id, created_at DESC` read on
+    PostgreSQL: the older warning row loses to the newer critical row.
+    """
+    org = await _make_org(db_session)
+    newer = _MORNING + timedelta(minutes=5)
+    await _open_plot_alert(db_session, alerts, org, "water_stress", _MORNING)
+    critical = replace(await _rule(db_session, "heavy_rain_forecast"), severity=Severity.CRITICAL)
+    await open_alert(rule=critical, plot_id=org.plot_id, at=newer, alerts=alerts)
+
+    target = await alerts.get_target_context(plot_id=org.plot_id, node_id=None)
+
+    assert target.group_times == {org.owner: newer, org.producer: newer}

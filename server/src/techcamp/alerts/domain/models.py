@@ -161,6 +161,12 @@ class Alert:
             resolved_at=at,
         )
 
+    def upgrade_to_critical(self) -> Alert:
+        """D5: only a live alert is upgraded; a resolved one stays closed."""
+        if self.state == AlertState.RESOLVED:
+            raise InvalidAlertTransitionError("Cannot upgrade a resolved alert")
+        return replace(self, severity=Severity.CRITICAL)
+
     def escalate(self, at: datetime) -> Alert:
         """Escalate a critical open alert (D12)."""
         if not is_eligible_for_escalation(self, at):
