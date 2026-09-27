@@ -13,25 +13,26 @@ from __future__ import annotations
 
 import datetime
 import importlib
+import logging
+from collections.abc import Container
 from decimal import Decimal
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow, SoilProfileRow
-from techcamp.farms.adapters.repositories import (
-    SqlAlchemyCropRepository,
-    SqlAlchemyWeatherRepository,
-)
+from techcamp.farms.adapters.repositories import SqlAlchemyCropRepository
 from techcamp.farms.domain.models import CropCycleStatus
 from techcamp.identity.adapters.orm import OrganizationRow
 from techcamp.irrigation.adapters.jobs import (
     QUEUE_NAME,
     RUN_DAILY_PLOTS_TASK_NAME,
     RUN_PLOT_BALANCE_TASK_NAME,
+    _defer_plot_job,
     local_today,
     run_daily_plots,
     run_plot_balance,
@@ -43,6 +44,7 @@ from techcamp.irrigation.adapters.repositories import (
 from techcamp.main import app
 from techcamp.shared.ids import uuid7
 from techcamp.weather.adapters.orm import WeatherDailyRow
+from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
 
 pytestmark = pytest.mark.anyio
 
@@ -129,7 +131,9 @@ async def _create_plot(
     return plot_id
 
 
-async def _queued_jobs(db_session: AsyncSession) -> list[dict[str, object]]:
+async def _queued_jobs(
+    db_session: AsyncSession, *, plot_ids: Container[UUID | str] | None = None
+) -> list[dict[str, object]]:
     result = await db_session.execute(
         text(
             "SELECT id, queue_name, task_name, lock, queueing_lock, args, status "
@@ -137,7 +141,11 @@ async def _queued_jobs(db_session: AsyncSession) -> list[dict[str, object]]:
         ),
         {"queue": QUEUE_NAME},
     )
-    return [dict(row) for row in result.mappings().all()]
+    all_jobs = [dict(row) for row in result.mappings().all()]
+    if plot_ids is not None:
+        target_ids = {str(pid) for pid in plot_ids}
+        return [job for job in all_jobs if str(job["args"].get("plot_id")) in target_ids]
+    return all_jobs
 
 
 async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_without_cycle(
@@ -147,6 +155,8 @@ async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_wi
 
     plots with an active cycle plus rainfed plots without one.
     An irrigated plot without an active cycle must NOT be queued.
+    Assertions are scoped to the test's own plots to guarantee isolation
+    regardless of rows committed by other tests (R3-fanout-test-isolation).
     """
     org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
 
@@ -185,7 +195,8 @@ async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_wi
 
     await run_daily_plots(timestamp=0)
 
-    jobs = await _queued_jobs(db_session)
+    test_plot_ids = {plot_irrigated_with_cycle, plot_rainfed_no_cycle, plot_irrigated_no_cycle}
+    jobs = await _queued_jobs(db_session, plot_ids=test_plot_ids)
     queued_plot_ids = {str(job["args"]["plot_id"]) for job in jobs}
 
     assert str(plot_irrigated_with_cycle) in queued_plot_ids
@@ -209,9 +220,10 @@ async def test_fanout_rerun_same_day_does_not_duplicate_jobs(
     """Re-running the daily fan-out for the same day must deduplicate jobs:
 
     a plot that already has a 'todo' job for day D is not enqueued a second time.
+    Scoped to the test's own plot for deterministic count isolation.
     """
     org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
-    await _create_plot(
+    plot_id = await _create_plot(
         db_session,
         org_id=org_id,
         farm_id=farm_id,
@@ -223,14 +235,81 @@ async def test_fanout_rerun_same_day_does_not_duplicate_jobs(
 
     # First run queues 1 job
     await run_daily_plots(timestamp=0)
-    jobs_first = await _queued_jobs(db_session)
+    jobs_first = await _queued_jobs(db_session, plot_ids=[plot_id])
     assert len(jobs_first) == 1
 
     # Second run for the same day (today) should not duplicate
     await run_daily_plots(timestamp=0)
-    jobs_second = await _queued_jobs(db_session)
+    jobs_second = await _queued_jobs(db_session, plot_ids=[plot_id])
     assert len(jobs_second) == 1
     assert jobs_second[0]["id"] == jobs_first[0]["id"]
+
+
+async def test_defer_plot_job_catches_queueing_lock_conflict(
+    db_session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_defer_plot_job catches duplicate queueing_lock IntegrityError and logs a warning."""
+    plot_id = uuid7()
+    args = {"plot_id": str(plot_id), "day": "2026-09-27"}
+    suffix = ":2026-09-27"
+
+    # First enqueue succeeds
+    await _defer_plot_job(
+        db_session,
+        task_name=RUN_PLOT_BALANCE_TASK_NAME,
+        plot_id=plot_id,
+        args=args,
+        queueing_suffix=suffix,
+    )
+
+    # Second enqueue with identical queueing_lock triggers unique constraint violation
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        await _defer_plot_job(
+            db_session,
+            task_name=RUN_PLOT_BALANCE_TASK_NAME,
+            plot_id=plot_id,
+            args=args,
+            queueing_suffix=suffix,
+        )
+
+    assert f"irrigation: job for plot {plot_id} with suffix {suffix} already queued" in caplog.text
+
+
+async def test_defer_plot_job_reraises_other_integrity_error(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_defer_plot_job re-raises any IntegrityError that is NOT the queueing lock
+
+    (R3-broad-integrityerror-swallow).
+    """
+    plot_id = uuid7()
+
+    class _OtherAsyncpgError(Exception):
+        constraint_name = "procrastinate_jobs_pkey"
+
+    other_error = IntegrityError(
+        statement="SELECT procrastinate_defer_jobs_v1(...)",
+        params={},
+        orig=_OtherAsyncpgError(
+            "duplicate key violates unique constraint 'procrastinate_jobs_pkey'"
+        ),
+    )
+
+    async def _failing_execute(*args: object, **kwargs: object) -> None:
+        raise other_error
+
+    monkeypatch.setattr(db_session, "execute", _failing_execute)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _defer_plot_job(
+            db_session,
+            task_name=RUN_PLOT_BALANCE_TASK_NAME,
+            plot_id=plot_id,
+            args={"plot_id": str(plot_id)},
+            queueing_suffix="",
+        )
+    assert exc_info.value is other_error
 
 
 async def _set_weather(

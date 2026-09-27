@@ -15,6 +15,8 @@ from typing import Any, Literal, Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from techcamp.irrigation.domain.errors import InvalidCropStagesError
+
 BOGOTA_TZ = ZoneInfo("America/Bogota")
 """The single local timezone of the product (docs/04-api.md:63-75, docs/06 §5)."""
 
@@ -174,7 +176,7 @@ def stage_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> str:
     if day_of_cycle < 1:
         raise ValueError("day_of_cycle must be >= 1")
     if not stages:
-        raise ValueError("stages must not be empty")
+        raise InvalidCropStagesError("stages must not be empty")
 
     accum_days = 0
     for stage in stages:
@@ -201,19 +203,22 @@ def compute_kc_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> 
     - Days past cycle: uses late-season Kc
 
     Raises:
-        ValueError: a stage name is not one of `initial`/`development`/`mid`/`late`.
-            `stage_for_cycle_day` identifies stages positionally, so a misspelled or
-            localized name would otherwise let the two disagree on the stage for
-            the same day instead of failing loudly (R3-005).
+        InvalidCropStagesError: `stages` is empty, or a stage name is not one of
+            `initial`/`development`/`mid`/`late`. `stage_for_cycle_day` identifies
+            stages positionally, so a misspelled or localized name would otherwise
+            let the two disagree on the stage for the same day instead of failing
+            loudly (R3-005). A `ValueError` subclass (R3-broad-valueerror-catch),
+            distinct from the plain `ValueError` below for an invalid
+            `day_of_cycle`, so a caller can catch stage-data problems narrowly.
     """
     if day_of_cycle < 1:
         raise ValueError("day_of_cycle must be >= 1")
     if not stages:
-        raise ValueError("stages must not be empty")
+        raise InvalidCropStagesError("stages must not be empty")
 
     unknown = {s.stage for s in stages} - _KNOWN_STAGE_NAMES
     if unknown:
-        raise ValueError(f"unknown crop stage name(s): {sorted(unknown)}")
+        raise InvalidCropStagesError(f"unknown crop stage name(s): {sorted(unknown)}")
 
     stage_by_name = {s.stage: s for s in stages}
     ini_stage = stage_by_name.get("initial", stages[0])

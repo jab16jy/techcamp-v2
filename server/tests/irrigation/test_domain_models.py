@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 from techcamp.farms.domain.models import CropStage, KcSource
+from techcamp.irrigation.domain.errors import InvalidCropStagesError
 from techcamp.irrigation.domain.models import (
     K_ASSIMILATION_DEFAULT,
     K_ASSIMILATION_NONE,
@@ -962,12 +963,18 @@ def test_stage_for_cycle_day_rejects_non_positive_day_of_cycle() -> None:
 
 
 def test_stage_for_cycle_day_rejects_empty_stages() -> None:
-    with pytest.raises(ValueError, match="stages must not be empty"):
+    """R3-broad-valueerror-catch: raises InvalidCropStagesError specifically (a
+    ValueError subclass), not IndexError from an empty-sequence access.
+    """
+    with pytest.raises(InvalidCropStagesError, match="stages must not be empty"):
         stage_for_cycle_day((), day_of_cycle=1)
 
 
 def test_compute_kc_for_cycle_day_rejects_empty_stages() -> None:
-    with pytest.raises(ValueError, match="stages must not be empty"):
+    """R3-broad-valueerror-catch: raises InvalidCropStagesError specifically (a
+    ValueError subclass), not IndexError from crop.stages[-1] on an empty tuple.
+    """
+    with pytest.raises(InvalidCropStagesError, match="stages must not be empty"):
         compute_kc_for_cycle_day((), day_of_cycle=1)
 
 
@@ -982,7 +989,7 @@ def test_compute_kc_for_cycle_day_fails_loudly_on_unknown_stage_name() -> None:
         CropStage(stage="mid", length_days=31, kc=1.20, depletion_fraction_p=0.55),
         CropStage(stage="late", length_days=14, kc=0.35, depletion_fraction_p=0.55),
     )
-    with pytest.raises(ValueError, match="unknown crop stage name"):
+    with pytest.raises(InvalidCropStagesError, match="unknown crop stage name"):
         compute_kc_for_cycle_day(stages, day_of_cycle=5)
 
     # stage_for_cycle_day does not look up by name, so it silently disagrees

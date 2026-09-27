@@ -1476,3 +1476,157 @@ async def test_skip_soil_incomplete_missing_root_depth(db_session: AsyncSession)
     await _set_weather(db_session, cell_id, target_day)
 
     await _assert_skipped_no_rows(db_session, plot_id, target_day, "soil_profile_incomplete")
+
+
+# --- Issue #116 round 2 findings ---
+
+
+async def test_et0_fallback_to_forecast_flags_missing_observed_weather(
+    db_session: AsyncSession,
+) -> None:
+    """R3-et0-fallback-untested-and-unflagged: D-1 has both an observed row (used
+    for rain) and a forecast row; the observed row's et0_mm is null, so ET0 comes
+    from the forecast row instead. docs/06 §5 requires the fallback be noted in
+    the rationale, so missing_observed_weather must be True even though the
+    observed row itself was found (it just could not supply et0).
+    """
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, rain_d_minus_1=2.0, now=now)
+
+    d_minus_1 = target_day - timedelta(days=1)
+    fetched_at = now - timedelta(hours=2)
+    # Overwrite the D-1 observed row: et0_mm -> null, rain_mm stays.
+    await db_session.merge(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=False,
+            et0_mm=None,
+            rain_mm=Decimal("2.0"),
+            tmin_c=Decimal("22.0"),
+            tmax_c=Decimal("32.0"),
+            rh_mean_pct=Decimal("65.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    # Add a D-1 forecast row: the fallback source for et0.
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=True,
+            et0_mm=Decimal("4.5"),
+            rain_mm=Decimal("1.0"),
+            tmin_c=Decimal("23.0"),
+            tmax_c=Decimal("33.0"),
+            rh_mean_pct=Decimal("60.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("missing_observed_weather") is True
+    assert result.recommendation.rationale.get("et0_mm") == pytest.approx(4.5)
+
+
+async def test_forecast_missing_true_when_a_single_day_is_missing_at_d_plus_6(
+    db_session: AsyncSession,
+) -> None:
+    """R3-forecast-missing-partial-window-untested: a gap at the far edge of the
+    window (D+6) must flag forecast_missing, not only a fully-empty window.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day)
+    d_plus_6 = target_day + timedelta(days=6)
+    await db_session.execute(
+        text("DELETE FROM weather_daily WHERE cell_id = :c AND day = :d AND is_forecast"),
+        {"c": cell_id, "d": d_plus_6},
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True
+
+
+async def test_forecast_missing_true_when_a_forecast_row_has_null_rain(
+    db_session: AsyncSession,
+) -> None:
+    """R3-forecast-missing-partial-window-untested: a present forecast row with a
+    null rain_mm must still flag forecast_missing, not just an absent row."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, now=now)
+    fetched_at = now - timedelta(hours=2)
+    await db_session.merge(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=target_day,
+            is_forecast=True,
+            et0_mm=Decimal("5.0"),
+            rain_mm=None,
+            tmin_c=Decimal("23.0"),
+            tmax_c=Decimal("33.0"),
+            rh_mean_pct=Decimal("60.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True
+
+
+async def test_forecast_missing_true_when_a_forecast_row_has_null_et0(
+    db_session: AsyncSession,
+) -> None:
+    """R3-forecast-missing-partial-window-untested: a present forecast row with a
+    null et0_mm must still flag forecast_missing, not just an absent row."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, now=now)
+    fetched_at = now - timedelta(hours=2)
+    await db_session.merge(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=target_day,
+            is_forecast=True,
+            et0_mm=None,
+            rain_mm=Decimal("0.0"),
+            tmin_c=Decimal("23.0"),
+            tmax_c=Decimal("33.0"),
+            rh_mean_pct=Decimal("60.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True

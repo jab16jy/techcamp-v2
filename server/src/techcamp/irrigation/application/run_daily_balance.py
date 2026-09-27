@@ -21,6 +21,7 @@ from techcamp.irrigation.application.ports import (
     IrrigationRecommendationRepository,
     WaterBalanceRepository,
 )
+from techcamp.irrigation.domain.errors import InvalidCropStagesError
 from techcamp.irrigation.domain.models import (
     K_ASSIMILATION_DEFAULT,
     K_ASSIMILATION_NONE,
@@ -314,6 +315,12 @@ async def run_daily_balance(
     et0_mm_d_minus_1 = weather_d_minus_1.et0_mm
     if et0_mm_d_minus_1 is None and other_row_d_minus_1 is not None:
         et0_mm_d_minus_1 = other_row_d_minus_1.et0_mm
+        # ET0 itself came from the forecast row even though rain came from the
+        # observed row: flag it like a fully-missing observed row (docs/06 §5
+        # "pronóstico si falta el observado, señalado en el rationale"; R3-et0-
+        # fallback-untested-and-unflagged) instead of only reflecting which row
+        # was picked for the day as a whole.
+        missing_observed = True
     if et0_mm_d_minus_1 is None:
         return DailyBalanceResult(
             balance=None,
@@ -345,11 +352,14 @@ async def run_daily_balance(
     try:
         stage = stage_for_cycle_day(crop.stages, day_of_cycle)
         kc = compute_kc_for_cycle_day(crop.stages, day_of_cycle)
-    except ValueError:
+    except InvalidCropStagesError:
         # Empty stages or a stage name compute_kc_for_cycle_day does not recognize
         # (docs/06 §5 R3-005/R3-empty-stages-indexerror/R3-kc-unknown-stage-raises-in-job):
         # skip this one plot like the other data-quality guards, instead of aborting
-        # the whole daily job with an uncaught ValueError.
+        # the whole daily job with an uncaught ValueError. A narrow except
+        # (R3-broad-valueerror-catch): day_of_cycle is already validated above, so
+        # the only ValueError subtype these two functions can still raise here is
+        # this one, about the stage data itself.
         return DailyBalanceResult(
             balance=None,
             recommendation=None,

@@ -115,7 +115,7 @@ async def query_plot_water_balance(
 
     if effective_from > effective_to:
         raise InvalidDateRangeError("`from` date must be on or before `to` date")
-    if (effective_to - effective_from).days > 366:
+    if (effective_to - effective_from).days > 365:
         raise InvalidDateRangeError("date range cannot exceed 366 days")
 
     rows = await water_balances.list_for_plot(
