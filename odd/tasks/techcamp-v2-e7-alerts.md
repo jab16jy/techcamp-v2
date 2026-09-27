@@ -195,6 +195,12 @@ work unit (`domain-modeling`).
   `Dr > RAW` (docs/04:75). E6 Alembic head `d8a2f1c4e9b7`.
 - Plan: rebase `feat/e7-alerts` onto `main` right after T3 closes (no writer active), re-chain
   T1's migration `d4e6f8a0b2c1` from `b7e2c9a41d38` onto `d8a2f1c4e9b7`, full checks, then T4.
+- Done 2026-09-26: rebased onto `main` @ `b627b66` (one conflict, `server/migrations/env.py`: kept
+  both the irrigation and notifications ORM imports); `d4e6f8a0b2c1` re-chained onto
+  `d8a2f1c4e9b7` in `6dafb0b`; one Alembic head `d4e6f8a0b2c1`. Old → new SHAs: `2fb93b6`→`c243b71`,
+  `18df6c0`→`29fbcef`, `dceaec1`→`01d372a`, `504a682`→`c806f37`, `1d62ba6`→`277b7c7`,
+  `75e3630`→`bf59e65`, `2a46a2b`→`c4cd001`, `1355487`→`8890c5e`, `adc7a4a`→`967c9ef`. SHAs elsewhere
+  in this doc are pre-rebase.
 - The informative irrigation push (docs/06 §5) stays an E6 follow-up to wire through this outbox
   once E7 is on `main`.
 
@@ -316,7 +322,9 @@ work unit (`domain-modeling`).
   targeted validator ran in a fresh OpenCode session `e7-t3-validate` (the `e7-t3-rework`
   session was gone) → APPROVED and acknowledged (authority burned, target
   `sha256:bf5bb780…`). The host transport does not surface the validator's follow-ups. Non-blocking
-  R3-003, R3-004 → #112. Boundary → `1355487`.
+  R3-003, R3-004 → #112. Boundary → `1355487` (rebased `8890c5e`).
+- Re-chain `6dafb0b` (`8890c5e..6dafb0b`, 29 lines): medium, `review_due: false`,
+  `under_budget` — stays pending in the slice until a later commit reaches the budget.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -342,6 +350,8 @@ work unit (`domain-modeling`).
   parent's uncommitted feature-doc edits (restored). Rule added: writers never run destructive git
   commands; the parent commits the feature doc before each writer runs.
 - T3 closed 2026-09-26: lineage `review-52ae082b2d0f892b` acknowledged; issue #112 filed.
+- Rebase 2026-09-26 (parent): full checks on `6dafb0b` — pytest 687 passed; ruff, format, mypy,
+  lint-imports green; `alembic heads` = `d4e6f8a0b2c1`.
 - Next step (handoff 2026-09-26): ~~close T3's lineage `review-52ae082b2d0f892b`, file T3 issue
-  (R3-003, R3-004 + new WARNINGs)~~, rebase onto `main` @ `b627b66` (re-chain `d4e6f8a0b2c1` onto
-  `d8a2f1c4e9b7`), quality unit for #95/#98, then T4. Handoff prompt: `.git-brief-e7-handoff.md`.
+  (R3-003, R3-004 + new WARNINGs)~~, ~~rebase onto `main` @ `b627b66` (re-chain `d4e6f8a0b2c1` onto
+  `d8a2f1c4e9b7`)~~, quality unit for #95/#98, then T4. Handoff prompt: `.git-brief-e7-handoff.md`.
