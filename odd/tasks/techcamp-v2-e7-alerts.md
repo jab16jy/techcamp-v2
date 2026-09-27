@@ -503,7 +503,8 @@ work unit (`domain-modeling`).
     binding, while the SAME route works for the reviewer lens, the refuter and the targeted
     validator (all used successfully in T4 and T5). T4 captured the identical slot only after
     several retries, so it is flaky, not a usage error. Every CRITICAL found so far is fixed and
-    gated; what is missing is the provider's validation, not the fix.
+    gated; what is missing is the provider's validation, not the fix. Tracked in #133, with the
+    reproduction and the code path to look at; the owner fixes the tooling on that side.
 - T4 (`5dbae1d..e15b969`, 24 files, 1,576 changed lines): medium, one reliability lens. START
   requested the per-slice committed range (`baseRef 5dbae1d`, `committedOnly`), not the
   whole-branch range the inspect offered, per the per-slice decision above. Lineage
