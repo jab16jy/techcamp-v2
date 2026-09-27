@@ -378,8 +378,9 @@ work unit (`domain-modeling`).
   decision D24 — **PENDING, tests written but execution deferred to T11** (owner
   decision 2026-09-27, time pressure): no database was started and no test suite was run in this
   worktree, so neither RED nor GREEN was observed here; the four static checks are green (see
-  Progress / evidence). The pin is `test_a_plot_whose_evaluation_raises_does_not_silence_the_
-  next_plot` (`_SensorsFailingForOneNode` raises at the sensor port the evaluator already uses,
+  Progress / evidence) and the corrected slice is **RDD-approved and acknowledged**
+  (`review-3c61851425db7894`, zero findings). The pin is
+  `test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot` (`_SensorsFailingForOneNode` raises at the sensor port the evaluator already uses,
   and the test carries the negative assertion: the failed plot shows NO alert and the next plot
   shows its own). No push, no merge: the parent merges this branch.
 - [ ] T6 Worker rules
@@ -581,8 +582,23 @@ work unit (`domain-modeling`).
     `native_stop_required` with `action: stop`, authority burned never, nothing acknowledged. That
     matches T5's and T3's endings in this store. The fix is therefore an ordinary work-unit commit
     and not a native bounded correction, and the parent owns the decision to accept it.
-  - Re-running RDD on this slice would need a fresh lineage, which the owner may or may not want
-    for a 2-commit, ~230-line correction; not done unilaterally.
+  - **Then the owner asked for a second round, and it is APPROVED.** The correction changed the
+    candidate, so it is a different target and the consumed lineage held no burnable authority: a
+    fresh lineage `review-3c61851425db7894` (target `sha256:59d3f543…`, 7 paths, base tree
+    `5d3f91dd`, standing grant) reviewed the corrected slice and returned **APPROVED with ZERO
+    findings** — one reliability lens, `findings: []`. Its evidence names what it checked and it is
+    the validation this slice needed: "The per-plot exception path logs the isolated failure, rolls
+    back a potentially poisoned shared session before processing the next plot, and propagates
+    rollback failure so failed recovery can still reach the ingest retry path. Tests cover both an
+    ordinary evaluation failure and a database-poisoning failure, asserting both the absence of an
+    alert for the failed plot and successful evaluation of the following plot." Acknowledged
+    (`gentle-ai.review-acknowledged/v1`, `authority: burned`, target `sha256:59d3f543…`); boundary →
+    `42d260e`. Note the third point: propagating a failed `recover` is deliberate, so an
+    unrecoverable session still reaches the ingest retry instead of being reported as success.
+  - What the two rounds are worth as a pair: the first round found a real defect the author could
+    not see, and the second confirmed the fix by reading it, including the rollback-failure path the
+    author had only reasoned about. The `RuntimeError`-only double of the first round would have
+    passed against the un-fixed code, which is the whole argument for the database-failure test.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
