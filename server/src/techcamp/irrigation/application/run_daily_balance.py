@@ -302,8 +302,20 @@ async def run_daily_balance(
     wp = float(soil.wilting_point_pct) / 100.0
     root_depth_m = float(soil.root_depth_cm) / 100.0
     taw = compute_taw(fc, wp, root_depth_m)
-    stage = stage_for_cycle_day(crop.stages, day_of_cycle)
-    kc = compute_kc_for_cycle_day(crop.stages, day_of_cycle)
+    try:
+        stage = stage_for_cycle_day(crop.stages, day_of_cycle)
+        kc = compute_kc_for_cycle_day(crop.stages, day_of_cycle)
+    except ValueError:
+        # Empty stages or a stage name compute_kc_for_cycle_day does not recognize
+        # (docs/06 §5 R3-005/R3-empty-stages-indexerror/R3-kc-unknown-stage-raises-in-job):
+        # skip this one plot like the other data-quality guards, instead of aborting
+        # the whole daily job with an uncaught ValueError.
+        return DailyBalanceResult(
+            balance=None,
+            recommendation=None,
+            skipped=True,
+            skip_reason="crop_stage_invalid",
+        )
     etc = compute_etc(kc, et0_d_minus_1)
 
     stage_obj = next((s for s in crop.stages if s.stage == stage), crop.stages[-1])

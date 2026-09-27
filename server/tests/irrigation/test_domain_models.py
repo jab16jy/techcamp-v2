@@ -486,6 +486,14 @@ def test_compute_water_balance_status_zero_raw_is_ok() -> None:
     assert compute_water_balance_status(dr=0.0, raw=0.0, is_rainfed=False) is WaterBalanceStatus.OK
     assert compute_water_balance_status(dr=0.0, raw=0.0, is_rainfed=True) is WaterBalanceStatus.OK
     assert compute_water_balance_status(dr=5.0, raw=0.0, is_rainfed=False) is WaterBalanceStatus.OK
+    # R3-zero-raw-rainfed-dr-positive-untested: without the guard this would be
+    # 'stress' (dr > raw), since 5.0 > 0.0.
+    assert compute_water_balance_status(dr=5.0, raw=0.0, is_rainfed=True) is WaterBalanceStatus.OK
+    # Negative RAW (e.g. a corrupt/inverted soil profile) is just as degenerate.
+    assert (
+        compute_water_balance_status(dr=5.0, raw=-10.0, is_rainfed=False) is WaterBalanceStatus.OK
+    )
+    assert compute_water_balance_status(dr=5.0, raw=-10.0, is_rainfed=True) is WaterBalanceStatus.OK
 
 
 # --- 12. Rainfed Advice Evaluation in Table Order (docs/06 §5 table) ---
