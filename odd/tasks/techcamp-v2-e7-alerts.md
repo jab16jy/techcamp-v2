@@ -186,6 +186,39 @@ work unit (`domain-modeling`).
 - D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
+- D18 T6a delivers the node-health sweep and `node_offline`, and `node_offline` becomes computable
+  by naming the absence of evidence in the domain: a pure `alerts/domain` decision over the time
+  since the node's last reading (3 × `interval_s`), not a sample series faking a threshold —
+  `decide_alert` cannot do it, because a rule with `operator = None` short-circuits to
+  `NO_ACTION` (docs/06 §3's rule table and the seeded row disagree with the domain's own
+  contract). `node_battery_low` stays seeded and INACTIVE: there is no `battery_v` column, no
+  `battery_v` sensor (the simulator provisions only `soil_moisture`) and `get_node_health` already
+  hard-codes the field to `None` with the gap flagged. Inventing a battery protocol no node sends
+  is scope this epic does not have; docs/06 §3 gets one honest line saying the rule waits for a
+  source, and the issue names the open decision (a `battery_v` sensor through the existing ingest
+  path vs a `node.battery_v` column fed by the status payload). Severity `info` means the rule
+  would plan no notification anyway (`_drafts`), so nothing is lost by deferring it.
+- D19 `fungal_risk` is rewritten to the data the product actually stores: the cell-day
+  `rh_mean_pct > 85 %` and a mean temperature of 20–30 °C derived as `(tmin_c + tmax_c) / 2`, with
+  no duration. docs/06 §3 asks for "≥ 10 h in the day", which no stored column can answer (one
+  scalar per cell-day; Open-Meteo is called with five DAILY variables), and hourly weather is an
+  infrastructure unit of its own (table, hourly variables, migration), not part of T6b. The
+  agronomic value is kept — a humid mild day is the real disease risk — and only the duration
+  nuance is lost, in the same spirit as D13's pending agronomist validation.
+- D20 `heavy_rain_forecast` asks for "> 50 mm in 24 h": a day IS 24 h, so the rule reads the
+  forecast day's `rain_mm` directly and needs no window method and no new rule column. "Crítica si
+  el suelo está saturado" is computed as the plot's latest soil-moisture reading at or above its
+  field capacity (the signal E4/E6 already store), and the severity is decided WHEN THE ALERT
+  OPENS, not by opening `warning` and upgrading: one write, one notification, the right severity
+  from the start. `decide_alert`'s UPGRADE branch stays hardcoded to `water_stress`, so the
+  evaluator passes the severity to `open_alert` instead of a second write.
+- D21 T6a sweeps nodes per organization: the periodic job reads the org ids and defers one job
+  per org, exactly like the existing per-cell (`_defer_cell_job`) and per-plot
+  (`_defer_plot_job`) fan-outs, with the same `procrastinate_defer_jobs_v1` inside
+  `begin_nested` and per-entity lock strings. No cross-org read is introduced: `list_for_org`
+  requires `org_id` on purpose (docs/09 org isolation) and a first cross-org query is not worth
+  the machinery it saves. Inside an org the node page is bounded (`limit` + cursor), the
+  `telemetry.NodeRepository.list_for_org` shape, not a full pagination design.
 - D17 A reading-threshold rule is decided from the plot's sensor series, so the plot evaluator
   selects rules by SOURCE, not by "has a metric and an operator": docs/06 §3's five sources seed
   rules that carry a metric too (`fungal_risk` is `air_rh > 85`, `node_battery_low` is
