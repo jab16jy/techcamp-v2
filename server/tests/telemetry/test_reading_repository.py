@@ -144,3 +144,78 @@ async def test_query_daily_returns_bucket_averages(db_session: AsyncSession) -> 
     assert len(points) == 1
     assert points[0].time == datetime(2026, 3, 1, tzinfo=UTC)
     assert points[0].value == 20.0
+
+
+async def test_query_valid_raw_excludes_out_of_range_null_and_foreign_org(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id = await _make_org_and_plot(db_session)
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_id = await _make_sensor(db_session, node_id)
+
+    # Valid reading (quality=0)
+    await _insert_reading(
+        db_session,
+        sensor_id,
+        at=datetime(2026, 3, 1, 10, tzinfo=UTC),
+        raw_value=10.0,
+        value=20.0,
+        quality=0,
+    )
+    # Valid reading with timestamp corrected (quality=1)
+    await _insert_reading(
+        db_session,
+        sensor_id,
+        at=datetime(2026, 3, 1, 11, tzinfo=UTC),
+        raw_value=11.0,
+        value=22.0,
+        quality=1,
+    )
+    # Out of range (quality=2) - should be excluded
+    await _insert_reading(
+        db_session,
+        sensor_id,
+        at=datetime(2026, 3, 1, 12, tzinfo=UTC),
+        raw_value=99.0,
+        value=99.0,
+        quality=2,
+    )
+    # Both timestamp corrected and out of range (quality=3) - should be excluded
+    await _insert_reading(
+        db_session,
+        sensor_id,
+        at=datetime(2026, 3, 1, 13, tzinfo=UTC),
+        raw_value=99.0,
+        value=99.0,
+        quality=3,
+    )
+    # Uncalibrated (value=None) - should be excluded
+    await _insert_reading(
+        db_session,
+        sensor_id,
+        at=datetime(2026, 3, 1, 14, tzinfo=UTC),
+        raw_value=12.0,
+        value=None,
+        quality=0,
+    )
+
+    repo = SqlAlchemyReadingRepository(db_session)
+    points = await repo.query_valid_raw(
+        sensor_id,
+        org_id,
+        start=datetime(2026, 3, 1, tzinfo=UTC),
+        end=datetime(2026, 3, 2, tzinfo=UTC),
+    )
+
+    assert [p.value for p in points] == [20.0, 22.0]
+    assert points[0].time < points[1].time
+
+    # Query with another org_id returns empty list (org isolation)
+    other_org_id, _ = await _make_org_and_plot(db_session)
+    other_points = await repo.query_valid_raw(
+        sensor_id,
+        other_org_id,
+        start=datetime(2026, 3, 1, tzinfo=UTC),
+        end=datetime(2026, 3, 2, tzinfo=UTC),
+    )
+    assert other_points == []

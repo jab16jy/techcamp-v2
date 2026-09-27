@@ -132,6 +132,14 @@ class ReadingRepository(Protocol):
         time (docs/04-api.md:92-93, `resolution=raw`)."""
         ...
 
+    async def query_valid_raw(
+        self, sensor_id: int, org_id: UUID, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        """Calibrated `reading` rows in `[start, end)` excluding readings
+        flagged out of range (`quality & 2 != 0`, docs/03 Calibración),
+        scoped to `org_id` through the sensor->node relationship."""
+        ...
+
     async def query_hourly(
         self, sensor_id: int, *, start: datetime, end: datetime
     ) -> list[ReadingPoint]:

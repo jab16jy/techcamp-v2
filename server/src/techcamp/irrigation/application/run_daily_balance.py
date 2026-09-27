@@ -5,6 +5,7 @@ Computes the water balance row for D-1 and stores the irrigation recommendation 
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -42,6 +43,7 @@ from techcamp.irrigation.domain.models import (
     is_sensor_depth_representative,
     stage_for_cycle_day,
 )
+from techcamp.shared.dates import BOGOTA_TZ
 from techcamp.telemetry.application.ports import (
     CalibrationRepository,
     NodeRepository,
@@ -392,8 +394,14 @@ async def run_daily_balance(
     ):
         node_list = await nodes.list_for_org(plot.org_id, plot_id=plot.id, limit=500)
         candidate_sensors: list[tuple[float, float]] = []
-        daily_start = datetime(d_balance.year, d_balance.month, d_balance.day, tzinfo=UTC)
-        daily_end = daily_start + timedelta(days=1)
+
+        # Local day D-1 in America/Bogota (D3; docs/06 §5), converted to UTC instants
+        local_day_start = datetime(
+            d_balance.year, d_balance.month, d_balance.day, 0, 0, 0, tzinfo=BOGOTA_TZ
+        )
+        local_day_end = local_day_start + timedelta(days=1)
+        day_start_utc = local_day_start.astimezone(UTC)
+        day_end_utc = local_day_end.astimezone(UTC)
 
         for node in node_list:
             node_sensors = await sensors.list_for_node(node.id, plot.org_id)
@@ -401,28 +409,26 @@ async def run_daily_balance(
                 if sensor.metric != "soil_moisture" or sensor.depth_cm is None:
                     continue
 
-                # 1. Reading in the last 24 h before the run
-                recent = await readings.query_raw(
-                    sensor.id, start=now - timedelta(hours=24), end=now
+                # 1. Calibration lookup anchors to the end of local day D-1
+                # (D2; R3-freshness-anchored-to-now)
+                cal = await calibrations.get_latest_valid_at(sensor.id, plot.org_id, at=day_end_utc)
+                if cal is None or cal.kind != CalibrationKind.FIELD:
+                    continue
+
+                # 2. Valid readings in the 24 h window ending at local day D-1 (D2, D3; docs/06 §5),
+                # excluding out-of-range readings (quality & 2).
+                valid_points = await readings.query_valid_raw(
+                    sensor.id, plot.org_id, start=day_start_utc, end=day_end_utc
                 )
-                if not recent:
+                if not valid_points:
                     continue
 
-                # 2. Latest valid calibration kind `field`
-                cal = await calibrations.get_latest_valid_at(sensor.id, plot.org_id, at=now)
-                if cal is None:
-                    continue
-                if cal.kind != CalibrationKind.FIELD:
+                # 3. Daily mean of valid sensor readings for D-1 (R3-daily-value-none)
+                values = [p.value for p in valid_points if not math.isnan(p.value)]
+                if not values:
                     continue
 
-                # 3. Daily mean of D-1 from query_daily
-                daily_points = await readings.query_daily(
-                    sensor.id, start=daily_start, end=daily_end
-                )
-                if not daily_points:
-                    continue
-
-                candidate_sensors.append((float(sensor.depth_cm), daily_points[0].value))
+                candidate_sensors.append((float(sensor.depth_cm), sum(values) / len(values)))
 
         root_depth_cm = float(soil.root_depth_cm)
         if len(candidate_sensors) in (1, 2):
