@@ -57,6 +57,11 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   (`uv run pytest path::test`); the full suite runs once implementation is done, and failures are
   re-run targeted. Fast checks per commit: `uv run ruff check`, `uv run ruff format --check`,
   `uv run mypy`, `uv run lint-imports`.
+- Parent checks before each RDD (owner 2026-09-26): on the committed slice, in the detached
+  worktree `e6-verify` with DB `techcamp_verify` (same container): `uv run pytest
+  tests/irrigation`, ruff, format, mypy, lint-imports, plus the domain diff against docs/06 §5.
+  T1–T2 run retroactively on `e2ec0db`: 42 passed, all green; docs drift (stress at Dr == RAW)
+  added to #94.
 - Test DB: own container `techcamp-e6-db`,
   `DATABASE_URL=postgresql+asyncpg://techcamp:techcamp@localhost:5436/techcamp`.
 - Writers through Herdr (owner 2026-09-26): `agy` first — fastest and most capable, the default
@@ -117,18 +122,24 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
     `test_upsert_and_read_back_water_balance` (ModuleNotFoundError: irrigation.adapters.orm);
     `pytest tests/irrigation` 42 passed, ruff, format, mypy, lint-imports green. Plain tables
     (docs/03:391).
-- [ ] T3 Daily balance use case per plot (docs/06 §5, ADR-0022). Writer: agy, one session for
+- [x] T3 Daily balance use case per plot (docs/06 §5, ADR-0022). Writer: agy, one session for
   T3a–T3b, one commit each.
-  - [ ] T3a Gather cycle/crop/stages, soil (read on the farms port), plot system, cell weather →
+  - [x] T3a Gather cycle/crop/stages, soil (read on the farms port), plot system, cell weather →
     compute and persist balance + recommendation with K = 0; docs/06 §5 note on missing soil
     data.
-  - [ ] T3b Representative sensor + active calibration → K and assimilation, `without_sensor`
+  - [x] T3b Representative sensor + active calibration → K and assimilation, `without_sensor`
     flag.
-- [ ] T4 Daily job 04:30 America/Bogota with per-plot fan-out, `POST /dev/jobs/irrigation:run
+- [x] T4 Daily job 04:30 America/Bogota with per-plot fan-out, `POST /dev/jobs/irrigation:run
   {day?}`, docs/04:181 update (docs/06 §5, ADR-0012). Writer: agy.
-- [ ] T5 `GET /plots/{id}/irrigation/recommendation?day=` and `GET /plots/{id}/water-balance`,
+- [x] T5 `GET /plots/{id}/irrigation/recommendation?day=` and `GET /plots/{id}/water-balance`,
   plot access + 404 across orgs, response shapes recorded in docs/04 (docs/04:105-109). Writer:
   agy.
+- [ ] Q1 Quality: share the forecast summary in `run_daily_balance.py` (3 copies), type the Kc
+  source (`Literal`, domain imports nothing). Writer: opencode, worktree `e6-quality` from
+  `ab366e4`, cherry-picked here.
+- [ ] Q2 Quality: enum string fallbacks (`query_irrigation.py`, router), dead router fallbacks
+  (UTC day), one local-today helper; docs/04 contradiction on the rainfed stress boundary — the
+  docs win (`Dr > RAW`, docs/04:75, ADR-0022), Refs #94. Writer: opencode, same session.
 - [ ] T6 Full suite + checks, delivery slices (chained PRs).
 
 ## Acceptance criteria
@@ -155,6 +166,27 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   approved, acknowledged. 6 non-blocking (4 WARNING, 2 SUGGESTION) → #96;
   R3-repo-commits-non-atomic folded into T3a (atomic balance + recommendation write).
   Boundary: `e2ec0db`.
+- T3a `e2ec0db..823afca` (1,042 lines, medium): parent checks on `823afca` — 52 passed, ruff,
+  format, mypy, lint-imports green; docs/06 §5 additions correct; drift: application imported
+  SQLAlchemy and committed (AGENTS.md layer rule; caused by the brief, folded into T3b). Lineage
+  `review-2f47cbb2d145b08d`, review-reliability, approved, acknowledged. 6 non-blocking
+  (4 WARNING, 2 SUGGESTION) → #97. Boundary: `823afca`.
+- T3b `823afca..e4302bd` (474 lines, medium): AGY RED `test_sensor_assimilation_field_representative_fresh`
+  (`assert 0.0 == approx(0.5)`); parent checks on `e4302bd` — irrigation 57 passed, farms 183
+  passed (shared ports/conftest touched), ruff, format, mypy, lint-imports green; application no
+  longer imports SQLAlchemy. Docs drift: UTC day window, reading quality ignored. Lineage
+  `review-eaca806b13c2f4d0`, review-reliability, approved, acknowledged. 5 non-blocking → #99.
+  Boundary: `e4302bd`.
+- T4 `e4302bd..ab366e4` (736 lines, medium): parent checks on `ab366e4` — irrigation + weather +
+  app tests 158 passed, ruff, format, mypy, lint-imports green; cron 04:30 relies on the worker's
+  `TZ: America/Bogota` (infra/compose.yaml), same as weather's 03:00; docs/04:181 updated.
+  Lineage `review-0c28fae149ae0dd4`, review-reliability, approved, acknowledged. 3 non-blocking
+  → #100. Boundary: `ab366e4`.
+- T5 `ab366e4..cc40415` (799 lines, medium): parent checks on `cc40415` — irrigation 75 passed,
+  ruff, format, mypy, lint-imports green. Quality scan (owner rule 2026-09-26: quality issues are
+  fixed now by OpenCode, review findings stay in the tracker) → Q1, Q2. Lineage
+  `review-6cea6d82cc09f3ef`, review-reliability, approved, acknowledged. 5 non-blocking → #101.
+  Boundary: `cc40415`.
 
 ## Next step
-T3a–T3b via agy (one session).
+Q1 (running) → Q2 via opencode, then T6 (full suite, delivery).
