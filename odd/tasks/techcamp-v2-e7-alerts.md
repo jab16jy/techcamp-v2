@@ -288,6 +288,25 @@ work unit (`domain-modeling`).
   standing grant; one reliability lens, APPROVED and acknowledged (authority burned). 3 WARNING +
   1 SUGGESTION → #98 (48 h upgrade while recovering, resolved `current_alert`, gap tolerance in
   `sustained_run`, untested coercions). Boundary → `504a682`.
+- T3 (OpenCode `e7-t3-rework`): `1d62ba6` feat (872 prod / 759 tests; parent gate passed after 4
+  quality fixes: required identity types, facade-only cross-module imports, dead branch, duplicated
+  farm lookup). Lineage `review-e4a6f7fd775b3821`: CRITICAL R3-001 (stale last-write-wins
+  transitions, double critical outbox) and R3-002 (event published to a foreign farm) → correction
+  `75e3630` (154 lines); targeted validation FAILED on the concurrent half of R3-001 (CAS guarded
+  state only) → escalated, `native_stop_required` (terminal). Fix `840d309` → amended by the writer
+  to `2a46a2b` (tests only; gate re-verified: no src change): CAS guards state + severity. WARNINGs
+  of that lineage, to file: R3-003 `open_alert` accepts an org rule of another org
+  (`use_cases.py:52-71`); R3-004 `sse_hub.py:266-270` forwards alert events without required
+  fields.
+- T3 fresh lineage `review-52ae082b2d0f892b` (`034fe32..2a46a2b`): `correction_required`, budget 200,
+  CRITICAL R3-001 `repositories.py:322-323` "DISTINCT with ORDER BY created_at is invalid on
+  PostgreSQL" — the writer says false positive (SQLAlchemy `.distinct(user_id)` renders `DISTINCT ON
+  (user_id)` with `ORDER BY user_id, created_at DESC`, valid; tests pass) and proposes option (b):
+  pin the grouping winner with a dedicated test, no query change; CRITICAL R3-002 real:
+  `upgrade_to_critical` upgrades a RESOLVED warning (needs a state guard + test). Waiting for the
+  parent's decision (recommended: (b) + the R3-002 guard in one bounded correction).
+- Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
+  `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
   on a dirty worktree.
 
@@ -310,4 +329,6 @@ work unit (`domain-modeling`).
 - 2026-09-26: the OpenCode T3 writer ran `git reset --hard` to drop the AGY draft and discarded the
   parent's uncommitted feature-doc edits (restored). Rule added: writers never run destructive git
   commands; the parent commits the feature doc before each writer runs.
-- Next step: T3 rework (OpenCode `e7-t3-rework`, own RDD from `924407a`).
+- Next step (handoff 2026-09-26): close T3's lineage `review-52ae082b2d0f892b`, file T3 issue
+  (R3-003, R3-004 + new WARNINGs), rebase onto `main` @ `b627b66` (re-chain `d4e6f8a0b2c1` onto
+  `d8a2f1c4e9b7`), quality unit for #95/#98, then T4. Handoff prompt: `.git-brief-e7-handoff.md`.
