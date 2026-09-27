@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.alerts.domain.models import Alert, AlertState
+from techcamp.alerts.domain.models import Alert, AlertState, Severity
 from techcamp.notifications.application import NotificationDraft
 
 
@@ -85,13 +85,14 @@ class AlertRepository(Protocol):
         farm_id: UUID,
         *,
         expected_state: AlertState,
+        expected_severity: Severity,
     ) -> Alert:
         """Persist the transitioned alert with any new outbox rows in one
         transaction, publishing `alert.updated` to the farm the SSE stream of
         the caller is subscribed to.
 
-        `expected_state` is the state the caller validated against, and
-        `farm_id` must be the alert's own farm; a transition that no longer
-        holds, or a farm that does not carry the alert, is refused.
+        `expected_state` and `expected_severity` are what the caller validated
+        against, and `farm_id` must be the alert's own farm; a transition that no
+        longer holds, or a farm that does not carry the alert, is refused.
         """
         ...

@@ -20,6 +20,7 @@ from techcamp.alerts.domain.models import (
     Alert,
     AlertRule,
     AlertState,
+    InvalidAlertTransitionError,
     Severity,
     ensure_can_manage_alert,
 )
@@ -87,6 +88,8 @@ async def upgrade_to_critical(
 
     An alert that is already critical is returned untouched: the upgrade happens
     once, so a re-evaluated or repeated call must not send a second critical
+    notice. Two evaluators upgrading at once contend on the same row, and the
+    one that loses gets the winner's critical alert back rather than a second
     notice.
     """
     alert = await _load(alert_id, org_id, alerts)
@@ -94,9 +97,22 @@ async def upgrade_to_critical(
         return alert
     upgraded = replace(alert, severity=Severity.CRITICAL)
     target = await alerts.get_target_context(plot_id=alert.plot_id, node_id=alert.node_id)
-    return await alerts.save(
-        upgraded, _drafts(upgraded, target, at), target.farm_id, expected_state=alert.state
-    )
+    try:
+        return await alerts.save(
+            upgraded,
+            _drafts(upgraded, target, at),
+            target.farm_id,
+            expected_state=alert.state,
+            expected_severity=alert.severity,
+        )
+    except InvalidAlertTransitionError:
+        # Another writer moved the alert while this one decided. A concurrent
+        # upgrade already did the work, so there is nothing left to send; any
+        # other move is that writer's transition, not ours, and still invalid.
+        current = await _load(alert_id, org_id, alerts)
+        if current.severity is Severity.CRITICAL:
+            return current
+        raise
 
 
 async def resolve_automatically(
@@ -105,7 +121,11 @@ async def resolve_automatically(
     """The condition cleared beyond the hysteresis band, sustained (docs/06 §3)."""
     alert = await _load(alert_id, org_id, alerts)
     return await alerts.save(
-        alert.resolve_automatically(at), [], farm_id, expected_state=alert.state
+        alert.resolve_automatically(at),
+        [],
+        farm_id,
+        expected_state=alert.state,
+        expected_severity=alert.severity,
     )
 
 
@@ -119,7 +139,13 @@ async def acknowledge(
     memberships: MembershipRepository,
 ) -> Alert:
     alert = await _managed_alert(user_id, alert_id, alerts, memberships)
-    return await alerts.save(alert.acknowledge(at), [], farm_id, expected_state=alert.state)
+    return await alerts.save(
+        alert.acknowledge(at),
+        [],
+        farm_id,
+        expected_state=alert.state,
+        expected_severity=alert.severity,
+    )
 
 
 async def resolve_manually(
@@ -135,7 +161,11 @@ async def resolve_manually(
     """Close an acknowledged alert, storing the note (D3, D12)."""
     alert = await _managed_alert(user_id, alert_id, alerts, memberships)
     return await alerts.save(
-        alert.resolve_manually(at, note), [], farm_id, expected_state=alert.state
+        alert.resolve_manually(at, note),
+        [],
+        farm_id,
+        expected_state=alert.state,
+        expected_severity=alert.severity,
     )
 
 

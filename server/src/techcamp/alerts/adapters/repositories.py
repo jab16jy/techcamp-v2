@@ -221,14 +221,17 @@ class SqlAlchemyAlertRepository:
         farm_id: UUID,
         *,
         expected_state: AlertState,
+        expected_severity: Severity,
     ) -> Alert:
         """The transitioned alert, any new outbox rows and `alert.updated` in one
         transaction.
 
-        `expected_state` is the state the caller validated its transition
-        against, and the update only lands on that state: a transition computed
-        on a snapshot another writer has already moved on is refused instead of
-        overwriting the newer row.
+        `expected_state` and `expected_severity` are what the caller validated
+        its transition against, and the update only lands on both: a transition
+        computed on a snapshot another writer has already moved on is refused
+        instead of overwriting the newer row. Severity is part of the guard
+        because a transition may leave the state alone (the 48 h upgrade) and
+        would otherwise be applied twice.
         """
         await self._assert_alert_farm(alert, farm_id)
         result = await self._session.execute(
@@ -237,6 +240,7 @@ class SqlAlchemyAlertRepository:
                 AlertRow.id == alert.id,
                 AlertRow.org_id == alert.org_id,
                 AlertRow.state == expected_state.value,
+                AlertRow.severity == expected_severity.value,
             )
             .values(
                 state=alert.state.value,
@@ -250,7 +254,8 @@ class SqlAlchemyAlertRepository:
         )
         if cast(CursorResult[Any], result).rowcount == 0:
             raise InvalidAlertTransitionError(
-                f"Alert {alert.id} is no longer {expected_state}, so the transition is stale"
+                f"Alert {alert.id} is no longer {expected_state}/{expected_severity}, "
+                "so the transition is stale"
             )
         await self._write(alert, drafts, "alert.updated", farm_id)
         return alert

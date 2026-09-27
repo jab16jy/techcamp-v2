@@ -44,6 +44,7 @@ from techcamp.identity.domain.models import Role
 from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.adapters.repositories import SqlAlchemyNotificationRepository
 from techcamp.shared.config import database_url
+from techcamp.shared.db import async_session_factory
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow
 from techcamp.telemetry.adapters.sse_hub import PlotEventsHub
@@ -613,7 +614,13 @@ async def test_a_stale_transition_does_not_overwrite_a_newer_row(
     )
 
     with pytest.raises(InvalidAlertTransitionError):
-        await alerts.save(stale, [], org.farm_id, expected_state=AlertState.OPEN)
+        await alerts.save(
+            stale,
+            [],
+            org.farm_id,
+            expected_state=AlertState.OPEN,
+            expected_severity=Severity.WARNING,
+        )
 
     row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
     assert row.state == "resolved"
@@ -629,7 +636,11 @@ async def test_an_alert_is_not_published_to_another_orgs_farm(
 
     with pytest.raises(ValueError, match="does not carry"):
         await alerts.save(
-            alert.acknowledge(_MORNING), [], other.farm_id, expected_state=AlertState.OPEN
+            alert.acknowledge(_MORNING),
+            [],
+            other.farm_id,
+            expected_state=AlertState.OPEN,
+            expected_severity=Severity.WARNING,
         )
 
     row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
@@ -651,3 +662,35 @@ async def test_upgrading_an_already_critical_alert_adds_no_rows(
 
     assert (again.id, again.severity) == (upgraded.id, Severity.CRITICAL)
     assert len(await _rows(db_session, alert.id)) == 4
+
+
+async def test_two_concurrent_upgrades_write_one_critical_outbox_set() -> None:
+    """Two evaluators upgrading at once must notify once (R3-001).
+
+    Each upgrade runs on its own session, so the two really contend for the
+    alert row: the loser must not add a second critical outbox set.
+    """
+    async with async_session_factory() as setup:
+        org = await _make_org(setup)
+        alert = await _open_plot_alert(
+            setup, SqlAlchemyAlertRepository(setup), org, "water_stress", _MORNING
+        )
+
+    later = _MORNING + timedelta(hours=48)
+
+    async def _upgrade() -> Alert:
+        async with async_session_factory() as session:
+            return await upgrade_to_critical(
+                alert_id=alert.id,
+                org_id=org.org_id,
+                at=later,
+                alerts=SqlAlchemyAlertRepository(session),
+            )
+
+    async with asyncio.timeout(30), async_session_factory() as check:
+        first, second = await asyncio.gather(_upgrade(), _upgrade())
+        rows = await _rows(check, alert.id)
+
+    assert (first.severity, second.severity) == (Severity.CRITICAL, Severity.CRITICAL)
+    assert len(rows) == 4  # 2 warning + 2 critical, never a second critical set
+    assert len([row for row in rows if row.next_attempt_at == later]) == 2
