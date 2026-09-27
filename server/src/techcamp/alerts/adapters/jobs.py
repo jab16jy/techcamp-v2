@@ -26,6 +26,7 @@ import json
 import logging
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from procrastinate import RetryStrategy
 from sqlalchemy import select, text
@@ -223,6 +224,19 @@ async def evaluate_org_node_health(org_id: str) -> None:
         await session.commit()
 
 
+_LOCAL = ZoneInfo("America/Bogota")
+"""The zone docs/10-dag.md fixes every job hour to, and so the zone a calendar
+DAY means to these rules, as opposed to the instant `at` is measured in (UTC).
+The same helper exists in `irrigation/domain/models.py::local_today`; a single
+`shared/` calendar helper the three modules share is a follow-up, not a reason
+to compute a farmer's day in the wrong zone."""
+
+
+def local_date(now: datetime) -> date:
+    """The calendar day `now` falls on in America/Bogota."""
+    return now.astimezone(_LOCAL).date()
+
+
 async def _evaluate_weather(session: AsyncSession, org_id: UUID, day: date) -> None:
     await evaluate_weather_rules(
         org_id=org_id,
@@ -250,10 +264,15 @@ async def evaluate_org_forecast_rules(org_id: str) -> None:
     """`heavy_rain_forecast` for one organization, over the forecast day the
     warning is about: the next forecast day, the first complete one (D20: a day
     IS the 24 h the rule names). All of the org's plots are decided at the same
-    `at`, this job's own decision time."""
+    `at`, this job's own decision time.
+
+    The day is the product's day, not UTC's: docs/10-dag.md fixes every job hour
+    to America/Bogota, and from 19:00 to 23:59 local `now().date() + 1` in UTC is
+    already two calendar days ahead — the rule would read the wrong forecast.
+    The same applies to a run the queue delays across UTC midnight."""
     now = datetime.now(UTC)
     async with async_session_factory() as session:
-        await _evaluate_weather(session, UUID(org_id), now.date() + timedelta(days=1))
+        await _evaluate_weather(session, UUID(org_id), local_date(now) + timedelta(days=1))
 
 
 @app.task(
@@ -263,7 +282,8 @@ async def evaluate_org_forecast_rules(org_id: str) -> None:
 )
 async def evaluate_org_fungal_risk(org_id: str) -> None:
     """`fungal_risk` for one organization, over the cell-day the 03:00
-    consolidation just closed: the day before this job's own (D10, D19)."""
+    consolidation just closed: the day before this job's own (D10, D19). In the
+    product's own zone, for the same reason as the forecast job above."""
     now = datetime.now(UTC)
     async with async_session_factory() as session:
-        await _evaluate_weather(session, UUID(org_id), now.date() - timedelta(days=1))
+        await _evaluate_weather(session, UUID(org_id), local_date(now) - timedelta(days=1))

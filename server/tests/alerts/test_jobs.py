@@ -28,6 +28,7 @@ from techcamp.alerts.adapters.jobs import (
     evaluate_org_forecast_rules,
     evaluate_org_fungal_risk,
     evaluate_org_node_health,
+    local_date,
     sweep_forecast_rules,
     sweep_fungal_risk,
     sweep_node_health,
@@ -38,6 +39,23 @@ from techcamp.identity.adapters.orm import OrganizationRow
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow
 from techcamp.weather.adapters.orm import WeatherCellRow, WeatherDailyRow
+
+
+async def test_a_job_day_is_the_products_day_and_not_utc_s() -> None:
+    """A forecast rule read on the wrong calendar day warns a farmer about the
+    wrong weather: docs/10 §3 fixes every job hour to America/Bogota, and from
+    19:00 to 23:59 local the UTC date is already tomorrow's."""
+    # 01:00 UTC is 20:00 of the PREVIOUS day in Bogota (UTC-5).
+    late_local_evening = datetime(2026, 9, 27, 1, 0, tzinfo=UTC)
+
+    assert local_date(late_local_evening) == date(2026, 9, 26)
+    # The contrast is the point: the UTC date, which is what the job used, is a
+    # different calendar day for five hours of every local evening.
+    assert late_local_evening.date() == date(2026, 9, 27)
+    # Midday agrees on both, so the helper changes nothing outside that window.
+    midday = datetime(2026, 9, 27, 16, 0, tzinfo=UTC)
+    assert local_date(midday) == midday.date() == date(2026, 9, 27)
+
 
 pytestmark = pytest.mark.anyio
 
