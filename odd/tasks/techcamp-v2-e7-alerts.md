@@ -337,8 +337,12 @@ work unit (`domain-modeling`).
     `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Pi subagent —
     forecast ~350 — actual 898 (`21fb000`; 372 production / 522 tests / 4 docs). `node_battery_low`
     is deliberately NOT delivered: no `battery_v` source exists (D18)
-  - [ ] T6b `heavy_rain_forecast` after the 3 h refresh (D10), critical with saturated soil;
-    `fungal_risk` daily — route: Herdr OpenCode (same session as T6a) — forecast ~400
+  - [x] T6b `heavy_rain_forecast` after the 3 h refresh (D10), critical with saturated soil;
+    `fungal_risk` daily — route: Pi subagent — forecast ~400 — actual 1,660 (`e293b9d` + `e769ebe`
+    formatting) + the parent's T6a fix `77827a0` and the timezone fix `016df59`. Three parent
+    corrections during the unit: real humidity evidence plus a mild flag instead of the
+    `_NOT_MILD_RH` fake sample, the docs/06 §3 rows in the same commit, and the saturation test
+    recorded as a proxy (D20)
 - [ ] T7 Notifications outbox
   - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
@@ -429,6 +433,24 @@ work unit (`domain-modeling`).
   (authority burned), no correction. 2 WARNING non-blocking → #113 (seed `metric`/`hysteresis`/
   `crop_id` not pinned independently; DB-default test bounded by process clock). Boundary →
   `a32a0d0`.
+- T6b (`37f6be9..016df59`, 17 files, 1,607 changed lines): medium, one reliability lens, CRITICAL
+  `R3-forecast-uses-utc-date` — **real, and fixed**. Both worker jobs took the day from
+  `datetime.now(UTC).date()`, but docs/10 §3 fixes every job hour to America/Bogota: from 19:00
+  to 23:59 local the UTC date is already the next day, so the forecast day was two calendar days
+  ahead and the rule could warn a farmer about the wrong weather (a run delayed across UTC
+  midnight also changes the day). `016df59` uses `local_date()`, the same `ZoneInfo` precedent
+  `weather/adapters/jobs.py:66` already sets, with a test on an instant that is 20:00 of the
+  previous day in Bogota. The writer missed an established pattern the parent had quoted in the
+  brief; the same shape now lives in three modules, so one `shared/` calendar helper is the
+  follow-up. The lineage is stuck at `correction_required` (tooling blocker below).
+  - The parent's T6a fix `77827a0` (owned by the parent, not the writer): a never-reported node
+    alerted five minutes after being claimed, while the technician was still installing it
+    (docs/06:78). The silence is now measured from `last_seen_at or claimed_at`, and a node with
+    neither is not judged; RED was `TypeError: decide_node_health() got an unexpected keyword
+    argument 'claimed_at'`. Same commit: the per-org job docstring no longer claims a retry
+    decides the same thing (it reads `datetime.now(UTC)` at run time, so a retry decides at a
+    later `at`, which can only make an alert fire later), and a full node page logs a warning
+    naming the organization instead of truncating silently.
 - T6a (`1f268cf..21fb000`, 9 files, 899 changed lines): medium, one reliability lens, CRITICAL
   `R3-periodic-task-name-mismatch` — **refuted by the parent, and the refutation is now a test**.
   The claim was that `@app.periodic` receives no task name and therefore configures the schedule
@@ -474,15 +496,14 @@ work unit (`domain-modeling`).
     evaluator selected rules by "has a metric and an operator", which also selected
     `fungal_risk` — it WOULD have opened from the ingestor on a pure RH run, ignoring the
     20–30 °C half of its condition and stealing T6b's rule).
-  - **Tooling blocker (2026-09-27, unresolved):** `gentle_review_capture` refuses the
-    correction-plan slot with "collectBinding is unknown, expired, or belongs to a different
-    session route", on both workspace roots and on both serializations of the binding, while the
-    same route worked for the reviewer, refuter and (in T4) the plan slot. The lineage is
-    therefore stuck at `correction_required` with the fixes committed; the targeted validation
-    that would close it is never offered. T4's identical slot was captured only after several
-    retries, so this is flaky, not a rule I am violating. Both CRITICALs are fixed and gated
-    (static checks green, 30 targeted tests); what is missing is the provider's validation, not
-    the fix.
+  - **Tooling blocker (2026-09-27, unresolved, three lineages now):** `gentle_review_capture`
+    refuses the correction-plan slot with "collectBinding is unknown, expired, or belongs to a
+    different session route" on `review-5104b9ca5c76ab6a` (T5), `review-23ebe1e7dc220953` (T6a)
+    and `review-59b7a7c4d9c8c889` (T6b), on both workspace roots and on both serializations of the
+    binding, while the SAME route works for the reviewer lens, the refuter and the targeted
+    validator (all used successfully in T4 and T5). T4 captured the identical slot only after
+    several retries, so it is flaky, not a usage error. Every CRITICAL found so far is fixed and
+    gated; what is missing is the provider's validation, not the fix.
 - T4 (`5dbae1d..e15b969`, 24 files, 1,576 changed lines): medium, one reliability lens. START
   requested the per-slice committed range (`baseRef 5dbae1d`, `committedOnly`), not the
   whole-branch range the inspect offered, per the per-slice decision above. Lineage
@@ -546,11 +567,12 @@ work unit (`domain-modeling`).
   full suite 727 passed, ruff, format, mypy, lint-imports green. The writer changed the planned
   sequential test for a barrier-synchronised concurrent pair, because a sequential PATCH cannot
   observe the defect (each request would read a fresh row) — accepted, it is the stronger test.
-- Next step: T6b (`heavy_rain_forecast` after the 3 h refresh, `fungal_risk` daily), with D10
-  already settling the cadence question — a separate alerts periodic a few minutes after the
-  refresh, NOT a call from the weather job, because docs/05 has no `weather → alerts` edge (the
-  parent had said it would defer from inside the refresh; that was wrong and D10's reason is the
-  one that holds). D19, D20 and D22 shape the two rules. Then T7a/b/c, T8, T9, T10, T11.
+- Next step: T7a (the outbox dispatcher: sender port, claim with `FOR UPDATE SKIP LOCKED`, backoff
+  1 min / 5 min / 30 min / 2 h and 5 attempts, the per-minute sweep, the seminar SMS adapter and
+  `GET /dev/outbox`, D7/D8), then T7b, T7c, T8, T9, T10, T11. T6a and T6b are code-complete and
+  gated; their lineages stay open at `correction_required` because of the tooling blocker, so the
+  delivery boundary is `016df59` and the three pending validations should be re-run when it
+  clears.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
