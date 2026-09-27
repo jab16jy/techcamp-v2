@@ -1,14 +1,46 @@
-"""FAO-56 water balance domain math (docs/06 §5; ADR-0009/0022).
+"""FAO-56 water balance domain math and recommendation decision (docs/06 §5; ADR-0009/0022/0023).
 
 Pure functions and dataclasses, stdlib only, floats (no I/O, no DB).
 Follows FAO Irrigation and Drainage Paper 56 single-Kc methodology and
-weighted sensor assimilation for Caribbean smallholder plots.
+project-specific agronomic recommendation rules for Caribbean smallholders.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Protocol
+
+
+class RecommendationKind(StrEnum):
+    """Irrigation recommendation decision outcome (docs/03-modelo-datos.md:210, 464)."""
+
+    IRRIGATE = "irrigate"
+    POSTPONE = "postpone"
+    NOT_NEEDED = "not_needed"
+    NO_KC = "no_kc"
+    RAINFED = "rainfed"
+
+
+class WaterBalanceStatus(StrEnum):
+    """Plot water balance status for cards and monitoring (docs/04-api.md:66, 75)."""
+
+    OK = "ok"
+    WATCH = "watch"
+    IRRIGATE = "irrigate"
+    STRESS = "stress"
+
+
+class RainfedAdvice(StrEnum):
+    """Agronomic advice codes for rainfed plots in table order (docs/06-diseno-detallado.md §5)."""
+
+    DELAY_SOWING = "delay_sowing"
+    RAIN_EXPECTED = "rain_expected"
+    CONSERVE_MOISTURE = "conserve_moisture"
+    PRIORITIZE_HARVEST = "prioritize_harvest"
+    NO_ACTION = "no_action"
+
 
 # Physical and agronomic constants
 P_MIN: float = 0.1
@@ -32,6 +64,9 @@ K_ASSIMILATION_NONE: float = 0.0
 ZR_HALF_TOLERANCE_RATIO: float = 0.15
 # ponytail: tolerance fraction around Zr/2 pending agronomic validation (docs/06 §5)
 
+WATCH_THRESHOLD_RATIO: float = 0.8
+"""Ratio of RAW above which depletion triggers 'watch' status before stress/irrigation."""
+
 
 class StageLike(Protocol):
     """Structural protocol for crop stages (matches farms.domain.models.CropStage)."""
@@ -39,6 +74,17 @@ class StageLike(Protocol):
     stage: str
     length_days: int
     kc: float
+
+
+@dataclass(frozen=True, slots=True)
+class IrrigationRecommendation:
+    """Irrigation recommendation for a plot on a given day (docs/03:206-215)."""
+
+    kind: RecommendationKind
+    depth_mm: float | None
+    duration_min: int | None
+    advice: tuple[RainfedAdvice, ...] | tuple[str, ...]
+    rationale: dict[str, Any]
 
 
 def stage_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> str:
@@ -224,3 +270,188 @@ def determine_sensor_weight(
     if has_valid_reading and calibration_kind == "field" and is_representative:
         return K_ASSIMILATION_DEFAULT
     return K_ASSIMILATION_NONE
+
+
+def compute_water_balance_status(dr: float, raw: float, is_rainfed: bool) -> WaterBalanceStatus:
+    """Compute 4-tier water balance status: ok | watch | irrigate | stress (docs/04:66, 75).
+
+    Rules:
+    - Dr < 0.8 * RAW: 'ok'
+    - 0.8 * RAW <= Dr < RAW: 'watch'
+    - Dr >= RAW:
+      - rainfed plot: 'stress' (rainfed never reports 'irrigate', docs/04:75)
+      - irrigated plot: 'irrigate'
+    """
+    if dr < WATCH_THRESHOLD_RATIO * raw:
+        return WaterBalanceStatus.OK
+    if dr < raw:
+        return WaterBalanceStatus.WATCH
+    if is_rainfed:
+        return WaterBalanceStatus.STRESS
+    return WaterBalanceStatus.IRRIGATE
+
+
+def evaluate_rainfed_advice(
+    has_active_cycle: bool,
+    dr: float,
+    raw: float,
+    forecast_rain_7d_mm: float,
+    forecast_et0_7d_mm: float,
+    stage: str,
+) -> tuple[RainfedAdvice, ...]:
+    """Evaluate advice codes for rainfed plots in table order (docs/06 §5 table).
+
+    Table order:
+    1. delay_sowing: no active cycle and 7d rain < 7d ET0.
+    2. rain_expected: active cycle, Dr >= RAW and 7d rain >= Dr.
+    3. conserve_moisture: active cycle, Dr >= RAW and 7d rain < Dr.
+    4. prioritize_harvest: conserve_moisture in stage 'late'.
+    5. no_action: active cycle, Dr < RAW.
+    """
+    if not has_active_cycle:
+        if forecast_rain_7d_mm < forecast_et0_7d_mm:
+            return (RainfedAdvice.DELAY_SOWING,)
+        return ()
+
+    advice: list[RainfedAdvice] = []
+    if dr >= raw:
+        if forecast_rain_7d_mm >= dr:
+            advice.append(RainfedAdvice.RAIN_EXPECTED)
+        else:
+            advice.append(RainfedAdvice.CONSERVE_MOISTURE)
+            if stage == "late":
+                advice.append(RainfedAdvice.PRIORITIZE_HARVEST)
+    else:
+        advice.append(RainfedAdvice.NO_ACTION)
+
+    return tuple(advice)
+
+
+def decide_recommendation(
+    has_active_cycle: bool,
+    is_rainfed: bool,
+    kc_source: Any,
+    dr: float,
+    raw: float,
+    irrigation_efficiency: float | None,
+    area_m2: float,
+    system_flow_lph: float | None,
+    forecast_rain_48h_mm: float,
+    forecast_rain_7d_mm: float,
+    forecast_et0_7d_mm: float,
+    stage: str,
+    rationale_context: dict[str, Any] | None = None,
+) -> IrrigationRecommendation | None:
+    """Execute the daily irrigation recommendation decision flowchart (docs/06 §5).
+
+    Returns:
+        IrrigationRecommendation with kind, depth_mm, duration_min, advice, and rationale,
+        or None when a plot with an irrigation system has no active crop cycle.
+    """
+    ctx = rationale_context or {}
+    source_str = kc_source.value if hasattr(kc_source, "value") else str(kc_source).lower()
+
+    k_val = ctx.get("k", K_ASSIMILATION_NONE)
+    rationale = {
+        "et0_mm": ctx.get("et0_mm"),
+        "kc": ctx.get("kc"),
+        "kc_source": source_str,
+        "kc_approximate": source_str == "approximate",
+        "p": ctx.get("p"),
+        "raw_mm": raw if has_active_cycle else None,
+        "taw_mm": ctx.get("taw_mm"),
+        "depletion_model_mm": ctx.get("dr_model"),
+        "depletion_mm": dr if has_active_cycle else None,
+        "k": k_val,
+        "without_sensor": k_val == K_ASSIMILATION_NONE,
+        "forecast_rain_48h_mm": forecast_rain_48h_mm,
+        "forecast_rain_7d_mm": forecast_rain_7d_mm,
+        "forecast_et0_7d_mm": forecast_et0_7d_mm,
+    }
+
+    # Branch: no active cycle
+    if not has_active_cycle:
+        if not is_rainfed:
+            return None
+        advice = evaluate_rainfed_advice(
+            has_active_cycle=False,
+            dr=dr,
+            raw=raw,
+            forecast_rain_7d_mm=forecast_rain_7d_mm,
+            forecast_et0_7d_mm=forecast_et0_7d_mm,
+            stage=stage,
+        )
+        return IrrigationRecommendation(
+            kind=RecommendationKind.RAINFED,
+            depth_mm=None,
+            duration_min=None,
+            advice=advice,
+            rationale=rationale,
+        )
+
+    # Branch: missing validated Kc
+    if source_str == "none":
+        return IrrigationRecommendation(
+            kind=RecommendationKind.NO_KC,
+            depth_mm=None,
+            duration_min=None,
+            advice=(),
+            rationale=rationale,
+        )
+
+    # Branch: rainfed plot
+    if is_rainfed:
+        advice = evaluate_rainfed_advice(
+            has_active_cycle=True,
+            dr=dr,
+            raw=raw,
+            forecast_rain_7d_mm=forecast_rain_7d_mm,
+            forecast_et0_7d_mm=forecast_et0_7d_mm,
+            stage=stage,
+        )
+        return IrrigationRecommendation(
+            kind=RecommendationKind.RAINFED,
+            depth_mm=None,
+            duration_min=None,
+            advice=advice,
+            rationale=rationale,
+        )
+
+    # Branch: plot with an irrigation system
+    if dr < raw:
+        return IrrigationRecommendation(
+            kind=RecommendationKind.NOT_NEEDED,
+            depth_mm=None,
+            duration_min=None,
+            advice=(),
+            rationale=rationale,
+        )
+
+    if forecast_rain_48h_mm >= dr:
+        return IrrigationRecommendation(
+            kind=RecommendationKind.POSTPONE,
+            depth_mm=None,
+            duration_min=None,
+            advice=(),
+            rationale=rationale,
+        )
+
+    efficiency = (
+        irrigation_efficiency
+        if irrigation_efficiency is not None and irrigation_efficiency > 0
+        else 1.0
+    )
+    depth_mm = round(dr / efficiency, 2)
+
+    duration_min: int | None = None
+    if system_flow_lph and system_flow_lph > 0 and area_m2 > 0:
+        # 1 mm on 1 m2 = 1 L
+        duration_min = round(depth_mm * area_m2 / system_flow_lph * 60.0)
+
+    return IrrigationRecommendation(
+        kind=RecommendationKind.IRRIGATE,
+        depth_mm=depth_mm,
+        duration_min=duration_min,
+        advice=(),
+        rationale=rationale,
+    )
