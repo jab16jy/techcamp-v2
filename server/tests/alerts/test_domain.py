@@ -22,6 +22,26 @@ from techcamp.alerts.domain import (
     resolve_threshold,
     sustained_run,
 )
+from techcamp.shared.ids import uuid7
+
+
+def _rule(code: str, **kwargs: object) -> AlertRule:
+    """A rule value with the stored id `AlertRule` now requires."""
+    return AlertRule(code=code, id=uuid7(), **kwargs)  # type: ignore[arg-type]
+
+
+def _alert(state: AlertState, severity: Severity, opened_at: datetime, **kwargs: object) -> Alert:
+    """A stored alert: the four identity fields every `Alert` now carries."""
+    return Alert(  # type: ignore[arg-type]
+        state=state,
+        severity=severity,
+        opened_at=opened_at,
+        id=uuid7(),
+        org_id=uuid7(),
+        rule_id=uuid7(),
+        rule_code="test_rule",
+        **kwargs,
+    )
 
 
 def test_models_and_enums_definition():
@@ -33,7 +53,7 @@ def test_models_and_enums_definition():
     assert Severity.WARNING == "warning"
     assert Severity.CRITICAL == "critical"
 
-    rule = AlertRule(
+    rule = _rule(
         code="water_stress",
         metric="soil_moisture",
         operator="<",
@@ -46,7 +66,7 @@ def test_models_and_enums_definition():
     assert rule.min_duration == timedelta(minutes=360)
 
     now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
-    alert = Alert(state=AlertState.OPEN, severity=Severity.WARNING, opened_at=now)
+    alert = _alert(AlertState.OPEN, Severity.WARNING, now)
     assert alert.state == AlertState.OPEN
     assert alert.opened_at == now
     assert alert.acknowledged_at is None
@@ -125,7 +145,7 @@ def test_sustained_run_basic_and_reset():
 
 def test_heat_stress_opens_after_3h_not_at_2h45():
     t0 = datetime(2026, 9, 26, 8, 0, tzinfo=UTC)
-    rule = AlertRule(
+    rule = _rule(
         code="heat_stress",
         metric="air_temp",
         operator=">",
@@ -156,24 +176,25 @@ def test_heat_stress_opens_after_3h_not_at_2h45():
         at=t0 + timedelta(minutes=180),
     )
     assert decision_3h.action == AlertAction.OPEN
-    assert decision_3h.alert is not None
-    assert decision_3h.alert.state == AlertState.OPEN
-    assert decision_3h.alert.severity == Severity.WARNING
-    assert decision_3h.alert.opened_at == t0 + timedelta(minutes=180)
+    # Nothing is stored yet, so there is no alert to return: `open_alert` builds
+    # it with its id, org and rule.
+    assert decision_3h.alert is None
+    opened = _alert(AlertState.OPEN, rule.severity, t0 + timedelta(minutes=180))
+    assert opened.opened_at == t0 + timedelta(minutes=180)
 
 
 def test_threshold_per_rule_code():
-    rule_ws = AlertRule(code="water_stress", metric="soil_moisture", operator="<")
+    rule_ws = _rule("water_stress", metric="soil_moisture", operator="<")
     assert resolve_threshold(rule_ws, stress_moisture_pct=15.3) == 15.3
     # Missing stress_moisture_pct -> None (no evaluation)
     assert resolve_threshold(rule_ws, stress_moisture_pct=None) is None
 
-    rule_wl = AlertRule(code="waterlogging", metric="soil_moisture", operator=">")
+    rule_wl = _rule("waterlogging", metric="soil_moisture", operator=">")
     assert resolve_threshold(rule_wl, field_capacity_pct=23.0) == 28.0
     assert resolve_threshold(rule_wl, field_capacity_pct=Decimal("23")) == Decimal("28")
     assert resolve_threshold(rule_wl, field_capacity_pct=None) is None
 
-    rule_custom = AlertRule(code="custom_temp", operator=">", threshold=Decimal("40"))
+    rule_custom = _rule("custom_temp", operator=">", threshold=Decimal("40"))
     assert resolve_threshold(rule_custom) == Decimal("40")
 
 
@@ -182,7 +203,7 @@ def test_alert_transitions_and_errors():
     t1 = t0 + timedelta(hours=1)
     t2 = t0 + timedelta(hours=2)
 
-    alert = Alert(state=AlertState.OPEN, severity=Severity.WARNING, opened_at=t0)
+    alert = _alert(AlertState.OPEN, Severity.WARNING, t0)
 
     # 1. Acknowledge: open -> acknowledged
     acked = alert.acknowledge(t1)
@@ -229,7 +250,7 @@ def test_alert_transitions_and_errors():
 
 def test_upgrade_at_48h_for_water_stress():
     t0 = datetime(2026, 9, 20, 8, 0, tzinfo=UTC)
-    rule = AlertRule(
+    rule = _rule(
         code="water_stress",
         metric="soil_moisture",
         operator="<",
@@ -237,7 +258,7 @@ def test_upgrade_at_48h_for_water_stress():
         min_duration=timedelta(minutes=360),
         severity=Severity.WARNING,
     )
-    alert = Alert(state=AlertState.OPEN, severity=Severity.WARNING, opened_at=t0)
+    alert = _alert(AlertState.OPEN, Severity.WARNING, t0)
 
     # Ongoing condition: moisture still below threshold (e.g. 14.0% with threshold 15.3%)
     samples = [(t0 + timedelta(hours=47, minutes=59), 14.0)]
@@ -266,8 +287,8 @@ def test_upgrade_at_48h_for_water_stress():
     assert decision_48h.alert.severity == Severity.CRITICAL
 
     # Non-water_stress rule (e.g. heat_stress) does not upgrade at 48 h
-    rule_heat = AlertRule(code="heat_stress", operator=">", threshold=Decimal("35"))
-    alert_heat = Alert(state=AlertState.OPEN, severity=Severity.WARNING, opened_at=t0)
+    rule_heat = _rule("heat_stress", operator=">", threshold=Decimal("35"))
+    alert_heat = _alert(AlertState.OPEN, Severity.WARNING, t0)
     decision_heat = decide_alert(
         rule_heat,
         [(t0 + timedelta(hours=48), 36.0)],
@@ -279,11 +300,7 @@ def test_upgrade_at_48h_for_water_stress():
 
 def test_escalation_eligibility_boundaries():
     t0 = datetime(2026, 9, 26, 8, 0, tzinfo=UTC)
-    critical_open = Alert(
-        state=AlertState.OPEN,
-        severity=Severity.CRITICAL,
-        opened_at=t0,
-    )
+    critical_open = _alert(AlertState.OPEN, Severity.CRITICAL, t0)
 
     # 1 h 59 min -> not eligible
     assert is_eligible_for_escalation(critical_open, t0 + timedelta(hours=1, minutes=59)) is False
@@ -301,7 +318,7 @@ def test_escalation_eligibility_boundaries():
     assert is_eligible_for_escalation(escalated, t0 + timedelta(hours=3)) is False
 
     # Warning severity -> not eligible
-    warning_open = Alert(state=AlertState.OPEN, severity=Severity.WARNING, opened_at=t0)
+    warning_open = _alert(AlertState.OPEN, Severity.WARNING, t0)
     assert is_eligible_for_escalation(warning_open, t0 + timedelta(hours=2)) is False
 
     # Trying to escalate an ineligible alert raises InvalidAlertTransitionError
@@ -317,7 +334,7 @@ def test_scenario_a_soil_moisture_linear_fall_and_resolution():
     - open at first sample >= 6 h after it (day ≈ 10.7)
     - resolve needs > 18.3% for 60 min (a rise to 17% does not resolve).
     """
-    rule = AlertRule(
+    rule = _rule(
         code="water_stress",
         metric="soil_moisture",
         operator="<",
@@ -367,10 +384,9 @@ def test_scenario_a_soil_moisture_linear_fall_and_resolution():
         stress_moisture_pct=theta_estres,
     )
     assert dec_1025.action == AlertAction.OPEN
-    opened_alert = dec_1025.alert
-    assert opened_alert is not None
-    assert opened_alert.state == AlertState.OPEN
-    assert opened_alert.severity == Severity.WARNING
+    # The alert `open_alert` would store, used below as the current one.
+    assert dec_1025.alert is None
+    opened_alert = _alert(AlertState.OPEN, rule.severity, sub_1025[-1][0])
     assert opened_alert.opened_at == sub_1025[-1][0]
 
     # Now test recovery / resolution:
@@ -426,7 +442,7 @@ def test_scenario_a_soil_moisture_linear_fall_and_resolution():
 
 def test_zero_duration_rule_opens_only_on_a_violating_latest_sample():
     t0 = datetime(2026, 9, 26, 8, 0, tzinfo=UTC)
-    battery = AlertRule(
+    battery = _rule(
         code="node_battery_low",
         metric="battery_v",
         operator="<",

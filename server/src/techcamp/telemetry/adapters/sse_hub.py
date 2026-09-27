@@ -263,10 +263,13 @@ class PlotEventsHub:
                     "status": raw["status"],
                     "at": raw["at"],
                 }
+            elif kind in ("alert.opened", "alert.updated"):
+                # alerts publishes the alert's own minimal fields (ADR-0015), so
+                # they pass through as they are minus the routing keys. D9: the
+                # hub learns these two kinds without importing `alerts`.
+                data = {k: v for k, v in raw.items() if k not in ("type", "org_id", "farm_id")}
             else:
-                # `alert.opened`/`alert.updated` (docs/04-api.md) are a no-op
-                # until E7: the notifier never publishes them yet, and any
-                # other `type` is unknown and dropped.
+                # Any other `type` is unknown and dropped.
                 logger.warning("plot_events: unhandled event type %r, dropping", kind)
                 return None
             return StreamEvent(

@@ -190,7 +190,7 @@ async def test_hub_ignores_malformed_and_unknown_payloads() -> None:
     _client_id, queue = hub.subscribe(farm_id)
 
     hub.dispatch("not json")
-    hub.dispatch(json.dumps({"type": "alert.opened", "farm_id": str(farm_id)}))
+    hub.dispatch(json.dumps({"type": "unknown.event", "farm_id": str(farm_id)}))
 
     assert queue.qsize() == 0
 

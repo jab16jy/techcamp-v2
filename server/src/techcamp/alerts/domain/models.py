@@ -1,15 +1,22 @@
 """Alert domain data models, state transitions, and evaluation rules (docs/06 §3, §10; ADR-0022).
 
-Pure domain logic: no I/O, no database dependencies, imports only from stdlib.
+Pure domain logic: no I/O, no database dependencies. Imports only stdlib, its
+own errors and `identity.domain.models.Role` (the one shared enum, the same
+allowance `farms.domain` has).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
+from uuid import UUID
+
+from techcamp.alerts.domain.errors import InsufficientRoleError
+from techcamp.identity.domain.models import Role
 
 
 class AlertState(StrEnum):
@@ -41,6 +48,16 @@ class InvalidAlertTransitionError(Exception):
     """Raised on invalid alert state transitions (mapped to HTTP 409 in adapters)."""
 
 
+def ensure_can_manage_alert(role: Role) -> None:
+    """Deny `viewer` from acknowledging or resolving an alert.
+
+    A viewer reads the tray; acknowledging is a claim of the work, and resolving
+    closes it, so neither is offered to that role (docs/04 §Alertas).
+    """
+    if role == Role.VIEWER:
+        raise InsufficientRoleError(role)
+
+
 RESOLUTION_WINDOW = timedelta(minutes=60)
 """D2: resolution condition sustained for 60 minutes (domain constant)."""
 
@@ -53,15 +70,22 @@ ESCALATION_DELAY = timedelta(hours=2)
 
 @dataclass(frozen=True, slots=True)
 class AlertRule:
-    """Alert evaluation rule value (docs/03:272-283; docs/06 §3)."""
+    """Alert evaluation rule value (docs/03:272-283; docs/06 §3).
+
+    `id` is the stored rule the evaluator decided with, so `open_alert` never
+    looks a rule up by code. `org_id` is `None` for a factory rule.
+    """
 
     code: str
+    id: UUID
+    org_id: UUID | None = None
     metric: str | None = None
     operator: str | None = None
     threshold: Decimal | float | None = None
     hysteresis: Decimal | float = Decimal(0)
     min_duration: timedelta = timedelta(0)
     severity: Severity = Severity.WARNING
+    crop_id: int | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.min_duration, (int, float)):
@@ -72,15 +96,30 @@ class AlertRule:
 
 @dataclass(frozen=True, slots=True)
 class Alert:
-    """Alert entity value (docs/03:284-297; docs/06 §3)."""
+    """Alert entity value (docs/03:284-297; docs/06 §3).
+
+    The four identity fields are the alert row's (docs/03 `alert`), so an alert
+    always knows which row, organization and rule it is; `plot_id` and `node_id`
+    are mutually exclusive there (`ck_alert_target_exactly_one`). `rule_code`
+    travels with the alert because the `NOTIFY` payload carries the code and
+    nothing else joins on it (ADR-0015: ids and minimal data).
+    """
 
     state: AlertState
     severity: Severity
     opened_at: datetime
+    id: UUID
+    org_id: UUID
+    rule_id: UUID
+    rule_code: str
+    plot_id: UUID | None = None
+    node_id: UUID | None = None
+    evidence: dict[str, Any] = field(default_factory=dict)
     acknowledged_at: datetime | None = None
     resolved_at: datetime | None = None
     escalated_at: datetime | None = None
     resolution_note: str | None = None
+    outcome: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.state, str) and not isinstance(self.state, AlertState):
@@ -260,7 +299,7 @@ def decide_alert(
 ) -> AlertDecision:
     """Decide alert action for one rule and target given time-ordered samples (docs/06 §3).
 
-    - none + condition run >= min_duration -> open with rule severity
+    - none + condition run >= min_duration -> open (the caller opens the stored alert)
     - open/acknowledged + clear run >= 60 min -> resolve
     - water_stress open/acknowledged, still warning, and at - opened_at >= 48 h ->
       upgrade to critical
@@ -284,14 +323,9 @@ def decide_alert(
             at=at,
         )
         if cond_run is not None and cond_run >= rule.min_duration:
-            return AlertDecision(
-                action=AlertAction.OPEN,
-                alert=Alert(
-                    state=AlertState.OPEN,
-                    severity=rule.severity,
-                    opened_at=at,
-                ),
-            )
+            # No alert yet, so none to return: `open_alert` builds the stored
+            # value with its id, org and rule (an `Alert` always carries them).
+            return AlertDecision(action=AlertAction.OPEN, alert=None)
         return AlertDecision(action=AlertAction.NO_ACTION, alert=None)
 
     if current_alert.state in (AlertState.OPEN, AlertState.ACKNOWLEDGED):

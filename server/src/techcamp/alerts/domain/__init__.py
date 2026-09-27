@@ -1,5 +1,6 @@
 """Alerts domain package."""
 
+from techcamp.alerts.domain.errors import AlertNotFoundError, InsufficientRoleError
 from techcamp.alerts.domain.models import (
     ESCALATION_DELAY,
     RESOLUTION_WINDOW,
@@ -12,6 +13,7 @@ from techcamp.alerts.domain.models import (
     InvalidAlertTransitionError,
     Severity,
     decide_alert,
+    ensure_can_manage_alert,
     is_clear_met,
     is_condition_met,
     is_eligible_for_escalation,
@@ -21,17 +23,20 @@ from techcamp.alerts.domain.models import (
 )
 
 __all__ = [
+    "ESCALATION_DELAY",
+    "RESOLUTION_WINDOW",
+    "WATER_STRESS_UPGRADE_AFTER",
     "Alert",
     "AlertAction",
     "AlertDecision",
+    "AlertNotFoundError",
     "AlertRule",
     "AlertState",
-    "ESCALATION_DELAY",
+    "InsufficientRoleError",
     "InvalidAlertTransitionError",
-    "RESOLUTION_WINDOW",
     "Severity",
-    "WATER_STRESS_UPGRADE_AFTER",
     "decide_alert",
+    "ensure_can_manage_alert",
     "is_clear_met",
     "is_condition_met",
     "is_eligible_for_escalation",

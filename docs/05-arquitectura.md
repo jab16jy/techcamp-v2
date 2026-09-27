@@ -106,10 +106,13 @@ flowchart TB
   irrigation --> farms
   irrigation --> weather
   irrigation --> telemetry
+  alerts --> farms
+  alerts --> identity
   alerts --> telemetry
   alerts --> weather
   alerts --> risk
   alerts --> notifications
+  notifications --> identity
   logbook --> farms
   risk --> weather
   metrics --> telemetry
@@ -122,6 +125,8 @@ flowchart TB
   assistant --> alerts
   assistant --> risk
 ```
+
+D14: `alerts` depende de `farms` e `identity` para obtener el suelo de la parcela, el técnico de la finca y los miembros de la organización; `notifications` depende de `identity` para las suscripciones push y el teléfono del usuario.
 
 **Reglas de dependencia** (verificadas en CI con `import-linter`):
 
