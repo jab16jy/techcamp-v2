@@ -6,6 +6,11 @@ batching timer and JSON/text decoding into the `Raw*` messages below.
 
 Only claimed nodes are ingested (task instruction): a `node_id` from an
 unknown or unclaimed node is discarded and counted, never raised.
+
+D9: `telemetry` never imports `alerts`. The composition root
+(`techcamp/ingestor.py`) injects the reading-rule evaluator through the
+`after_flush` hook below, which is awaited with the readings that landed once
+the batch is committed (D16).
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
@@ -66,6 +71,15 @@ class RawStatusMessage:
     node_id: UUID
     payload: bytes
     received_at: datetime
+
+
+type AfterFlush = Callable[[Sequence[ReadingEvent]], Awaitable[None]]
+"""D9: the reading-rule hook, awaited with the readings that landed.
+
+Typed here so nothing in `telemetry` names an `alerts` symbol; the caller that
+composes it is the ingestor entrypoint (docs/05: a module only imports another
+module's public `application` package, never its domain).
+"""
 
 
 @dataclass
@@ -131,9 +145,16 @@ async def ingest_uplinks(
     readings: ReadingRepository,
     plots: PlotRepository,
     events: PlotEventsPort,
+    after_flush: AfterFlush | None = None,
 ) -> IngestStats:
     """One ingest flush (docs/06-diseno-detallado.md §1). `messages` is
-    whatever `adapters/ingestor.py`'s batcher accumulated (500 msgs or 1s)."""
+    whatever `adapters/ingestor.py`'s batcher accumulated (500 msgs or 1s).
+
+    `after_flush` (D9) is awaited with `new_events` after the batch and the node
+    updates are committed, in its own transaction (D16): a batch that lands
+    without its alert is re-evaluated by the next batch, because the evaluation
+    is stateless over the stored readings (D1).
+    """
     stats = IngestStats()
     records: list[ReadingRecord] = []
     reading_events: list[tuple[tuple[int, datetime], ReadingEvent]] = []
@@ -240,8 +261,6 @@ async def ingest_uplinks(
                     )
                 )
 
-        # Hot alert-rule evaluation: no-op until E7 (feature doc decision).
-
         seen[node.id] = NodeSeenUpdate(
             node_id=node.id,
             org_id=node.org_id,
@@ -260,6 +279,8 @@ async def ingest_uplinks(
     await _flush_node_updates(
         seen, new_events, nodes=nodes, plots=plots, events=events, farm_cache=farm_cache
     )
+    if after_flush is not None and new_events:
+        await after_flush(new_events)
     return stats
 
 

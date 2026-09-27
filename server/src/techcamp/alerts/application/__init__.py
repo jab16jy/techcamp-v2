@@ -5,6 +5,7 @@ so the lifecycle and the rule use cases are exported here and the use cases
 stay behind it.
 """
 
+from techcamp.alerts.application.evaluate_readings import evaluate_landed_readings
 from techcamp.alerts.application.manage_rules import create_rule, list_rules, update_rule
 from techcamp.alerts.application.ports import AlertRepository, AlertRuleRepository, AlertTarget
 from techcamp.alerts.application.use_cases import (
@@ -22,6 +23,7 @@ __all__ = [
     "AlertTarget",
     "acknowledge",
     "create_rule",
+    "evaluate_landed_readings",
     "list_alerts",
     "list_rules",
     "open_alert",

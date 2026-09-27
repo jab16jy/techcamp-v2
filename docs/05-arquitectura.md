@@ -80,7 +80,7 @@ flowchart LR
 | **ChirpStack** | Servidor de red LoRaWAN; decodifica el payload y lo publica en MQTT | Solo si hay gateways LoRa |
 | **PostgreSQL** | Fuente de verdad única | Vertical, y réplica de lectura en el año 3 |
 
-`api`, `ingestor` y `worker` usan **la misma imagen** con distinto comando. Un cambio de dominio se despliega una sola vez.
+`api`, `ingestor` y `worker` usan **la misma imagen** con distinto comando. Un cambio de dominio se despliega una sola vez. El comando del `ingestor` es `python -m techcamp.ingestor`, el módulo de composición donde se inyecta al pipeline de `telemetry` el evaluador de reglas de umbral sobre lecturas ([06 §3](06-diseno-detallado.md#3-alertas-y-notificaciones)): `telemetry` nunca importa a `alerts`, el hook se inyecta desde la raíz de composición.
 
 ## Módulos (C4 nivel 3)
 

@@ -35,7 +35,7 @@ sequenceDiagram
   I->>DB: INSERT … ON CONFLICT (sensor_id, time) DO NOTHING
   I->>DB: UPDATE node SET last_seen_at, status='online'
   I->>I: evaluar reglas en caliente para las parcelas afectadas
-  I->>DB: INSERT alert + notification (misma transacción)
+  I->>DB: INSERT alert + notification (una sola transacción, ADR-0016) después del commit del lote; si el proceso cae entre ambos, el siguiente lote reevalúa sobre las lecturas ya guardadas, porque la evaluación es sin estado (D16)
   I->>DB: NOTIFY plot_events
   DB-->>A: evento → SSE a los clientes suscritos
 ```
