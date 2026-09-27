@@ -186,6 +186,17 @@ work unit (`domain-modeling`).
 - D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
+- D17 A reading-threshold rule is decided from the plot's sensor series, so the plot evaluator
+  selects rules by SOURCE, not by "has a metric and an operator": docs/06 §3's five sources seed
+  rules that carry a metric too (`fungal_risk` is `air_rh > 85`, `node_battery_low` is
+  `battery_v < 3.4`, `heavy_rain_forecast` is `rain > 50`), and `fungal_risk` would otherwise
+  open from the ingestor on a pure RH run, ignoring the 20–30 °C half of its condition and
+  stealing T6b's rule. `alert_rule` has no source or target column (docs/03:272-283), so the
+  taxonomy lives in the domain as the set of codes that belong to the other four sources
+  (`NON_PLOT_RULE_CODES`), exposed as one function that returns the sensor metric a plot rule is
+  decided on. Org rules keep working: they are plot rules by construction, with their own code.
+  `water_stress` stays in the set (T10 supplies its plot threshold). Follow-up: docs/03 should
+  carry a `source` column so the taxonomy is data, not a code list.
 - D16 T5's hot evaluation runs in its own transaction, not in the readings' one. The ingestor
   commits each batch inside its repositories (`insert_batch` commits in
   `telemetry/adapters/repositories.py:463`, and the node update commits too), so no transaction
