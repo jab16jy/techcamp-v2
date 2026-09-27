@@ -186,6 +186,14 @@ work unit (`domain-modeling`).
 - D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
+- D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
+  (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
+  every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
+  take the alert's own farm from `get_target_context(...)`, as `upgrade_to_critical` does, so the
+  HTTP caller cannot address a foreign farm. `POST /push-subscriptions` upserts on the UNIQUE
+  `endpoint` and re-binds the row to the caller, replacing its `keys`; `DELETE` only serves the
+  caller's own row (anything else 404). Read `GET /alert-rules` serves any member of the org
+  (viewer included); `POST`/`PATCH` need role `owner` of the rule's org.
 
 ## E6 coordination (2026-09-26)
 - E6 merged to `main` (PRs #104–#111, `main` @ `b627b66`): `water_balance_daily` (`plot_id`, `day`,
