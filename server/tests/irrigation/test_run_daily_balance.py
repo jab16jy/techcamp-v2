@@ -12,6 +12,7 @@ Tests against real Postgres with TDD:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -27,7 +28,7 @@ from techcamp.farms.adapters.repositories import (
     SqlAlchemyPlotRepository,
     SqlAlchemySoilProfileRepository,
 )
-from techcamp.farms.domain.models import CropCycleStatus
+from techcamp.farms.domain.models import Crop, CropCycleStatus, CropStage, KcSource
 from techcamp.identity.adapters.orm import OrganizationRow
 from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyIrrigationRecommendationRepository,
@@ -1006,3 +1007,124 @@ async def test_sensor_assimilation_two_sensors_averaged(db_session: AsyncSession
     assert result.recommendation is not None
     assert result.recommendation.rationale.get("without_sensor") is False
     assert result.recommendation.rationale.get("k") == pytest.approx(0.5)
+
+
+# --- Issue #115 round 1 findings ---
+
+
+@dataclass
+class _FakeCropRepositoryWithBadStage:
+    """A stage name outside initial/development/mid/late that only a
+    hand-built `Crop` can carry: `crop_stage`'s `ck_crop_stage_name` CHECK
+    constraint rejects it at the real Postgres adapter, so this fakes the
+    farms port instead of writing an invalid row (R3-kc-unknown-stage-
+    raises-in-job)."""
+
+    crop: Crop
+
+    async def get(self, crop_id: int) -> Crop | None:
+        return self.crop
+
+
+async def test_invalid_crop_stage_name_skips_with_typed_reason_and_no_rows(
+    db_session: AsyncSession,
+) -> None:
+    """A stage name compute_kc_for_cycle_day does not recognize must skip this one
+    plot with a typed reason, not abort the whole job with an uncaught ValueError
+    (R3-kc-unknown-stage-raises-in-job).
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    bad_crop = Crop(
+        id=crop_id,
+        code="maize",
+        name_es="Maíz",
+        kc_source=KcSource.FAO56,
+        stages=(
+            CropStage(stage="inicial", length_days=18, kc=0.30, depletion_fraction_p=0.55),
+            CropStage(stage="development", length_days=27, kc=0.75, depletion_fraction_p=0.55),
+            CropStage(stage="mid", length_days=31, kc=1.20, depletion_fraction_p=0.55),
+            CropStage(stage="late", length_days=14, kc=0.35, depletion_fraction_p=0.55),
+        ),
+    )
+
+    wb_repo = SqlAlchemyWaterBalanceRepository(db_session)
+    rec_repo = SqlAlchemyIrrigationRecommendationRepository(db_session)
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=_FakeCropRepositoryWithBadStage(bad_crop),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=wb_repo,
+        recommendations=rec_repo,
+    )
+    await db_session.commit()
+
+    assert result.skipped
+    assert result.skip_reason == "crop_stage_invalid"
+    assert result.balance is None
+    assert result.recommendation is None
+
+    d_minus_1 = target_day - timedelta(days=1)
+    assert await wb_repo.get_for_plot(plot_id, d_minus_1) is None
+    assert await rec_repo.get_for_plot(plot_id, target_day) is None
+
+
+async def test_sensor_assimilation_clamps_depletion_within_0_taw_at_app_level(
+    db_session: AsyncSession,
+) -> None:
+    """R3-clamp-wiring-untested-at-app-level: a field-calibrated representative
+    sensor reading far above field capacity (fc=23%) must still persist
+    depletion_mm inside [0, TAW], not a negative value from the raw formula.
+    """
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Sensor at Zr/2 (30 cm of a 60 cm root zone) reads 40% (well above fc=23%,
+    # e.g. right after heavy rain): the raw Dr_obs formula alone would be negative.
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=30,
+        calibration_kind="field",
+        reading_fresh=True,
+        daily_value=40.0,
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert 0.0 <= result.balance.depletion_mm <= result.balance.taw_mm
