@@ -244,9 +244,10 @@ work unit (`domain-modeling`).
   coercions/alias/`Decimal | float`) — brief `.git-brief-e7-Q1.md` — route: Herdr OpenCode
   `e7-q1` — forecast ~250 — actual 932 (`3fc9b93` 441, `a32a0d0` 491; production 234 / tests 698:
   frozen seed copy + tests); #95 and #98 closed
-- [ ] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
+- [x] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
   `GET/POST/PATCH /alert-rules`, `POST/DELETE /push-subscriptions`; org isolation tests;
-  docs/04 shapes — route: Herdr OpenCode — forecast ~450
+  docs/04 shapes — route: Pi subagent (same session, no Herdr tab) — forecast ~450 — actual
+  1,540 (`e15b969`; 857 production / 672 tests / 11 docs) + correction 119 (`577a405`)
 - [ ] T5 Reading rules in the ingestor: after-flush hook (D9), `heat_stress`, `waterlogging`
   (field capacity + 5 from the plot soil), org custom threshold rules; open and resolve on each
   batch — route: Herdr OpenCode — forecast ~450
@@ -346,6 +347,22 @@ work unit (`domain-modeling`).
   (authority burned), no correction. 2 WARNING non-blocking → #113 (seed `metric`/`hysteresis`/
   `crop_id` not pinned independently; DB-default test bounded by process clock). Boundary →
   `a32a0d0`.
+- T4 (`5dbae1d..e15b969`, 24 files, 1,576 changed lines): medium, one reliability lens. START
+  requested the per-slice committed range (`baseRef 5dbae1d`, `committedOnly`), not the
+  whole-branch range the inspect offered, per the per-slice decision above. Lineage
+  `review-c0833989f9f3593b`, one reliability lens, CRITICAL R3-001 (concurrent rule PATCHes
+  reverting each other's fields: read-modify-write wrote every mutable column). Correction plan
+  120 diff lines (≤ 200) captured; fix `577a405` (field-level update through a domain
+  `AlertRuleChanges`, 119 diff lines) with a barrier-synchronised concurrent-PATCH regression
+  test; targeted validation APPROVED and acknowledged (authority burned, target
+  `sha256:a677d627…`). Non-blocking R3-002 (push-subscription upsert is read-then-insert, so
+  two concurrent registrations of a new endpoint hit the UNIQUE constraint as a 500) plus the
+  parent's third copy of `_reject_explicit_null` → #114. Two host-transport notes for the next
+  slice: the lens needed a model in `~/.pi/gentle-ai/models.json` (created: all four review
+  lenses + `review-refuter`/`review-validator` → `opencode/space-bunny-free`, `high`), and a
+  `gentle_review_capture` must omit `workspaceRoot` — the collect-binding route is registered
+  under the session cwd, so passing the E7 worktree was refused as "different session route".
+  Boundary → `577a405`.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
@@ -381,9 +398,17 @@ work unit (`domain-modeling`).
   as implemented: a gap > `max_gap` restarts the run (zero-length run, not `None`); a stale latest
   sample is `None`. Note: the `a32a0d0` body says the adapter converts `Numeric` → `float` for rules;
   today only the test helper does — the rule-loading adapter (T4/T5) must do it.
-- Next step (handoff 2026-09-26): ~~close T3's lineage `review-52ae082b2d0f892b`, file T3 issue
-  (R3-003, R3-004 + new WARNINGs)~~, ~~rebase onto `main` @ `b627b66` (re-chain `d4e6f8a0b2c1` onto
-  `d8a2f1c4e9b7`)~~, ~~quality unit for #95/#98~~, then T4 (brief `.git-brief-e7-T4.md` written;
-  add D15 to Decisions before launching it: `list_alerts` takes `org_id`; `acknowledge`/
-  `resolve_manually` drop `farm_id` and take the alert's own farm; push endpoint upsert re-binds
-  to the caller). Owner paused after Q1 (2026-09-26). Handoff prompt: `.git-brief-e7-handoff.md`.
+- T4 2026-09-27 (writer: Pi subagent, no Herdr tab): D15 added and committed first (`5dbae1d`).
+  Writer evidence: first RED `TypeError: acknowledge() missing 1 required keyword-only argument:
+  'farm_id'` (`tests/alerts/test_lifecycle.py:396`); its own checks: pytest 726 passed, ruff,
+  format, mypy, lint-imports green. Parent gate on `e15b969` (run by the parent, DB
+  `techcamp-e7-db` on 5437): 726 passed, ruff, format, mypy, lint-imports green; diff matches
+  docs/04 §Alertas (new shapes and 403/404/409/422 written there in the unit), docs/03 and
+  D11/D15; no SQL in the routers, no SQLAlchemy or adapters in `application`, `notifications`
+  never imports `alerts`, every read filtered by `org_id`. No quality issue to fix now.
+  Correction `577a405`: writer's checks 73 passed in `tests/alerts`; parent gate on `577a405`:
+  full suite 727 passed, ruff, format, mypy, lint-imports green. The writer changed the planned
+  sequential test for a barrier-synchronised concurrent pair, because a sequential PATCH cannot
+  observe the defect (each request would read a fresh row) — accepted, it is the stronger test.
+- Next step: T5 (reading rules in the ingestor, D9) — brief not written yet; #95, #98, #112, #113
+  and #114 stay open for later in the epic.
