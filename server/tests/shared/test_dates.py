@@ -31,6 +31,10 @@ def test_local_today_naive_input_is_treated_as_utc() -> None:
 
 def test_local_today_default_none_uses_current_time() -> None:
     """When now is omitted or None, local_today returns the current America/Bogota date."""
-    expected = datetime.now(BOGOTA_TZ).date()
-    assert local_today() == expected
-    assert local_today(None) == expected
+    before = datetime.now(BOGOTA_TZ).date()
+    result_default = local_today()
+    result_none = local_today(None)
+    after = datetime.now(BOGOTA_TZ).date()
+
+    assert result_default in (before, after)
+    assert result_none in (before, after)
