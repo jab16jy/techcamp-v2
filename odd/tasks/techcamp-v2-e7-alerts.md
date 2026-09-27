@@ -186,6 +186,15 @@ work unit (`domain-modeling`).
 - D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
+- D22 The 60-minute resolution window belongs to the RULES WITH A SERIES. docs/06 §3's
+  "resolución automática ... sostenida durante 60 minutos" exists because a reading rule is
+  evaluated over a time series and the clear condition needs to hold, not flicker.
+  `heavy_rain_forecast` (every 3 h over a daily aggregate) and `fungal_risk` (daily over the
+  previous day) have no evidence finer than their own cadence, so a 60-minute sustained clear
+  run is not computable: with one sample per evaluation the run is 0 and the alert would never
+  resolve. Those rules resolve on the FIRST false evaluation, hysteresis still applying, and
+  docs/06 §3 says so. Same reasoning, same shape: a window in units the evidence does not have
+  is not a safe default, it is a rule that can never fire.
 - D18 T6a delivers the node-health sweep and `node_offline`, and `node_offline` becomes computable
   by naming the absence of evidence in the domain: a pure `alerts/domain` decision over the time
   since the node's last reading (3 × `interval_s`), not a sample series faking a threshold —
@@ -311,9 +320,10 @@ work unit (`domain-modeling`).
   D16, D17 — **validation pending**: the lineage is closed at `correction_required` because the
   correction-plan capture is refused (see Review (RDD))
 - [ ] T6 Worker rules
-  - [ ] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
-    `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Herdr OpenCode —
-    forecast ~350
+  - [x] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
+    `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Pi subagent —
+    forecast ~350 — actual 898 (`21fb000`; 372 production / 522 tests / 4 docs). `node_battery_low`
+    is deliberately NOT delivered: no `battery_v` source exists (D18)
   - [ ] T6b `heavy_rain_forecast` after the 3 h refresh (D10), critical with saturated soil;
     `fungal_risk` daily — route: Herdr OpenCode (same session as T6a) — forecast ~400
 - [ ] T7 Notifications outbox
@@ -406,6 +416,32 @@ work unit (`domain-modeling`).
   (authority burned), no correction. 2 WARNING non-blocking → #113 (seed `metric`/`hysteresis`/
   `crop_id` not pinned independently; DB-default test bounded by process clock). Boundary →
   `a32a0d0`.
+- T6a (`1f268cf..21fb000`, 9 files, 899 changed lines): medium, one reliability lens, CRITICAL
+  `R3-periodic-task-name-mismatch` — **refuted by the parent, and the refutation is now a test**.
+  The claim was that `@app.periodic` receives no task name and therefore configures the schedule
+  with procrastinate's default identity, so the worker would never run the sweep. From the
+  installed procrastinate: `periodic_decorator` wraps the `Task` object `@app.task(name=…)` built,
+  `register_task` keys the schedule by `task.name`, and `defer_jobs` enqueues
+  `task.configure(...)` — the same task. At runtime the registry reads
+  `'alerts.sweep_node_health' periodic_id='' cron='*/5 * * * *' -> task.name='alerts.sweep_node_health'`.
+  The same shape is weather's 3 h refresh and irrigation's daily job, both live in the seminar
+  stack since E5/E6; if the claim held, neither would run. The refutation alone would leave the
+  invariant unpinned — every job test calls the coroutine directly, so a schedule naming an
+  unregistered task keeps the suite green while the worker never runs it — so the parent added
+  `server/tests/shared/test_periodic_schedules.py` (`37f6be9`): every schedule must enqueue a
+  registered task on the queue the worker listens to, and the node-health sweep must be
+  `*/5 * * * *`. Same shape as T3's `DISTINCT ON` false positive, also refuted from the source.
+  The lineage could not advance past the correction-plan slot (tooling blocker below).
+  - Parent gate on `21fb000`: static checks green, 9 targeted tests; the writer's single full run
+    (748 passed) is the slice's. Two writer deviations, both accepted as improvements: the domain
+    decision takes `heard_run` instead of `rule` (the 60-minute clear run is NOT computable from
+    `last_seen_at` alone — one timestamp says when the node was last heard, not that it was heard
+    continuously — so it reuses `sustained_run` with an always-true predicate and keeps the gap
+    tolerance in one place), and no new repository method: the org list is an in-adapter
+    `select(distinct NodeRow.org_id)` reading ids only, which is what D21's fan-out is for.
+  - D22 (new, for T6b): the 60-minute resolution window belongs to rules WITH A series;
+    `heavy_rain_forecast` and `fungal_risk` have no evidence finer than their cadence, so they
+    resolve on the first false evaluation.
 - T5 (`a8f2ea2..a204e92`, 17 files, 947 changed lines): medium, one reliability lens. Two CRITICAL
   findings, both real, both fixed; the targeted validation could not run (tooling, see below), so
   the slice is NOT approved yet.
@@ -497,11 +533,12 @@ work unit (`domain-modeling`).
   full suite 727 passed, ruff, format, mypy, lint-imports green. The writer changed the planned
   sequential test for a barrier-synchronised concurrent pair, because a sequential PATCH cannot
   observe the defect (each request would read a fresh row) — accepted, it is the stronger test.
-- Next step: T6a (node health every 5 min), the brief is being written from the mapping scout
-  (job framework, node data, recipients, test seams). Two invariants learned from T5's CRITICALs
-  go into the brief: a decision that reads a window is taken at the newest sample of ITS OWN
-  target (never a global batch time), and every test of a behaviour carries the negative
-  assertion too (it must not decide with another target's data), because in an alerting system
-  the dangerous failure is silence, not an exception — which is why the whole suite was green
-  through both bugs. #95, #98, #112, #113 and #114 stay open for later in the epic; T5's
-  non-blocking findings and the `alert_rule.source` column follow-up are filed with the round.
+- Next step: T6b (`heavy_rain_forecast` after the 3 h refresh, `fungal_risk` daily), with D10
+  already settling the cadence question — a separate alerts periodic a few minutes after the
+  refresh, NOT a call from the weather job, because docs/05 has no `weather → alerts` edge (the
+  parent had said it would defer from inside the refresh; that was wrong and D10's reason is the
+  one that holds). D19, D20 and D22 shape the two rules. Then T7a/b/c, T8, T9, T10, T11.
+  Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
+  window is taken at the newest evidence of ITS OWN target, never a global time; and every
+  behaviour test carries the negative assertion too, because in an alerting system the dangerous
+  failure is silence, not an exception — which is why the whole suite was green through both.
