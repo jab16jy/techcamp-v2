@@ -81,6 +81,7 @@ class ForecastSummary:
     rain_7d_mm: float
     et0_7d_mm: float
     low_confidence: bool
+    forecast_missing: bool
 
 
 def _summarize_forecast(
@@ -89,10 +90,26 @@ def _summarize_forecast(
     d_rec: date,
     now: datetime,
 ) -> ForecastSummary:
-    """Sum the 48 h and 7-day forecast rain, the 7-day forecast ET0, and flag
-    rows fetched more than 24 h ago as low confidence (docs/06 §5, §6).
+    """Sum the 48 h and 7-day forecast rain, the 7-day forecast ET0, flag rows
+    fetched more than 24 h ago as low confidence, and flag a gap in the [D, D+6]
+    forecast window as forecast_missing (docs/06 §5, §6; D1, feature doc
+    `techcamp-v2-e6-followups.md`).
+
+    A day in the window with no forecast row, or a row with a null rain_mm or
+    et0_mm, still sums as 0 for that day (a conservative default: "no rain
+    forecast" is the safer assumption for the postpone/rainfed advice
+    branches) — but forecast_missing flags it in the rationale instead of
+    silently presenting the recommendation as fully trustworthy (R3-missing-
+    forecast-silently-zero).
     """
     d_plus_6 = d_rec + timedelta(days=6)
+    forecast_by_day = {r.day: r for r in weather_rows if r.is_forecast}
+    forecast_missing = any(
+        (row := forecast_by_day.get(d_rec + timedelta(days=offset))) is None
+        or row.rain_mm is None
+        or row.et0_mm is None
+        for offset in range(7)
+    )
     return ForecastSummary(
         rain_48h_mm=sum(
             float(r.rain_mm)
@@ -116,6 +133,7 @@ def _summarize_forecast(
             for r in weather_rows
             if r.fetched_at is not None
         ),
+        forecast_missing=forecast_missing,
     )
 
 
@@ -199,7 +217,10 @@ async def run_daily_balance(
             forecast_rain_7d_mm=forecast.rain_7d_mm,
             forecast_et0_7d_mm=forecast.et0_7d_mm,
             stage="",
-            rationale_context={"low_confidence": forecast.low_confidence},
+            rationale_context={
+                "low_confidence": forecast.low_confidence,
+                "forecast_missing": forecast.forecast_missing,
+            },
         )
         saved_rec: IrrigationRecommendation | None = None
         if rec is not None:
@@ -235,7 +256,10 @@ async def run_daily_balance(
             forecast_rain_7d_mm=forecast.rain_7d_mm,
             forecast_et0_7d_mm=forecast.et0_7d_mm,
             stage="",
-            rationale_context={"low_confidence": forecast.low_confidence},
+            rationale_context={
+                "low_confidence": forecast.low_confidence,
+                "forecast_missing": forecast.forecast_missing,
+            },
         )
         saved_rec = None
         if rec is not None:
@@ -281,7 +305,23 @@ async def run_daily_balance(
             skip_reason="missing_weather_for_balance_day",
         )
 
-    et0_d_minus_1 = float(weather_d_minus_1.et0_mm) if weather_d_minus_1.et0_mm is not None else 0.0
+    # A null ET0 on D-1 must not silently become ETc 0 (D1, R3-missing-forecast-
+    # silently-zero): fall back to the other D-1 row (observed/forecast) if it has
+    # one, and skip this plot with a typed reason only if neither does — rain
+    # keeps its 0.0 default, since a missing rainfall reading is the conservative
+    # (not the risky) direction for Pe.
+    other_row_d_minus_1 = forecast_row_d_minus_1 if weather_d_minus_1 is obs_row else obs_row
+    et0_mm_d_minus_1 = weather_d_minus_1.et0_mm
+    if et0_mm_d_minus_1 is None and other_row_d_minus_1 is not None:
+        et0_mm_d_minus_1 = other_row_d_minus_1.et0_mm
+    if et0_mm_d_minus_1 is None:
+        return DailyBalanceResult(
+            balance=None,
+            recommendation=None,
+            skipped=True,
+            skip_reason="missing_et0_for_balance_day",
+        )
+    et0_d_minus_1 = float(et0_mm_d_minus_1)
     rain_d_minus_1 = (
         float(weather_d_minus_1.rain_mm) if weather_d_minus_1.rain_mm is not None else 0.0
     )
@@ -406,6 +446,7 @@ async def run_daily_balance(
             "dr_model": dr_model,
             "k": k,
             "low_confidence": forecast.low_confidence,
+            "forecast_missing": forecast.forecast_missing,
             "missing_observed_weather": missing_observed,
         },
     )

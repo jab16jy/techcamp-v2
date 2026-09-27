@@ -1128,3 +1128,218 @@ async def test_sensor_assimilation_clamps_depletion_within_0_taw_at_app_level(
     assert result.balance is not None
     assert result.balance.assimilation_k == pytest.approx(0.5)
     assert 0.0 <= result.balance.depletion_mm <= result.balance.taw_mm
+
+
+# --- T3: #97 daily balance use case follow-ups ---
+
+
+def _core_repos(db_session: AsyncSession, *, crops: object | None = None) -> dict[str, object]:
+    """The repository set every T3 test below passes, `crops` overridable for a fake."""
+    return dict(
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=crops if crops is not None else SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+    )
+
+
+async def _assert_skipped_no_rows(
+    db_session: AsyncSession,
+    plot_id: UUID,
+    target_day: date,
+    reason: str,
+    *,
+    crops: object | None = None,
+) -> None:
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, **_core_repos(db_session, crops=crops)
+    )
+    await db_session.commit()
+    assert result.skipped
+    assert result.skip_reason == reason
+    assert result.balance is None
+    assert result.recommendation is None
+    d_minus_1 = target_day - timedelta(days=1)
+    wb_repo = SqlAlchemyWaterBalanceRepository(db_session)
+    rec_repo = SqlAlchemyIrrigationRecommendationRepository(db_session)
+    assert await wb_repo.get_for_plot(plot_id, d_minus_1) is None
+    assert await rec_repo.get_for_plot(plot_id, target_day) is None
+
+
+async def test_forecast_missing_flagged_when_window_has_no_forecast_rows(
+    db_session: AsyncSession,
+) -> None:
+    """D1 (R3-missing-forecast-silently-zero): no forecast rows for [D, D+6] keeps
+    computing (not skipped) but flags forecast_missing in the rationale, instead of
+    silently presenting zeroed forecast sums as trustworthy.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    # Only the D-1 observed row, no forecast rows for D..D+6 at all.
+
+    d_minus_1 = target_day - timedelta(days=1)
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=False,
+            et0_mm=Decimal("5.0"),
+            rain_mm=Decimal("0.0"),
+            tmin_c=Decimal("22.0"),
+            tmax_c=Decimal("32.0"),
+            rh_mean_pct=Decimal("65.0"),
+            fetched_at=datetime.now(UTC) - timedelta(hours=2),
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True
+
+
+async def test_forecast_missing_false_when_window_is_complete(db_session: AsyncSession) -> None:
+    """The normal fixture populates all 7 forecast days with non-null rain/ET0."""
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day)
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is False
+
+
+async def test_missing_et0_on_balance_day_skips_with_typed_reason(db_session: AsyncSession) -> None:
+    """D1: a D-1 row with a null et0_mm and no other D-1 row to fall back to must
+    skip with a typed reason, not silently compute ETc = 0.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+
+    d_minus_1 = target_day - timedelta(days=1)
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=False,
+            et0_mm=None,
+            rain_mm=Decimal("0.0"),
+            tmin_c=Decimal("22.0"),
+            tmax_c=Decimal("32.0"),
+            rh_mean_pct=Decimal("65.0"),
+            fetched_at=datetime.now(UTC) - timedelta(hours=2),
+        )
+    )
+    await db_session.commit()
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "missing_et0_for_balance_day")
+
+
+async def test_low_confidence_true_when_weather_fetched_over_24h_ago(
+    db_session: AsyncSession,
+) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, stale_weather=True)
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("low_confidence") is True
+
+
+async def test_low_confidence_false_at_exactly_24h_boundary(db_session: AsyncSession) -> None:
+    """R3-low-confidence-untested: fetched_at exactly 24h before `now` is NOT low
+    confidence — the contract is "more than 24 h" (docs/06 §5/§6), strictly greater.
+    """
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Overwrite every row's fetched_at to exactly 24h before `now`.
+    rows = (
+        await db_session.execute(
+            text("SELECT cell_id, day, is_forecast FROM weather_daily WHERE cell_id = :c"),
+            {"c": cell_id},
+        )
+    ).all()
+    for cell_id_, day_, is_forecast_ in rows:
+        await db_session.merge(
+            WeatherDailyRow(
+                cell_id=cell_id_,
+                day=day_,
+                is_forecast=is_forecast_,
+                fetched_at=now - timedelta(hours=24),
+                et0_mm=Decimal("5.0"),
+                rain_mm=Decimal("0.0"),
+                tmin_c=Decimal("22.0"),
+                tmax_c=Decimal("32.0"),
+                rh_mean_pct=Decimal("65.0"),
+            )
+        )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("low_confidence") is False
+
+
+async def test_low_confidence_handles_naive_now_as_utc(db_session: AsyncSession) -> None:
+    """R3-low-confidence-untested: a naive `now` (no tzinfo) is read as UTC, matching
+    `local_today`'s own contract, so staleness compares against the right instant.
+    """
+    target_day = date(2026, 9, 25)
+    aware_now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    naive_now = aware_now.replace(tzinfo=None)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, stale_weather=True, now=aware_now)
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=naive_now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("low_confidence") is True
+
+
+async def test_skip_crop_stage_empty(db_session: AsyncSession) -> None:
+    """R3-empty-stages-indexerror: an empty stages tuple on a non-none kc_source
+    crop must skip with a typed reason instead of `crop.stages[-1]` raising
+    IndexError. Faked at the port for the same reason as the bad-name test.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    empty_stage_crop = Crop(
+        id=crop_id, code="maize", name_es="Maíz", kc_source=KcSource.FAO56, stages=()
+    )
+
+    await _assert_skipped_no_rows(
+        db_session,
+        plot_id,
+        target_day,
+        "crop_stage_invalid",
+        crops=_FakeCropRepositoryWithBadStage(empty_stage_crop),
+    )

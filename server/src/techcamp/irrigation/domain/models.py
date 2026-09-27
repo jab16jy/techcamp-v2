@@ -484,6 +484,8 @@ def decide_recommendation(
     }
     if "low_confidence" in ctx:
         rationale["low_confidence"] = ctx["low_confidence"]
+    if "forecast_missing" in ctx:
+        rationale["forecast_missing"] = ctx["forecast_missing"]
     if "missing_observed_weather" in ctx:
         rationale["missing_observed_weather"] = ctx["missing_observed_weather"]
 
