@@ -9,10 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 from uuid import UUID
+from zoneinfo import ZoneInfo
+
+BOGOTA_TZ = ZoneInfo("America/Bogota")
+"""The single local timezone of the product (docs/04-api.md:63-75, docs/06 §5)."""
 
 
 class RecommendationKind(StrEnum):
@@ -111,16 +115,54 @@ class WaterBalanceDay:
 
 @dataclass(frozen=True, slots=True)
 class IrrigationRecommendation:
-    """Irrigation recommendation for a plot on a given day (docs/03:206-215)."""
+    """Irrigation recommendation for a plot on a given day (docs/03:206-215).
+
+    The decision `decide_recommendation` produces carries no identity: it is a
+    verdict about a plot's numbers, and the caller pairs it with the plot and the
+    day when it stores it. `advice` is always advice codes; the repository parses
+    stored JSON back into `RainfedAdvice` and drops codes it does not know.
+    """
 
     kind: RecommendationKind
     depth_mm: float | None
     duration_min: int | None
-    advice: tuple[RainfedAdvice, ...] | tuple[str, ...]
+    advice: tuple[RainfedAdvice, ...]
     rationale: dict[str, Any]
     id: UUID | None = None
     plot_id: UUID | None = None
     day: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredIrrigationRecommendation:
+    """A stored `irrigation_recommendation` row as the read API serves it (docs/03:206-215).
+
+    `plot_id` and `day` are the row's key columns and NOT NULL, so a stored
+    recommendation always carries both and readers need no fallback. `id` is
+    omitted on purpose: no read path exposes it (docs/04-api.md:110-114).
+    """
+
+    plot_id: UUID
+    day: date
+    kind: RecommendationKind
+    depth_mm: float | None
+    duration_min: int | None
+    advice: tuple[RainfedAdvice, ...]
+    rationale: dict[str, Any]
+
+
+def local_today(now: datetime) -> date:
+    """The date of `now` in America/Bogota, the product's local day.
+
+    A naive `now` is read as UTC, which is how the application layer stores and
+    passes instants, so a naive value cannot silently become local time. Every
+    irrigation read that defaults a date ("today" for a recommendation, "yesterday"
+    for a water balance) resolves it through here, so one place owns the timezone
+    (docs/04-api.md:63-75; docs/06 §5).
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return now.astimezone(BOGOTA_TZ).date()
 
 
 def stage_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> str:
@@ -314,16 +356,18 @@ def compute_water_balance_status(dr: float, raw: float, is_rainfed: bool) -> Wat
     Rules:
     - Dr < 0.8 * RAW: 'ok'
     - 0.8 * RAW <= Dr < RAW: 'watch'
-    - Dr >= RAW:
-      - rainfed plot: 'stress' (rainfed never reports 'irrigate', docs/04:75)
-      - irrigated plot: 'irrigate'
+    - Dr >= RAW, plot with an irrigation system: 'irrigate' (docs/06 §5 flowchart)
+    - Dr > RAW, rainfed plot: 'stress', because water stress is strictly above RAW
+      (ADR-0022; docs/04:75)
+    - Dr == RAW, rainfed plot: 'watch'. The threshold is not crossed yet and a
+      rainfed plot never reports 'irrigate' (docs/04:75).
     """
-    if dr < WATCH_THRESHOLD_RATIO * raw:
-        return WaterBalanceStatus.OK
     if dr < raw:
+        if dr < WATCH_THRESHOLD_RATIO * raw:
+            return WaterBalanceStatus.OK
         return WaterBalanceStatus.WATCH
     if is_rainfed:
-        return WaterBalanceStatus.STRESS
+        return WaterBalanceStatus.WATCH if dr == raw else WaterBalanceStatus.STRESS
     return WaterBalanceStatus.IRRIGATE
 
 

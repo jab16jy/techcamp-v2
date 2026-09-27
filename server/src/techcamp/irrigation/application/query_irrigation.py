@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from techcamp.farms.application.manage_plots import resolve_plot_access
 from techcamp.farms.application.ports import PlotRepository
@@ -20,12 +19,11 @@ from techcamp.irrigation.application.ports import (
 )
 from techcamp.irrigation.domain.errors import InvalidDateRangeError, RecommendationNotFoundError
 from techcamp.irrigation.domain.models import (
-    IrrigationRecommendation,
+    StoredIrrigationRecommendation,
     WaterBalanceStatus,
     compute_water_balance_status,
+    local_today,
 )
-
-BOGOTA_TZ = ZoneInfo("America/Bogota")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +53,7 @@ async def query_plot_recommendation(
     plots: PlotRepository,
     recommendations: IrrigationRecommendationRepository,
     memberships: MembershipRepository,
-) -> IrrigationRecommendation:
+) -> StoredIrrigationRecommendation:
     """Retrieve the irrigation recommendation for a plot on a given day.
 
     Defaults `day` to local today in America/Bogota.
@@ -67,16 +65,22 @@ async def query_plot_recommendation(
     )
 
     if day is None:
-        if now is None:
-            now = datetime.now(UTC)
-        elif now.tzinfo is None:
-            now = now.replace(tzinfo=UTC)
-        day = now.astimezone(BOGOTA_TZ).date()
+        day = local_today(now if now is not None else datetime.now(UTC))
 
     rec = await recommendations.get_for_plot(plot_id=plot.id, day=day, org_id=plot.org_id)
     if rec is None:
         raise RecommendationNotFoundError(plot_id=plot.id, day=day)
-    return rec
+    # `plot.id` and `day` are the key the row was just read by, so they are the
+    # stored recommendation's own identity (docs/03:206-215).
+    return StoredIrrigationRecommendation(
+        plot_id=plot.id,
+        day=day,
+        kind=rec.kind,
+        depth_mm=rec.depth_mm,
+        duration_min=rec.duration_min,
+        advice=rec.advice,
+        rationale=rec.rationale,
+    )
 
 
 async def query_plot_water_balance(
@@ -103,11 +107,8 @@ async def query_plot_water_balance(
 
     if now is None:
         now = datetime.now(UTC)
-    elif now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
 
-    local_today = now.astimezone(BOGOTA_TZ).date()
-    local_yesterday = local_today - timedelta(days=1)
+    local_yesterday = local_today(now) - timedelta(days=1)
 
     effective_to = to_day if to_day is not None else local_yesterday
     effective_from = from_day if from_day is not None else (effective_to - timedelta(days=29))
@@ -121,10 +122,7 @@ async def query_plot_water_balance(
         plot_id=plot.id, org_id=plot.org_id, from_day=effective_from, to_day=effective_to
     )
 
-    is_rainfed = (
-        plot.irrigation_system == IrrigationSystem.NONE
-        or str(plot.irrigation_system).lower() == "none"
-    )
+    is_rainfed = plot.irrigation_system == IrrigationSystem.NONE
 
     return [
         PlotWaterBalanceDay(
