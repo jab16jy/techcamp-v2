@@ -1185,6 +1185,32 @@ async def test_sensor_assimilation_reading_at_0200_utc_day_d_belongs_to_local_d_
     assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
 
 
+async def test_sensor_assimilation_reading_at_0300_utc_day_d_minus_1_belongs_to_local_d_minus_2(
+    db_session: AsyncSession,
+) -> None:
+    """R3-local-day-start-boundary-untested: 03:00 UTC on day D-1 is 22:00 Bogota on day D-2,
+    so it is before the 05:00 UTC local-day start and excluded -> K=0."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 24, 3, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, 16.0, 0)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
 async def test_sensor_assimilation_out_of_range_reading_excluded_from_daily_mean(
     db_session: AsyncSession,
 ) -> None:
@@ -1219,6 +1245,32 @@ async def test_sensor_assimilation_sensor_with_no_valid_readings_or_nan_mean_yie
     _, plot_id = await _setup_plot_with_sensors(
         db_session,
         [SensorSpec(depth_cm=30, readings=[(t, 999.0, 2)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+async def test_sensor_assimilation_nan_reading_value_filtered_and_yields_k_zero(
+    db_session: AsyncSession,
+) -> None:
+    """R3-nan-filter-branch-untested: A reading with value=NaN is excluded by the NaN filter,
+    leaving no valid readings -> K=0, no TypeError or NaN propagation."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, float("nan"), 0)])],
         target_day=target_day,
         now=now,
     )
