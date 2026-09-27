@@ -215,13 +215,14 @@ work unit (`domain-modeling`).
   transitions and escalation eligibility (2 h critical, 48 h `water_stress`), threshold per rule
   code; docs/06 §3 — route: Herdr AGY — forecast ~350 — actual 788 (`18df6c0`) + review
   correction 39 by the parent (`dceaec1`)
-- [ ] T3 Alert lifecycle (AGY draft rejected 2026-09-26: ~2,150 lines vs ~450, SQL in
+- [x] T3 Alert lifecycle (AGY draft rejected 2026-09-26: ~2,150 lines vs ~450, SQL in
   `application`, flexible signatures, a `notifications → alerts` cycle; reworked by OpenCode from
   `.git-brief-e7-T3-rework.md`, ~650 forecast; architecture and size rules added to the common
   brief): repository (org-filtered), open/update/resolve use cases writing alert +
   notification rows in one transaction (D4–D6), `NOTIFY plot_events` `alert.opened` /
   `alert.updated`, SSE hub pass-through — route: Herdr OpenCode (rework; AGY draft rejected) —
-  forecast ~650
+  forecast ~650 — actual `1d62ba6` (872 prod / 759 tests) + corrections `75e3630`, `2a46a2b`,
+  `1355487` (parent, 89 lines incl. the handoff doc)
 - [ ] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
   `GET/POST/PATCH /alert-rules`, `POST/DELETE /push-subscriptions`; org isolation tests;
   docs/04 shapes — route: Herdr OpenCode — forecast ~450
@@ -303,8 +304,19 @@ work unit (`domain-modeling`).
   PostgreSQL" — the writer says false positive (SQLAlchemy `.distinct(user_id)` renders `DISTINCT ON
   (user_id)` with `ORDER BY user_id, created_at DESC`, valid; tests pass) and proposes option (b):
   pin the grouping winner with a dedicated test, no query change; CRITICAL R3-002 real:
-  `upgrade_to_critical` upgrades a RESOLVED warning (needs a state guard + test). Waiting for the
-  parent's decision (recommended: (b) + the R3-002 guard in one bounded correction).
+  `upgrade_to_critical` upgrades a RESOLVED warning (needs a state guard + test).
+  Parent verified R3-001 by compiling the statement with the postgresql dialect:
+  `SELECT DISTINCT ON (notification.user_id) … ORDER BY notification.user_id,
+  notification.created_at DESC` — valid (the DISTINCT ON key leads the ORDER BY); false positive.
+  Correction `1355487` by the parent (owner: "resolve T3 yourself"), TDD: RED `DID NOT RAISE
+  InvalidAlertTransitionError`; `Alert.upgrade_to_critical()` refuses a resolved alert, the use case
+  calls it; `test_the_pending_group_is_each_users_newest_push_row` pins the grouping winner (passes
+  on PostgreSQL, no query change). Gate: tests/alerts + notifications + test_sse_stream 78 passed;
+  ruff, format, mypy, lint-imports green. Plan captured (89 lines ≤ 200); the OpenCode-bound
+  targeted validator ran in a fresh OpenCode session `e7-t3-validate` (the `e7-t3-rework`
+  session was gone) → APPROVED and acknowledged (authority burned, target
+  `sha256:bf5bb780…`). The host transport does not surface the validator's follow-ups. Non-blocking
+  R3-003, R3-004 → #112. Boundary → `1355487`.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -329,6 +341,7 @@ work unit (`domain-modeling`).
 - 2026-09-26: the OpenCode T3 writer ran `git reset --hard` to drop the AGY draft and discarded the
   parent's uncommitted feature-doc edits (restored). Rule added: writers never run destructive git
   commands; the parent commits the feature doc before each writer runs.
-- Next step (handoff 2026-09-26): close T3's lineage `review-52ae082b2d0f892b`, file T3 issue
-  (R3-003, R3-004 + new WARNINGs), rebase onto `main` @ `b627b66` (re-chain `d4e6f8a0b2c1` onto
+- T3 closed 2026-09-26: lineage `review-52ae082b2d0f892b` acknowledged; issue #112 filed.
+- Next step (handoff 2026-09-26): ~~close T3's lineage `review-52ae082b2d0f892b`, file T3 issue
+  (R3-003, R3-004 + new WARNINGs)~~, rebase onto `main` @ `b627b66` (re-chain `d4e6f8a0b2c1` onto
   `d8a2f1c4e9b7`), quality unit for #95/#98, then T4. Handoff prompt: `.git-brief-e7-handoff.md`.
