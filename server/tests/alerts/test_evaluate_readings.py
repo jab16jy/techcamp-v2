@@ -120,11 +120,17 @@ async def _make_plot(
 
 
 async def _store_series(
-    db_session: AsyncSession, plot: Plot, *, end: datetime, values: list[float]
+    db_session: AsyncSession,
+    plot: Plot,
+    *,
+    end: datetime,
+    values: list[float],
+    qualities: dict[int, int] | None = None,
 ) -> datetime:
     """A backdated series of readings, one every `_STEP` up to `end` (D1: the
     evaluation is stateless over the stored readings, so the window is read back
-    from `reading`, not carried in memory)."""
+    from `reading`, not carried in memory). `qualities` overrides the `quality`
+    flag of the sample at that index (docs/03 `reading.quality`)."""
     start = end - _STEP * (len(values) - 1)
     records = [
         ReadingRecord(
@@ -133,7 +139,7 @@ async def _store_series(
             raw_value=value,
             value=value,
             received_at=start + _STEP * index,
-            quality=0,
+            quality=(qualities or {}).get(index, 0),
         )
         for index, value in enumerate(values)
     ]
@@ -302,6 +308,37 @@ async def test_another_orgs_rule_never_opens_for_this_plot(
     alerts = await _alerts(db_session, plot)
     assert [code for code, _, _ in alerts] == ["heat_stress"]
     assert all(state == AlertState.OPEN for _, state, _ in alerts)
+
+
+# -- a reading outside the physical range does not trigger alerts (docs/06 §1) --
+
+
+async def test_only_the_out_of_range_flag_is_kept_out_of_the_window(
+    db_session: AsyncSession,
+) -> None:
+    plot = await _make_plot(db_session, metric="air_temp")
+    # The run reaches the 180 min the rule asks for only because of the last
+    # sample, and that one is out of the physical range (`quality` flag 2,
+    # docs/06 §1 "no dispara alertas"), so nothing opens.
+    at = await _store_series(
+        db_session, plot, end=_START, values=[38.0] * 12 + [150.0], qualities={12: 2}
+    )
+
+    await _landed(db_session, plot, at=at, metric="air_temp")
+
+    assert await _alerts(db_session, plot) == []
+
+    # A `quality` flag 1 (a `ts` corrected by `received_at`) is valid evidence:
+    # the same 3 h run opens, so the flags are read bit by bit and not as a
+    # whole.
+    later = _START + timedelta(hours=6)
+    at = await _store_series(db_session, plot, end=later, values=[38.0] * 13, qualities={0: 1})
+
+    await _landed(db_session, plot, at=at, metric="air_temp")
+
+    assert [(code, state) for code, state, _ in await _alerts(db_session, plot)] == [
+        ("heat_stress", AlertState.OPEN)
+    ]
 
 
 # -- resolution: clear beyond the hysteresis band sustained 60 min (D2) --

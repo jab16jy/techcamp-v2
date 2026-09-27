@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Row, func, or_, select, text, update
+from sqlalchemy import ColumnElement, CursorResult, Row, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,7 @@ from techcamp.telemetry.domain.models import (
     NodeTransport,
     ReadingEvent,
     ReadingPoint,
+    ReadingQuality,
     ReadingRecord,
     Sensor,
 )
@@ -463,9 +464,17 @@ class SqlAlchemyReadingRepository:
         await self._session.commit()
         return {(row.sensor_id, row.time) for row in result}
 
-    async def query_raw(
-        self, sensor_id: int, *, start: datetime, end: datetime
+    async def _raw(
+        self,
+        sensor_id: int,
+        *,
+        start: datetime,
+        end: datetime,
+        extra: Sequence[ColumnElement[bool]] = (),
     ) -> list[ReadingPoint]:
+        """`reading` rows in `[start, end)` with a calibrated `value`, ordered by
+        time, narrowed by `extra` (the two public reads below differ only in the
+        quality flags they accept)."""
         result = await self._session.execute(
             select(ReadingRow.time, ReadingRow.value)
             .where(
@@ -473,10 +482,33 @@ class SqlAlchemyReadingRepository:
                 ReadingRow.time >= start,
                 ReadingRow.time < end,
                 ReadingRow.value.is_not(None),
+                *extra,
             )
             .order_by(ReadingRow.time)
         )
         return [ReadingPoint(time=row.time, value=row.value) for row in result]
+
+    async def query_raw(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        return await self._raw(sensor_id, start=start, end=end)
+
+    async def query_valid_raw(
+        self, sensor_id: int, *, start: datetime, end: datetime
+    ) -> list[ReadingPoint]:
+        """`query_raw` without the out-of-range readings (docs/06 §1: a value
+        outside the physical range "no dispara alertas").
+
+        Only bit 2 of `quality` is filtered: a `ts` corrected by `received_at`
+        (bit 1) is still evidence a sustained run may build on, so the flags are
+        read one by one as docs/06 §1 keeps them.
+        """
+        return await self._raw(
+            sensor_id,
+            start=start,
+            end=end,
+            extra=(ReadingRow.quality.bitwise_and(int(ReadingQuality.OUT_OF_RANGE)) == 0,),
+        )
 
     async def _query_aggregate(
         self, view: str, sensor_id: int, *, start: datetime, end: datetime

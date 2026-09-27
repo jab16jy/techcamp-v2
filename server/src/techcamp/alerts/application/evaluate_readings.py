@@ -183,7 +183,12 @@ async def _samples(
     end: datetime,
 ) -> list[tuple[datetime, float]]:
     """The `(time, value)` samples of `metric` over the window, one sequence for
-    the plot, ordered by time (`sustained_run` walks it backwards)."""
+    the plot, ordered by time (`sustained_run` walks it backwards).
+
+    `query_valid_raw` is the read that excludes the out-of-range readings
+    (docs/06 §1: they "no disparan alertas"), flag by flag and without touching
+    what the readings API returns.
+    """
     samples: list[tuple[datetime, float]] = []
     for node in plot_nodes:
         for sensor in await sensors.list_for_node(node.id, plot.org_id):
@@ -191,6 +196,6 @@ async def _samples(
                 continue
             samples.extend(
                 (point.time, point.value)
-                for point in await readings.query_raw(sensor.id, start=start, end=end)
+                for point in await readings.query_valid_raw(sensor.id, start=start, end=end)
             )
     return sorted(samples)
