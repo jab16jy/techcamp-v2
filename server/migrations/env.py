@@ -12,8 +12,14 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# `disable_existing_loggers=False` (default is True): fileConfig()'s default
+# silently disables every logger already created by the time it runs, including
+# every application module logger the test suite imported during collection
+# (Alembic upgrades run in an autouse session fixture, tests/conftest.py). Without
+# this, no application `logging.getLogger(__name__).warning(...)` call is ever
+# observable in any test, including via `caplog`.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Import every module's ORM mappings so they register on Base.metadata.
 from techcamp.farms.adapters import orm as farms_orm  # noqa: E402,F401

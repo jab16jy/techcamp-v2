@@ -2,15 +2,23 @@
 
 Tests against real Postgres with TDD:
 - Upsert and read back (balance and recommendation with advice/rationale JSONB)
-- Upsert overwriting the same day
+- Upsert overwriting the same day, including the value the overwrite itself returns
 - Range listing ordered by day
-- Org isolation (access across organizations returns nothing)
+- Org isolation (access across organizations returns nothing), for both repositories'
+  single-day `get_for_plot`
 - DB CHECK constraints (depth/duration rejected on non-irrigate kind)
-- Alembic migration upgrade / downgrade cycle
+
+The Alembic upgrade/downgrade cycle for this module's migration is not re-tested here:
+`tests/conftest.py`'s session-scoped `_migrated_schema` fixture already runs
+`command.upgrade(..., "head")` once before the whole suite and `command.downgrade(...,
+"base")` after, which exercises every migration's upgrade and downgrade, including this
+module's; every test in this file then depends on the resulting schema matching the ORM
+(column types, constraints) to pass at all.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -223,7 +231,14 @@ async def test_upsert_overwrites_same_day(db_session: AsyncSession) -> None:
         advice=(),
         rationale={"status": "irrigate"},
     )
-    await rec_repo.upsert(r2, plot_id=plot_id, day=day)
+    saved_r2 = await rec_repo.upsert(r2, plot_id=plot_id, day=day)
+
+    # R3-upsert-returning-stale: the overwriting upsert's own return value must be
+    # fresh, not the first upsert's row still cached in the session identity map.
+    assert saved_r2.kind == RecommendationKind.IRRIGATE
+    assert saved_r2.depth_mm == pytest.approx(15.0)
+    assert saved_r2.duration_min == 30
+    assert saved_r2.rationale == {"status": "irrigate"}
 
     updated_r = await rec_repo.get_for_plot(plot_id, day, org_id=org_id)
     assert updated_r is not None
@@ -289,10 +304,14 @@ async def test_org_isolation_for_balance_and_recommendation(db_session: AsyncSes
     # 1. Org 1 sees plot 1 data
     assert len(await balance_repo.list_for_plot(plot1_id, org1_id, day, day)) == 1
     assert await rec_repo.get_for_plot(plot1_id, day, org_id=org1_id) is not None
+    assert await balance_repo.get_for_plot(plot1_id, day, org_id=org1_id) is not None
 
     # 2. Org 2 querying plot 1 gets empty list and None (docs/09 org isolation)
     assert len(await balance_repo.list_for_plot(plot1_id, org2_id, day, day)) == 0
     assert await rec_repo.get_for_plot(plot1_id, day, org_id=org2_id) is None
+    # R3-balance-get-org-filter-untested: the single-day balance read's org_id
+    # filter path was never exercised cross-org before this test.
+    assert await balance_repo.get_for_plot(plot1_id, day, org_id=org2_id) is None
 
 
 async def test_check_constraints_reject_invalid_recommendation(db_session: AsyncSession) -> None:
@@ -347,3 +366,73 @@ async def test_check_constraints_reject_invalid_recommendation(db_session: Async
     with pytest.raises(IntegrityError):
         await db_session.commit()
     await db_session.rollback()
+
+
+async def test_get_for_plot_logs_and_drops_unknown_advice_code(
+    db_session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R3-advice-silent-drop: an advice code that is not a current RainfedAdvice
+    member (e.g. a legacy or corrupted value) is dropped but logged, not silently
+    lost. Written directly through the ORM row since the domain model only accepts
+    real RainfedAdvice members.
+    """
+    _org_id, plot_id = await _make_plot(db_session)
+    day = date(2026, 9, 25)
+    row = IrrigationRecommendationRow(
+        id=uuid7(),
+        plot_id=plot_id,
+        day=day,
+        kind="rainfed",
+        depth_mm=None,
+        duration_min=None,
+        advice=["rain_expected", "legacy_unknown_code"],
+        rationale={},
+    )
+    db_session.add(row)
+    await db_session.commit()
+
+    rec_repo = SqlAlchemyIrrigationRecommendationRepository(db_session)
+    with caplog.at_level(logging.WARNING):
+        rec = await rec_repo.get_for_plot(plot_id, day)
+
+    assert rec is not None
+    assert rec.advice == (RainfedAdvice.RAIN_EXPECTED,)
+    assert any("legacy_unknown_code" in message for message in caplog.messages)
+
+
+async def test_upsert_rejects_recommendation_plot_or_day_mismatch(
+    db_session: AsyncSession,
+) -> None:
+    """R3-upsert-ignores-model-plot-day: when `recommendation` carries its own
+    `plot_id`/`day` (e.g. re-saving one just read back), it must agree with the
+    keyword arguments; a mismatch is rejected instead of silently persisted under
+    the keyword identity.
+    """
+    _org_id, plot_id = await _make_plot(db_session)
+    other_plot_id = uuid7()
+    day = date(2026, 9, 25)
+    other_day = date(2026, 9, 26)
+    rec_repo = SqlAlchemyIrrigationRecommendationRepository(db_session)
+
+    mismatched_plot = IrrigationRecommendation(
+        kind=RecommendationKind.NOT_NEEDED,
+        depth_mm=None,
+        duration_min=None,
+        advice=(),
+        rationale={},
+        plot_id=other_plot_id,
+    )
+    with pytest.raises(ValueError, match="plot_id"):
+        await rec_repo.upsert(mismatched_plot, plot_id=plot_id, day=day)
+
+    mismatched_day = IrrigationRecommendation(
+        kind=RecommendationKind.NOT_NEEDED,
+        depth_mm=None,
+        duration_min=None,
+        advice=(),
+        rationale={},
+        plot_id=plot_id,
+        day=other_day,
+    )
+    with pytest.raises(ValueError, match="day"):
+        await rec_repo.upsert(mismatched_day, plot_id=plot_id, day=day)
