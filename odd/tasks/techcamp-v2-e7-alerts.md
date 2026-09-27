@@ -115,11 +115,11 @@ alerts).
   branch point `a899aa6`. Consent for new-feature candidates: standing grant. Blocking findings:
   bounded correction. Non-blocking: one issue per review round (`review-follow-up`, `epic:e7`,
   `area:*`, `type:*`), fixed later in the epic by the same session, commits `Refs #N`.
-- RDD ownership (owner 2026-09-26): the parent runs RDD for every slice a writer delivers (AGY has
-  none). Watch each writer with a poll that wakes on the first `blocked` and on an `idle`/`done`
+- RDD ownership (owner 2026-09-26, clarified the same day): the parent runs the gate and RDD for
+  every AGY slice (AGY has none); OpenCode runs its own tests and RDD and reports the outcome. Watch each writer with a poll that wakes on the first `blocked` and on an `idle`/`done`
   held ~45 s, confirmed by reading the pane; the moment a work-unit commit lands, assess it and
   follow `next_transition` verbatim when `review_due`; record the outcome under Review (RDD).
-- Parent gate before RDD (owner 2026-09-26): for every writer slice the parent runs, in the
+- Parent gate before RDD (owner 2026-09-26; AGY slices only): for every AGY slice the parent runs, in the
   worktree, the slice's targeted tests (`uv run pytest tests/alerts tests/notifications` or the
   touched modules), `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`,
   `uv run lint-imports`, and compares the slice's domain diff against the owning docs (docs/06
@@ -201,7 +201,10 @@ work unit (`domain-modeling`).
   transitions and escalation eligibility (2 h critical, 48 h `water_stress`), threshold per rule
   code; docs/06 §3 — route: Herdr AGY — forecast ~350 — actual 788 (`18df6c0`) + review
   correction 39 by the parent (`dceaec1`)
-- [ ] T3 Alert lifecycle: repository (org-filtered), open/update/resolve use cases writing alert +
+- [ ] T3 Alert lifecycle (AGY draft rejected 2026-09-26: ~2,150 lines vs ~450, SQL in
+  `application`, flexible signatures, a `notifications → alerts` cycle; reworked by OpenCode from
+  `.git-brief-e7-T3-rework.md`, ~650 forecast; architecture and size rules added to the common
+  brief): repository (org-filtered), open/update/resolve use cases writing alert +
   notification rows in one transaction (D4–D6), `NOTIFY plot_events` `alert.opened` /
   `alert.updated`, SSE hub pass-through — route: Herdr AGY — forecast ~450
 - [ ] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
@@ -289,4 +292,7 @@ work unit (`domain-modeling`).
   (sustained run, hysteresis, 60 min resolution, 48 h upgrade, manual resolve only from
   acknowledged, 2 h escalation) and D1/D2/D12 bullets added to docs/06 §3.
 - T2 correction `dceaec1` (parent): tests/alerts 15 passed; ruff, format, mypy, lint-imports green.
-- Next step: resume T3 (AGY session `e7-t3`, paused during the T2 correction).
+- 2026-09-26: the OpenCode T3 writer ran `git reset --hard` to drop the AGY draft and discarded the
+  parent's uncommitted feature-doc edits (restored). Rule added: writers never run destructive git
+  commands; the parent commits the feature doc before each writer runs.
+- Next step: T3 rework (OpenCode `e7-t3-rework`, own RDD from `924407a`).
