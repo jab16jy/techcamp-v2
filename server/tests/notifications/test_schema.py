@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,25 +116,29 @@ async def test_push_subscription_endpoint_is_unique(db_session: AsyncSession) ->
     await db_session.rollback()
 
 
-async def test_notification_creation_and_defaults(db_session: AsyncSession) -> None:
-    """Notification row creates with default pending status and attempts=0."""
+async def test_notification_defaults_come_from_the_database(db_session: AsyncSession) -> None:
+    """A Core insert that omits `status`, `attempts`, `next_attempt_at` and
+    `created_at` gets the server defaults docs/03 gives the row: `'pending'`, `0`
+    and `now()`. The ORM only fills `status` and `attempts` in Python, so the
+    database is what has to carry all four.
+    """
     _org_id, user_id, alert_id = await _create_test_context(db_session)
 
-    notif = NotificationRow(
-        id=uuid7(),
-        alert_id=alert_id,
-        user_id=user_id,
-        channel="push",
-        next_attempt_at=datetime.now(UTC),
-        created_at=datetime.now(UTC),
+    before = datetime.now(UTC)
+    await db_session.execute(
+        insert(NotificationRow.__table__).values(
+            id=uuid7(), alert_id=alert_id, user_id=user_id, channel="push"
+        )
     )
-    db_session.add(notif)
     await db_session.commit()
+    after = datetime.now(UTC)
 
-    result = await db_session.execute(select(NotificationRow).where(NotificationRow.id == notif.id))
+    result = await db_session.execute(select(NotificationRow))
     saved = result.scalar_one()
     assert saved.status == "pending"
     assert saved.attempts == 0
+    assert before <= saved.created_at <= after
+    assert before <= saved.next_attempt_at <= after
     assert saved.sent_at is None
     assert saved.last_error is None
 

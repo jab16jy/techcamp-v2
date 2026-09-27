@@ -7,7 +7,6 @@ import uuid
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from techcamp.alerts.adapters.orm import AlertRuleRow
@@ -128,14 +127,12 @@ FACTORY_RULES: tuple[dict[str, Any], ...] = (
 
 
 async def seed_factory_rules(conn: AsyncConnection) -> None:
-    """Insert factory alert rules, ignoring conflicts if already present."""
+    """Insert factory rules, ignoring conflicts if already present.
+
+    The rows are the same ones the `d4e6f8a0b2c1` revision inserted as its own
+    frozen copy; the test teardown needs this one because a `TRUNCATE
+    organization ... CASCADE` wipes the whole table.
+    """
     stmt = insert(AlertRuleRow).values([dict(r) for r in FACTORY_RULES])
     stmt = stmt.on_conflict_do_nothing(index_elements=[AlertRuleRow.id])
     await conn.execute(stmt)
-
-
-def seed_factory_rules_sync(conn: Connection) -> None:
-    """Synchronous version for Alembic migration."""
-    stmt = insert(AlertRuleRow).values([dict(r) for r in FACTORY_RULES])
-    stmt = stmt.on_conflict_do_nothing(index_elements=[AlertRuleRow.id])
-    conn.execute(stmt)

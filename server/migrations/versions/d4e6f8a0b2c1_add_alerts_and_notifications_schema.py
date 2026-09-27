@@ -6,19 +6,136 @@ Create Date: 2026-09-26 18:00:00.000000
 
 """
 
-from typing import Sequence, Union
+import decimal
+import uuid
+from typing import Any, Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-
-from techcamp.alerts.adapters.seed import FACTORY_RULES
 
 # revision identifiers, used by Alembic.
 revision: str = "d4e6f8a0b2c1"
 down_revision: Union[str, Sequence[str], None] = "d8a2f1c4e9b7"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+# The factory rules (docs/06 §3, "Reglas de fábrica"; `org_id = null`) this revision
+# inserts, as a literal copy: a revision is frozen once merged, so it may not import
+# application code that can change underneath it. The runtime seed
+# (`techcamp.alerts.adapters.seed.FACTORY_RULES`) is the same rows and is what the
+# test teardown re-inserts after a TRUNCATE; `tests/alerts/test_schema.py` asserts
+# the two copies are equal, so neither can drift from the other unnoticed.
+_FACTORY_RULES: list[dict[str, Any]] = [
+    {
+        "id": uuid.UUID("4f2226d8-acb4-5d24-8d36-253fac57343b"),
+        "org_id": None,
+        "code": "water_stress",
+        "metric": "soil_moisture",
+        "operator": "<",
+        "threshold": None,
+        "hysteresis": decimal.Decimal("3"),
+        "min_duration_min": 360,
+        "severity": "warning",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("a3bbaa6b-dd43-553e-8d11-f84edf2b2026"),
+        "org_id": None,
+        "code": "waterlogging",
+        "metric": "soil_moisture",
+        "operator": ">",
+        "threshold": None,
+        "hysteresis": decimal.Decimal("3"),
+        "min_duration_min": 1440,
+        "severity": "warning",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("8c9ddfd9-5fe8-59f7-99d7-f3ad529ba35b"),
+        "org_id": None,
+        "code": "heat_stress",
+        "metric": "air_temp",
+        "operator": ">",
+        "threshold": decimal.Decimal("35"),
+        "hysteresis": decimal.Decimal("1"),
+        "min_duration_min": 180,
+        "severity": "warning",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("34b5d343-ed0d-5723-9664-ca0d572fa0c4"),
+        "org_id": None,
+        "code": "fungal_risk",
+        "metric": "air_rh",
+        "operator": ">",
+        "threshold": decimal.Decimal("85"),
+        "hysteresis": decimal.Decimal("5"),
+        "min_duration_min": 600,
+        "severity": "warning",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("eff73793-79fe-53f2-9b25-b0d5de17dd21"),
+        "org_id": None,
+        "code": "heavy_rain_forecast",
+        "metric": "rain",
+        "operator": ">",
+        "threshold": decimal.Decimal("50"),
+        "hysteresis": decimal.Decimal("0"),
+        "min_duration_min": 0,
+        "severity": "warning",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("94d8a3ad-7894-50a8-bbaa-f92c437990cf"),
+        "org_id": None,
+        "code": "flood_risk",
+        "metric": None,
+        "operator": None,
+        "threshold": None,
+        "hysteresis": decimal.Decimal("0"),
+        "min_duration_min": 0,
+        "severity": "critical",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("97e539c6-8702-55db-9cfb-35498fce2e5b"),
+        "org_id": None,
+        "code": "drought_risk",
+        "metric": None,
+        "operator": None,
+        "threshold": None,
+        "hysteresis": decimal.Decimal("0"),
+        "min_duration_min": 0,
+        "severity": "critical",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("6637e30a-fce1-52d6-b357-204fd3ef2d27"),
+        "org_id": None,
+        "code": "node_offline",
+        "metric": None,
+        "operator": None,
+        "threshold": None,
+        "hysteresis": decimal.Decimal("0"),
+        "min_duration_min": 0,
+        "severity": "warning",
+        "crop_id": None,
+    },
+    {
+        "id": uuid.UUID("aeb954c6-f6ed-51a3-9753-70410726c20a"),
+        "org_id": None,
+        "code": "node_battery_low",
+        "metric": "battery_v",
+        "operator": "<",
+        "threshold": decimal.Decimal("3.4"),
+        "hysteresis": decimal.Decimal("0.1"),
+        "min_duration_min": 0,
+        "severity": "info",
+        "crop_id": None,
+    },
+]
 
 
 def upgrade() -> None:
@@ -70,7 +187,7 @@ def upgrade() -> None:
         sa.column("severity", sa.String),
         sa.column("crop_id", sa.Integer),
     )
-    op.bulk_insert(alert_rule_table, [dict(r) for r in FACTORY_RULES])
+    op.bulk_insert(alert_rule_table, _FACTORY_RULES)
 
     op.create_table(
         "alert",
