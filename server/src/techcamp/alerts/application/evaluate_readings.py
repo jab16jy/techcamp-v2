@@ -81,14 +81,20 @@ async def evaluate_landed_readings(
 ) -> None:
     """Decide every reading-threshold rule of the plots the batch just landed.
 
-    `events` are the readings that actually landed (D16: the hook runs after the
-    batch commit and is not called when nothing landed), so `at` is the batch's
-    latest reading time and only those plots are re-evaluated.
+    `events` are the readings this batch processed (D16: the hook runs after the
+    batch commit, and it runs again for a batch a failed flush re-queued), so
+    each plot is decided at **its own** newest reading of the batch: a batch
+    mixes plots whose readings arrive at different times, and judging one of them
+    at another's timestamp would drop its series as stale (`sustained_run`) and
+    leave it unevaluated until the next batch.
     """
-    at = max(event.at for event in events)
     org_by_plot: dict[UUID, UUID] = {}
+    at_by_plot: dict[UUID, datetime] = {}
     for event in events:
         org_by_plot.setdefault(event.plot_id, event.org_id)
+        current = at_by_plot.get(event.plot_id)
+        if current is None or event.at > current:
+            at_by_plot[event.plot_id] = event.at
 
     for plot_id, org_id in org_by_plot.items():
         plot = await plots.get_for_orgs(plot_id, [org_id])
@@ -96,7 +102,7 @@ async def evaluate_landed_readings(
             continue
         await _evaluate_plot(
             plot,
-            at=at,
+            at=at_by_plot[plot_id],
             rules=rules,
             readings=readings,
             sensors=sensors,

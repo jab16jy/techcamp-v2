@@ -152,10 +152,10 @@ async def test_ingest_uplinks_is_idempotent_across_two_flushes(db_session: Async
     assert len(reading_notifications) == 1
 
 
-# -- D9: the after-flush hook sees exactly the readings that landed --
+# -- D9: the after-flush hook sees the readings of the batch it just processed --
 
 
-async def test_ingest_uplinks_awaits_the_after_flush_hook_with_the_readings_that_landed(
+async def test_ingest_uplinks_awaits_the_after_flush_hook_with_the_batchs_readings(
     db_session: AsyncSession,
 ) -> None:
     org_id, plot_id, node_id, sensor_id = await _claimed_node_with_sensor(db_session)
@@ -170,15 +170,18 @@ async def test_ingest_uplinks_awaits_the_after_flush_hook_with_the_readings_that
 
     message = RawUplink(node_id=node_id, payload=_uplink_payload(), received_at=_RECEIVED_AT)
     first = await ingest_uplinks([message], **ports, after_flush=_after_flush)
-    # A QoS-1 redelivery: `ON CONFLICT DO NOTHING` inserted nothing, so there
-    # is no new reading to evaluate and the hook must not run at all.
+    # A QoS-1 redelivery inserts nothing, so the SSE fan-out publishes nothing
+    # (`test_ingest_uplinks_is_idempotent_across_two_flushes` proves that), but
+    # the batch's reading still reaches the hook: a batch re-queued by a failed
+    # flush re-evaluates at once instead of waiting for the next batch (D16),
+    # and deciding the same window twice is idempotent.
     second = await ingest_uplinks([message], **ports, after_flush=_after_flush)
 
     assert first.inserted == 1
     assert second.inserted == 0
-    assert len(seen) == 1
-    events = seen[0]
-    assert [(e.org_id, e.plot_id, e.metric, e.value) for e in events] == [
+    assert len(seen) == 2
+    assert seen[0] == seen[1]
+    assert [(e.org_id, e.plot_id, e.metric, e.value) for e in seen[0]] == [
         (org_id, plot_id, "soil_moisture", pytest.approx(46.2))
     ]
 

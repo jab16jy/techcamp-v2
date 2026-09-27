@@ -9,8 +9,8 @@ unknown or unclaimed node is discarded and counted, never raised.
 
 D9: `telemetry` never imports `alerts`. The composition root
 (`techcamp/ingestor.py`) injects the reading-rule evaluator through the
-`after_flush` hook below, which is awaited with the readings that landed once
-the batch is committed (D16).
+`after_flush` hook below, which is awaited with the readings this batch
+processed, once the batch is committed (D16).
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ class RawStatusMessage:
 
 
 type AfterFlush = Callable[[Sequence[ReadingEvent]], Awaitable[None]]
-"""D9: the reading-rule hook, awaited with the readings that landed.
+"""D9: the reading-rule hook, awaited with the readings of the batch.
 
 Typed here so nothing in `telemetry` names an `alerts` symbol; the caller that
 composes it is the ingestor entrypoint (docs/05: a module only imports another
@@ -150,10 +150,13 @@ async def ingest_uplinks(
     """One ingest flush (docs/06-diseno-detallado.md §1). `messages` is
     whatever `adapters/ingestor.py`'s batcher accumulated (500 msgs or 1s).
 
-    `after_flush` (D9) is awaited with `new_events` after the batch and the node
-    updates are committed, in its own transaction (D16): a batch that lands
-    without its alert is re-evaluated by the next batch, because the evaluation
-    is stateless over the stored readings (D1).
+    `after_flush` (D9) is awaited after the batch and the node updates are
+    committed, in its own transaction (D16). It is awaited with the readings
+    this batch processed, not only the ones `insert_batch` returned: a flush
+    that fails in the hook is re-queued and re-decided at once instead of
+    waiting for the node's next batch, and deciding the same window twice is
+    idempotent (`open_alert` returns the alert already open, and a resolved one
+    is no `current_alert`).
     """
     stats = IngestStats()
     records: list[ReadingRecord] = []
@@ -273,14 +276,16 @@ async def ingest_uplinks(
     stats.inserted = len(inserted)
     # `ON CONFLICT DO NOTHING` skips a redelivered reading, and a QoS-1
     # duplicate must not send a second `reading` event to the SSE fan-out
-    # (GitHub #36): only rows that actually landed are published.
+    # (GitHub #36): only rows that actually landed are published. The hook gets
+    # the batch's own readings instead, so a re-queued batch re-evaluates.
     new_events = [event for key, event in reading_events if key in inserted]
+    batch_events = [event for _, event in reading_events]
 
     await _flush_node_updates(
         seen, new_events, nodes=nodes, plots=plots, events=events, farm_cache=farm_cache
     )
-    if after_flush is not None and new_events:
-        await after_flush(new_events)
+    if after_flush is not None and batch_events:
+        await after_flush(batch_events)
     return stats
 
 

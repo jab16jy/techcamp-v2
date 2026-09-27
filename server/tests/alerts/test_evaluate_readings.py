@@ -148,21 +148,21 @@ async def _store_series(
 
 
 async def _landed(db_session: AsyncSession, plot: Plot, *, at: datetime, metric: str) -> AfterFlush:
-    """The hook the ingestor awaits with the readings that landed (D9)."""
+    """The hook the ingestor awaits with the readings of the batch (D9)."""
     evaluator = build_evaluator(db_session)
-    await evaluator(
-        [
-            ReadingEvent(
-                org_id=plot.org_id,
-                farm_id=plot.farm_id,
-                plot_id=plot.plot_id,
-                metric=metric,
-                value=0.0,
-                at=at,
-            )
-        ]
-    )
+    await evaluator([_event(plot, at=at, metric=metric)])
     return evaluator
+
+
+def _event(plot: Plot, *, at: datetime, metric: str) -> ReadingEvent:
+    return ReadingEvent(
+        org_id=plot.org_id,
+        farm_id=plot.farm_id,
+        plot_id=plot.plot_id,
+        metric=metric,
+        value=0.0,
+        at=at,
+    )
 
 
 async def _alerts(db_session: AsyncSession, plot: Plot) -> list[tuple[str, str, datetime | None]]:
@@ -326,6 +326,38 @@ async def test_the_rules_of_the_other_docs_sources_never_open_from_the_ingestor(
         await _landed(db_session, plot, at=at, metric=metric)
 
         assert await _alerts(db_session, plot) == []
+
+
+# -- one batch, two plots: each is decided at its own newest reading (R3) --
+
+
+async def test_a_batch_decides_each_plot_at_its_own_newest_reading(
+    db_session: AsyncSession,
+) -> None:
+    fresh = await _make_plot(db_session, metric="air_temp")
+    stale = await _make_plot(db_session, metric="air_temp")
+    fresh_at = await _store_series(db_session, fresh, end=_START, values=[38.0] * 13)
+    # The other plot's readings are 3 h older: judged at the batch's newest
+    # reading, its series is stale (`sustained_run` drops it) and it would wait
+    # for the next batch instead of opening now.
+    stale_at = await _store_series(
+        db_session, stale, end=_START - timedelta(hours=3), values=[38.0] * 13
+    )
+
+    evaluator = build_evaluator(db_session)
+    await evaluator(
+        [
+            _event(fresh, at=fresh_at, metric="air_temp"),
+            _event(stale, at=stale_at, metric="air_temp"),
+        ]
+    )
+
+    assert [(code, state) for code, state, _ in await _alerts(db_session, fresh)] == [
+        ("heat_stress", AlertState.OPEN)
+    ]
+    assert [(code, state) for code, state, _ in await _alerts(db_session, stale)] == [
+        ("heat_stress", AlertState.OPEN)
+    ]
 
 
 # -- a reading outside the physical range does not trigger alerts (docs/06 §1) --
