@@ -229,6 +229,12 @@ work unit (`domain-modeling`).
   `alert.updated`, SSE hub pass-through — route: Herdr OpenCode (rework; AGY draft rejected) —
   forecast ~650 — actual `1d62ba6` (872 prod / 759 tests) + corrections `75e3630`, `2a46a2b`,
   `1355487` (parent, 89 lines incl. the handoff doc)
+- [ ] Q1 Quality unit for #95 (T1: frozen seed copy in the migration, CHECK/partial-index
+  rejection tests, DB defaults, deterministic survival test, drop `seed_factory_rules_sync`) and
+  #98 (T2: 48 h upgrade only while the violation run is active, resolved `current_alert` as none,
+  `max_gap` = 3 × `interval_s` gap/freshness rule in `sustained_run` written to docs/06 §3, remove
+  coercions/alias/`Decimal | float`) — brief `.git-brief-e7-Q1.md` — route: Herdr OpenCode
+  `e7-q1` — forecast ~250
 - [ ] T4 Alerts API: `GET /alerts` (cursor page), `:acknowledge`, `:resolve {note?}`,
   `GET/POST/PATCH /alert-rules`, `POST/DELETE /push-subscriptions`; org isolation tests;
   docs/04 shapes — route: Herdr OpenCode — forecast ~450
