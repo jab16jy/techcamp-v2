@@ -83,11 +83,20 @@ async def upgrade_to_critical(
     *, alert_id: UUID, org_id: UUID, at: datetime, alerts: AlertRepository
 ) -> Alert:
     """D5: `water_stress` at 48 h and a saturated-soil forecast become critical
-    and notify again as critical."""
+    and notify again as critical.
+
+    An alert that is already critical is returned untouched: the upgrade happens
+    once, so a re-evaluated or repeated call must not send a second critical
+    notice.
+    """
     alert = await _load(alert_id, org_id, alerts)
+    if alert.severity is Severity.CRITICAL:
+        return alert
     upgraded = replace(alert, severity=Severity.CRITICAL)
     target = await alerts.get_target_context(plot_id=alert.plot_id, node_id=alert.node_id)
-    return await alerts.save(upgraded, _drafts(upgraded, target, at), target.farm_id)
+    return await alerts.save(
+        upgraded, _drafts(upgraded, target, at), target.farm_id, expected_state=alert.state
+    )
 
 
 async def resolve_automatically(
@@ -95,7 +104,9 @@ async def resolve_automatically(
 ) -> Alert:
     """The condition cleared beyond the hysteresis band, sustained (docs/06 §3)."""
     alert = await _load(alert_id, org_id, alerts)
-    return await alerts.save(alert.resolve_automatically(at), [], farm_id)
+    return await alerts.save(
+        alert.resolve_automatically(at), [], farm_id, expected_state=alert.state
+    )
 
 
 async def acknowledge(
@@ -108,7 +119,7 @@ async def acknowledge(
     memberships: MembershipRepository,
 ) -> Alert:
     alert = await _managed_alert(user_id, alert_id, alerts, memberships)
-    return await alerts.save(alert.acknowledge(at), [], farm_id)
+    return await alerts.save(alert.acknowledge(at), [], farm_id, expected_state=alert.state)
 
 
 async def resolve_manually(
@@ -123,7 +134,9 @@ async def resolve_manually(
 ) -> Alert:
     """Close an acknowledged alert, storing the note (D3, D12)."""
     alert = await _managed_alert(user_id, alert_id, alerts, memberships)
-    return await alerts.save(alert.resolve_manually(at, note), [], farm_id)
+    return await alerts.save(
+        alert.resolve_manually(at, note), [], farm_id, expected_state=alert.state
+    )
 
 
 async def list_alerts(

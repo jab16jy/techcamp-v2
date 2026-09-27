@@ -13,17 +13,22 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Row, func, select, text, update
+from sqlalchemy import CursorResult, Row, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.alerts.application.ports import AlertTarget
-from techcamp.alerts.domain.models import Alert, AlertState, Severity
+from techcamp.alerts.domain.models import (
+    Alert,
+    AlertState,
+    InvalidAlertTransitionError,
+    Severity,
+)
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import MembershipRow
 from techcamp.identity.domain.models import Role
@@ -209,12 +214,30 @@ class SqlAlchemyAlertRepository:
         await self._write(alert, drafts, "alert.opened", target.farm_id)
         return alert
 
-    async def save(self, alert: Alert, drafts: Sequence[NotificationDraft], farm_id: UUID) -> Alert:
+    async def save(
+        self,
+        alert: Alert,
+        drafts: Sequence[NotificationDraft],
+        farm_id: UUID,
+        *,
+        expected_state: AlertState,
+    ) -> Alert:
         """The transitioned alert, any new outbox rows and `alert.updated` in one
-        transaction."""
-        await self._session.execute(
+        transaction.
+
+        `expected_state` is the state the caller validated its transition
+        against, and the update only lands on that state: a transition computed
+        on a snapshot another writer has already moved on is refused instead of
+        overwriting the newer row.
+        """
+        await self._assert_alert_farm(alert, farm_id)
+        result = await self._session.execute(
             update(AlertRow)
-            .where(AlertRow.id == alert.id, AlertRow.org_id == alert.org_id)
+            .where(
+                AlertRow.id == alert.id,
+                AlertRow.org_id == alert.org_id,
+                AlertRow.state == expected_state.value,
+            )
             .values(
                 state=alert.state.value,
                 severity=alert.severity.value,
@@ -225,8 +248,30 @@ class SqlAlchemyAlertRepository:
                 outcome=alert.outcome,
             )
         )
+        if cast(CursorResult[Any], result).rowcount == 0:
+            raise InvalidAlertTransitionError(
+                f"Alert {alert.id} is no longer {expected_state}, so the transition is stale"
+            )
         await self._write(alert, drafts, "alert.updated", farm_id)
         return alert
+
+    async def _assert_alert_farm(self, alert: Alert, farm_id: UUID) -> None:
+        """The `farm_id` a caller states must be the alert's own farm.
+
+        `plot_events` is one stream per farm and the alert's ids ride it
+        (ADR-0015), so publishing to another farm's stream would hand one
+        organization's alert to another's subscribers.
+        """
+        if alert.plot_id is not None:
+            stmt = select(PlotRow.farm_id).where(PlotRow.id == alert.plot_id)
+        else:
+            stmt = (
+                select(PlotRow.farm_id)
+                .join(NodeRow, NodeRow.plot_id == PlotRow.id)
+                .where(NodeRow.id == alert.node_id)
+            )
+        if (await self._session.execute(stmt)).scalar_one() != farm_id:
+            raise ValueError(f"Farm {farm_id} does not carry alert {alert.id}")
 
     async def _write(
         self, alert: Alert, drafts: Sequence[NotificationDraft], kind: str, farm_id: UUID

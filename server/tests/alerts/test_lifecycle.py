@@ -595,3 +595,59 @@ async def test_list_alerts_filters_and_pages_by_cursor(
         user_id=org.owner, limit=2, cursor=page[-1].id, alerts=alerts, memberships=memberships
     )
     assert [alert.id for alert in rest] == [min({water.id, heat.id, node.id})]
+
+
+async def test_a_stale_transition_does_not_overwrite_a_newer_row(
+    db_session: AsyncSession, alerts: SqlAlchemyAlertRepository
+) -> None:
+    """A transition computed on an old snapshot must not win (R3-001)."""
+    org = await _make_org(db_session)
+    alert = await _open_plot_alert(db_session, alerts, org, "water_stress", _MORNING)
+    stale = alert.acknowledge(_MORNING + timedelta(minutes=1))
+    await resolve_automatically(
+        alert_id=alert.id,
+        org_id=org.org_id,
+        farm_id=org.farm_id,
+        at=_MORNING + timedelta(minutes=2),
+        alerts=alerts,
+    )
+
+    with pytest.raises(InvalidAlertTransitionError):
+        await alerts.save(stale, [], org.farm_id, expected_state=AlertState.OPEN)
+
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert row.state == "resolved"
+
+
+async def test_an_alert_is_not_published_to_another_orgs_farm(
+    db_session: AsyncSession, alerts: SqlAlchemyAlertRepository
+) -> None:
+    """The SSE stream is per farm and carries the alert's ids (R3-002)."""
+    org = await _make_org(db_session)
+    other = await _make_org(db_session)
+    alert = await _open_plot_alert(db_session, alerts, org, "water_stress", _MORNING)
+
+    with pytest.raises(ValueError, match="does not carry"):
+        await alerts.save(
+            alert.acknowledge(_MORNING), [], other.farm_id, expected_state=AlertState.OPEN
+        )
+
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert row.state == "open"
+
+
+async def test_upgrading_an_already_critical_alert_adds_no_rows(
+    db_session: AsyncSession, alerts: SqlAlchemyAlertRepository
+) -> None:
+    """The 48 h upgrade notifies once, not once per evaluation (R3-001)."""
+    org = await _make_org(db_session)
+    later = _MORNING + timedelta(hours=48)
+    alert = await _open_plot_alert(db_session, alerts, org, "water_stress", _MORNING)
+    upgraded = await upgrade_to_critical(
+        alert_id=alert.id, org_id=org.org_id, at=later, alerts=alerts
+    )
+
+    again = await upgrade_to_critical(alert_id=alert.id, org_id=org.org_id, at=later, alerts=alerts)
+
+    assert (again.id, again.severity) == (upgraded.id, Severity.CRITICAL)
+    assert len(await _rows(db_session, alert.id)) == 4

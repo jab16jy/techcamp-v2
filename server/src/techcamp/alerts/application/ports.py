@@ -78,8 +78,20 @@ class AlertRepository(Protocol):
         is there."""
         ...
 
-    async def save(self, alert: Alert, drafts: Sequence[NotificationDraft], farm_id: UUID) -> Alert:
+    async def save(
+        self,
+        alert: Alert,
+        drafts: Sequence[NotificationDraft],
+        farm_id: UUID,
+        *,
+        expected_state: AlertState,
+    ) -> Alert:
         """Persist the transitioned alert with any new outbox rows in one
         transaction, publishing `alert.updated` to the farm the SSE stream of
-        the caller is subscribed to."""
+        the caller is subscribed to.
+
+        `expected_state` is the state the caller validated against, and
+        `farm_id` must be the alert's own farm; a transition that no longer
+        holds, or a farm that does not carry the alert, is refused.
+        """
         ...
