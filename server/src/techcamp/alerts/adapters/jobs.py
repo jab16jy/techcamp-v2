@@ -205,8 +205,11 @@ async def sweep_fungal_risk(timestamp: int) -> None:
 )
 async def evaluate_org_node_health(org_id: str) -> None:
     """Decides `node_offline` for one organization's nodes, all of them at the
-    same `at`: the sweep's own decision time (ADR-0012, jobs are idempotent, so
-    a retry of the same job decides the same thing)."""
+    same `at`: this job's own run time, read with `datetime.now(UTC)` when the
+    job starts (ADR-0012). A retry of the same job therefore decides at a LATER
+    `at` than the attempt that failed — which is the point of the margin rather
+    than a defect: the silence is a duration, so re-reading the clock can only
+    make an alert fire later, never undo one."""
     async with async_session_factory() as session:
         await evaluate_node_health(
             org_id=UUID(org_id),

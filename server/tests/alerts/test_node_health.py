@@ -218,9 +218,28 @@ def test_the_node_health_decision_opens_only_past_three_intervals_of_silence() -
     on_margin = decide_node_health(last_seen_at=_AT - _MARGIN, at=_AT, interval_s=_INTERVAL_S)
     assert on_margin.action is AlertAction.NO_ACTION
 
-    # A node that never reported is the absence of evidence in its purest form.
-    never = decide_node_health(last_seen_at=None, at=_AT, interval_s=_INTERVAL_S)
-    assert never.action is AlertAction.OPEN
+    # A node that never reported is the absence of evidence in its purest form,
+    # but the silence is measured from when it was CLAIMED, so a technician who
+    # has not finished installing it yet is not paged (docs/06 §3).
+    claimed_now = decide_node_health(
+        last_seen_at=None, claimed_at=_AT - timedelta(minutes=2), at=_AT, interval_s=_INTERVAL_S
+    )
+    assert claimed_now.action is AlertAction.NO_ACTION
+
+    claimed_long_ago = decide_node_health(
+        last_seen_at=None,
+        claimed_at=_AT - _MARGIN - timedelta(seconds=1),
+        at=_AT,
+        interval_s=_INTERVAL_S,
+    )
+    assert claimed_long_ago.action is AlertAction.OPEN
+
+    # Neither a reading nor a claim: there is no clock to measure silence from,
+    # so there is nothing to judge.
+    unclaimed = decide_node_health(
+        last_seen_at=None, claimed_at=None, at=_AT, interval_s=_INTERVAL_S
+    )
+    assert unclaimed.action is AlertAction.NO_ACTION
 
 
 def test_the_node_health_decision_resolves_only_after_the_sixty_minute_clear_run() -> None:

@@ -385,6 +385,7 @@ def decide_node_health(
     last_seen_at: datetime | None,
     at: datetime,
     interval_s: int,
+    claimed_at: datetime | None = None,
     current_alert: Alert | None = None,
     heard_run: timedelta | None = None,
 ) -> AlertDecision:
@@ -404,6 +405,13 @@ def decide_node_health(
     `heard_run` is how long the node has been heard from (see `heard_from_run`),
     read from the node's own readings; it is only needed to resolve, and only
     for a node that already has an open alert.
+
+    The silence is measured from `last_seen_at`, or from `claimed_at` when the
+    node has never reported: a node is claimed when the technician links it,
+    and it cannot have gone silent before it starts talking, so measuring from
+    the claim is what keeps a node that is still being installed from paging
+    someone minutes after it is linked. A node with neither has no clock to
+    measure silence from, so it is not judged.
     """
     # A resolved alert no longer holds its (rule, target): it is decided as no
     # alert, so the silence is evaluated from scratch (same as `decide_alert`).
@@ -411,7 +419,10 @@ def decide_node_health(
         current_alert = None
 
     if current_alert is None:
-        silent = last_seen_at is None or at - last_seen_at > node_silence_window(interval_s)
+        reference = last_seen_at if last_seen_at is not None else claimed_at
+        if reference is None:
+            return AlertDecision(action=AlertAction.NO_ACTION, alert=None)
+        silent = at - reference > node_silence_window(interval_s)
         return AlertDecision(
             action=AlertAction.OPEN if silent else AlertAction.NO_ACTION, alert=None
         )

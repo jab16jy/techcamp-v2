@@ -13,6 +13,7 @@ falls back to the org owners when the farm has none.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -28,6 +29,8 @@ from techcamp.alerts.domain import (
     node_silence_window,
 )
 from techcamp.telemetry.application.ports import NodeRepository, ReadingRepository, SensorRepository
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from techcamp.telemetry.domain.models import Node
@@ -65,7 +68,17 @@ async def evaluate_node_health(
         # a broken deployment and this sweep has nothing to decide. Same as the
         # reading-threshold evaluator, which decides nothing without rules.
         return
-    for node in await nodes.list_for_org(org_id, limit=_MAX_NODES_PER_ORG):
+    page = await nodes.list_for_org(org_id, limit=_MAX_NODES_PER_ORG)
+    if len(page) == _MAX_NODES_PER_ORG:
+        # D21: a bounded page, not a pagination design. An organization at the
+        # cap is truncated silently otherwise, and a node past the page would
+        # never be judged — so the truncation has to be visible in the log.
+        logger.warning(
+            "alerts: org %s has at least %d nodes; the sweep judged only the first page",
+            org_id,
+            _MAX_NODES_PER_ORG,
+        )
+    for node in page:
         await _evaluate_node(node, rule, at=at, sensors=sensors, readings=readings, alerts=alerts)
 
 
@@ -92,9 +105,11 @@ async def _evaluate_node(
         rule_id=rule.id, org_id=node.org_id, plot_id=None, node_id=node.id
     )
     # The clear run is only read for a node that already has an open alert: a
-    # silent node needs the absence of evidence, which `last_seen_at` already is.
+    # silent node needs the absence of evidence, which `last_seen_at` already is
+    # (or `claimed_at` for one that never reported).
     decision = decide_node_health(
         last_seen_at=node.last_seen_at,
+        claimed_at=node.claimed_at,
         at=at,
         interval_s=node.interval_s,
         current_alert=current,
