@@ -87,8 +87,10 @@ Forecast ≈ 1,300 authored lines (tests included).
   - #118 fix `9490222` (52, tests). RDD `5b0710b..9490222` (medium, under budget but reviewed as the last slice; consent granted by session default): lineage `review-4bde0ff948bb1feb`, approved, acknowledged. 1 WARNING + 1 SUGGESTION (boundary test not at the exact edge; NaN test not isolating the filter) → #119, fixed now by the T4 AGY session.
   - #119 fix `d859b21` (42, tests: readings at 04:59/05:00 UTC; NaN next to a valid reading). RDD `9490222..d859b21`: lineage `review-34f9581ecd01b305`, approved, acknowledged. 1 SUGGESTION (test name contradicts its assertion) → #120, fixed now by the T4 AGY session.
   - #120 fix `2d7ed64` (28, tests: rename + NaN-only case). RDD `d859b21..2d7ed64`: lineage `review-438b8ce5e02176ea`, approved, acknowledged. 2 SUGGESTION (NaN-only test specificity, exact float equality) → #121, left in the tracker (owner decision 2026-09-27: test-only suggestions after six rounds on the same tests).
-- [ ] T8 Close — full `uv run pytest`, feature doc final, delivery (after owner approval).
-  - Implementation closed 2026-09-27 at `2d7ed64`: 18 commits, ≈ 2,380 authored lines. Full `uv run pytest` ran once on `5b0710b` (693 passed); the three later commits only touch `tests/irrigation/test_run_daily_balance.py` (targeted: 46 passed, ruff/format/mypy green). Delivery (push + chained PRs) pending the owner.
+- [x] T8 Close — full `uv run pytest`, feature doc final, delivery (after owner approval).
+  - Implementation closed 2026-09-27 at `2d7ed64`: 18 commits, ≈ 2,380 authored lines. Full `uv run pytest` ran once on `5b0710b` (693 passed); the three later commits only touch `tests/irrigation/test_run_daily_balance.py` (targeted: 46 passed, ruff/format/mypy green). Delivery (owner, 2026-09-27: push + PRs, merge later on the owner's word): 9 stacked-to-main PRs cut at commit boundaries, all ≤ 400 authored lines, no `size:exception`: #122 `e6f/01-plan` (100), #123 `e6f/02-domain-rules` (399), #124 `e6f/03-persistence` (291), #125 `e6f/04-forecast-flags` (272), #126 `e6f/05-skip-reasons` (200), #127 `e6f/06-job-api` (355), #128 `e6f/07-local-day` (165), #129 `e6f/08-sensor-assimilation` (366), #130 `e6f/09-assimilation-tests` (246). CI green on every PR; merged in order by the owner's word (retarget to `main`, merge commits); `main` @ `99a3bf4` CI green; #94–#103 and #115–#120 closed, #121 open.
+- 2026-09-27: `main` CI on `803cd03` (merge of #122, docs only) failed with the teardown `DeadlockDetectedError` (flake #89, occurrence commented there); every later push, up to `99a3bf4`, is green.
+- 2026-09-27: cleanup (owner): worktrees `e6-followups`, `e6f-t5|t6|t7`, `e6f-verify`, branches `fix/e6-followups`, `fix/e6f-t*`, `e6f/01..09` (local and remote), the AGY panes and container `techcamp-e6f-db` with its databases (`techcamp`, `techcamp_verify`, `techcamp_t5..t7`) removed.
 
 Per task, record: route, writer session, commits (authored lines), RED line, checks, RDD lineage/outcome, issue closed.
 
@@ -100,7 +102,7 @@ Per task, record: route, writer session, commits (authored lines), RED line, che
 - [x] Every open finding in #94, #96, #97, #99, #100, #101, #102 fixed with a test, or proven already fixed (listed in Scope).
 - [x] Docs updated for D1–D4 in the same commits as the code.
 - [x] Every review round opened by this feature fixed and re-reviewed (#115–#120), except #121, left open by owner decision.
-- [ ] Full suite, ruff, format, mypy, lint-imports green (done locally); CI green on every PR (pending delivery).
+- [x] Full suite, ruff, format, mypy, lint-imports green; CI green on every PR and on `main` @ `99a3bf4`.
 
 ## Progress / evidence
 - 2026-09-26: setup (owner-approved cleanup): E6 worktrees, `e6/0x-*` and `feat/e6-irrigation` branches (local + remote) and `techcamp-e6-db` removed after cherry-picking `495659f` → `d0d1728`; merged branch `fix/e5-82-consolidation-gap` (PR #93) removed. New worktree, CodeGraph index, DB and verify worktree created.
@@ -108,4 +110,4 @@ Per task, record: route, writer session, commits (authored lines), RED line, che
 - 2026-09-27: owner approved D1–D5, T7 in scope, route switched to in-session `odd-worker`.
 
 ## Next step
-Owner decides delivery: push + stacked-to-main chained PRs of about 400 authored lines (skills `chained-pr`, `work-unit-commits`), then merge in order when the owner says so; then remove worktrees `e6f-t5|t6|t7`, `e6f-verify`, their branches, the AGY panes and container `techcamp-e6f-db`.
+None: feature closed. `main` @ `99a3bf4` is green. #121 stays in the tracker.
