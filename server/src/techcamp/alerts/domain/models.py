@@ -77,6 +77,10 @@ WATER_STRESS_UPGRADE_AFTER = timedelta(hours=48)
 ESCALATION_DELAY = timedelta(hours=2)
 """D12: critical open alert escalated to technician after 2 h from opened_at."""
 
+NODE_SILENCE_INTERVALS = 3
+"""docs/06 §3: `node_offline` is "sin lecturas durante 3 intervalos", the same
+3 × `interval_s` that "Tolerancia de huecos y frescura" makes `max_gap`."""
+
 NON_PLOT_RULE_CODES: frozenset[str] = frozenset(
     {
         # docs/06 §3 has five sources and only "Umbral sobre lecturas" is
@@ -276,6 +280,69 @@ def sustained_run(
             break
 
     return filtered[-1][0] - filtered[start_index][0]
+
+
+def node_silence_window(interval_s: int) -> timedelta:
+    """How long a node may stay silent before it counts as offline (docs/06 §3)."""
+    return timedelta(seconds=NODE_SILENCE_INTERVALS * interval_s)
+
+
+def heard_from_run(
+    samples: Sequence[tuple[datetime, float]], at: datetime, *, max_gap: timedelta
+) -> timedelta | None:
+    """How long the node has been heard from without a gap longer than `max_gap`.
+
+    The value of a sample is irrelevant here — the node speaking is the
+    evidence — so this is `sustained_run` with a predicate every sample meets,
+    reused so the "Tolerancia de huecos y frescura" rule stays in one place: a
+    node that reports, goes quiet for more than the margin and reports again
+    has no run, which is what keeps a flapping node from resolving its alert.
+    """
+    return sustained_run(samples, lambda _value: True, at, max_gap=max_gap)
+
+
+def decide_node_health(
+    *,
+    last_seen_at: datetime | None,
+    at: datetime,
+    interval_s: int,
+    current_alert: Alert | None = None,
+    heard_run: timedelta | None = None,
+) -> AlertDecision:
+    """Decide the node-health rules of docs/06 §3, "Salud del nodo" (D18).
+
+    `node_offline` is decided on the ABSENCE of evidence, so it gets its own
+    decision instead of a series faked to look like a threshold: the seeded rule
+    carries no `metric` and no `operator`, which `decide_alert` answers
+    `NO_ACTION` for. The rule's own columns are never read, so the rule value
+    is not a parameter; the caller holds it to open the alert with.
+
+    - no alert + `at - last_seen_at` past 3 × `interval_s` (or never seen) -> open
+    - open/acknowledged + heard from for 60 min without a gap past that same
+      margin -> resolve (D2: the resolution window applies here too)
+    - otherwise no action
+
+    `heard_run` is how long the node has been heard from (see `heard_from_run`),
+    read from the node's own readings; it is only needed to resolve, and only
+    for a node that already has an open alert.
+    """
+    # A resolved alert no longer holds its (rule, target): it is decided as no
+    # alert, so the silence is evaluated from scratch (same as `decide_alert`).
+    if current_alert is not None and current_alert.state is AlertState.RESOLVED:
+        current_alert = None
+
+    if current_alert is None:
+        silent = last_seen_at is None or at - last_seen_at > node_silence_window(interval_s)
+        return AlertDecision(
+            action=AlertAction.OPEN if silent else AlertAction.NO_ACTION, alert=None
+        )
+
+    if heard_run is not None and heard_run >= RESOLUTION_WINDOW:
+        return AlertDecision(
+            action=AlertAction.RESOLVE, alert=current_alert.resolve_automatically(at)
+        )
+
+    return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)
 
 
 def resolve_threshold(

@@ -129,7 +129,9 @@ stateDiagram-v2
 | `heavy_rain_forecast` | Pronóstico > 50 mm en 24 h | warning; crítica si el suelo está saturado |
 | `flood_risk` / `drought_risk` | Severidad del modelo ≥ `alto` | crítica |
 | `node_offline` | Sin lecturas durante 3 intervalos | warning (al técnico) |
-| `node_battery_low` | `battery_v` < 3,4 V | info (al técnico) |
+| `node_battery_low` | `battery_v` < 3,4 V — regla sembrada e **inactiva**: no hay sensor ni columna `battery_v` en el sistema actual, así que queda a la espera de que exista esa fuente | info (al técnico) |
+
+- **Salud del nodo (ausencia de evidencia):** `node_offline` no es un umbral sobre una serie, sino la ausencia de una lectura: se decide en el dominio sobre `at - last_seen_at` del propio nodo contra 3 × su `interval_s` (o `last_seen_at` nulo, si nunca reportó), y se resuelve cuando el nodo lleva 60 min seguidos hablando sin un hueco mayor que ese mismo margen (ventana de resolución, 60 min). Por eso no se busca un operador ni un umbral en la fila de `alert_rule`.
 
 ## 4. Notificaciones (outbox)
 
