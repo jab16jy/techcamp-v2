@@ -87,12 +87,12 @@ async def get_plot_irrigation_recommendation(
         raise ProblemError(status=404, title="Recommendation not found") from exc
 
     return IrrigationRecommendationView(
-        plot_id=rec.plot_id or plot_id,
-        day=rec.day or (day if day is not None else now.date()),
-        kind=rec.kind.value if hasattr(rec.kind, "value") else str(rec.kind),
+        plot_id=rec.plot_id,
+        day=rec.day,
+        kind=rec.kind.value,
         depth_mm=rec.depth_mm,
         duration_min=rec.duration_min,
-        advice=[a.value if hasattr(a, "value") else str(a) for a in rec.advice],
+        advice=[a.value for a in rec.advice],
         rationale=dict(rec.rationale) if rec.rationale else {},
     )
 
@@ -148,7 +148,7 @@ async def get_plot_water_balance(
             soil_moisture_obs_pct=item.soil_moisture_obs_pct,
             assimilation_k=item.assimilation_k,
             stress_moisture_pct=item.stress_moisture_pct,
-            status=item.status.value if hasattr(item.status, "value") else str(item.status),
+            status=item.status.value,
         )
         for item in items
     ]

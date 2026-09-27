@@ -15,7 +15,6 @@ import datetime
 import json
 import logging
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from procrastinate import RetryStrategy
 from sqlalchemy import or_, select, text
@@ -35,6 +34,7 @@ from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyWaterBalanceRepository,
 )
 from techcamp.irrigation.application.run_daily_balance import run_daily_balance
+from techcamp.irrigation.domain.models import local_today as local_day_in_bogota
 from techcamp.shared.db import async_session_factory
 from techcamp.shared.jobs import app
 from techcamp.telemetry.adapters.repositories import (
@@ -51,13 +51,15 @@ QUEUE_NAME = "irrigation"
 RUN_DAILY_PLOTS_TASK_NAME = "irrigation.run_daily_plots"
 RUN_PLOT_BALANCE_TASK_NAME = "irrigation.run_plot_balance"
 
-_LOCAL = ZoneInfo("America/Bogota")
-"""The zone the orchestration DAG fixes every job hour to (docs/10-dag.md:156; docs/06 §5)."""
-
 
 def local_today() -> datetime.date:
-    """Today in the DAG's zone (America/Bogota)."""
-    return datetime.datetime.now(_LOCAL).date()
+    """Today in the DAG's zone, which is America/Bogota (docs/10-dag.md:156;
+    docs/06 §5).
+
+    The zone and the conversion belong to the domain, so the job entry points
+    read the clock and hand the instant over rather than owning a second copy
+    of the same rule."""
+    return local_day_in_bogota(datetime.datetime.now(datetime.UTC))
 
 
 async def eligible_plot_ids(session: AsyncSession) -> list[UUID]:

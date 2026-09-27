@@ -350,14 +350,16 @@ def test_determine_sensor_weight_rules() -> None:
 def test_compute_water_balance_status_irrigated_and_rainfed() -> None:
     """docs/04:66,75: status is ok | watch | irrigate | stress.
 
-    Rainfed never reports 'irrigate'; reports 'stress' when Dr >= RAW.
+    Rainfed never reports 'irrigate'; reports 'stress' only when Dr > RAW
+    (ADR-0022), which `test_compute_water_balance_status_at_raw_is_watch_for_rainfed`
+    covers at the Dr == RAW boundary.
     Watch threshold is minimally defined at 0.8 * RAW.
     Let RAW = 50.0 mm.
     0.8 * RAW = 40.0 mm.
 
     Dr = 20.0 mm (< 40.0) -> 'ok' for both.
     Dr = 45.0 mm (40.0 <= Dr < 50.0) -> 'watch' for both.
-    Dr = 55.0 mm (>= 50.0):
+    Dr = 55.0 mm (> 50.0):
       irrigated -> 'irrigate'
       rainfed -> 'stress'
     """
@@ -381,6 +383,33 @@ def test_compute_water_balance_status_irrigated_and_rainfed() -> None:
     )
     assert (
         compute_water_balance_status(dr=55.0, raw=raw, is_rainfed=True) is WaterBalanceStatus.STRESS
+    )
+
+
+def test_compute_water_balance_status_at_raw_is_watch_for_rainfed() -> None:
+    """Exactly at RAW the rainfed status is 'watch', not 'stress' (ADR-0022).
+
+    ADR-0022 defines water stress as `Dr > RAW`, and docs/04-api.md:75 repeats it:
+    a rainfed plot is 'stress' only above RAW. At `Dr == RAW` the plot has not
+    crossed the threshold yet, so it is still 'watch' and never 'irrigate'
+    (docs/04-api.md:75). A plot with an irrigation system keeps the docs/06 §5
+    flowchart rule `Dr >= RAW` -> 'irrigate'.
+    """
+    raw = 50.0
+
+    # Dr == RAW: rainfed 'watch', irrigated 'irrigate' (docs/06 §5 flowchart).
+    assert (
+        compute_water_balance_status(dr=raw, raw=raw, is_rainfed=True) is WaterBalanceStatus.WATCH
+    )
+    assert (
+        compute_water_balance_status(dr=raw, raw=raw, is_rainfed=False)
+        is WaterBalanceStatus.IRRIGATE
+    )
+
+    # One hundredth of a millimetre above RAW: rainfed crosses into 'stress'.
+    assert (
+        compute_water_balance_status(dr=raw + 0.01, raw=raw, is_rainfed=True)
+        is WaterBalanceStatus.STRESS
     )
 
 
@@ -477,7 +506,7 @@ def test_decide_recommendation_no_active_cycle() -> None:
         decide_recommendation(
             has_active_cycle=False,
             is_rainfed=False,
-            kc_source=KcSource.FAO56,
+            kc_source=KcSource.FAO56.value,
             dr=0.0,
             raw=50.0,
             irrigation_efficiency=0.9,
@@ -496,7 +525,7 @@ def test_decide_recommendation_no_active_cycle() -> None:
     rec = decide_recommendation(
         has_active_cycle=False,
         is_rainfed=True,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=0.0,
         raw=50.0,
         irrigation_efficiency=None,
@@ -521,7 +550,7 @@ def test_decide_recommendation_no_kc() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.NONE,
+        kc_source=KcSource.NONE.value,
         dr=30.0,
         raw=50.0,
         irrigation_efficiency=0.9,
@@ -545,7 +574,7 @@ def test_decide_recommendation_irrigated_not_needed() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=30.0,
         raw=50.0,
         irrigation_efficiency=0.9,
@@ -568,7 +597,7 @@ def test_decide_recommendation_irrigated_postpone() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=55.0,
         raw=50.0,
         irrigation_efficiency=0.9,
@@ -602,7 +631,7 @@ def test_decide_recommendation_irrigated_irrigate_depth_and_minutes() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.FAO56,
+        kc_source=KcSource.FAO56.value,
         dr=54.0,
         raw=50.0,
         irrigation_efficiency=0.90,
@@ -633,7 +662,7 @@ def test_decide_recommendation_irrigated_duration_rounding() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.LOCAL,
+        kc_source=KcSource.LOCAL.value,
         dr=45.0,
         raw=40.0,
         irrigation_efficiency=0.75,
@@ -660,7 +689,7 @@ def test_decide_recommendation_rationale_contents() -> None:
     rec = decide_recommendation(
         has_active_cycle=True,
         is_rainfed=False,
-        kc_source=KcSource.APPROXIMATE,
+        kc_source=KcSource.APPROXIMATE.value,
         dr=54.0,
         raw=50.0,
         irrigation_efficiency=0.90,
