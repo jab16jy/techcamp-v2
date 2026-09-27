@@ -137,12 +137,16 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
 - [x] T5 `GET /plots/{id}/irrigation/recommendation?day=` and `GET /plots/{id}/water-balance`,
   plot access + 404 across orgs, response shapes recorded in docs/04 (docs/04:105-109). Writer:
   agy.
-- [ ] Q1 Quality: share the forecast summary in `run_daily_balance.py` (3 copies), type the Kc
+- [x] Q1 Quality: share the forecast summary in `run_daily_balance.py` (3 copies), type the Kc
   source (`Literal`, domain imports nothing). Writer: opencode, worktree `e6-quality` from
   `ab366e4`, cherry-picked here.
-- [ ] Q2 Quality: enum string fallbacks (`query_irrigation.py`, router), dead router fallbacks
+- [x] Q2 Quality: enum string fallbacks (`query_irrigation.py`, router), dead router fallbacks
   (UTC day), one local-today helper; docs/04 contradiction on the rainfed stress boundary — the
   docs win (`Dr > RAW`, docs/04:75, ADR-0022), Refs #94. Writer: opencode, same session.
+- [x] Q3 Quality leftovers: remaining enum `hasattr`/`isinstance` fallbacks (router, run_daily_balance,
+  repositories), `jobs.py` reuses the domain local-day helper, `is`/`is not` against StrEnum members
+  → `==`/`!=` (RDD R3-kc-source-identity-check, #102). Writer: opencode. Weather's own Bogota
+  duplicates are pre-existing E5 code → #103.
 - [ ] T6 Full suite + checks, delivery slices (chained PRs).
 
 ## Acceptance criteria
@@ -190,6 +194,14 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   fixed now by OpenCode, review findings stay in the tracker) → Q1, Q2. Lineage
   `review-6cea6d82cc09f3ef`, review-reliability, approved, acknowledged. 5 non-blocking → #101.
   Boundary: `cc40415`.
+- Q1 `3fa3374` + Q2 `6e6158c` (cherry-picked from `e6-quality`; with doc commits `cc40415..9331c44`,
+  403 lines, medium): OpenCode's own assess was under budget until the doc commit; parent checks —
+  76 passed, ruff, format, mypy, lint-imports green; docs/04 stress boundary now `Dr > RAW`. Owner
+  granted consent (refactor). Lineage `review-ca70e576a1e51424`, review-reliability, approved,
+  acknowledged. 4 non-blocking → #102. Boundary: `9331c44`.
+- Q3 `273dbd5`, `5b39829`, `ccabf7c` (32 lines): parent checks green (76 passed); OpenCode assess
+  `under_budget` → pending in the slice (no review due). Tests keep `is` on purpose (stronger
+  assertion against a plain-string regression).
 
 ## Next step
-Q1 (running) → Q2 via opencode, then T6 (full suite, delivery).
+T6: full suite (running), then delivery slices.
