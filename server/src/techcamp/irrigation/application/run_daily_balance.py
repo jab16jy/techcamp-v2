@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from techcamp.farms.application.ports import (
     CropCycleRepository,
     CropRepository,
@@ -23,17 +21,22 @@ from techcamp.irrigation.application.ports import (
     WaterBalanceRepository,
 )
 from techcamp.irrigation.domain.models import (
+    K_ASSIMILATION_DEFAULT,
+    K_ASSIMILATION_NONE,
     IrrigationRecommendation,
     WaterBalanceDay,
+    assimilate_depletion,
     compute_adjusted_p,
     compute_effective_rain,
     compute_etc,
     compute_kc_for_cycle_day,
     compute_model_depletion,
+    compute_observed_depletion,
     compute_raw,
     compute_stress_moisture,
     compute_taw,
     decide_recommendation,
+    is_sensor_depth_representative,
     stage_for_cycle_day,
 )
 from techcamp.telemetry.application.ports import (
@@ -57,7 +60,6 @@ async def run_daily_balance(
     *,
     plot_id: UUID,
     day: date,
-    session: AsyncSession,
     plots: PlotRepository,
     crop_cycles: CropCycleRepository,
     crops: CropRepository,
@@ -156,7 +158,6 @@ async def run_daily_balance(
         saved_rec: IrrigationRecommendation | None = None
         if rec is not None:
             saved_rec = await recommendations.upsert(rec, plot_id=plot.id, day=d_rec)
-        await session.commit()
         return DailyBalanceResult(balance=None, recommendation=saved_rec)
 
     # Active crop cycle exists
@@ -218,7 +219,6 @@ async def run_daily_balance(
         saved_rec = None
         if rec is not None:
             saved_rec = await recommendations.upsert(rec, plot_id=plot.id, day=d_rec)
-        await session.commit()
         return DailyBalanceResult(balance=None, recommendation=saved_rec)
 
     # Soil completeness check
@@ -315,9 +315,61 @@ async def run_daily_balance(
     dr_prev = prev_balance.depletion_mm if prev_balance is not None else 0.0
     dr_model = compute_model_depletion(dr_prev, etc, pe, irrigation_mm, taw)
 
-    k = 0.0
+    k = K_ASSIMILATION_NONE
     dr_assimilated = dr_model
     soil_moisture_obs_pct: float | None = None
+
+    if (
+        nodes is not None
+        and sensors is not None
+        and calibrations is not None
+        and readings is not None
+    ):
+        node_list = await nodes.list_for_org(plot.org_id, plot_id=plot.id, limit=500)
+        candidate_sensors: list[tuple[float, float]] = []
+        daily_start = datetime(d_balance.year, d_balance.month, d_balance.day, tzinfo=UTC)
+        daily_end = daily_start + timedelta(days=1)
+
+        for node in node_list:
+            node_sensors = await sensors.list_for_node(node.id, plot.org_id)
+            for sensor in node_sensors:
+                if sensor.metric != "soil_moisture" or sensor.depth_cm is None:
+                    continue
+
+                # 1. Reading in the last 24 h before the run
+                recent = await readings.query_raw(
+                    sensor.id, start=now - timedelta(hours=24), end=now
+                )
+                if not recent:
+                    continue
+
+                # 2. Latest valid calibration kind `field`
+                cal = await calibrations.get_latest_valid_at(sensor.id, plot.org_id, at=now)
+                if cal is None:
+                    continue
+                cal_kind_str = cal.kind.value if hasattr(cal.kind, "value") else str(cal.kind)
+                if cal_kind_str.lower() != "field":
+                    continue
+
+                # 3. Daily mean of D-1 from query_daily
+                daily_points = await readings.query_daily(
+                    sensor.id, start=daily_start, end=daily_end
+                )
+                if not daily_points:
+                    continue
+
+                candidate_sensors.append((float(sensor.depth_cm), daily_points[0].value))
+
+        root_depth_cm = float(soil.root_depth_cm)
+        if len(candidate_sensors) in (1, 2):
+            sensor_depths = [depth for depth, _ in candidate_sensors]
+            if is_sensor_depth_representative(sensor_depths, root_depth_cm):
+                k = K_ASSIMILATION_DEFAULT
+                theta_obs_pct = sum(mean for _, mean in candidate_sensors) / len(candidate_sensors)
+                theta_obs = theta_obs_pct / 100.0
+                dr_obs = compute_observed_depletion(fc, theta_obs, root_depth_m)
+                dr_assimilated = assimilate_depletion(dr_model, dr_obs, k)
+                soil_moisture_obs_pct = theta_obs_pct
 
     rec = decide_recommendation(
         has_active_cycle=True,
@@ -363,6 +415,5 @@ async def run_daily_balance(
     saved_rec = None
     if rec is not None:
         saved_rec = await recommendations.upsert(rec, plot_id=plot.id, day=d_rec)
-    await session.commit()
 
     return DailyBalanceResult(balance=balance_day, recommendation=saved_rec)

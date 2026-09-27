@@ -17,6 +17,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow, SoilProfileRow
@@ -34,7 +35,15 @@ from techcamp.irrigation.adapters.repositories import (
 )
 from techcamp.irrigation.application.run_daily_balance import run_daily_balance
 from techcamp.irrigation.domain.models import RainfedAdvice, RecommendationKind, WaterBalanceDay
+from techcamp.shared.db import engine
 from techcamp.shared.ids import uuid7
+from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, ReadingRow, SensorRow
+from techcamp.telemetry.adapters.repositories import (
+    SqlAlchemyCalibrationRepository,
+    SqlAlchemyNodeRepository,
+    SqlAlchemyReadingRepository,
+    SqlAlchemySensorRepository,
+)
 from techcamp.weather.adapters.orm import WeatherDailyRow
 from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
 
@@ -236,7 +245,6 @@ async def test_irrigated_plot_irrigate(db_session: AsyncSession) -> None:
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -245,6 +253,7 @@ async def test_irrigated_plot_irrigate(db_session: AsyncSession) -> None:
         water_balances=wb_repo,
         recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.balance is not None
@@ -287,7 +296,6 @@ async def test_irrigated_plot_postpone(db_session: AsyncSession) -> None:
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -296,6 +304,7 @@ async def test_irrigated_plot_postpone(db_session: AsyncSession) -> None:
         water_balances=wb_repo,
         recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.recommendation is not None
@@ -318,7 +327,6 @@ async def test_irrigated_plot_not_needed(db_session: AsyncSession) -> None:
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -327,6 +335,7 @@ async def test_irrigated_plot_not_needed(db_session: AsyncSession) -> None:
         water_balances=SqlAlchemyWaterBalanceRepository(db_session),
         recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.recommendation is not None
@@ -368,7 +377,6 @@ async def test_rainfed_plot_with_cycle(db_session: AsyncSession) -> None:
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -377,6 +385,7 @@ async def test_rainfed_plot_with_cycle(db_session: AsyncSession) -> None:
         water_balances=wb_repo,
         recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.balance is not None
@@ -401,7 +410,6 @@ async def test_rainfed_plot_without_cycle_delay_sowing(db_session: AsyncSession)
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -410,6 +418,7 @@ async def test_rainfed_plot_without_cycle_delay_sowing(db_session: AsyncSession)
         water_balances=wb_repo,
         recommendations=rec_repo,
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.balance is None  # No balance row for plot without active cycle
@@ -439,7 +448,6 @@ async def test_no_kc_skips_balance_and_stores_no_kc_recommendation(
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -448,6 +456,7 @@ async def test_no_kc_skips_balance_and_stores_no_kc_recommendation(
         water_balances=wb_repo,
         recommendations=rec_repo,
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.balance is None
@@ -480,7 +489,6 @@ async def test_incomplete_soil_skips_balance_and_recommendation(
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -489,6 +497,7 @@ async def test_incomplete_soil_skips_balance_and_recommendation(
         water_balances=wb_repo,
         recommendations=rec_repo,
     )
+    await db_session.commit()
 
     assert result.skipped
     assert result.skip_reason == "soil_profile_incomplete"
@@ -533,7 +542,6 @@ async def test_previous_day_chaining_d2_feeds_d1(db_session: AsyncSession) -> No
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -542,6 +550,7 @@ async def test_previous_day_chaining_d2_feeds_d1(db_session: AsyncSession) -> No
         water_balances=wb_repo,
         recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.balance is not None
@@ -562,7 +571,6 @@ async def test_missing_observed_weather_falls_back_to_forecast_and_flagged(
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -571,6 +579,7 @@ async def test_missing_observed_weather_falls_back_to_forecast_and_flagged(
         water_balances=SqlAlchemyWaterBalanceRepository(db_session),
         recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
     )
+    await db_session.commit()
 
     assert not result.skipped
     assert result.balance is not None
@@ -592,7 +601,6 @@ async def test_org_of_rows_is_the_plots_org(db_session: AsyncSession) -> None:
     result = await run_daily_balance(
         plot_id=plot_id,
         day=target_day,
-        session=db_session,
         plots=SqlAlchemyPlotRepository(db_session),
         crop_cycles=SqlAlchemyCropCycleRepository(db_session),
         crops=SqlAlchemyCropRepository(db_session),
@@ -601,6 +609,7 @@ async def test_org_of_rows_is_the_plots_org(db_session: AsyncSession) -> None:
         water_balances=wb_repo,
         recommendations=rec_repo,
     )
+    await db_session.commit()
 
     assert not result.skipped
     d_minus_1 = target_day - timedelta(days=1)
@@ -617,3 +626,383 @@ async def test_org_of_rows_is_the_plots_org(db_session: AsyncSession) -> None:
     assert bal_foreign is None
     rec_foreign = await rec_repo.get_for_plot(plot_id, target_day, org_id=foreign_org)
     assert rec_foreign is None
+
+
+async def _setup_sensor(
+    db_session: AsyncSession,
+    *,
+    org_id: UUID,
+    plot_id: UUID,
+    depth_cm: int = 30,
+    calibration_kind: str = "field",
+    reading_fresh: bool = True,
+    daily_value: float = 16.0,
+    target_day: date = date(2026, 9, 25),
+    now: datetime | None = None,
+) -> int:
+    """Creates a node, soil_moisture sensor, calibration, and readings for testing assimilation."""
+    from uuid import uuid4
+
+    ref_time = now or datetime.now(UTC)
+    node_id = uuid7()
+    db_session.add(
+        NodeRow(
+            id=node_id,
+            org_id=org_id,
+            plot_id=plot_id,
+            transport="wifi",
+            dev_eui=f"eui-{uuid4().hex[:12]}",
+            claim_code=f"claim-{uuid4().hex[:12]}",
+            credential_hash="hash",
+            interval_s=900,
+            status="online",
+            claimed_at=ref_time - timedelta(days=10),
+            last_seen_at=ref_time,
+        )
+    )
+    await db_session.flush()
+
+    sensor_row = SensorRow(
+        node_id=node_id,
+        channel_key=f"sm_{depth_cm}_{uuid4().hex[:6]}",
+        metric="soil_moisture",
+        depth_cm=depth_cm,
+        unit="pct",
+    )
+    db_session.add(sensor_row)
+    await db_session.flush()
+
+    cal_id = uuid7()
+    db_session.add(
+        CalibrationRow(
+            id=cal_id,
+            sensor_id=sensor_row.id,
+            version=1,
+            method="linear",
+            kind=calibration_kind,
+            params={"scale": 1.0, "offset": 0.0},
+            rmse_pct=None,
+            valid_from=ref_time - timedelta(days=10),
+        )
+    )
+    await db_session.commit()
+
+    d_minus_1 = target_day - timedelta(days=1)
+    if reading_fresh:
+        fresh_time = ref_time - timedelta(hours=2)
+        db_session.add(
+            ReadingRow(
+                time=fresh_time,
+                sensor_id=sensor_row.id,
+                raw_value=float(daily_value),
+                value=float(daily_value),
+                received_at=fresh_time,
+                quality=0,
+            )
+        )
+        d1_time = datetime(d_minus_1.year, d_minus_1.month, d_minus_1.day, 12, 0, tzinfo=UTC)
+        db_session.add(
+            ReadingRow(
+                time=d1_time,
+                sensor_id=sensor_row.id,
+                raw_value=float(daily_value),
+                value=float(daily_value),
+                received_at=d1_time,
+                quality=0,
+            )
+        )
+    else:
+        stale_time = ref_time - timedelta(hours=26)
+        db_session.add(
+            ReadingRow(
+                time=stale_time,
+                sensor_id=sensor_row.id,
+                raw_value=float(daily_value),
+                value=float(daily_value),
+                received_at=stale_time,
+                quality=0,
+            )
+        )
+    await db_session.commit()
+
+    autocommit_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
+    async with autocommit_engine.connect() as conn:
+        await conn.execute(text("CALL refresh_continuous_aggregate('reading_daily', NULL, NULL)"))
+
+    return sensor_row.id
+
+
+async def test_sensor_assimilation_field_representative_fresh(db_session: AsyncSession) -> None:
+    """Field calibration + representative depth + fresh reading -> K 0.5 and Dr assimilated."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Root depth is 60 cm in fixture. 30 cm is exactly Zr/2 -> representative!
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=30,
+        calibration_kind="field",
+        reading_fresh=True,
+        daily_value=16.0,
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+    assert result.balance.depletion_mm != result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is False
+    assert result.recommendation.rationale.get("k") == pytest.approx(0.5)
+
+
+async def test_sensor_assimilation_lab_calibration_yields_k_zero(db_session: AsyncSession) -> None:
+    """Lab calibration -> K 0, without_sensor True, no assimilation."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=30,
+        calibration_kind="lab",
+        reading_fresh=True,
+        daily_value=16.0,
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+    assert result.recommendation.rationale.get("k") == pytest.approx(0.0)
+
+
+async def test_sensor_assimilation_stale_reading_yields_k_zero(db_session: AsyncSession) -> None:
+    """Stale sensor reading (> 24 h) -> K 0, without_sensor True."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Reading is 26h old
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=30,
+        calibration_kind="field",
+        reading_fresh=False,
+        daily_value=16.0,
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+async def test_sensor_assimilation_shallow_sensor_yields_k_zero(db_session: AsyncSession) -> None:
+    """Shallow sensor (10 cm under a 1 m root zone) -> not representative -> K 0."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Update soil root zone to 100 cm (1 m)
+    soil_repo = SqlAlchemySoilProfileRepository(db_session)
+    prof = await soil_repo.get_for_plot(plot_id)
+    assert prof is not None
+    from techcamp.farms.domain.models import SoilProfile
+
+    await soil_repo.put(
+        SoilProfile(
+            plot_id=plot_id,
+            source=prof.source,
+            ph=prof.ph,
+            organic_matter_pct=prof.organic_matter_pct,
+            texture=prof.texture,
+            field_capacity_pct=prof.field_capacity_pct,
+            wilting_point_pct=prof.wilting_point_pct,
+            root_depth_cm=100.0,
+        )
+    )
+
+    # Sensor at 10 cm: Zr=100cm, Zr/2=50cm, tolerance=15cm -> [35..65cm]. 10cm is shallow!
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=10,
+        calibration_kind="field",
+        reading_fresh=True,
+        daily_value=16.0,
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=soil_repo,
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+async def test_sensor_assimilation_two_sensors_averaged(db_session: AsyncSession) -> None:
+    """Two sensors at different depths in root zone -> averaged daily mean and K 0.5."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Root depth 60 cm. Sensor 1 at 20 cm (14%), Sensor 2 at 40 cm (18%).
+    # Average = 16.0%.
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=20,
+        calibration_kind="field",
+        reading_fresh=True,
+        daily_value=14.0,
+        target_day=target_day,
+        now=now,
+    )
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=40,
+        calibration_kind="field",
+        reading_fresh=True,
+        daily_value=18.0,
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is False
+    assert result.recommendation.rationale.get("k") == pytest.approx(0.5)
