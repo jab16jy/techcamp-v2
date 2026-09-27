@@ -1185,18 +1185,21 @@ async def test_sensor_assimilation_reading_at_0200_utc_day_d_belongs_to_local_d_
     assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
 
 
-async def test_sensor_assimilation_reading_at_0300_utc_day_d_minus_1_belongs_to_local_d_minus_2(
+async def test_sensor_assimilation_start_boundary_pair_0459_excluded_0500_included(
     db_session: AsyncSession,
 ) -> None:
-    """R3-local-day-start-boundary-untested: 03:00 UTC on day D-1 is 22:00 Bogota on day D-2,
-    so it is before the 05:00 UTC local-day start and excluded -> K=0."""
+    """R3-001: 04:59 UTC on day D-1 is excluded (local D-2) while 05:00 UTC is included.
+    Both readings are fresh relative to now (<24 h), isolating the local-day window start."""
     target_day = date(2026, 9, 25)
     now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
-    t = datetime(2026, 9, 24, 3, 0, tzinfo=UTC)
+    # 04:59 UTC on Sep 24 is fresh (<24 h from now), but before local day D-1 start (05:00 UTC)
+    t_excluded = datetime(2026, 9, 24, 4, 59, tzinfo=UTC)
+    # 05:00 UTC on Sep 24 is the exact start boundary of local day D-1 [05:00 UTC D-1, 05:00 UTC D)
+    t_included = datetime(2026, 9, 24, 5, 0, tzinfo=UTC)
 
     _, plot_id = await _setup_plot_with_sensors(
         db_session,
-        [SensorSpec(depth_cm=30, readings=[(t, 16.0, 0)])],
+        [SensorSpec(depth_cm=30, readings=[(t_excluded, 10.0, 0), (t_included, 16.0, 0)])],
         target_day=target_day,
         now=now,
     )
@@ -1204,11 +1207,9 @@ async def test_sensor_assimilation_reading_at_0300_utc_day_d_minus_1_belongs_to_
     result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
     assert not result.skipped
     assert result.balance is not None
-    assert result.balance.assimilation_k == pytest.approx(0.0)
-    assert result.balance.soil_moisture_obs_pct is None
-    assert result.balance.depletion_mm == result.balance.depletion_model_mm
-    assert result.recommendation is not None
-    assert result.recommendation.rationale.get("without_sensor") is True
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    # If 04:59 UTC were included, mean would be (10.0 + 16.0) / 2 = 13.0
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
 
 
 async def test_sensor_assimilation_out_of_range_reading_excluded_from_daily_mean(
@@ -1262,15 +1263,16 @@ async def test_sensor_assimilation_sensor_with_no_valid_readings_or_nan_mean_yie
 async def test_sensor_assimilation_nan_reading_value_filtered_and_yields_k_zero(
     db_session: AsyncSession,
 ) -> None:
-    """R3-nan-filter-branch-untested: A reading with value=NaN is excluded by the NaN filter,
-    leaving no valid readings -> K=0, no TypeError or NaN propagation."""
+    """R3-002: A reading with value=NaN is excluded by the NaN filter next to a valid reading,
+    so observed moisture equals the valid reading and K > 0 (fails if NaN reaches the mean)."""
     target_day = date(2026, 9, 25)
     now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
-    t = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+    t_nan = datetime(2026, 9, 24, 10, 0, tzinfo=UTC)
+    t_valid = datetime(2026, 9, 24, 14, 0, tzinfo=UTC)
 
     _, plot_id = await _setup_plot_with_sensors(
         db_session,
-        [SensorSpec(depth_cm=30, readings=[(t, float("nan"), 0)])],
+        [SensorSpec(depth_cm=30, readings=[(t_nan, float("nan"), 0), (t_valid, 16.0, 0)])],
         target_day=target_day,
         now=now,
     )
@@ -1278,11 +1280,13 @@ async def test_sensor_assimilation_nan_reading_value_filtered_and_yields_k_zero(
     result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
     assert not result.skipped
     assert result.balance is not None
-    assert result.balance.assimilation_k == pytest.approx(0.0)
-    assert result.balance.soil_moisture_obs_pct is None
-    assert result.balance.depletion_mm == result.balance.depletion_model_mm
-    assert result.recommendation is not None
-    assert result.recommendation.rationale.get("without_sensor") is True
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+    expected_dr_obs = 1000.0 * (0.23 - 0.16) * 0.6
+    expected_dr = result.balance.depletion_model_mm + 0.5 * (
+        expected_dr_obs - result.balance.depletion_model_mm
+    )
+    assert result.balance.depletion_mm == pytest.approx(expected_dr)
 
 
 async def test_sensor_assimilation_fresh_reading_no_balance_day_readings_yields_k_zero(
