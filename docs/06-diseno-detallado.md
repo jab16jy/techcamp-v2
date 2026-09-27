@@ -176,8 +176,8 @@ Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8) ([ADR-
 | θ_estrés | `θFC − p × (θFC − θWP)`: la humedad a la que `Dr = RAW` | Se guarda en `water_balance_daily.stress_moisture_pct` para la regla `water_stress` |
 | Pe | `0,8 × P` si P > 5 mm; si no, 0 | Lluvia de la celda o del pluviómetro del nodo |
 | Dr modelado | `Dr_modelo(i) = clamp(Dr(i−1) − Pe − I + ETc, 0, TAW)` | Balance diario |
-| Dr observado | `1000 × (θFC − θobs) × Zr` | Promedio diario de humedad del sensor representativo |
-| Dr | `Dr_modelo + K × (Dr_obs − Dr_modelo)` | Asimilación ponderada; `K` según la tabla siguiente |
+| Dr observado | `clamp(1000 × (θFC − θobs) × Zr, 0, TAW)` | Promedio diario de humedad del sensor representativo |
+| Dr | `clamp(Dr_modelo + K × (Dr_obs − Dr_modelo), 0, TAW)` | Asimilación ponderada; `K` según la tabla siguiente |
 
 **Peso del sensor (`K`).** Un sensor capacitivo barato no es la verdad de la zona de raíces: con calibración de laboratorio llevada al campo su error es de 5,5–19 puntos de humedad, y con calibración de campo baja a 0,5–3,6 puntos ([investigación, H3.2](investigacion/tecnificacion-campo.md#rq3--supuestos-técnicos)). Por eso el sensor corrige el balance, no lo reemplaza:
 
@@ -230,6 +230,7 @@ flowchart TD
 - El error entre modelo y observación es el SLI "error de humedad" ([11-metricas](11-metricas.md)).
 - **Semántica temporal de la corrida:** una corrida para el día local D (America/Bogota) calcula la fila de balance para D−1 con el clima observado consolidado de ese día (o pronóstico si falta el observado, señalado en el `rationale`); y guarda la recomendación para el día D a partir de Dr(D−1), evaluando la lluvia pronosticada a 48 h (D..D+1) y a 7 días (D..D+6) y la ET0 pronosticada a 7 días. El día del ciclo es `(D−1 − sown_on).days + 1`; el balance previo es el de D−2 (`Dr_prev = 0` si falta). Clima con `fetched_at` de más de 24 h se marca `low_confidence` en el `rationale`.
 - **Datos de suelo incompletos:** si el `soil_profile` de la parcela carece de θFC, θWP o `root_depth_cm` (Zr), no se guarda fila de balance ni recomendación para el día; el job registra la omisión.
+- **RAW ≤ 0** (suelo degenerado, p. ej. θFC = θWP): no hay un umbral positivo de depleción que comparar, así que el estado es `ok`, el consejo de secano es `no_action` y una parcela con riego recibe `not_needed` en vez de `postpone` indefinido.
 
 ### Parcelas de secano
 

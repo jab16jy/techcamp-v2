@@ -184,6 +184,12 @@ def stage_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> str:
     return stages[-1].stage
 
 
+_KNOWN_STAGE_NAMES = frozenset({"initial", "development", "mid", "late"})
+"""Canonical stage names this module's Kc lookup understands (mirrors
+`farms.domain.models.CROP_STAGES`; `StageLike` is structural, so the name is
+not imported)."""
+
+
 def compute_kc_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> float:
     """Compute crop coefficient Kc for a 1-based cycle day from ordered stages.
 
@@ -193,11 +199,21 @@ def compute_kc_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> 
     - Mid-season stage: Kc = Kc_mid
     - Late-season stage: uses its own Kc (docs/06 §5 table; feature doc Decision)
     - Days past cycle: uses late-season Kc
+
+    Raises:
+        ValueError: a stage name is not one of `initial`/`development`/`mid`/`late`.
+            `stage_for_cycle_day` identifies stages positionally, so a misspelled or
+            localized name would otherwise let the two disagree on the stage for
+            the same day instead of failing loudly (R3-005).
     """
     if day_of_cycle < 1:
         raise ValueError("day_of_cycle must be >= 1")
     if not stages:
         raise ValueError("stages must not be empty")
+
+    unknown = {s.stage for s in stages} - _KNOWN_STAGE_NAMES
+    if unknown:
+        raise ValueError(f"unknown crop stage name(s): {sorted(unknown)}")
 
     stage_by_name = {s.stage: s for s in stages}
     ini_stage = stage_by_name.get("initial", stages[0])
@@ -290,46 +306,58 @@ def compute_model_depletion(
     return max(0.0, min(taw_mm, balance))
 
 
-def compute_observed_depletion(fc: float, theta_obs: float, root_depth_m: float) -> float:
+def compute_observed_depletion(
+    fc: float, theta_obs: float, root_depth_m: float, taw_mm: float
+) -> float:
     """Observed depletion from sensor soil moisture (docs/06 §5 table).
 
-    Formula: Dr_obs = 1000 * (θFC - θobs) * Zr.
+    Formula: Dr_obs = clamp(1000 * (θFC - θobs) * Zr, 0, TAW). Clamped like
+    `compute_model_depletion` (R3-001): a sensor reading above field capacity (heavy
+    rain) or below the wilting point would otherwise yield a negative or
+    above-TAW depletion that then drives status, the decision, and next day's
+    `dr_prev`.
     """
-    return 1000.0 * (fc - theta_obs) * root_depth_m
+    raw = 1000.0 * (fc - theta_obs) * root_depth_m
+    return max(0.0, min(taw_mm, raw))
 
 
-def assimilate_depletion(dr_model: float, dr_obs: float, k: float) -> float:
+def assimilate_depletion(dr_model: float, dr_obs: float, k: float, taw_mm: float) -> float:
     """Weighted assimilation of sensor depletion into model depletion (ADR-0022; docs/06 §5).
 
-    Formula: Dr = Dr_model + K * (Dr_obs - Dr_model).
+    Formula: Dr = clamp(Dr_model + K * (Dr_obs - Dr_model), 0, TAW) (R3-001).
     """
-    return dr_model + k * (dr_obs - dr_model)
+    raw = dr_model + k * (dr_obs - dr_model)
+    return max(0.0, min(taw_mm, raw))
 
 
 def is_sensor_depth_representative(
-    sensor_depths: Sequence[float],
-    root_depth: float,
+    sensor_depths_cm: Sequence[float],
+    root_depth_cm: float,
     tolerance_ratio: float = ZR_HALF_TOLERANCE_RATIO,
 ) -> bool:
     """Check if sensor installation depth represents the crop root zone (docs/06 §5).
+
+    Both `sensor_depths_cm` and `root_depth_cm` are centimetres (R3-002): every
+    other domain function takes Zr in metres (`root_depth_m`), so mixing units
+    here would silently return False and drop K to 0.
 
     Rules:
     - Exactly one sensor: must be near Zr/2 within tolerance (tolerance_ratio * root_depth).
     - Exactly two sensors: both within root zone (0 < depth <= root_depth) at different depths.
     - Otherwise (0 or 3+ sensors): not representative.
     """
-    if root_depth <= 0:
+    if root_depth_cm <= 0:
         return False
 
-    if len(sensor_depths) == 1:
-        d = sensor_depths[0]
-        target = root_depth / 2.0
-        tolerance = tolerance_ratio * root_depth
-        return 0.0 < d <= root_depth and abs(d - target) <= tolerance
+    if len(sensor_depths_cm) == 1:
+        d = sensor_depths_cm[0]
+        target = root_depth_cm / 2.0
+        tolerance = tolerance_ratio * root_depth_cm
+        return 0.0 < d <= root_depth_cm and abs(d - target) <= tolerance
 
-    if len(sensor_depths) == 2:
-        d1, d2 = sensor_depths[0], sensor_depths[1]
-        return 0.0 < d1 <= root_depth and 0.0 < d2 <= root_depth and d1 != d2
+    if len(sensor_depths_cm) == 2:
+        d1, d2 = sensor_depths_cm[0], sensor_depths_cm[1]
+        return 0.0 < d1 <= root_depth_cm and 0.0 < d2 <= root_depth_cm and d1 != d2
 
     return False
 
@@ -354,6 +382,10 @@ def compute_water_balance_status(dr: float, raw: float, is_rainfed: bool) -> Wat
     """Compute 4-tier water balance status: ok | watch | irrigate | stress (docs/04:66, 75).
 
     Rules:
+    - RAW <= 0 (degenerate soil, e.g. θFC == θWP, or TAW = 0 from incomplete soil
+      data): 'ok'. There is no positive depletion threshold to compare Dr against,
+      so this reads as no stress rather than an incoherent 'irrigate'/'stress'
+      (D5, feature doc `techcamp-v2-e6-followups.md`; R3-003).
     - Dr < 0.8 * RAW: 'ok'
     - 0.8 * RAW <= Dr < RAW: 'watch'
     - Dr >= RAW, plot with an irrigation system: 'irrigate' (docs/06 §5 flowchart)
@@ -362,6 +394,8 @@ def compute_water_balance_status(dr: float, raw: float, is_rainfed: bool) -> Wat
     - Dr == RAW, rainfed plot: 'watch'. The threshold is not crossed yet and a
       rainfed plot never reports 'irrigate' (docs/04:75).
     """
+    if raw <= 0:
+        return WaterBalanceStatus.OK
     if dr < raw:
         if dr < WATCH_THRESHOLD_RATIO * raw:
             return WaterBalanceStatus.OK
@@ -386,7 +420,8 @@ def evaluate_rainfed_advice(
     2. rain_expected: active cycle, Dr >= RAW and 7d rain >= Dr.
     3. conserve_moisture: active cycle, Dr >= RAW and 7d rain < Dr.
     4. prioritize_harvest: conserve_moisture in stage 'late'.
-    5. no_action: active cycle, Dr < RAW.
+    5. no_action: active cycle, Dr < RAW, or RAW <= 0 (degenerate soil: no positive
+       threshold to be at or above, D5, R3-003).
     """
     if not has_active_cycle:
         if forecast_rain_7d_mm < forecast_et0_7d_mm:
@@ -394,7 +429,7 @@ def evaluate_rainfed_advice(
         return ()
 
     advice: list[RainfedAdvice] = []
-    if dr >= raw:
+    if raw > 0 and dr >= raw:
         if forecast_rain_7d_mm >= dr:
             advice.append(RainfedAdvice.RAIN_EXPECTED)
         else:
@@ -501,7 +536,9 @@ def decide_recommendation(
         )
 
     # Branch: plot with an irrigation system
-    if dr < raw:
+    if dr < raw or raw <= 0:
+        # RAW <= 0 (degenerate soil): no positive threshold to be at or above, so
+        # never postpone/irrigate an irrigated plot on that data (D5, R3-003).
         return IrrigationRecommendation(
             kind=RecommendationKind.NOT_NEEDED,
             depth_mm=None,
