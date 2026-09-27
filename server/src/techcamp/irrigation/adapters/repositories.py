@@ -181,14 +181,8 @@ class SqlAlchemyIrrigationRecommendationRepository:
         Updates existing decision in place if re-run on the same day.
         """
         rec_id = recommendation.id or recommendation_id or uuid7()
-        advice_list = [
-            a.value if isinstance(a, RainfedAdvice) else str(a) for a in recommendation.advice
-        ]
-        kind_str = (
-            recommendation.kind.value
-            if isinstance(recommendation.kind, RecommendationKind)
-            else str(recommendation.kind)
-        )
+        advice_list = [a.value for a in recommendation.advice]
+        kind_str = recommendation.kind.value
         insert_stmt = pg_insert(IrrigationRecommendationRow).values(
             id=rec_id,
             plot_id=plot_id,

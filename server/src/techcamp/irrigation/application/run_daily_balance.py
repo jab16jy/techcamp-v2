@@ -47,6 +47,7 @@ from techcamp.telemetry.application.ports import (
     ReadingRepository,
     SensorRepository,
 )
+from techcamp.telemetry.domain.models import CalibrationKind
 from techcamp.weather.application.ports import WeatherRepository
 from techcamp.weather.domain.models import WeatherDay
 
@@ -349,8 +350,7 @@ async def run_daily_balance(
                 cal = await calibrations.get_latest_valid_at(sensor.id, plot.org_id, at=now)
                 if cal is None:
                     continue
-                cal_kind_str = cal.kind.value if hasattr(cal.kind, "value") else str(cal.kind)
-                if cal_kind_str.lower() != "field":
+                if cal.kind is not CalibrationKind.FIELD:
                     continue
 
                 # 3. Daily mean of D-1 from query_daily

@@ -148,7 +148,7 @@ async def get_plot_water_balance(
             soil_moisture_obs_pct=item.soil_moisture_obs_pct,
             assimilation_k=item.assimilation_k,
             stress_moisture_pct=item.stress_moisture_pct,
-            status=item.status.value if hasattr(item.status, "value") else str(item.status),
+            status=item.status.value,
         )
         for item in items
     ]
