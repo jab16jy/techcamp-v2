@@ -186,6 +186,18 @@ work unit (`domain-modeling`).
 - D13 Factory rule values that docs/06 §3 does not give (hysteresis of `heat_stress` 1 °C,
   `waterlogging` 3, `fungal_risk` 5 %, `node_battery_low` 0.1 V) are seeded as pending
   agronomist validation (docs/06 §3: "Los umbrales se validan con un agrónomo antes del piloto").
+- D16 T5's hot evaluation runs in its own transaction, not in the readings' one. The ingestor
+  commits each batch inside its repositories (`insert_batch` commits in
+  `telemetry/adapters/repositories.py:463`, and the node update commits too), so no transaction
+  is open where the alert could be written; docs/06 §1's "misma transacción" line described an
+  intent the code never had. What stays atomic is the alert together with its `notification`
+  rows (ADR-0016, docs/06 §4, already true in `SqlAlchemyAlertRepository.insert`). The lost
+  window is self-healing because the evaluation is stateless over the stored readings (D1): any
+  rule that can open needs a sustained series (`min_duration`), so a batch that lands without
+  its alert is re-evaluated by the next batch of that plot and opens it then. T5 corrects
+  docs/06 §1 to state that guarantee instead of the old one, and keeps the transactional
+  refactor out of the epic on purpose: making `ingest_uplinks` own the transaction would touch
+  the status path and the flush retry, which is a unit of its own.
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
