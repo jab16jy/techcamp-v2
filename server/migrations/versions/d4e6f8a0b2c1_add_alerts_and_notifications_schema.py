@@ -1,7 +1,7 @@
 """add alerts and notifications schema
 
 Revision ID: d4e6f8a0b2c1
-Revises: b7e2c9a41d38
+Revises: d8a2f1c4e9b7
 Create Date: 2026-09-26 18:00:00.000000
 
 """
@@ -16,7 +16,7 @@ from techcamp.alerts.adapters.seed import FACTORY_RULES
 
 # revision identifiers, used by Alembic.
 revision: str = "d4e6f8a0b2c1"
-down_revision: Union[str, Sequence[str], None] = "b7e2c9a41d38"
+down_revision: Union[str, Sequence[str], None] = "d8a2f1c4e9b7"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
