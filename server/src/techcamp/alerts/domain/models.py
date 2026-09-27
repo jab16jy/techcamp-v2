@@ -132,6 +132,85 @@ class AlertRuleChanges:
 
 
 @dataclass(frozen=True, slots=True)
+class CellDay:
+    """One `weather_daily` row as the alert rules read it (docs/03 `weather_daily`).
+
+    A copy here rather than a `weather` domain import: docs/05 grants `alerts`
+    the `weather` APPLICATION package, and these four measures plus the fetch
+    that produced them are the whole of the row an alert is decided on.
+    `fetched_at` is when the provider produced the row, which is the only
+    timestamp a daily aggregate has: it is when the evidence became known, and
+    so what the freshness rule of docs/06 §3 is measured against.
+    """
+
+    fetched_at: datetime
+    rain_mm: float | None = None
+    rh_mean_pct: float | None = None
+    tmin_c: float | None = None
+    tmax_c: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ForecastRainEvidence:
+    """The forecast day's rain `heavy_rain_forecast` is decided on (D20).
+
+    `value` is what `decide_worker_rule` compares against the rule's own
+    threshold and `is_mild` the second half of its condition, so the application
+    carries no branch per rule. This rule has no second half, so `is_mild` is
+    always true.
+    """
+
+    observed_at: datetime
+    rain_mm: float
+
+    @property
+    def value(self) -> float:
+        return self.rain_mm
+
+    @property
+    def is_mild(self) -> bool:
+        """`heavy_rain_forecast` names no temperature, so it has nothing to gate."""
+        return True
+
+
+@dataclass(frozen=True, slots=True)
+class CellDayHumidityEvidence:
+    """The cell-day humidity and mean temperature `fungal_risk` is decided on (D19).
+
+    The rule is a humid **and mild** day, and its own columns are only
+    `air_rh > 85`, so the temperature half cannot be expressed as a threshold:
+    the evidence carries the real humidity as `value` and the day's real
+    temperature as `is_mild`, and the decision reads both. A day whose
+    temperature the provider never stored is not a mild day — the half is
+    unsaid, and an unsaid half neither opens the rule nor clears it silently
+    into a made-up value.
+    """
+
+    observed_at: datetime
+    rh_mean_pct: float
+    mean_temp_c: float | None
+
+    @property
+    def value(self) -> float:
+        return self.rh_mean_pct
+
+    @property
+    def is_mild(self) -> bool:
+        return (
+            self.mean_temp_c is not None
+            and FUNGAL_MIN_TEMP_C <= self.mean_temp_c <= FUNGAL_MAX_TEMP_C
+        )
+
+
+WorkerRuleEvidence = ForecastRainEvidence | CellDayHumidityEvidence
+"""The two members of the forecast source's evidence, one per rule code."""
+
+FUNGAL_MIN_TEMP_C = 20.0
+FUNGAL_MAX_TEMP_C = 30.0
+"""docs/06 §3: `fungal_risk` asks for a mean temperature of 20-30 °C (D19)."""
+
+
+@dataclass(frozen=True, slots=True)
 class Alert:
     """Alert entity value (docs/03:284-297; docs/06 §3).
 
@@ -342,6 +421,122 @@ def decide_node_health(
             action=AlertAction.RESOLVE, alert=current_alert.resolve_automatically(at)
         )
 
+    return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)
+
+
+def mean_daily_temp_c(tmin_c: float | None, tmax_c: float | None) -> float | None:
+    """The mean temperature of a cell-day, `(tmin_c + tmax_c) / 2` (D19).
+
+    The only form a stored `weather_daily` row carries temperature in (Open-Meteo
+    is called with daily variables, docs/06 §6), and `None` when the provider has
+    no value for one of the two ends: a day without a temperature is not a mild
+    day, and saying so is the honest answer, not a zero.
+    """
+    if tmin_c is None or tmax_c is None:
+        return None
+    return (tmin_c + tmax_c) / 2.0
+
+
+def worker_rule_evidence(
+    rule: AlertRule, *, observed: CellDay | None, forecast: CellDay | None
+) -> WorkerRuleEvidence | None:
+    """The evidence a worker rule of docs/06 §3 is decided on, or `None` when the
+    rule belongs to another source or the cell-day has nothing to read.
+
+    The rule code is the discriminator (`alert_rule` has no `source` column,
+    D17) and it is read here, in the domain, so the application supplies values
+    and carries no branch per rule — the same shape as `plot_rule_metric`.
+
+    - `heavy_rain_forecast` is the FORECAST row's `rain_mm` for the forecast
+      day: D20, a day is the 24 h the rule names, so the value is read and not
+      summed over a window
+    - `fungal_risk` is the OBSERVED row's humidity, never the forecast's: a
+      forecast is not an observation of the day that already happened (D19)
+    """
+    if rule.code == "heavy_rain_forecast":
+        if forecast is None or forecast.rain_mm is None:
+            return None
+        return ForecastRainEvidence(observed_at=forecast.fetched_at, rain_mm=forecast.rain_mm)
+    if rule.code == "fungal_risk":
+        if observed is None or observed.rh_mean_pct is None:
+            return None
+        return CellDayHumidityEvidence(
+            observed_at=observed.fetched_at,
+            rh_mean_pct=observed.rh_mean_pct,
+            mean_temp_c=mean_daily_temp_c(observed.tmin_c, observed.tmax_c),
+        )
+    return None
+
+
+def worker_rule_opening_severity(rule: AlertRule, *, saturated: bool) -> Severity | None:
+    """The severity a worker rule opens at, or `None` to keep the rule's own.
+
+    D20: `heavy_rain_forecast` is critical when the plot's soil is saturated, and
+    the severity is decided WHEN THE ALERT OPENS: one write, one notification,
+    the right severity from the start. The evaluator passes it to `open_alert`
+    instead of opening a `warning` and upgrading it, because `decide_alert`'s
+    upgrade branch belongs to `water_stress` (D5).
+    """
+    if rule.code == "heavy_rain_forecast" and saturated:
+        return Severity.CRITICAL
+    return None
+
+
+def decide_worker_rule(
+    rule: AlertRule,
+    samples: Sequence[tuple[datetime, float]],
+    at: datetime,
+    *,
+    max_gap: timedelta,
+    current_alert: Alert | None = None,
+    is_mild: bool = True,
+) -> AlertDecision:
+    """Decide a rule of the forecast source of docs/06 §3 on its own aggregate.
+
+    Its own decision, like `decide_node_health` and for the same reason: the
+    evidence of these rules is one value per day, and neither of the two windows
+    `decide_alert` opens with is computable from it. `min_duration` in minutes
+    is a window in units a single aggregate does not have — with one sample the
+    run is always 0, so the seeded `min_duration_min` of `fungal_risk` (600) is
+    a rule that could never fire, and D19 removes the duration instead. The 60
+    minute resolution window fails the same way (D22), so these rules resolve on
+    the FIRST false evaluation, the hysteresis band still applying.
+
+    - no alert + the aggregate violates the condition AND `is_mild` -> open
+    - open/acknowledged + the day is not mild, or the aggregate clears the
+      condition beyond the hysteresis band -> resolve
+    - otherwise no action
+
+    `is_mild` is the second half of a rule's condition, decided by the evidence
+    that carries it (`WorkerRuleEvidence.is_mild`, D19) and `True` for a rule
+    that names no temperature, so the caller never discriminates on the code.
+
+    `max_gap` is the freshness margin (see `heard_from_run`): an aggregate older
+    than it at `at` is not evidence that the condition still holds, so nothing
+    is decided from it.
+    """
+    if current_alert is not None and current_alert.state is AlertState.RESOLVED:
+        current_alert = None
+    if rule.threshold is None or rule.operator not in ("<", ">"):
+        return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)
+    if heard_from_run(samples, at, max_gap=max_gap) is None:
+        return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)
+
+    value = max(samples, key=lambda sample: sample[0])[1]
+    if current_alert is None:
+        return AlertDecision(
+            action=(
+                AlertAction.OPEN
+                if is_mild and is_condition_met(rule.operator, value, rule.threshold)
+                else AlertAction.NO_ACTION
+            ),
+            alert=None,
+        )
+    if not is_mild or is_clear_met(rule.operator, value, rule.threshold, rule.hysteresis):
+        return AlertDecision(
+            action=AlertAction.RESOLVE,
+            alert=current_alert.resolve_automatically(at),
+        )
     return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)
 
 

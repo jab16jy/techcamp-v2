@@ -12,7 +12,7 @@ resolved by `open_alert` (D4) whether or not a test person is attached.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -21,9 +21,15 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.jobs import (
+    EVALUATE_ORG_FORECAST_TASK_NAME,
+    EVALUATE_ORG_FUNGAL_TASK_NAME,
     EVALUATE_ORG_TASK_NAME,
     QUEUE_NAME,
+    evaluate_org_forecast_rules,
+    evaluate_org_fungal_risk,
     evaluate_org_node_health,
+    sweep_forecast_rules,
+    sweep_fungal_risk,
     sweep_node_health,
 )
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
@@ -31,6 +37,7 @@ from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import OrganizationRow
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow
+from techcamp.weather.adapters.orm import WeatherCellRow, WeatherDailyRow
 
 pytestmark = pytest.mark.anyio
 
@@ -179,3 +186,139 @@ async def test_the_org_job_opens_the_alert_of_a_silent_node_and_skips_a_recent_o
     alerts = await _node_alerts(db_session, org.org_id)
     assert len(alerts) == 1
     assert alerts[0] == ("node_offline", "open")
+
+
+# -- the forecast and daily rules on their own periodics (D10, D20, D23) --
+
+
+async def test_the_weather_sweeps_defer_one_job_per_org_with_their_own_locks(
+    db_session: AsyncSession,
+) -> None:
+    """D23 fixes the two hours docs/10 §3 does not name: the forecast rules ten
+    minutes after each 3 h refresh, `fungal_risk` after the 04:30 balance and
+    before the 05:00 morning push. Each sweep reads the orgs that have PLOTS (a
+    weather rule is about a plot) and defers one job per org, on its own lock so
+    the two sources never wait on each other."""
+    first = await _make_org(db_session)
+    second = await _make_org(db_session)
+    # An organization with no plot has nothing a weather rule could be decided
+    # for, so it must not cost a job.
+    empty = uuid7()
+    db_session.add(OrganizationRow(id=empty, name="Empty Org", kind="individual"))
+    await db_session.commit()
+
+    await sweep_forecast_rules(timestamp=0)
+    await sweep_fungal_risk(timestamp=0)
+
+    jobs = await _jobs(db_session)
+    expected = {str(first.org_id), str(second.org_id)}
+    assert len(jobs) == 4
+    assert {job.args["org_id"] for job in jobs} == expected
+    assert {job.task_name for job in jobs} == {
+        EVALUATE_ORG_FORECAST_TASK_NAME,
+        EVALUATE_ORG_FUNGAL_TASK_NAME,
+    }
+    assert all(job.queue_name == QUEUE_NAME and job.status == "todo" for job in jobs)
+    assert {job.lock for job in jobs} == {
+        f"alerts:org:{org_id}:{source}" for org_id in expected for source in ("forecast", "fungal")
+    }
+    assert {job.queueing_lock for job in jobs} == {job.lock for job in jobs}
+    assert str(empty) not in {job.args["org_id"] for job in jobs}
+
+
+async def test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cell_day(
+    db_session: AsyncSession,
+) -> None:
+    """Each job decides the day its own rule is about, read from the run's own
+    clock: the forecast rule the next forecast day, `fungal_risk` the cell-day
+    the 03:00 consolidation just closed. A row for any other day is ignored."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    await _point_plot_at_cell(db_session, org, cell_id)
+    now = datetime.now(UTC)
+    forecast_day = now.date() + timedelta(days=1)
+    cell_day = now.date() - timedelta(days=1)
+    _store_weather(db_session, cell_id, forecast_day, True, rain_mm=62.0, fetched_at=now)
+    _store_weather(
+        db_session,
+        cell_id,
+        cell_day,
+        False,
+        rh_mean_pct=90.0,
+        tmin_c=21.0,
+        tmax_c=25.0,
+        fetched_at=now,
+    )
+    await _commit(db_session)
+
+    await evaluate_org_forecast_rules(org_id=str(org.org_id))
+    await evaluate_org_fungal_risk(org_id=str(org.org_id))
+
+    assert sorted(await _plot_alerts(db_session, org.org_id)) == [
+        ("fungal_risk", "open"),
+        ("heavy_rain_forecast", "open"),
+    ]
+
+
+async def _cell(db_session: AsyncSession) -> int:
+    """The one 0.1° cell the org's plot falls into (D23: a cell is shared)."""
+    row = WeatherCellRow(lat=10.9, lon=-74.1)
+    db_session.add(row)
+    await db_session.commit()
+    return row.id
+
+
+async def _point_plot_at_cell(db_session: AsyncSession, org: Org, cell_id: int) -> None:
+    db_session.add(
+        PlotRow(
+            id=uuid7(),
+            org_id=org.org_id,
+            farm_id=org.farm_id,
+            name="Lote con celda",
+            boundary=_BOUNDARY,
+            irrigation_system="drip",
+            weather_cell_id=cell_id,
+        )
+    )
+    await db_session.commit()
+
+
+def _store_weather(
+    db_session: AsyncSession,
+    cell_id: int,
+    day: date,
+    is_forecast: bool,
+    *,
+    fetched_at: datetime,
+    rain_mm: float | None = None,
+    rh_mean_pct: float | None = None,
+    tmin_c: float | None = None,
+    tmax_c: float | None = None,
+) -> None:
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=day,
+            is_forecast=is_forecast,
+            et0_mm=4.2,
+            rain_mm=rain_mm,
+            tmin_c=tmin_c,
+            tmax_c=tmax_c,
+            rh_mean_pct=rh_mean_pct,
+            fetched_at=fetched_at,
+        )
+    )
+
+
+async def _commit(db_session: AsyncSession) -> None:
+    await db_session.commit()
+
+
+async def _plot_alerts(db_session: AsyncSession, org_id: UUID) -> list[tuple[str, str]]:
+    """`(rule_code, state)` of the org's plot alerts."""
+    rows = await db_session.execute(
+        select(AlertRuleRow.code, AlertRow.state)
+        .join(AlertRow, AlertRow.rule_id == AlertRuleRow.id)
+        .where(AlertRow.org_id == org_id)
+    )
+    return [(code, state) for code, state in rows]

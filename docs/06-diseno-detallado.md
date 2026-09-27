@@ -113,7 +113,7 @@ stateDiagram-v2
 - **Una sola alerta abierta** por (`rule_id`, `plot_id`/`node_id`). Lo garantiza un índice único parcial en la base, no el código.
 - `Pending` no se persiste como alerta; la condición sostenida se evalúa sin estado sobre las lecturas de la ventana (`min_duration_min` hacia atrás desde la última lectura), iniciando la racha en la primera lectura tras la última que incumplió la condición.
 - **Tolerancia de huecos y frescura:** dos lecturas solo cuentan como consecutivas si no media un hueco mayor que `max_gap`, que es 3 × `interval_s` del nodo que las produjo (el mismo margen que define `node_offline`). Un hueco mayor termina la racha igual que una lectura que incumple: la racha reinicia en la lectura siguiente al hueco. Y si la última lectura es más antigua que `max_gap` en el momento de evaluar, no hay racha: el nodo está caído y lo almacenado no es evidencia de que la condición siga vigente. Aplica igual a la racha que abre una alerta y a la de 60 min que la resuelve.
-- **Ventana de resolución:** la resolución automática exige que la condición de cierre (superando la banda de histéresis) se mantenga sostenida durante 60 minutos (constante de dominio).
+- **Ventana de resolución:** la resolución automática exige que la condición de cierre (superando la banda de histéresis) se mantenga sostenida durante 60 minutos (constante de dominio). Esa ventana pertenece a las reglas **que tienen una serie**: `heavy_rain_forecast` (cada 3 h sobre un agregado diario) y `fungal_risk` (diario sobre el día anterior) no tienen evidencia más fina que su propia cadencia, así que una racha de 60 min no es computable — con una sola muestra por evaluación la racha es 0 y la alerta nunca se resolvería. Esas dos se resuelven en la **primera evaluación falsa**, sigue aplicando la banda de histéresis.
 - **Reloj de escalamiento:** el plazo de 2 h para escalar una alerta crítica no reconocida corre desde `opened_at`; una alerta ascendida a crítica tras 48 h escala en su siguiente revisión.
 - Escalar una alerta crítica notifica por SMS o WhatsApp al técnico asignado a la finca (`farm.technician_id`).
 - Las alertas de nodo van al técnico, no al productor ([01-requisitos](01-requisitos.md), escenario C).
@@ -125,13 +125,15 @@ stateDiagram-v2
 | `water_stress` | Con sensor representativo: humedad < θ_estrés de la parcela durante 6 h. Sin él: `Dr > RAW` en el balance diario ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | warning; crítica si dura 48 h |
 | `waterlogging` | Humedad de suelo > capacidad de campo + 5 durante 24 h | warning |
 | `heat_stress` | Temperatura del aire > 35 °C durante 3 h | warning |
-| `fungal_risk` | Humedad relativa > 85 % durante ≥ 10 h en el día y temperatura media de 20–30 °C | warning |
+| `fungal_risk` | Humedad relativa media del día > 85 % y temperatura media de 20–30 °C, calculada como `(tmin_c + tmax_c) / 2`; sin duración | warning |
 | `heavy_rain_forecast` | Pronóstico > 50 mm en 24 h | warning; crítica si el suelo está saturado |
 | `flood_risk` / `drought_risk` | Severidad del modelo ≥ `alto` | crítica |
 | `node_offline` | Sin lecturas durante 3 intervalos | warning (al técnico) |
 | `node_battery_low` | `battery_v` < 3,4 V — regla sembrada e **inactiva**: no hay sensor ni columna `battery_v` en el sistema actual, así que queda a la espera de que exista esa fuente | info (al técnico) |
 
 - **Salud del nodo (ausencia de evidencia):** `node_offline` no es un umbral sobre una serie, sino la ausencia de una lectura: se decide en el dominio sobre `at - last_seen_at` del propio nodo contra 3 × su `interval_s` (o `last_seen_at` nulo, si nunca reportó), y se resuelve cuando el nodo lleva 60 min seguidos hablando sin un hueco mayor que ese mismo margen (ventana de resolución, 60 min). Por eso no se busca un operador ni un umbral en la fila de `alert_rule`.
+- **Reglas de pronóstico (`heavy_rain_forecast`, `fungal_risk`):** se deciden en el `worker` sobre un agregado por celda y día, no sobre una serie, así que no piden duración: `min_duration_min` es 0 y la ventana de 60 min no les aplica (se resuelven en la primera evaluación falsa). `fungal_risk` se evalúa sobre la fila **observada** del día anterior —un pronóstico no es una observación de un día que ya pasó— y su media térmica sale de los dos extremos almacenados; el matiz de "≥ 10 h en el día" que pedía la versión anterior espera al clima horario (tabla, variables y migración propias) y queda pendiente de validación agronómica.
+- **Suelo saturado (proxy):** la severidad crítica de `heavy_rain_forecast` se calcula con la última lectura de humedad de suelo de la parcela **igual o por encima de su capacidad de campo** θFC. Es un proxy pendiente de validación agronómica: la saturación real es el suelo *por encima* de la capacidad de campo, y esta versión solo puede afirmar "el suelo llegó a capacidad de campo". La señal es la última muestra válida de la parcela, no el sensor representativo por profundidad que E6 decide para el balance; la versión por profundidad llega con `water_stress` ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)).
 
 ## 4. Notificaciones (outbox)
 

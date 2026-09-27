@@ -50,6 +50,7 @@ async def open_alert(
     plot_id: UUID | None = None,
     node_id: UUID | None = None,
     evidence: dict[str, Any] | None = None,
+    severity: Severity | None = None,
 ) -> Alert:
     """Open an alert for one evaluated (rule, target), idempotently.
 
@@ -57,6 +58,12 @@ async def open_alert(
     alert already open for that pair is returned untouched, so a second batch
     that still violates the rule sends no second notice; the partial unique
     index is the backstop for the race between two writers.
+
+    `severity` overrides the rule's own for an evaluator that decides it from
+    the evidence instead of from the row (D20: `heavy_rain_forecast` is critical
+    when the plot's soil is saturated, and it is decided HERE so the alert opens
+    once at the right severity with one notification, instead of opening
+    `warning` and taking the `upgrade_to_critical` path afterwards).
     """
     if (plot_id is None) == (node_id is None):
         raise ValueError("An alert targets exactly one of plot_id or node_id")
@@ -69,7 +76,7 @@ async def open_alert(
     alert = Alert(
         id=uuid7(),
         state=AlertState.OPEN,
-        severity=rule.severity,
+        severity=severity or rule.severity,
         opened_at=at,
         org_id=target.org_id,
         rule_id=rule.id,

@@ -35,7 +35,7 @@ _DOCUMENTED_RULES: dict[str, tuple[str | None, decimal.Decimal | None, int, str]
     "water_stress": ("<", None, 360, "warning"),
     "waterlogging": (">", None, 1440, "warning"),
     "heat_stress": (">", decimal.Decimal("35"), 180, "warning"),
-    "fungal_risk": (">", decimal.Decimal("85"), 600, "warning"),
+    "fungal_risk": (">", decimal.Decimal("85"), 0, "warning"),
     "heavy_rain_forecast": (">", decimal.Decimal("50"), 0, "warning"),
     "flood_risk": (None, None, 0, "critical"),
     "drought_risk": (None, None, 0, "critical"),
