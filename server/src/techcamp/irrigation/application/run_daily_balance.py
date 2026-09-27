@@ -217,7 +217,7 @@ async def run_daily_balance(
         )
 
     # Branch: kc_source is none -> no_kc recommendation, skip balance row
-    if crop.kc_source is KcSource.NONE:
+    if crop.kc_source == KcSource.NONE:
         weather_rows = await weather.list_daily(
             plot.weather_cell_id, from_day=d_balance, to_day=d_rec + timedelta(days=6)
         )
