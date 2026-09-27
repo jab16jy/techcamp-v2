@@ -264,6 +264,23 @@ work unit (`domain-modeling`).
   docs/06 §1 to state that guarantee instead of the old one, and keeps the transactional
   refactor out of the epic on purpose: making `ingest_uplinks` own the transaction would touch
   the status path and the flush retry, which is a unit of its own.
+- D24 T5c: the per-plot isolation of the reading-rule evaluation belongs to `alerts`, not to
+  `telemetry`. The ingestor awaits the hook inside its flush, so one plot that raised used to stop
+  the plot loop AND re-queue the whole batch through `_flush_with_retry`, which then failed
+  identically on every attempt and grew to the batcher cap: a poison batch that silenced the
+  alerts of every plot sharing it, while losing no readings (they are committed before the hook).
+  `evaluate_landed_readings` now evaluates each plot inside its own `try`, logs the failure with
+  its org and plot, and continues. `telemetry` is left alone on purpose: swallowing there would
+  hide a real flush failure from the retry that D16 relies on, and it would put an `alerts`
+  decision in a module that must not know the module exists (D9). The skipped plot costs one
+  batch, never the alert: the evaluation is stateless over the stored readings (D1, D16), so the
+  plot's next batch decides it again, and a failure of the flush itself, BEFORE the hook, still
+  re-queues so R3-RetrySkipsAlertEvaluation keeps holding. docs/06 §1 now names both halves. The
+  same unit hoists `sensors.list_for_node` out of the per-rule loop (`_sensors_by_metric`, once
+  per plot): every rule of a plot asks the same question of the same nodes, so N × R sensor reads
+  become N, with the readings still read per rule because each rule has its own window. Same
+  behavior, and the sample semantics are deliberately untouched — what a plot rule MEANS over
+  several sensors is still undecided (#131).
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
@@ -297,6 +314,12 @@ work unit (`domain-modeling`).
 - Q2 `water_stress` trigger b (`Dr > RAW` from the balance): E7 evaluates it in an alerts job after
   E6's 04:30 balance job, reading `water_balance_daily` (the row for D−1); E6 did not wire a call
   into its job, so the alerts job stands (settled 2026-09-26 with the E6 coordination note).
+- Q3 A plot rule whose metric is read by more than one sensor of the plot: decided per node, on an
+  aggregate, or on the merged series? docs/06 §3 does not say, and on the merged series two
+  disagreeing depths (20 cm and 40 cm) make the healthy value the last sample of the series, so
+  `sustained_run` answers `None` on every evaluation and the rule can never open. Found by T5c,
+  which kept the semantics identical on purpose: **#131**. Owner decision needed before T10 gives
+  `water_stress` its per-plot threshold.
 
 ## Tasks
 - [x] T1 Schema: migration from `b7e2c9a41d38` for `alert_rule` (+ factory rules seeded),
@@ -332,6 +355,22 @@ work unit (`domain-modeling`).
   1,059 authored (`7e98815` 721, `4e7201d` 111, `db19ece` 109, `a204e92` 118) + decisions
   D16, D17 — **validation pending**: the lineage is closed at `correction_required` because the
   correction-plan capture is refused (see Review (RDD))
+- [x] T5c Isolate each plot's rule evaluation in the ingest hook (T5 follow-up from the parent's
+  review, 2026-09-27): a plot whose evaluation raises must not stop the plots after it in the same
+  batch, and `sensors.list_for_node` is read once per plot instead of once per rule — route:
+  delegated direct, Herdr OpenCode (worktree `e7-t5-isolation`, branch `fix/e7-t5-plot-isolation`
+  branched from `feat/e7-alerts` @ `f1270a7`; the writer owns its RDD) — triggers: writer (2+
+  non-trivial files) and preparation (the sensor read and the sample semantics were mapped with
+  CodeGraph `explore` on `ingest_uplinks` / `after_flush` / `evaluate_landed_readings` /
+  `_evaluate_plot` / `_samples` and on `sustained_run` before any grep or read, no fallback) —
+  forecast ~120 — actual 189 changed lines in one commit (`19780b3`: 76 production / 76 tests /
+  1 docs line) + decision D24 — **PENDING, tests written but execution deferred to T11** (owner
+  decision 2026-09-27, time pressure): no database was started and no test suite was run in this
+  worktree, so neither RED nor GREEN was observed here; the four static checks are green (see
+  Progress / evidence). The pin is `test_a_plot_whose_evaluation_raises_does_not_silence_the_
+  next_plot` (`_SensorsFailingForOneNode` raises at the sensor port the evaluator already uses,
+  and the test carries the negative assertion: the failed plot shows NO alert and the next plot
+  shows its own). No push, no merge: the parent merges this branch.
 - [ ] T6 Worker rules
   - [x] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
     `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Pi subagent —
@@ -499,6 +538,14 @@ work unit (`domain-modeling`).
   `gentle_review_capture` must omit `workspaceRoot` — the collect-binding route is registered
   under the session cwd, so passing the E7 worktree was refused as "different session route".
   Boundary → `577a405`.
+- T5c (`f1270a7..19780b3`, 5 files, 189 changed lines): the writer owns its own RDD from the
+  `e7-t5-isolation` worktree on branch `fix/e7-t5-plot-isolation`, per-slice committed range with
+  base `f1270a7`. `gentle-ai review assess --base-ref f1270a7 --committed-only --json`:
+  **medium** (`executable_change` on `alerts/adapters/evaluate_readings.py`), 189 changed lines,
+  `review_due: false` / `under_budget` — under the standing per-task budget this range would stay
+  pending in the slice; the owner asked for the review explicitly in the T5c brief, so the
+  lifecycle was entered anyway through the selectorless STATUS (which is the only authority that
+  may offer a START). Standing consent grant applied (owner's default for feature candidates).
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
@@ -546,9 +593,37 @@ work unit (`domain-modeling`).
   full suite 727 passed, ruff, format, mypy, lint-imports green. The writer changed the planned
   sequential test for a barrier-synchronised concurrent pair, because a sequential PATCH cannot
   observe the defect (each request would read a fresh row) — accepted, it is the stronger test.
-- Next step: T6b (`heavy_rain_forecast` after the 3 h refresh, `fungal_risk` daily), with D10
-  already settling the cadence question — a separate alerts periodic a few minutes after the
-  refresh, NOT a call from the weather job, because docs/05 has no `weather → alerts` edge (the
+- T5c 2026-09-27 (writer: Herdr OpenCode, worktree `e7-t5-isolation`, branch
+  `fix/e7-t5-plot-isolation` @ `f1270a7`, brief `.git-brief-e7-T5-isolation.md`; the `e7-alerts`
+  worktree was never touched, another writer is on T6b there). Read: AGENTS.md, D9/D14/D16/D17,
+  the T5 sections of this doc, docs/06 §1 and §3, the telemetry/alerts/farms ports, the existing
+  alerts tests. Mapped with CodeGraph (`explore` on the ingest hook, `_evaluate_plot`, `_samples`,
+  `sensors.list_for_node`, `_flush_with_retry`; then `explore` on `sustained_run` /
+  `decide_alert` to describe #131 exactly); index created in this worktree, no fallback, no
+  index copied from another checkout.
+  - TDD: the pin `test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot` is written
+    in `tests/alerts/test_evaluate_readings.py` (a `_SensorsFailingForOneNode` double raises at the
+    sensor port the evaluator already uses; both plots carry the same 3 h heat run, and the test
+    asserts the failed plot opened NOTHING and the next one opened its own). **Neither RED nor
+    GREEN was observed: the owner deferred every suite run to T11/final verification
+    (2026-09-27, time pressure), so no database was started here. T11 owns the execution.**
+  - Static checks run in `server/` on `19780b3`: `uv run ruff check`: All checks passed;
+    `uv run ruff format --check`: 228 files already formatted; `uv run mypy`: Success, no issues
+    in 154 source files; `uv run lint-imports`: 1 contract kept, 0 broken (hexagonal layers per
+    module KEPT). `telemetry` still does not import `alerts`, and the isolation is inside
+    `alerts`.
+  - #131 opened for the open product question (a plot rule over several sensors of one plot:
+    per node, aggregate, or merged series) — the merged series today makes the healthy value the
+    last sample, so `sustained_run` answers `None` every time and the rule can never open. Labels
+    used: `epic:e7`, `area:server`, `type:feature`; the brief's `area:alerts` and `type:design`
+    do not exist in this repository's label set and creating labels was not authorized, so the
+    nearest existing labels were used.
+- Next step: the parent merges `fix/e7-t5-plot-isolation` into `feat/e7-alerts` (no push, no merge
+  from this worktree), and T11 runs the suites these tests were written for. T6b
+  (`heavy_rain_forecast` after the 3 h refresh, `fungal_risk` daily) is running in the other
+  worktree, with D10 already settling the cadence question — a separate alerts periodic a few
+  minutes after the refresh, NOT a call from the weather job, because docs/05 has no
+  `weather → alerts` edge (the
   parent had said it would defer from inside the refresh; that was wrong and D10's reason is the
   one that holds). D19, D20 and D22 shape the two rules. Then T7a/b/c, T8, T9, T10, T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
