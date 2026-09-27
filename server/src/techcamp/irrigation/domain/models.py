@@ -9,16 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from techcamp.irrigation.domain.errors import InvalidCropStagesError
-
-BOGOTA_TZ = ZoneInfo("America/Bogota")
-"""The single local timezone of the product (docs/04-api.md:63-75, docs/06 §5)."""
 
 
 class RecommendationKind(StrEnum):
@@ -151,20 +147,6 @@ class StoredIrrigationRecommendation:
     duration_min: int | None
     advice: tuple[RainfedAdvice, ...]
     rationale: dict[str, Any]
-
-
-def local_today(now: datetime) -> date:
-    """The date of `now` in America/Bogota, the product's local day.
-
-    A naive `now` is read as UTC, which is how the application layer stores and
-    passes instants, so a naive value cannot silently become local time. Every
-    irrigation read that defaults a date ("today" for a recommendation, "yesterday"
-    for a water balance) resolves it through here, so one place owns the timezone
-    (docs/04-api.md:63-75; docs/06 §5).
-    """
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
-    return now.astimezone(BOGOTA_TZ).date()
 
 
 def stage_for_cycle_day(stages: Sequence[StageLike], day_of_cycle: int) -> str:

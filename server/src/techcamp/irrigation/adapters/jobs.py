@@ -35,7 +35,7 @@ from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyWaterBalanceRepository,
 )
 from techcamp.irrigation.application.run_daily_balance import run_daily_balance
-from techcamp.irrigation.domain.models import local_today as local_day_in_bogota
+from techcamp.shared.dates import local_today
 from techcamp.shared.db import async_session_factory
 from techcamp.shared.jobs import app
 from techcamp.telemetry.adapters.repositories import (
@@ -62,16 +62,6 @@ def _is_queueing_lock_violation(exc: IntegrityError) -> bool:
     """
     cause = exc.orig.__cause__ if exc.orig is not None else None
     return isinstance(cause, UniqueViolationError) and cause.constraint_name == QUEUEING_LOCK_INDEX
-
-
-def local_today() -> datetime.date:
-    """Today in the DAG's zone, which is America/Bogota (docs/10-dag.md:156;
-    docs/06 §5).
-
-    The zone and the conversion belong to the domain, so the job entry points
-    read the clock and hand the instant over rather than owning a second copy
-    of the same rule."""
-    return local_day_in_bogota(datetime.datetime.now(datetime.UTC))
 
 
 async def eligible_plot_ids(session: AsyncSession) -> list[UUID]:

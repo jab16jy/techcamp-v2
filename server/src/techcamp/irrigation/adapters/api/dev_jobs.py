@@ -13,7 +13,8 @@ import datetime
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from techcamp.irrigation.adapters.jobs import QUEUE_NAME, local_today, run_daily_plots
+from techcamp.irrigation.adapters.jobs import QUEUE_NAME, run_daily_plots
+from techcamp.shared.dates import local_today
 from techcamp.shared.errors import ProblemError
 from techcamp.shared.jobs import app as jobs_app
 
