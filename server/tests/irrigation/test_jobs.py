@@ -380,6 +380,73 @@ async def test_skipped_plot_logs_and_stores_nothing(
     assert await recs.get_for_plot(plot_id, target_day) is None
 
 
+class _RaisingRecommendationRepository:
+    """Always raises on upsert, standing in for
+    `SqlAlchemyIrrigationRecommendationRepository` to prove atomicity
+    (R3-atomic-write-unproved): `run_daily_balance` itself never commits (only
+    flushes, T3b/docs check), and the caller (`run_plot_balance`) commits once
+    at the end, so a failure here must leave no balance row behind either.
+    """
+
+    def __init__(self, _session: AsyncSession) -> None:
+        pass
+
+    async def upsert(
+        self, recommendation: object, *, plot_id: UUID, day: datetime.date, **_: object
+    ) -> object:
+        raise RuntimeError("boom: recommendation upsert failed")
+
+    async def get_for_plot(
+        self, plot_id: UUID, day: datetime.date, org_id: UUID | None = None
+    ) -> object | None:
+        return None
+
+
+async def test_per_plot_task_leaves_no_balance_row_if_recommendation_upsert_fails(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The per-plot task's own session is only committed once, at the end
+    (jobs.py docstring). If the recommendation upsert fails after the balance
+    upsert already flushed within that same (never-committed) session, no
+    balance row survives — proven from this test's own, separate session.
+    """
+    target_day = local_today()
+    d_minus_1 = target_day - datetime.timedelta(days=1)
+    org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
+    plot_id = await _create_plot(
+        db_session,
+        org_id=org_id,
+        farm_id=farm_id,
+        cell_id=cell_id,
+        name="Lote Atomic",
+        irrigation_system="drip",
+        has_active_cycle=True,
+    )
+    db_session.add(
+        SoilProfileRow(
+            plot_id=plot_id,
+            source="lab",
+            texture="sandy_loam",
+            field_capacity_pct=Decimal("23.0"),
+            wilting_point_pct=Decimal("9.0"),
+            root_depth_cm=Decimal("60.0"),
+        )
+    )
+    await db_session.commit()
+    await _set_weather(db_session, cell_id, target_day)
+
+    monkeypatch.setattr(
+        "techcamp.irrigation.adapters.jobs.SqlAlchemyIrrigationRecommendationRepository",
+        _RaisingRecommendationRepository,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_plot_balance(plot_id=str(plot_id), day=target_day.isoformat())
+
+    balances = SqlAlchemyWaterBalanceRepository(db_session)
+    assert await balances.get_for_plot(plot_id, d_minus_1) is None
+
+
 def _client() -> TestClient:
     return TestClient(app, base_url="http://testserver/api/v1")
 
