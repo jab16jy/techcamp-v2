@@ -364,13 +364,13 @@ async def run_daily_balance(
 
         root_depth_cm = float(soil.root_depth_cm)
         if len(candidate_sensors) in (1, 2):
-            sensor_depths = [depth for depth, _ in candidate_sensors]
-            if is_sensor_depth_representative(sensor_depths, root_depth_cm):
+            sensor_depths_cm = [depth for depth, _ in candidate_sensors]
+            if is_sensor_depth_representative(sensor_depths_cm, root_depth_cm):
                 k = K_ASSIMILATION_DEFAULT
                 theta_obs_pct = sum(mean for _, mean in candidate_sensors) / len(candidate_sensors)
                 theta_obs = theta_obs_pct / 100.0
-                dr_obs = compute_observed_depletion(fc, theta_obs, root_depth_m)
-                dr_assimilated = assimilate_depletion(dr_model, dr_obs, k)
+                dr_obs = compute_observed_depletion(fc, theta_obs, root_depth_m, taw)
+                dr_assimilated = assimilate_depletion(dr_model, dr_obs, k, taw)
                 soil_moisture_obs_pct = theta_obs_pct
 
     rec = decide_recommendation(
