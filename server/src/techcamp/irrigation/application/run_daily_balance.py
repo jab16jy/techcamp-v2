@@ -350,7 +350,7 @@ async def run_daily_balance(
                 cal = await calibrations.get_latest_valid_at(sensor.id, plot.org_id, at=now)
                 if cal is None:
                     continue
-                if cal.kind is not CalibrationKind.FIELD:
+                if cal.kind != CalibrationKind.FIELD:
                     continue
 
                 # 3. Daily mean of D-1 from query_daily
