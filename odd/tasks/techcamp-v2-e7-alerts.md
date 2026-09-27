@@ -477,7 +477,7 @@ work unit (`domain-modeling`).
   registered task on the queue the worker listens to, and the node-health sweep must be
   `*/5 * * * *`.
   Same shape as T3's `DISTINCT ON` false positive, also refuted from the source.
-  **Lineage NOT CLOSED 2026-09-27 — maintainer-authorized, then refused by the CLI.** The host
+  **Lineage NOT CLOSED 2026-09-27 — recovered as a successor, which then found a CRITICAL.** The host
   switch that closed T6b did not apply here: the CLI re-offers `recovery_authorization`
   (`scope_changed`), NOT the correction-plan slot, on every read-only STATUS call on the same
   binding (`--lineage review-23ebe1e7dc220953 --base-ref 1f268cf --committed-only`). Frozen tier
@@ -486,23 +486,31 @@ work unit (`domain-modeling`).
   one and native classifies the difference as a scope change. `review inspect-authority` reports
   the authority `valid: true`, `complete: true`, **0 recovery edges**: nothing is corrupt, the
   lineage is simply waiting on a maintainer artifact.
-  - The owner authorized the `scope_changed` recovery (actor `jab16jy`), and it is still refused.
-    `review recover` demands an "exact LF-only `gentle-ai.review-recovery-authorization/v1`
-    binding", and that binding is **not discoverable from the CLI surface**: `review schema`
-    only emits `capture-result-dry-run`, `refuter`, `reviewer` and `validator`; the STATUS input
-    carries the schema NAME only, never its fields. The documented field set was tried in both
-    documented variants and both were refused, verbatim:
-    - without `successor_lineage`: `correction-required scope recovery requires an exact
-      maintainer authorization binding`
-    - with `successor_lineage: review-411621a8a31dfb6b`: same refusal
-    Guessing undocumented fields against an exact-match validator would be forging maintainer
-    authority, so the operator stopped. Flag-level refusals fixed along the way (none mutated
-    anything): `--successor-lineage` is required despite the help calling it "optional native";
+  - The owner's first recovery attempts were refused, and the reason was the OPERATOR's, not
+    the tooling's: the binding was hand-built as a JSON object. The real contract is a
+    **six-line LF text record** —
+    `gentle-ai.review-recovery-authorization/v1` / `predecessor_lineage=` /
+    `predecessor_revision=` / `target_identity=` / `actor=` / `reason=` — and, more
+    decisively, `correction_required` is one of the states that **self-mints** it:
+    `RunReviewRecover` derives the actor from the repository Git identity, the reason from a
+    closed constant and the binding itself. Supplying `--maintainer-authorization` at all is
+    what triggers the strict comparison, so the correct invocation **omits** it, along with
+    `--actor` and `--reason`. That succeeded on the first try and created the successor
+    `review-411621a8a31dfb6b` in `reviewing`.
+    Flag-level facts that cost attempts along the way (no refusal mutated anything):
+    `--successor-lineage` is required despite the help calling it "optional native";
     `--reason`/`--actor` are required again when the binding carries them;
     `--expected-untracked-inventory` must be dropped; and **`--base-ref` is pinned to the
     predecessor's base (`1f268cf`)**, so the minimal `21fb000` scope is refused too
     (`recovery base-ref does not match predecessor base`) — a scope recovery therefore always
     reviews T6a + the guard test + the parent fix + T6b.
+  - **Successor `review-411621a8a31dfb6b`**: tier medium, 2,588 changed lines, one
+    `review-reliability` lens → `correction_required` with CRITICAL
+    `R3-missing-temperature-resolves-alert` (deterministic, introduced,
+    `server/src/techcamp/alerts/domain/models.py:525`) → **#134**. So the guard test `37f6be9`
+    finally IS reviewed, and the review earned its keep. The T6b validator had raised the same
+    defect as a non-blocking WARNING; the divergence is recorded, not reconciled.
+    The lineage is NOT approved and NOT acknowledged.
     Post-attempt state, verified: `inspect-authority` still 0 edges and valid, T6a still
     `correction_required`/`recover`, and the successor id does not exist
     (`applicability: unrelated`). Nothing was abandoned, recovered or reclaimed.
@@ -544,7 +552,7 @@ work unit (`domain-modeling`).
     evaluator selected rules by "has a metric and an operator", which also selected
     `fungal_risk` — it WOULD have opened from the ingestor on a pure RH run, ignoring the
     20–30 °C half of its condition and stealing T6b's rule).
-  - **Tooling blocker (2026-09-27, WORKAROUND FOUND, defect still open in #133):**
+  - **Tooling blocker (2026-09-27, WORKAROUND FOUND and VERIFIED, reported upstream):**
     `gentle_review_capture` refuses the correction-plan slot with "collectBinding is unknown,
     expired, or belongs to a different session route" on `review-5104b9ca5c76ab6a` (T5),
     `review-23ebe1e7dc220953` (T6a) and `review-59b7a7c4d9c8c889` (T6b), on both workspace roots
@@ -556,11 +564,14 @@ work unit (`domain-modeling`).
     --agent opencode --lineage <id> --base-ref <base> --committed-only --next-transition`
     re-offers the slot with provider-issued `submission.argument_tokens`. **The workaround: run
     the lifecycle from the OpenCode host through the `gentle-ai` CLI with `--agent opencode`,
-    never through the Pi wrapper.** It closed T6b end to end. T6a reaches a DIFFERENT wall: it
-    asks for a `scope_changed` recovery, and even with the owner's authorization the CLI refuses
-    the exact `gentle-ai.review-recovery-authorization/v1` binding because that binding is not
-    discoverable from the CLI surface (see its entry above). T5 was not attempted. The Pi
-    wrapper defect itself remains; #133 stays open and the owner fixes the tooling on that side.
+    never through the Pi wrapper.** It closed T6b end to end. T6a reached a second wall, now
+    also resolved: it asked for a `scope_changed` recovery, and the first attempts failed on a
+    hand-built JSON binding. The real contract is a six-line LF text record, and
+    `correction_required` self-mints it — the correct invocation simply omits
+    `--maintainer-authorization`, `--actor` and `--reason` (see its entry above). Its successor
+    `review-411621a8a31dfb6b` then reviewed 2,588 lines and found a CRITICAL → #134. T5 was not
+    attempted. The wrapper defect itself is unfixed; the occurrence is recorded upstream on
+    `Gentleman-Programming/gentle-ai#4921` and the local tracking issue was removed.
 - T4 (`5dbae1d..e15b969`, 24 files, 1,576 changed lines): medium, one reliability lens. START
   requested the per-slice committed range (`baseRef 5dbae1d`, `committedOnly`), not the
   whole-branch range the inspect offered, per the per-slice decision above. Lineage
