@@ -64,9 +64,12 @@ E6 is on the critical path (E4 → E6 → E9 → E15) and feeds E7 (the `water_s
   added to #94.
 - Test DB: own container `techcamp-e6-db`,
   `DATABASE_URL=postgresql+asyncpg://techcamp:techcamp@localhost:5436/techcamp`.
-- Writers through Herdr (owner 2026-09-26): `agy` first — fastest and most capable, the default
-  writer (parent runs RDD on its commits); `opencode` only when a mid-to-high unit needs a bit
-  more (runs its own RDD); `odd-worker` only for complex work. One session per task group.
+- Writers through Herdr: OpenCode is the primary writer (owner 2026-09-26, after T5: AGY is no
+  longer used; T1–T5 were written by AGY). Claude `odd-worker` only for complex work. OpenCode runs
+  its own RDD (owner 2026-09-26, from Q1); the parent runs its checks and docs comparison on each
+  committed slice in `e6-verify` and files the findings. Quality
+  issues from the parent's checks are fixed immediately via OpenCode; RDD non-blocking findings
+  stay in the tracker. One session per task group.
 - Triggers fired: mapping (4+ files: one Sonnet explorer, 2026-09-26), writer (every unit touches
   2+ non-trivial files).
 - Skills forwarded: `fastapi`, `pydantic`, `find-docs`, `work-unit-commits`, `chained-pr`,
