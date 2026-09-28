@@ -26,6 +26,7 @@ from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.alerts.application.ports import AlertTarget
 from techcamp.alerts.domain.errors import InvalidAlertRuleError
 from techcamp.alerts.domain.models import (
+    ESCALATION_DELAY,
     Alert,
     AlertRule,
     AlertRuleChanges,
@@ -193,6 +194,37 @@ class SqlAlchemyAlertRepository:
             recipients=recipients,
             group_times=await self._group_times(farm_id),
         )
+
+    async def lock_escalation_candidate(self, *, org_id: UUID, at: datetime) -> Alert | None:
+        """One due critical of this org, oldest first, held for the decision.
+
+        ONE row and not a page: `save` commits per alert, and that commit is what
+        releases the lock, so a claimed page would leave its later rows unlocked
+        again for a second worker to escalate a second time. One alert per
+        transaction is the unit `save` already is, and the sweep simply calls
+        this until it returns nothing.
+
+        The narrowing here (critical, open, unescalated, 2 h from `opened_at`) is
+        the sweep's page filter, not the decision: `is_eligible_for_escalation`
+        decides on the value read under this lock, and an alert that fails it
+        escalates nothing.
+        """
+        stmt = (
+            select(*_ALERT_COLUMNS, _RULE_CODE)
+            .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
+            .where(
+                AlertRow.org_id == org_id,
+                AlertRow.state == AlertState.OPEN.value,
+                AlertRow.severity == Severity.CRITICAL.value,
+                AlertRow.escalated_at.is_(None),
+                AlertRow.opened_at <= at - ESCALATION_DELAY,
+            )
+            .order_by(AlertRow.opened_at, AlertRow.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        row = (await self._session.execute(stmt)).one_or_none()
+        return _alert_from_row(row) if row is not None else None
 
     async def insert(
         self, alert: Alert, drafts: Sequence[NotificationDraft], target: AlertTarget

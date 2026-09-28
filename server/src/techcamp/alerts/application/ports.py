@@ -84,6 +84,18 @@ class AlertRepository(Protocol):
         target, resolved on the session the alert is written on."""
         ...
 
+    async def lock_escalation_candidate(self, *, org_id: UUID, at: datetime) -> Alert | None:
+        """The next critical alert of one org whose 2 h are up, locked, or nothing.
+
+        The row is taken `FOR UPDATE SKIP LOCKED` and the caller decides under
+        that lock, because the write that follows is the same transaction
+        (docs/06 §3 "Reloj de escalamiento"; D12, D42). A second worker skips a
+        row another one holds instead of waiting on it, and one alert per
+        transaction is the unit `save` already is. `org_id` is required, never
+        optional (docs/09).
+        """
+        ...
+
     async def insert(
         self, alert: Alert, drafts: Sequence[NotificationDraft], target: AlertTarget
     ) -> Alert:
