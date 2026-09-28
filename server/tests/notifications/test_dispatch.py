@@ -231,6 +231,28 @@ async def test_claim_due_skips_a_row_another_worker_is_sending(
     assert [row.id for row in claimed] == [row.id for row in free]
 
 
+async def test_hold_takes_only_a_row_that_is_still_pending_and_due(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """docs/06 §4: the claim's lock over a whole batch dies with that
+    transaction, so the second lock has to check the row is STILL `pending` and
+    due. Holding by id alone let a row a second worker finished in that window be
+    sent again."""
+    finished = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    finished.status = "sent"
+    finished.sent_at = _DUE
+    early = await _pending_row(
+        db_session, seeded, channel=Channel.SMS, due_at=_DUE + timedelta(minutes=5)
+    )
+    due = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    await db_session.commit()
+    outbox = _outbox(db_session)
+
+    assert await outbox.hold(finished.id, now=_DUE) is False
+    assert await outbox.hold(early.id, now=_DUE) is False
+    assert await outbox.hold(due.id, now=_DUE) is True
+
+
 async def test_a_due_sms_row_is_sent_and_marked_sent(
     db_session: AsyncSession, seeded: Seeded
 ) -> None:
@@ -438,8 +460,8 @@ async def test_hold_refuses_a_row_another_worker_already_holds(
             text("SELECT id FROM notification WHERE id = :id FOR UPDATE"), {"id": taken.id}
         )
 
-        assert await outbox.hold(free.id) is True
-        assert await outbox.hold(taken.id) is False
+        assert await outbox.hold(free.id, now=_DUE) is True
+        assert await outbox.hold(taken.id, now=_DUE) is False
 
 
 async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
@@ -453,8 +475,8 @@ async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
     outbox = _outbox(db_session)
     real_hold = outbox.hold
 
-    async def _hold(notification_id: UUID) -> bool:
-        return await real_hold(notification_id) and notification_id == first.id
+    async def _hold(notification_id: UUID, *, now: datetime) -> bool:
+        return await real_hold(notification_id, now=now) and notification_id == first.id
 
     monkeypatch.setattr(outbox, "hold", _hold)
 

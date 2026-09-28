@@ -67,6 +67,11 @@ async def dispatch_due_notifications(
     because every pass either moves its rows out of the due set (sent, given up,
     or backed off to a later `next_attempt_at`) or comes back short: a row
     another worker holds is passed over by the claim and is not counted.
+
+    Delivery is AT LEAST ONCE, and deliberately so: a worker that dies after the
+    provider accepted a message but before `sent` is committed leaves the row
+    `pending`, and the next sweep sends it again. A possible duplicate is
+    preferred over a lost critical alert (docs/06 §4; RF-08, RNF-05).
     """
     if not senders:
         return _EMPTY_REPORT
@@ -95,7 +100,7 @@ async def _one_pass(
     claimed = await outbox.claim_due(now=now, channels=list(senders), limit=limit)
     sent = retried = failed = skipped = 0
     for notification in claimed:
-        if not await outbox.hold(notification.id):
+        if not await outbox.hold(notification.id, now=now):
             skipped += 1
             continue
         try:

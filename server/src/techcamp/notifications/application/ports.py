@@ -73,9 +73,10 @@ class OutboxRepository(Protocol):
         """
         ...
 
-    async def hold(self, notification_id: UUID) -> bool:
+    async def hold(self, notification_id: UUID, *, now: datetime) -> bool:
         """Take one row's own lock before it is sent; `False` when another worker
-        already holds it, which is the row's answer: it is not ours to send."""
+        already holds it or has already closed it, which is the row's answer: it
+        is not ours to send."""
         ...
 
     async def mark_sent(self, notification_id: UUID, *, at: datetime) -> None:

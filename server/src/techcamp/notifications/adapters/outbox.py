@@ -82,20 +82,27 @@ class SqlAlchemyOutboxRepository:
             for row, org_id, severity, rule_code in result
         ]
 
-    async def hold(self, notification_id: UUID) -> bool:
+    async def hold(self, notification_id: UUID, *, now: datetime) -> bool:
         """Take one row's own lock right before it is sent; `False` if another
-        worker holds it already.
+        worker holds it already or has already finished it.
 
         The claim locks the whole batch at once, and its first outcome commits,
         which ends that transaction and releases every lock it took — including
         the ones on rows not sent yet. This is the lock that protects the send
         itself, and `SKIP LOCKED` is what lets the row go to the worker that
-        already has it rather than sending it twice.
+        already has it rather than sending it twice. `status` and
+        `next_attempt_at` are re-checked because that gap is real: in it another
+        worker can claim the row, send it and close it, and an id-only lock would
+        hand this worker a row that is no longer ours to send.
         """
         return (
             await self._session.execute(
                 select(NotificationRow.id)
-                .where(NotificationRow.id == notification_id)
+                .where(
+                    NotificationRow.id == notification_id,
+                    NotificationRow.status == "pending",
+                    NotificationRow.next_attempt_at <= now,
+                )
                 .with_for_update(skip_locked=True)
             )
         ).scalar_one_or_none() is not None
