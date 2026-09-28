@@ -888,7 +888,7 @@ work unit (`domain-modeling`).
   escalation proven; seminar-stack demo; final report — route: Herdr OpenCode (worktree `e7-t11`,
   branch `feat/e7-t11-close` from `feat/e7-alerts` @ `3120dac`; own DB `techcamp-e7-db-t11` on
   **5439**) — forecast ~250 — actual **1,151 authored** over four work units
-  (`075aa55` 519, `f110fbe` 89, `4ac095e` 284, `6d0cf37` 33), two of them tests and one a real
+  (`075aa55` 519, `f110fbe` 89, `4ac095e` 195, `6d0cf37` 33), two of them tests and one a real
   production defect the demo found — three lineages, all APPROVED and acknowledged
   (`review-b13abff23ad3d0e1` with one WARNING fixed in the next commit,
   `review-c60160b94d5d2336` zero findings, `review-34054452efa459cf` zero findings)
@@ -1611,7 +1611,7 @@ work unit (`domain-modeling`).
     `invalid_request … cause: flag provided but not defined: -target`. The provider-issued re-entry
     carries a `--repository-context` token a hand-written command misses. Take
     `next_transition.execute.command` verbatim (T9's #249 lesson, same shape).
-- T11 slice 2 (`82609c6e..4ac095e`, 1 path, 284 lines: the local-day fix plus the delivery chain):
+- T11 slice 2 (`82609c6e..4ac095e`, 1 path, **284 changed lines** = `f110fbe`'s 89 plus `4ac095e`'s 195, the two reviewed together because the fix is the same file the delivery chain extends):
   `assess` → `medium`, `review_due: false` / `under_budget` — the owner asked for the round anyway
   ("RDD over the committed work before the next behavior"), so the lifecycle ran from the
   provider's own `fresh_target_ready` START. Lineage **`review-c60160b94d5d2336`**, one
@@ -2159,7 +2159,7 @@ owner-pending item that needs a human with a browser.
 | --- | --- | --- |
 | `075aa55` | 519 (1 new test file) | scenario A through `ingest_uplinks`: both alerts at the doc's instants and not before, the daily heat cycle, the critical `water_stress`, two organizations apart |
 | `f110fbe` | 89 | the RDD WARNING's fix: the scenario's day is a LOCAL day, not a sample count |
-| `4ac095e` | 284 | the delivery chain: push, the 2 h clock, `GET /dev/outbox` |
+| `4ac095e` | 195 | the delivery chain: push, the 2 h clock, `GET /dev/outbox` |
 | `6d0cf37` | 33 | the defect the demo found: the deferred dispatch job now carries its `timestamp` |
 
 Total **1,151 authored**, of which 1,146 is one new test file and 10 is the production fix.
