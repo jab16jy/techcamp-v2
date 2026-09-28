@@ -92,6 +92,34 @@ class NotificationDraft:
     next_attempt_at: datetime
 
 
+def in_quiet_hours(now: datetime) -> bool:
+    """Whether `now` falls in the farm's silence, 20:00–05:00 (docs/06 §4).
+
+    Read in **America/Bogota**, never in UTC and never against the UTC date: the
+    hour belongs to the farmer who is not going to be woken up, and 05:00 Bogotá is
+    10:00 UTC, so an instant can be quiet in one clock and the middle of the
+    afternoon in the other. That is why both facts live in one function: the write
+    side (`next_attempt_at`) and the send side (the dispatcher) must not be able to
+    disagree about which clock they mean.
+    """
+    local = now.astimezone(BOGOTA)
+    return QUIET_HOURS_FROM <= local.hour or local.hour < QUIET_HOURS_UNTIL
+
+
+def quiet_hours_until(now: datetime) -> datetime:
+    """The next 05:00 Bogotá after `now`, as an instant (docs/06 §4, D6).
+
+    The DATE is Bogotá's too: at 00:30 Bogotá the next 05:00 is the same calendar
+    day in Bogotá, and computing it from the UTC date would hold the row until a
+    05:00 that had already passed.
+    """
+    local = now.astimezone(BOGOTA)
+    morning = local.replace(hour=QUIET_HOURS_UNTIL, minute=0, second=0, microsecond=0)
+    if local.hour >= QUIET_HOURS_FROM:
+        morning += timedelta(days=1)
+    return morning.astimezone(UTC)
+
+
 def next_attempt_at(
     *, critical: bool, now: datetime, group_time: datetime | None = None
 ) -> datetime:
@@ -100,17 +128,18 @@ def next_attempt_at(
     A critical is due now: it is the one severity that may break the silence.
     A non-critical row joins the group it lands in (the `next_attempt_at` of the
     pending row it groups with) and otherwise waits out 20:00–05:00 Bogotá.
+
+    This is the WRITE side of the quiet hours. The send side re-checks the hour
+    before a row leaves, because a row's `next_attempt_at` is also written by a
+    retry backoff and by the circuit's cooldown, and neither of those knows about
+    20:00 (D39).
     """
     if critical:
         return now.astimezone(UTC)
     if group_time is not None:
         return group_time.astimezone(UTC)
-    local = now.astimezone(BOGOTA)
-    if QUIET_HOURS_FROM <= local.hour or local.hour < QUIET_HOURS_UNTIL:
-        morning = local.replace(hour=QUIET_HOURS_UNTIL, minute=0, second=0, microsecond=0)
-        if local.hour >= QUIET_HOURS_FROM:
-            morning += timedelta(days=1)
-        return morning.astimezone(UTC)
+    if in_quiet_hours(now):
+        return quiet_hours_until(now)
     return now.astimezone(UTC)
 
 

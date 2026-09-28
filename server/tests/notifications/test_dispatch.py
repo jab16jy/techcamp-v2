@@ -212,7 +212,7 @@ async def _seed_alert(session: AsyncSession, *, severity: str = "warning") -> Se
             plot_id=other_plot_id,
             transport="cellular",
             dev_eui=f"eui-{node_id}",
-            claim_code="claim-code",
+            claim_code=f"claim-{node_id}",
             credential_hash="hash",
             interval_s=300,
             claimed_at=_DUE,
@@ -937,6 +937,167 @@ async def test_a_group_whose_provider_is_down_is_never_attempted(
     assert (await _row(db_session, ids[1])).attempts == 0
 
 
+@pytest.mark.parametrize(
+    ("now", "released"),
+    [
+        pytest.param(
+            datetime(2026, 9, 27, 5, 0, tzinfo=UTC),  # 00:00 Bogotá on the 27th
+            datetime(2026, 9, 27, 10, 0, tzinfo=UTC),
+            id="midnight-in-bogota",
+        ),
+        pytest.param(
+            datetime(2026, 9, 28, 3, 0, tzinfo=UTC),  # 22:00 Bogotá on the 27th
+            datetime(2026, 9, 28, 10, 0, tzinfo=UTC),
+            id="evening-in-bogota-utc-date-has-moved-on",
+        ),
+    ],
+)
+async def test_a_non_critical_row_that_comes_due_at_night_waits_for_0500_bogota(
+    db_session: AsyncSession, seeded: Seeded, now: datetime, released: datetime
+) -> None:
+    """D6 applies the quiet hours when the row is WRITTEN, and that is not enough:
+    a row's `next_attempt_at` is also written by a retry backoff and by the
+    circuit's cooldown, and neither of those knows about 20:00. So the hour is
+    checked again where the row actually leaves.
+
+    One instant for each mistake a UTC implementation makes. 05:00 UTC is 00:00 in
+    Bogotá: quiet in the product's clock, the middle of the afternoon on the UTC
+    date, so a check that read the UTC HOUR would send this at midnight on a
+    farmer's phone. 03:00 UTC on the 28th is 22:00 in Bogotá on the 27th: the UTC
+    hour is quiet too, but the DATE has already rolled over, so a check that read
+    it would hold the row to 28th 05:00 UTC — which is 00:00 in Bogotá, still the
+    middle of the night.
+    """
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=now)
+    sender = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=now,
+    )
+
+    assert (report.claimed, report.deferred, report.sent) == (1, 1, 0)
+    assert sender.messages == 0, "a non-critical row was delivered in the quiet hours"
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == released  # 05:00 Bogotá
+    assert held.last_error == "the farm is in its quiet hours until 05:00"
+
+
+async def test_a_row_that_is_only_quiet_in_utc_is_delivered(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The other direction, because a check can be wrong both ways: 20:00 UTC is
+    15:00 in Bogotá, so the afternoon is the middle of the "night" on the UTC
+    clock. Reading UTC would silence a whole afternoon of alerts for five hours."""
+    afternoon = datetime(2026, 9, 27, 20, 0, tzinfo=UTC)  # 15:00 Bogotá
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=afternoon)
+    sender = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=afternoon,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert (await _row(db_session, row.id)).status == "sent"
+
+
+async def test_a_critical_is_delivered_at_midnight(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """docs/06 §4 "Horas de silencio": "20:00–05:00: solo notificaciones críticas".
+    A critical is the one severity that may break the silence, and it is the one
+    RNF-05 gives two minutes, so the quiet hours never hold it."""
+    at_night = datetime(2026, 9, 27, 5, 0, tzinfo=UTC)  # 00:00 Bogotá
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH, due_at=at_night)
+    sender = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=at_night,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert sender.messages == 1
+    assert (await _row(db_session, row.id)).status == "sent"
+
+
+async def test_the_quiet_hours_hold_beats_an_open_circuit_and_its_instant(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """Both gates can refuse the same row and they disagree about when it becomes
+    due: the circuit says "in five minutes", the night says "at 05:00". The night
+    wins, because a non-critical row that becomes due at 20:02 must not be sent at
+    20:07 either — the row's whole point is that the farmer hears it in the
+    morning. The reason in `last_error` names the one that decided it."""
+    at_night = datetime(2026, 9, 28, 3, 0, tzinfo=UTC)  # 22:00 Bogotá on the 27th
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=at_night)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+
+    await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=circuits,
+        now=at_night,
+    )
+
+    held = await _row(db_session, row.id)
+    assert held.next_attempt_at == datetime(2026, 9, 28, 10, 0, tzinfo=UTC)
+    assert held.last_error == "the farm is in its quiet hours until 05:00"
+
+
+async def test_a_group_is_not_formed_out_of_rows_the_night_holds(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """Grouping and the quiet hours cannot both apply to a row: a group of
+    non-criticals is the 05:00 message, and a row held until 05:00 is not part of
+    anything that goes out at 02:00. Both rows of one farm are held, each on its
+    own, and the morning sweep groups them."""
+    at_night = datetime(2026, 9, 28, 3, 0, tzinfo=UTC)  # 22:00 Bogotá on the 27th
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    ids = [
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=at_night)).id,
+        (
+            await _pending_row(
+                db_session, seeded, channel=Channel.PUSH, due_at=at_night, alert_id=other_alert
+            )
+        ).id,
+    ]
+    sender = _LandingSender()
+    circuits = _circuits(_Clock())
+
+    held = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=at_night,
+    )
+    assert (held.deferred, held.sent) == (2, 0)
+    assert sender.messages == 0
+
+    # The morning sweep: both rows are due again, and now they are one message.
+    morning = datetime(2026, 9, 28, 10, 0, tzinfo=UTC)  # 05:00 Bogotá on the 28th
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=morning,
+    )
+
+    assert (report.sent, report.deferred) == (2, 0)
+    assert sender.messages == 1
+    assert (await _row(db_session, ids[0])).status == "sent"
+    assert (await _row(db_session, ids[1])).status == "sent"
+
+
 async def test_a_due_sms_row_is_sent_and_marked_sent(
     db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
@@ -1159,10 +1320,19 @@ async def test_the_dispatch_job_sends_the_due_rows(
     db_session: AsyncSession, seeded: Seeded
 ) -> None:
     """The task the outbox write defers and the minute sweep runs (D7) drains
-    the outbox through the senders the profile registers."""
-    # The job sends what is due *now*, so the row cannot be dated in the past.
+    the outbox through the senders the profile registers.
+
+    The row is a CRITICAL one, and that is the point of this test being able to
+    run at any hour: the job takes the wall clock, so a non-critical row would
+    legitimately be held while Bogotá sleeps and this test would fail for a third
+    of the day. The quiet hours are real, so the test is not what fixes it — a
+    severity the silence does not apply to is (D6, D39)."""
+    critical = await _seed_alert(db_session, severity="critical")
     row = await _pending_row(
-        db_session, seeded, channel=Channel.SMS, due_at=datetime.now(UTC) - timedelta(seconds=1)
+        db_session,
+        critical,
+        channel=Channel.SMS,
+        due_at=datetime.now(UTC) - timedelta(seconds=1),
     )
 
     await dispatch_outbox(timestamp=0)

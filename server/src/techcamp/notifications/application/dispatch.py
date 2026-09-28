@@ -27,6 +27,8 @@ from techcamp.notifications.domain.models import (
     MAX_ATTEMPTS,
     Channel,
     PendingNotification,
+    in_quiet_hours,
+    quiet_hours_until,
     retry_delay,
 )
 
@@ -156,6 +158,22 @@ async def _one_pass(
             await flush()
             skipped += 1
             continue
+        if _is_silenced(notification, now):
+            await flush()
+            # docs/06 §4's "Horas de silencio" at the point the row actually
+            # leaves. D6 applies them when the row is WRITTEN, which is not the
+            # same thing: `next_attempt_at` is also written by a retry backoff and
+            # by the circuit's cooldown, and neither knows about 20:00, so a
+            # `warning` whose two-hour retry landed at 03:00 would ring a farmer's
+            # phone at three in the morning. No attempt either — the delivery was
+            # never refused by anybody, it was simply not this hour (D39).
+            await outbox.mark_deferred(
+                notification.id,
+                next_attempt_at=quiet_hours_until(now),
+                reason="the farm is in its quiet hours until 05:00",
+            )
+            deferred += 1
+            continue
         if group and not _joins(group[-1], notification):
             # Start a new message by sending the one already built, BEFORE this
             # row's channel is decided. That ordering is the whole reason a pass
@@ -247,6 +265,16 @@ async def _deliver(
             await outbox.mark_sent(notification.id, at=now)
             sent += 1
     return DispatchReport(0, sent, retried, failed, 0, 0)
+
+
+def _is_silenced(notification: PendingNotification, now: datetime) -> bool:
+    """Whether this row must not leave now because the farm is asleep.
+
+    docs/06 §4 "Horas de silencio": "20:00–05:00: solo notificaciones críticas". A
+    critical is the one severity that may break it, and D6 says so on the write
+    side too, so the two can never disagree about which rows are exempt.
+    """
+    return notification.severity != CRITICAL_SEVERITY and in_quiet_hours(now)
 
 
 def _joins(previous: PendingNotification, candidate: PendingNotification) -> bool:
