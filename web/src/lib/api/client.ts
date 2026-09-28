@@ -13,7 +13,10 @@ import { clearSession, getToken } from './session'
  * `test.env` sets it because Node's `fetch`/`Request` need an absolute URL
  * (see that file's comment), and it is never set outside tests.
  */
-const API_BASE_URL: string = import.meta.env.VITE_API_TEST_BASE_URL ?? ''
+/** Exported for the one caller outside `apiClient`: the offline synchronizer
+ * (`lib/sync/transport.ts`) reaches `/api/v1/sync/*` with `fetch` until T3/T4
+ * land those paths in `schema.d.ts` and T8 swaps it for the typed client. */
+export const API_BASE_URL: string = import.meta.env.VITE_API_TEST_BASE_URL ?? ''
 
 /** Requests are aborted after this long, surfacing as a `DOMException` `TimeoutError`.
  * Exported so `client.test.ts` asserts against the same constant, not a duplicated number. */
