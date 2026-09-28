@@ -271,6 +271,16 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 - T6 started (owner approved running it in parallel): OpenCode `e8-t6` high, lane `e8-t6`
   (`feat/e8-t6-presign`, DB 5445), new modules only to avoid clashing with T3's ports/repositories.
 
+- T3 gate (parent, DB 5444) on `fef63b0`, `030528e`, `cf4973e` (1,485 + 642 + 112 lines; over the
+  ~650 forecast, 17 push-table behaviour tests): 94 passed, ruff, format (265), mypy (177),
+  lint-imports clean. Docs diff sent back before RDD: (1) `created_offline` hard-coded `True` on
+  insert breaks docs/11 "Uso offline" (the T7 client already sends `!navigator.onLine` in `data`,
+  docs/04 "data lleva los campos de logbook_entry"): take it from `data` on insert, never change it
+  on update; (2) `op: delete` still checks `crop_cycle_id`/`alert_id`, so a change rejected
+  `not_found` for them can never be deleted (D12 "no valida los campos", RNF-01): keep plot/org/role
+  checks, skip reference checks; (3) duplicated delete branch in `_apply_visit`. Writer judgment
+  call accepted: an unknown `kind` is that change's `rejected invalid`, not a batch `422` (D5).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
