@@ -293,6 +293,8 @@ erDiagram
     timestamptz opened_at
     timestamptz acknowledged_at
     timestamptz resolved_at
+    timestamptz escalated_at
+    text resolution_note
     text outcome "confirmed|false_alarm; null hasta que el productor o el técnico lo registre"
   }
   notification {
@@ -303,12 +305,16 @@ erDiagram
     text status "pending|sent|failed"
     int attempts
     timestamptz next_attempt_at
+    timestamptz created_at
+    timestamptz sent_at
+    text last_error
   }
   push_subscription {
     uuid id PK
     uuid user_id FK
     text endpoint UK
     jsonb keys
+    timestamptz created_at
   }
   model_version {
     uuid id PK
@@ -474,6 +480,30 @@ La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectu
 | `two_point` | `{"raw_dry": 2900, "raw_wet": 1300, "vwc_dry": 5, "vwc_wet": 45}` | Humedad de suelo capacitiva, calibrada en seco y saturado en campo |
 | `polynomial` | `{"coeffs": [c0, c1, c2]}` | Calibración de laboratorio por tipo de suelo |
 
+### `alert`, `alert_rule`, `notification` y `push_subscription`: alertas y notificaciones
+
+| Aspecto | Decisión | Por qué |
+|---|---|---|
+| Invariante de objetivo | `CHECK (num_nonnulls(plot_id, node_id) = 1)` en `alert` | Una alerta pertenece exactamente a una parcela o a un nodo, nunca a ambos ni a ninguno |
+| Unicidad de alerta abierta | Índices únicos parciales en `(rule_id, plot_id)` y `(rule_id, node_id)` con `WHERE state <> 'resolved'` | Máximo una alerta abierta por regla y objetivo; resolver una alerta permite abrir una nueva (docs/06 §3) |
+| Estados y escalamiento | `state in ('open', 'acknowledged', 'resolved')`; `escalated_at` y `resolution_note` | El escalamiento no es un estado aparte (se marca con `escalated_at`, D3); el cierre manual opcionalmente guarda `resolution_note` |
+| Cola de salida (outbox) | `notification` con `status in ('pending', 'sent', 'failed')` y `next_attempt_at` | Alerta y notificaciones se persisten en la misma transacción (ADR-0016); índice parcial `(status, next_attempt_at) WHERE status = 'pending'` para el worker |
+| Suscripciones web push | `push_subscription.endpoint UNIQUE` | Un endpoint de navegador se registra una sola vez; credenciales VAPID/claves en `keys JSONB` |
+
+**Reglas de fábrica (`alert_rule` con `org_id IS NULL`)** sembradas por la migración (docs/06 §3):
+
+| Código | Métrica | Operador | Umbral | Histéresis | Duración mín (min) | Severidad | Estado de validación |
+|---|---|---|---|---|---|---|---|
+| `water_stress` | `soil_moisture` | `<` | *null* | 3 | 360 | warning | Umbral dinámico por parcela (θ_estrés); pendiente de validación agronómica |
+| `waterlogging` | `soil_moisture` | `>` | *null* | 3 | 1440 | warning | Umbral dinámico por suelo (capacidad de campo + 5); pendiente de validación agronómica |
+| `heat_stress` | `air_temp` | `>` | 35 | 1 | 180 | warning | Pendiente de validación agronómica |
+| `fungal_risk` | `air_rh` | `>` | 85 | 5 | 600 | warning | Pendiente de validación agronómica |
+| `heavy_rain_forecast` | `rain` | `>` | 50 | 0 | 0 | warning | Pendiente de validación agronómica |
+| `flood_risk` | *null* | *null* | *null* | 0 | 0 | critical | Evaluado por modelo ML (E10) |
+| `drought_risk` | *null* | *null* | *null* | 0 | 0 | critical | Evaluado por modelo ML (E10) |
+| `node_offline` | *null* | *null* | *null* | 0 | 0 | warning | Salud de nodo (3 × intervalo sin lecturas) |
+| `node_battery_low` | `battery_v` | `<` | 3,4 | 0,1 | 0 | info | Salud de nodo |
+
 ### Índices principales
 
 | Tabla | Índice | Consulta que atiende |
@@ -481,7 +511,10 @@ La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectu
 | `plot` | GiST(`boundary`) | Parcelas en un área del mapa |
 | `farm` | (`org_id`) | Listado por organización |
 | `reading` | (`sensor_id`, `time DESC`) | Serie de un sensor (viene con la unicidad) |
+| `alert_rule` | (`code`) parcial `WHERE org_id IS NULL` | Unicidad de reglas de fábrica del sistema |
 | `alert` | (`org_id`, `state`, `opened_at DESC`) parcial `WHERE state <> 'resolved'` | Alertas abiertas de la organización |
+| `alert` | (`rule_id`, `plot_id`) parcial `WHERE state <> 'resolved'` | Máximo una alerta abierta por regla y parcela |
+| `alert` | (`rule_id`, `node_id`) parcial `WHERE state <> 'resolved'` | Máximo una alerta abierta por regla y nodo |
 | `logbook_entry` | (`org_id`, `server_version`) | Pull de sincronización |
 | `notification` | (`status`, `next_attempt_at`) parcial `WHERE status = 'pending'` | Cola de envío |
 | `kb_chunk` | HNSW(`embedding vector_cosine_ops`) | Búsqueda semántica |

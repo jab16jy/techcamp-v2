@@ -12,6 +12,7 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.alerts.adapters.seed import seed_factory_rules
 from techcamp.shared.db import async_session_factory, engine
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
@@ -83,3 +84,7 @@ async def db_session() -> AsyncIterator[AsyncSession]:
                 "RESTART IDENTITY CASCADE"
             )
         )
+        # TRUNCATE organization CASCADE wipes `alert_rule` entirely because of
+        # `alert_rule.org_id FK organization`. Re-seed the factory rules so
+        # subsequent tests find them intact.
+        await seed_factory_rules(conn)
