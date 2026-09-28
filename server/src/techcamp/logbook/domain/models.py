@@ -95,14 +95,14 @@ EXTENSION_VISIT_WRITE_ROLES: frozenset[Role] = frozenset(
 
 _VALID_TOPICS: frozenset[str] = frozenset(t.value for t in VisitTopic)
 
-_NUMERIC_AMOUNT_FIELDS: tuple[tuple[str, str], ...] = (
-    ("quantity", "quantity"),
-    ("cost_cop", "cost_cop"),
-    ("yield_kg", "yield_kg"),
-    ("sold_kg", "sold_kg"),
-    ("sale_price_cop_per_kg", "sale_price_cop_per_kg"),
-    ("labor_days", "labor_days"),
-    ("irrigation_mm", "irrigation_mm"),
+_NUMERIC_AMOUNT_FIELDS: tuple[str, ...] = (
+    "quantity",
+    "cost_cop",
+    "yield_kg",
+    "sold_kg",
+    "sale_price_cop_per_kg",
+    "labor_days",
+    "irrigation_mm",
 )
 
 
@@ -139,8 +139,8 @@ def ensure_valid_entry(fields: LogbookEntryFields) -> None:
     - Sold kg <= yield kg for harvest entries.
     """
     # 1. Non-negative amounts
-    for attr, name in _NUMERIC_AMOUNT_FIELDS:
-        val: Decimal | None = getattr(fields, attr)
+    for name in _NUMERIC_AMOUNT_FIELDS:
+        val: Decimal | None = getattr(fields, name)
         if val is not None and val < 0:
             raise InvalidEntryError(f"{name} must be non-negative (got {val})")
 
@@ -198,12 +198,11 @@ def ensure_valid_entry(fields: LogbookEntryFields) -> None:
             )
 
 
-def ensure_valid_topics(topics: Sequence[str | VisitTopic]) -> None:
+def ensure_valid_topics(topics: Sequence[str]) -> None:
     """Validate that every topic in the sequence belongs to VisitTopic (docs/03:245, D5)."""
     for topic in topics:
-        value = topic.value if isinstance(topic, VisitTopic) else topic
-        if value not in _VALID_TOPICS:
-            raise InvalidEntryError(f"Invalid visit topic: '{value}'")
+        if topic not in _VALID_TOPICS:
+            raise InvalidEntryError(f"Invalid visit topic: '{topic}'")
 
 
 def _require_tz_aware(dt: datetime, name: str) -> None:
@@ -250,5 +249,3 @@ def ensure_can_sync(entity: SyncEntity, role: Role) -> None:
     elif entity == SyncEntity.EXTENSION_VISIT:
         if role not in EXTENSION_VISIT_WRITE_ROLES:
             raise InsufficientRoleError(role, entity)
-    else:
-        raise ValueError(f"Unknown SyncEntity: {entity}")
