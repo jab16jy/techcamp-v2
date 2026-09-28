@@ -23,6 +23,20 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
+      // T9 needs its own `push` / `notificationclick` handlers, and Workbox's
+      // generated worker cannot carry them, so the worker is hand-written
+      // (`src/features/push/sw.ts`) and only the manifest is injected. The
+      // precache globs below are E1's, moved verbatim from `workbox.globPatterns`
+      // so the shell still opens offline exactly as before.
+      //
+      // `filename` is deliberately flat: the plugin resolves the emitted worker
+      // as `resolve(root, outDir, filename)` but builds the bundle into `outDir`
+      // root, so a nested `filename` builds `dist/sw.js` and then tries to
+      // rename a `dist/features/push/sw.js` that was never written. `srcDir`
+      // is what locates the source; `filename` is the emitted name.
+      strategies: 'injectManifest',
+      srcDir: 'src/features/push',
+      filename: 'sw.ts',
       manifest: {
         name: 'TechCamp',
         short_name: 'TechCamp',
@@ -44,7 +58,7 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
+      injectManifest: {
         // Precaches the whole shell (JS/CSS/HTML/icons), so the app opens offline after
         // one online visit — the dev-only /dev/ui chunk never exists in this output to precache.
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],

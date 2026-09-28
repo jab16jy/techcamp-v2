@@ -4,6 +4,7 @@ import { SignInScreen } from '../features/auth/containers/SignInScreen'
 import { SignOutButton } from '../features/auth/components/SignOutButton'
 import { requireAuthLoader } from '../features/auth/guard'
 import { PlotsScreen } from '../features/plots/containers/PlotsScreen'
+import { NotificationsCard } from '../features/push/components/NotificationsCard'
 import { PlaceholderPage } from './PlaceholderPage'
 
 const tabRoutes: RouteObject[] = [
@@ -16,6 +17,8 @@ const tabRoutes: RouteObject[] = [
     element: (
       <PlaceholderPage title="Más">
         <SignOutButton />
+        {/* docs/07's screen map: "Ajustes y notificaciones" hangs off `Más`. */}
+        <NotificationsCard />
       </PlaceholderPage>
     ),
   },
