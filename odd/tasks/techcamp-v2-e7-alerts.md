@@ -685,7 +685,7 @@ work unit (`domain-modeling`).
   `test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot` (`_SensorsFailingForOneNode` raises at the sensor port the evaluator already uses,
   and the test carries the negative assertion: the failed plot shows NO alert and the next plot
   shows its own). No push, no merge: the parent merges this branch.
-- [ ] T6 Worker rules
+- [x] T6 Worker rules
   - [x] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
     `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Pi subagent —
     forecast ~350 — actual 898 (`21fb000`; 372 production / 522 tests / 4 docs). `node_battery_low`
@@ -714,7 +714,7 @@ work unit (`domain-modeling`).
     `local_date` helper. No production change — CodeGraph shows both jobs read the day only
     through `local_date` — route: Herdr OpenCode (branch `review/e7-rdd`) — forecast ~30 — actual 13
     (`c9132d8`, 10 insertions / 3 deletions, one file)
-- [ ] T7 Notifications outbox
+- [x] T7 Notifications outbox
   - [x] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
