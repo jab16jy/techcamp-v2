@@ -7,7 +7,7 @@ import type { PullResponse, PushRequest, PushResponse } from './types'
  * synced": the queued changes are still on the phone and the next run after the
  * user is back sends them (D11).
  */
-export type SyncStopReason = 'unauthorized' | 'unavailable'
+export type SyncStopReason = 'unauthorized' | 'unavailable' | 'unknown_entity'
 
 export class SyncStoppedError extends Error {
   readonly reason: SyncStopReason

@@ -27,7 +27,7 @@ export function recordSyncOutcome(outcome: SyncOutcome): void {
   } else if (outcome.status === 'stopped') {
     state = {
       ...state,
-      syncStopped: true,
+      syncStopped: outcome.reason !== 'unavailable',
     }
   }
   for (const listener of listeners) listener()

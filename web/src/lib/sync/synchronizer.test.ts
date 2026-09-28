@@ -8,6 +8,7 @@ import { uuidv7 } from '../db/ids'
 import { clearSession, setSession } from '../api/session'
 import type { LogbookEntryDraft } from '../db/local'
 import { syncOnce } from './synchronizer'
+import { getSyncState } from './syncState'
 import type { PullResponse, PushRequest } from './types'
 
 const ORG_ID = '018f0c2a-0000-7000-8000-0000000000aa'
@@ -342,13 +343,11 @@ describe('syncOnce: pull', () => {
 
     const outcome = await syncOnce()
 
-    // Fail closed: the run stops and the cursor stays where it was, because
-    // skipping the change would lose it silently and advancing would never
-    // bring it back. The change before it is rolled back with the transaction.
-    expect(outcome).toEqual({ status: 'stopped', reason: 'unavailable' })
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unknown_entity' })
     expect(await getCursor()).toBe(0)
     expect(await db.logbookEntries.count()).toBe(0)
     expect(await db.extensionVisits.count()).toBe(0)
+    expect(getSyncState().syncStopped).toBe(true)
   })
 
   it('keeps a deleted row tombstoned when the server sends the delete', async () => {
