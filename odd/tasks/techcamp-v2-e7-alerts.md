@@ -344,6 +344,15 @@ work unit (`domain-modeling`).
     corrections during the unit: real humidity evidence plus a mild flag instead of the
     `_NOT_MILD_RH` fake sample, the docs/06 §3 rows in the same commit, and the saturation test
     recorded as a proxy (D20)
+  - [x] T6c #134: a cell-day that carries humidity and NO stored temperature no longer RESOLVES an
+    open `fungal_risk` alert. The temperature half is tri-state — mild, measured not mild, or
+    **no dicho** — and the two branches read the third differently on purpose: unsaid never opens
+    the rule and resolves nothing, so the humidity half alone is what closes such a day.
+    `is_mild` → `mildness: bool | None` on the evidence and on `decide_worker_rule` (a name that
+    admits three states, so no caller can read `not None` as "not mild"); `heavy_rain_forecast`
+    untouched. docs/06 §3 gets the absent-evidence line in the same commit — route: Herdr OpenCode
+    (branch `review/e7-rdd`, isolated; the owner merges it into `feat/e7-alerts`) — forecast ~120 —
+    actual 191 (`8c57ff0`; 56 production / 130 tests / 1 docs line)
 - [ ] T7 Notifications outbox
   - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
@@ -588,6 +597,14 @@ work unit (`domain-modeling`).
   `gentle_review_capture` must omit `workspaceRoot` — the collect-binding route is registered
   under the session cwd, so passing the E7 worktree was refused as "different session route".
   Boundary → `577a405`.
+- T6c #134 (`91323cd..8c57ff0`, 4 files, 191 changed lines, branch `review/e7-rdd`): `medium`
+  (`executable_change` on `evaluate_weather_rules.py`), `review_due: false`,
+  **`under_budget`** — the native assess named no `next_transition` and no lineage was started, so
+  the slice stays PENDING review at the `91323cd` boundary until a later commit reaches the ~400
+  line delivery budget. That matches #134's own plan: the fix lands on the isolated branch, the
+  owner merges it, and it is reviewed as a NEW candidate (a code change invalidates the frozen
+  `review-411621a8a31dfb6b`, which therefore stays at `correction_required` and is not closed here).
+  No consent envelope was raised, so the standing grant was not exercised.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
@@ -635,6 +652,31 @@ work unit (`domain-modeling`).
   full suite 727 passed, ruff, format, mypy, lint-imports green. The writer changed the planned
   sequential test for a barrier-synchronised concurrent pair, because a sequential PATCH cannot
   observe the defect (each request would read a fresh row) — accepted, it is the stronger test.
+- T6c 2026-09-27 (writer: OpenCode on `review/e7-rdd`, brief `.git-brief-e7-134.md`): #134 fixed
+  as a tri-state `mildness`. CodeGraph used from the first call (index initialized once in this
+  worktree), no grep-first fallback. TDD, RED first and recorded:
+  - domain RED: `AttributeError: 'CellDayHumidityEvidence' object has no attribute 'mildness'`
+    (5 tests) and `TypeError: decide_worker_rule() got an unexpected keyword argument 'mildness'`
+  - the BEHAVIORAL RED, on the real evaluator path: `AssertionError: assert 'resolved' == 'open'` in
+    `test_an_open_fungal_risk_alert_survives_a_cell_day_with_no_stored_temperature` — the defect
+    reproduced end to end, an open warning closed by a `weather_daily` row with no temperature ends
+  - GREEN `uv run pytest tests/alerts` (own DB `techcamp-e7-db-134` on **5438**, never 5437):
+    **111 passed, 1 failed**, 68 s. The failure is
+    `test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cell_day`, and it is
+    PRE-EXISTING: verified by stashing this unit and re-running it on base `91323cd`, where it
+    fails the same way (both rules missing, so nothing in the temperature half is involved). Not
+    fixed here — it is a T6b job test, outside this unit's scope, and the cause is not yet known
+    (`_make_org` in `tests/alerts/test_jobs.py` seeds no membership, unlike the evaluator tests
+    that do open alerts; the candidate is unproven). Reported to the owner as a follow-up, not
+    filed: it is not a review finding of this slice.
+  - Static checks in `server/`: `uv run ruff check` All checks passed; `uv run ruff format --check`
+    230 files already formatted; `uv run mypy` Success, no issues in 155 source files;
+    `uv run lint-imports` 1 kept, 0 broken.
+  - RDD: `gentle-ai review assess --cwd <worktree> --agent opencode --base-ref 91323cd
+    --committed-only --json` → `risk: medium`, `review_due: false`, `under_budget`, no
+    `next_transition`; no lineage started, boundary stays `91323cd` (see Review (RDD)).
+  - Rollback: `8c57ff0` alone; it touches the two evaluator files, one test file and one docs
+    line, and nothing else in the epic depends on the new name outside them.
 - Next step: T7a (the outbox dispatcher: sender port, claim with `FOR UPDATE SKIP LOCKED`, backoff
   1 min / 5 min / 30 min / 2 h and 5 attempts, the per-minute sweep, the seminar SMS adapter and
   `GET /dev/outbox`, D7/D8), then T7b, T7c, T8, T9, T10, T11. T6a and T6b are code-complete and
