@@ -153,7 +153,7 @@ La bitácora alimenta el balance hídrico (riegos registrados) y el resumen del 
 
 ## 3. DAG de orquestación diaria (worker)
 
-Horas en `America/Bogota`. Cada job arranca cuando termina el anterior y además tiene hora mínima de inicio; si una dependencia falla, los siguientes no corren y se alerta al equipo. Las reglas de pronóstico, las de riesgo de hongos y las de balance hídrico son jobs propios del módulo `alerts` (no los llama el job de clima ni el de riego), por eso viven en el bloque de continuos con su propia hora.
+Horas en `America/Bogota`. Cada job arranca cuando termina el anterior y además tiene hora mínima de inicio; si una dependencia falla, los siguientes no corren y se alerta al equipo. Las reglas de pronóstico, las de riesgo de hongos y las de balance hídrico son jobs propios del módulo `alerts` (no los llama el job de clima ni el de riego), por eso viven en el bloque de continuos con su propia hora. El escalamiento de críticas sin reconocer (docs/06 §3, "Reloj de escalamiento") también es un job propio de `alerts`, cada 5 minutos como la salud de nodos: solo marca `escalated_at` y escribe la fila de `sms` al técnico, y el envío lo hace el outbox.
 
 ```mermaid
 flowchart LR
@@ -172,6 +172,7 @@ flowchart LR
     n[al insertar y cada min: outbox de notificaciones]
     q[04:45 diario: riesgo de hongos<br/>sobre el día anterior consolidado]
     r[04:50 diario: reglas de balance hídrico<br/>del día D−1 ya consolidado]
+    s[cada 5 min: escalar críticas sin reconocer]
   end
 
   subgraph mensual [Mensual: día 1, 02:00]

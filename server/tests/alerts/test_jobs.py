@@ -22,25 +22,32 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.jobs import (
+    ESCALATE_ORG_TASK_NAME,
     EVALUATE_ORG_BALANCE_TASK_NAME,
     EVALUATE_ORG_FORECAST_TASK_NAME,
     EVALUATE_ORG_FUNGAL_TASK_NAME,
     EVALUATE_ORG_TASK_NAME,
     QUEUE_NAME,
+    escalate_org_alerts,
     evaluate_org_balance_rules,
     evaluate_org_forecast_rules,
     evaluate_org_fungal_risk,
     evaluate_org_node_health,
     local_date,
     sweep_balance_rules,
+    sweep_escalations,
     sweep_forecast_rules,
     sweep_fungal_risk,
     sweep_node_health,
 )
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
+from techcamp.alerts.adapters.repositories import SqlAlchemyAlertRepository
+from techcamp.alerts.application import open_alert
+from techcamp.alerts.domain import Alert, AlertRule, Severity
 from techcamp.farms.adapters.orm import FarmRow, PlotRow, SoilProfileRow
-from techcamp.identity.adapters.orm import OrganizationRow
+from techcamp.identity.adapters.orm import AppUserRow, OrganizationRow
 from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
+from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, ReadingRow, SensorRow
 from techcamp.weather.adapters.orm import WeatherCellRow, WeatherDailyRow
@@ -149,6 +156,38 @@ async def _jobs(db_session: AsyncSession) -> list[Any]:
             )
         )
     ).all()
+
+
+async def _open_critical(
+    db_session: AsyncSession,
+    org: Org,
+    *,
+    code: str,
+    at: datetime,
+    severity: Severity = Severity.CRITICAL,
+) -> Alert:
+    """A plot alert of one factory rule, opened at `at` (the D20 severity override
+    an evaluator uses when the evidence decides the severity)."""
+    row = (
+        await db_session.execute(select(AlertRuleRow).where(AlertRuleRow.code == code))
+    ).scalar_one()
+    return await open_alert(
+        rule=AlertRule(
+            code=row.code,
+            id=row.id,
+            org_id=row.org_id,
+            metric=row.metric,
+            operator=row.operator,
+            threshold=float(row.threshold) if row.threshold is not None else None,
+            hysteresis=float(row.hysteresis),
+            min_duration=timedelta(minutes=row.min_duration_min),
+            severity=Severity(row.severity),
+        ),
+        plot_id=org.plot_id,
+        at=at,
+        severity=severity,
+        alerts=SqlAlchemyAlertRepository(db_session),
+    )
 
 
 async def _node_alerts(db_session: AsyncSession, org_id: UUID) -> list[tuple[str, str]]:
@@ -502,3 +541,82 @@ async def _add_representative_sensor(db_session: AsyncSession, org: Org, *, plot
         )
     )
     await db_session.flush()
+
+
+# -- the escalation sweep on its own periodic (docs/06 §3; D41, D43) --
+
+
+async def test_the_escalation_sweep_defers_one_job_per_org_with_its_own_lock(
+    db_session: AsyncSession,
+) -> None:
+    """D43 fixes the hour docs/10 §3 does not name: every 5 minutes, like the node
+    health sweep, because both notice a technician that something is wrong. It
+    reads the orgs that have PLOTS — a node alert belongs to the plot its node
+    hangs on, so an org with a plot covers both target kinds — and defers one job
+    per org on the `escalation` lock, so it never waits on the forecast, fungal or
+    balance sweeps of the same organization."""
+    first = await _make_org(db_session)
+    second = await _make_org(db_session)
+    # An organization with no plot has no alert that could ever escalate, so it
+    # must not cost a job.
+    empty = uuid7()
+    db_session.add(OrganizationRow(id=empty, name="Empty Org", kind="individual"))
+    await db_session.commit()
+
+    await sweep_escalations(timestamp=0)
+
+    jobs = await _jobs(db_session)
+    expected = {str(first.org_id), str(second.org_id)}
+    assert {job.task_name for job in jobs} == {ESCALATE_ORG_TASK_NAME}
+    assert {job.args["org_id"] for job in jobs} == expected
+    assert all(job.queue_name == QUEUE_NAME and job.status == "todo" for job in jobs)
+    assert {job.lock for job in jobs} == {f"alerts:org:{org_id}:escalation" for org_id in expected}
+    assert {job.queueing_lock for job in jobs} == {job.lock for job in jobs}
+    assert str(empty) not in {job.args["org_id"] for job in jobs}
+
+
+async def test_the_escalation_job_escalates_only_the_criticals_whose_two_hours_are_up(
+    db_session: AsyncSession,
+) -> None:
+    """The per-org job end to end at its own decision time: a critical open past
+    the 2 h of docs/06 §3 escalates and its technician is texted, while a critical
+    that opened a minute ago and a warning of the same age are left alone."""
+    now = datetime.now(UTC)
+    org = await _make_org(db_session)
+    # The escalation's recipient is `farm.technician_id` (D4), a column of the
+    # farm and not a membership: this file's org is lean on purpose, so the
+    # technician is attached here rather than by the fixture.
+    technician = uuid7()
+    db_session.add(
+        AppUserRow(id=technician, phone=f"+57{technician.int % 10**13:013d}", full_name="Tech")
+    )
+    farm = await db_session.get(FarmRow, org.farm_id)
+    assert farm is not None
+    farm.technician_id = technician
+    await db_session.commit()
+    due = await _open_critical(db_session, org, code="water_stress", at=now - timedelta(hours=3))
+    young = await _open_critical(db_session, org, code="heat_stress", at=now - timedelta(minutes=1))
+    warning = await _open_critical(
+        db_session, org, code="waterlogging", at=now - timedelta(hours=3), severity=Severity.WARNING
+    )
+
+    await escalate_org_alerts(org_id=str(org.org_id))
+
+    escalated = {
+        row.id: row.escalated_at for row in (await db_session.execute(select(AlertRow))).scalars()
+    }
+    assert escalated[due.id] is not None
+    assert escalated[young.id] is None
+    assert escalated[warning.id] is None
+    sms = (
+        (
+            await db_session.execute(
+                select(NotificationRow).where(
+                    NotificationRow.alert_id == due.id, NotificationRow.channel == "sms"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [row.user_id for row in sms] == [technician]
