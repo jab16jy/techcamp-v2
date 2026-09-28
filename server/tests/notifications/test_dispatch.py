@@ -695,6 +695,51 @@ async def test_a_critical_waits_when_no_other_channel_can_send(
     assert held.next_attempt_at == _DUE + BREAKER_COOLDOWN
 
 
+async def test_a_full_batch_of_criticals_with_no_route_ends_the_run(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """The loop that drains a backlog must also END, and these are the rows that
+    could keep it going: a critical on a `push` nobody configured (D40) whose every
+    configured alternate has an open circuit, filling a whole claim. They are held
+    to the earliest of the circuits that could take them, so they leave the due set
+    and the run finishes.
+
+    It is the `push` cooldown that must NOT be asked, and it is the whole bug: a
+    channel with no sender has no breaker at all, so the question would be answered
+    by a breaker created on the spot, fresh and closed, at zero. Held until zero
+    means held until `now`, which means still due, which means a full batch
+    re-claimed pass after pass — the row is never lost and never delivered, and the
+    job spins (docs/06 §4; D30, D35, D40).
+    """
+    first = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    first_id = first.id
+    second = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    second_id = second.id
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.SMS)
+    sender = _FailingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: sender},
+        circuits=circuits,
+        now=_DUE,
+        limit=2,
+    )
+
+    # A full batch, all of it held, and no third pass: `sent` is 0, so nothing here
+    # was a delivery.
+    assert (report.claimed, report.deferred, report.sent) == (2, 2, 0)
+    assert sender.sent == []
+    for row_id in (first_id, second_id):
+        held = await _row(db_session, row_id)
+        # Still `pending` — an outage is not a death (docs/06 §4; RF-08) — and due
+        # exactly when SMS is allowed its next trial, which is the earliest of the
+        # only circuits that could carry it.
+        assert (held.status, held.attempts) == ("pending", 0)
+        assert held.next_attempt_at == _DUE + BREAKER_COOLDOWN
+
+
 async def test_a_critical_does_not_fall_back_from_the_escalation_channel(
     db_session: AsyncSession, critical: Seeded
 ) -> None:

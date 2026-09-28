@@ -22,6 +22,7 @@ from techcamp.notifications.application.ports import (
 from techcamp.notifications.domain.errors import RowNotDeliverableError
 from techcamp.notifications.domain.models import (
     ALTERNATE_CHANNELS,
+    BREAKER_COOLDOWN,
     CLAIM_LIMIT,
     CRITICAL_SEVERITY,
     MAX_ATTEMPTS,
@@ -55,6 +56,20 @@ class DispatchReport:
     one that would otherwise be invisible — a run can claim fifty rows and move
     none of them without anything having failed."""
 
+    @property
+    def moved(self) -> bool:
+        """Whether this pass took any of its rows OUT of the due set.
+
+        A row leaves the due set when it is sent, given up, backed off to a later
+        `next_attempt_at`, or held until a circuit's cooldown — the four outcomes
+        the repeat in `dispatch_due_notifications` relies on. A pass that moved
+        NOTHING cannot move anything by running again: the rows it would re-claim
+        are the very rows it has just decided to hold, so the repeat would spin on
+        them forever. Liveness of that loop is as binding as draining a backlog
+        inside one run.
+        """
+        return self.sent + self.retried + self.failed + self.deferred > 0
+
     def __add__(self, other: DispatchReport) -> DispatchReport:
         return DispatchReport(
             claimed=self.claimed + other.claimed,
@@ -84,7 +99,10 @@ async def dispatch_due_notifications(
     because every pass either moves its rows out of the due set (sent, given up,
     backed off to a later `next_attempt_at`, or held to the end of a circuit's
     cooldown) or comes back short: a row another worker holds is passed over by
-    the claim and is not counted.
+    the claim and is not counted. A pass that is full but moved NOTHING ends it too
+    — a full pass over a due set it cannot shrink is a set it will keep re-claiming,
+    and a full batch of rows waiting on a provider is exactly that (docs/06 §4;
+    D30, D35).
 
     Delivery is AT LEAST ONCE, and deliberately so: a worker that dies after the
     provider accepted a message but before `sent` is committed leaves the row
@@ -101,7 +119,7 @@ async def dispatch_due_notifications(
             outbox=outbox, senders=senders, circuits=circuits, now=now, limit=limit
         )
         report += passed
-        if passed.claimed < limit:
+        if passed.claimed < limit or not passed.moved:
             return report
 
 
@@ -193,13 +211,30 @@ async def _one_pass(
             await flush()
             # The provider is refusing, and a refused call would cost this row one
             # of its five attempts on a delivery nothing could have fixed. The row
-            # is held until the circuit's own cooldown, so it becomes due exactly
-            # when the provider is allowed its next trial (docs/06 §4; D30, D35).
+            # is held until the EARLIEST of the circuits that could take it, so it
+            # comes due exactly when the first of them is allowed its next trial
+            # (docs/06 §4; D30, D35).
+            #
+            # "Could take it" is deliberately not the row's own channel. A critical
+            # whose primary was never configured (D40) has NO breaker on that
+            # channel — a channel with no sender has no provider, so it has no
+            # failures to count — and asking it anyway would create a fresh, closed
+            # breaker and answer zero. The row would then be held until `now`, stay
+            # due, and a FULL batch of them would be re-claimed pass after pass
+            # forever. The circuits to ask are the ones that have a sender, and for
+            # a critical its alternates too.
+            routes = _routes_for(notification, senders=senders)
+            wait = min(
+                (circuits.cooldown_remaining(candidate) for candidate in routes),
+                # No route at all is unreachable (the claim only asks for channels
+                # that can send, D31, D40), but a liveness bound should not depend
+                # on that: one full cooldown is always strictly in the future.
+                default=BREAKER_COOLDOWN.total_seconds(),
+            )
             await outbox.mark_deferred(
                 notification.id,
-                next_attempt_at=now
-                + timedelta(seconds=circuits.cooldown_remaining(notification.channel)),
-                reason=f"the {notification.channel.value} circuit is open",
+                next_attempt_at=now + timedelta(seconds=wait),
+                reason=_held_reason(notification, routes),
             )
             deferred += 1
             continue
@@ -402,3 +437,38 @@ def _where_it_can_go(
         if candidate in senders and circuits.allows(candidate):
             return candidate
     return None
+
+
+def _routes_for(
+    notification: PendingNotification, *, senders: Mapping[Channel, NotificationSender]
+) -> tuple[Channel, ...]:
+    """The channels whose circuit decides when this row is worth trying again.
+
+    The same reachability rule `_where_it_can_go` uses, minus the circuits' own
+    opinion: a channel that has a sender, plus — for a critical only, because a
+    `warning` has nowhere else to go (D5) — the alternates that have one. Order is
+    the row's own channel first, matching docs/01 RF-08's "SMS o WhatsApp como
+    respaldo".
+    """
+    routes: list[Channel] = []
+    if notification.channel in senders:
+        routes.append(notification.channel)
+    if notification.severity == CRITICAL_SEVERITY:
+        routes.extend(
+            candidate
+            for candidate in ALTERNATE_CHANNELS.get(notification.channel, ())
+            if candidate in senders
+        )
+    return tuple(routes)
+
+
+def _held_reason(notification: PendingNotification, routes: tuple[Channel, ...]) -> str:
+    """Why this row is being held, in terms an operator can act on later."""
+    if not routes:
+        return f"the {notification.channel.value} channel has no sender and no alternate to use"
+    if routes == (notification.channel,):
+        return f"the {notification.channel.value} circuit is open"
+    return (
+        f"no route out of {notification.channel.value} is free: "
+        f"{', '.join(channel.value for channel in routes)} have an open circuit"
+    )
