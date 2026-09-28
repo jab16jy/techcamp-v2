@@ -29,10 +29,33 @@ const WRITE_DEBOUNCE_MS = 2_000
  * `syncOnce` turns them into a `stopped` outcome.
  */
 function startRun(): void {
-  void syncOnce().catch((error: unknown) => {
-    console.error('a synchronization run failed unexpectedly', error)
-  })
+  // `syncOnce` is single-flight: calling it while a run is in flight returns
+  // that run, so a change queued after the run took its pending snapshot would
+  // never be pushed by this call. Remember that it happened and run exactly
+  // once more when the current run ends, instead of leaving the write to wait
+  // for the next 60 s tick, the next `online` event, or a restart (RNF-01: the
+  // change is on the phone and owed to the server).
+  if (runInFlight) {
+    followUpRequested = true
+    return
+  }
+  runInFlight = true
+  void syncOnce()
+    .catch((error: unknown) => {
+      console.error('a synchronization run failed unexpectedly', error)
+    })
+    .finally(() => {
+      runInFlight = false
+      if (!followUpRequested) return
+      // One boolean, so a burst of writes during a run is still one follow-up:
+      // that run pushes all of them.
+      followUpRequested = false
+      startRun()
+    })
 }
+
+let runInFlight = false
+let followUpRequested = false
 
 export function startSynchronizer(): () => void {
   startRun()

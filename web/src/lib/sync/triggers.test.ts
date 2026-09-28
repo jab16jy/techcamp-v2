@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getPendingCount, subscribePendingCount } from '../db/live'
+import { db } from '../db/db'
 import { saveLogbookEntry } from '../db/local'
 import { resetLocalDb } from '../db/testDb'
 import { uuidv7 } from '../db/ids'
@@ -203,6 +204,49 @@ describe('startSynchronizer', () => {
     await waitForRuns(api, 2)
     await flush()
     expect(api.runs()).toBe(2)
+  })
+
+  it('runs once more for a write that lands while a run is in flight', async () => {
+    // The first run is held open in its push. A second entry is written while it
+    // is still going, and its debounce fires before the run finishes: `syncOnce`
+    // is single-flight, so that call would hand back the running promise and the
+    // new change would wait for the next 60 s tick, an `online` event, or a
+    // restart.
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let pushes = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/push')) {
+          pushes += 1
+          if (pushes === 1) await gate
+          const request = JSON.parse(String(init?.body)) as { changes: { id: string }[] }
+          return json({ results: request.changes.map((c) => ({ id: c.id, status: 'applied', server_version: 1 })) })
+        }
+        return json({ changes: [], next_since: 0, has_more: false })
+      }),
+    )
+    await saveLogbookEntry(draft())
+    start()
+    // The first run is now inside its held push.
+    for (let attempt = 0; attempt < 200 && pushes === 0; attempt += 1) await flush(1)
+    expect(pushes).toBe(1)
+
+    await saveLogbookEntry(draft())
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flush()
+    // Still one: the follow-up waits for the run in flight.
+    expect(pushes).toBe(1)
+
+    release()
+    await waitFor(() => pushes === 2)
+    await flush()
+    // Exactly one follow-up, and it carried the change written mid-run.
+    expect(pushes).toBe(2)
+    expect(await db.outbox.count()).toBe(0)
   })
 
   it('ticks every 60 s only while the document is visible', async () => {
