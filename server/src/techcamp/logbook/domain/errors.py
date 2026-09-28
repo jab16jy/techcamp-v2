@@ -8,6 +8,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from techcamp.identity.domain.models import Role
     from techcamp.logbook.domain.models import SyncEntity
 
@@ -58,3 +60,26 @@ class VisitExportForbiddenError(Exception):
     def __init__(self, role: Role) -> None:
         self.role = role
         super().__init__(f"Role '{role}' cannot export visits")
+
+
+class InvalidAttachmentError(Exception):
+    """Raised when a photo's declared size or content type is not accepted.
+
+    Mapped to 422 by the presign router (docs/04 §Bitácora "Fotos"; D8): the
+    client compresses to ≤ 200 KB `image/jpeg` or `image/webp`, and a request
+    that says otherwise is refused before the API ever names a bucket.
+    """
+
+
+class AttachmentParentNotFoundError(Exception):
+    """Raised when the parent entry or visit is not there for this caller.
+
+    Mapped to 404 by the presign router (docs/09): a parent of another
+    organization, a deleted one and one that never existed answer identically,
+    so presigning never reveals that an id exists somewhere else. D8: the
+    parent must already be synced and visible before a photo can join it.
+    """
+
+    def __init__(self, parent_id: UUID) -> None:
+        self.parent_id = parent_id
+        super().__init__(f"Attachment parent '{parent_id}' is not visible")

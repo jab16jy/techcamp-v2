@@ -11,6 +11,7 @@ dependencies = [
     "aiomqtt>=2.5.1",
     "alembic>=1.20.0",
     "asyncpg>=0.31.0",
+    "boto3>=1.40.0",
     "fastapi>=0.141.1",
     "geoalchemy2>=0.20.0",
     "httpx>=0.28.1",
@@ -51,6 +52,15 @@ python_version = "3.12"
 mypy_path = "src"
 packages = ["techcamp"]
 strict = true
+
+[[tool.mypy.overrides]]
+# Neither boto3 nor botocore ships a py.typed marker (E8 T6: the S3 presigner).
+# The one value read off them is the URL `generate_presigned_url` returns, and
+# the tests assert its host, bucket, key and `X-Amz-Expires` against a real
+# signature, so an untyped import costs the boundary its annotation, not a
+# runtime assumption about the signature.
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # asyncpg ships no stubs/py.typed marker (E4 T6: the raw `LISTEN` connection).
