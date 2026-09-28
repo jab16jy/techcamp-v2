@@ -43,8 +43,9 @@ class SqlAlchemyOutboxRepository:
         now() FOR UPDATE SKIP LOCKED LIMIT 50`.
 
         `channels` is what keeps a backlog from starving: a row whose channel has
-        no sender yet (`push` until T7b) is not even asked for, so it cannot fill
-        every claim while the rows that CAN be delivered wait behind it.
+        no sender yet (a `push` with no VAPID key configured) is not even asked
+        for, so it cannot fill every claim while the rows that CAN be delivered
+        wait behind it.
 
         The alert's `rule_code` and `severity` join in because they are the
         message: a provider handed an id alone cannot render anything. `of=`
