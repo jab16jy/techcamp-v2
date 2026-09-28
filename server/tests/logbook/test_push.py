@@ -233,10 +233,18 @@ async def test_the_newer_client_updated_at_wins_and_the_older_push_is_conflict_o
         _entry(env, id=change.id, client_updated_at=_later(env), notes="revisada"),
         caller_id=producer,
     )
+    stored_after_newer = await _stored_entry(pusher.session, change.id)
 
     assert newer.status is SyncStatus.APPLIED
     assert newer.server_version is not None and newer.server_version > applied.server_version
     assert await _entry_count(pusher.session) == 1
+    # The applied values, not only the version: an implementation that
+    # allocated a version and wrote nothing would pass the three assertions
+    # above and leave the losing edit standing.
+    assert stored_after_newer is not None
+    assert stored_after_newer.notes == "revisada"
+    assert stored_after_newer.client_updated_at == _later(env)
+    assert stored_after_newer.server_version == newer.server_version
 
 
 async def test_a_rejected_change_rolls_back_its_own_savepoint_and_the_batch_continues(
