@@ -685,7 +685,7 @@ work unit (`domain-modeling`).
   `test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot` (`_SensorsFailingForOneNode` raises at the sensor port the evaluator already uses,
   and the test carries the negative assertion: the failed plot shows NO alert and the next plot
   shows its own). No push, no merge: the parent merges this branch.
-- [ ] T6 Worker rules
+- [x] T6 Worker rules
   - [x] T6a Node health every 5 min: `node_offline` (no readings for 3 × `interval_s`),
     `node_battery_low` (latest `battery_v` < 3.4 V), to the technician — route: Pi subagent —
     forecast ~350 — actual 898 (`21fb000`; 372 production / 522 tests / 4 docs). `node_battery_low`
@@ -714,7 +714,7 @@ work unit (`domain-modeling`).
     `local_date` helper. No production change — CodeGraph shows both jobs read the day only
     through `local_date` — route: Herdr OpenCode (branch `review/e7-rdd`) — forecast ~30 — actual 13
     (`c9132d8`, 10 insertions / 3 deletions, one file)
-- [ ] T7 Notifications outbox
+- [x] T7 Notifications outbox
   - [x] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
@@ -883,21 +883,171 @@ work unit (`domain-modeling`).
     `alerts --> irrigation` edge — docs/05 (D25) + the hexagonal rule that another module's domain
     is not reachable. Org filter on every read of both branches — docs/09:47. The 04:50 hour and
     the product's day — docs/10 §3 (D28).
-- [ ] T11 Close: scenario-A integration test (readings through ingest → `heat_stress` and
+- [x] T11 Close: scenario-A integration test (readings through ingest → `heat_stress` and
   `water_stress` open → push via the fake sender → escalation SMS in `/dev/outbox`), retries and
-  escalation proven; seminar-stack demo; final report — route: Herdr OpenCode — forecast ~250
+  escalation proven; seminar-stack demo; final report — route: Herdr OpenCode (worktree `e7-t11`,
+  branch `feat/e7-t11-close` from `feat/e7-alerts` @ `3120dac`; own DB `techcamp-e7-db-t11` on
+  **5439**) — forecast ~250 — actual **1,151 authored** over four work units
+  (`075aa55` 519, `f110fbe` 89, `4ac095e` 195, `6d0cf37` 33), two of them tests and one a real
+  production defect the demo found — three lineages, all APPROVED and acknowledged
+  (`review-b13abff23ad3d0e1` with one WARNING fixed in the next commit,
+  `review-c60160b94d5d2336` zero findings, `review-34054452efa459cf` zero findings)
+  - **Docs read before planning:** AGENTS.md, docs/10 §3 and the E7 row (`:70`), docs/06 §3 (rules
+    and the state diagram), §4 (the whole outbox rule table) and §10's "Aritmética del escenario A",
+    docs/04:182-210 (`/dev/outbox`) and `:75` (`Dr > RAW`), docs/01:30 RF-07, `:31` RF-08, `:57`
+    RNF-05, docs/09:47, ADR-0012, ADR-0016, ADR-0021, ADR-0022, and this doc's D4, D5, D12, D24,
+    D30, D31, D37, D40–D43, T6–T10. Mapped with CodeGraph first (`ingest_uplinks` /
+    `after_flush` / `evaluate_landed_readings` / `escalate_due_alerts` / `dispatch_due_notifications`
+    / `build_senders` / the `/dev/outbox` router), no grep-first fallback.
+  - **What already existed, so it was CITED and not rewritten (Ponytail):** the partial unique index
+    (`test_second_non_resolved_alert_for_same_rule_and_plot_is_rejected`); the scenario's own
+    arithmetic at sample granularity
+    (`test_scenario_a_soil_moisture_linear_fall_and_resolution`); the 3 h heat minimum
+    (`test_heat_stress_opens_after_3h_not_at_2h45`,
+    `test_a_heat_run_shorter_than_the_minimum_duration_opens_nothing`); the reading branch of
+    `water_stress` and its hysteresis (`test_a_dry_run_below_the_plots_stress_moisture_opens_water_stress`,
+    `..._above_..._opens_nothing`, `test_water_stress_resolves_above_the_hysteresis_band`); one
+    transaction for the alert and its rows
+    (`test_a_failure_after_the_alert_insert_rolls_back_everything`,
+    `test_one_message_writes_its_rows_in_one_commit`); the escalation
+    (`test_a_due_critical_alert_escalates_and_texts_the_farms_technician`); the tray
+    (`test_the_tray_lists_the_simulated_messages_with_their_alert`); the WHOLE retry ladder, the
+    breaker and the critical's alternate channel
+    (`test_retry_delays_follow_the_documented_backoff`,
+    `test_the_fifth_failed_attempt_gives_the_row_up`,
+    `test_five_failed_deliveries_open_the_circuit_and_the_next_one_is_not_attempted`,
+    `test_a_critical_goes_to_the_alternate_channel_while_push_is_down` D37,
+    `test_a_critical_whose_provider_is_unconfigured_goes_out_by_the_alternate` D40); and org
+    isolation, six `..._is_404` tests plus the repository-level ones. **The gap was never a missing
+    half: it was that no test walked the CHAIN, so a break between any two halves would leave every
+    unit green. That is what T11 added.**
+  - **The D24 executions owed since T5c (owner decision 2026-09-27): GREEN, observed by the parent**
+    on `feat/e7-alerts` @ `3120dac` against `techcamp-e7-db` (5437),
+    `uv run pytest tests/alerts/test_evaluate_readings.py tests/alerts/test_lifecycle.py
+    -k "silence or raises or failure or recover" -rA` → **3 passed**:
+    `test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot`,
+    `test_a_database_failure_in_one_plot_does_not_silence_the_next_plot` (both T5c's) and
+    `test_a_failure_after_the_alert_insert_rolls_back_everything` (T3's, `277b7c7`). **No RED,
+    because they pin code that already worked.** A correction to this doc while it is being written:
+    line 1498 said "T11 owns the execution of all three tests" and T5c's entry said "tests written
+    but execution deferred" — **T5c wrote TWO tests, not three** (verified with
+    `git log -S` on both test names: `19780b3` and `ed8583a`), and D24 names
+    `R3-RetrySkipsAlertEvaluation` as a behaviour that "keeps holding" with **no test of that name in
+    the suite**; the closest is `tests/telemetry/test_ingestor.py::test_flush_with_retry_requeues_the_batch_on_failure_for_the_next_flush`,
+    which passes. So there was nothing deferred to find beyond the two, and no defect to fix.
+  - **The T10 lesson (this doc's Review section): DECIDED, and it stays in #135.** The gap is real —
+    `evaluate_balance_rules` (`alerts/application/evaluate_water_stress.py:103-117`) loops the org's
+    plots with no per-plot `try` + `recover`, and #135 tracks it as
+    `R3-org-failure-isolation`. The evidence for not touching it here: scenario A's plot HAS a
+    representative sensor (a `field`-calibrated `soil_moisture` at 30 cm = Zr/2 with Zr = 0,6 m), so
+    `_evaluate_plot` RETURNS at line 146-148 before deciding anything (D29) — the reading branch owns
+    the plot and the balance evaluator's decision is never walked. A test written here would prove a
+    path scenario A does not take. Cited, not fixed, and not duplicated.
+  - **Commit split** (4 work units, tests and shape with each):
+    `075aa55` the scenario-A replay through the real ingest path (the two alerts at the documented
+    instants, the daily heat cycle, the critical `water_stress`, two organizations apart);
+    `f110fbe` the RDD WARNING's fix — the local day; `4ac095e` the delivery chain (push, the 2 h
+    clock, the tray); `6d0cf37` the defect the demo found.
+  - **The demo found a REAL defect, and it is fixed (`6d0cf37`).** `enqueue_dispatch` deferred with
+    `"args": json.dumps({})` while the task's signature is `dispatch_outbox(timestamp: int)`, so every
+    same-transaction defer died in the worker with `TypeError: dispatch_outbox() missing 1 required
+    positional argument: 'timestamp'`. D7's "at insert" half was dead; delivery only worked because the
+    next minute's cron picked the row up, so RNF-05's two minutes held by luck of the sweep. The
+    suite could not see it because every test of D7 COUNTS the job row. The fix is the codebase's own
+    precedent (`{"timestamp": 0}`, as the `/dev/jobs` routes already do), and the existing test now
+    calls the task with the arguments the product wrote.
+  - **Seminar-stack demo (ADR-0021), on its own project `techcamp-e7-t11`:** up, health checked, org
+    + farm + plot created through the API, ONE alert **seeded by SQL** (marked: the node simulator and
+    `POST /dev/scenarios/{name}:load` are E16, so no route can produce an alert — and the point of the
+    demo is the DELIVERY side, which the integration test does not cover), the escalation produced by
+    the **worker's own `*/5` sweep** with no manual trigger, and the SMS shown in
+    `GET /dev/outbox`. Commands and observed output below. The live browser push needs a human and is
+    an owner runbook below, marked PENDING.
+  - **Two things the demo could not do, honestly:** (1) `verify_otp` signs in an EXISTING user only
+    (`tests/identity/test_dev_auth.py::test_otp_verify_rejects_an_unknown_user`) and docs/04 has no
+    `POST /organizations`, so the demo seeded the identity rows by SQL and did everything after that
+    through the API; (2) **the seminar's "the log IS the delivery" (D8, D40) is FALSE in the running
+    stack**: only `ingestor.py` calls `logging.basicConfig(level=INFO)`, so `SeminarSmsSender`'s
+    `logger.info` never emits in the `worker` and the simulated SMS is invisible in the log. The tray
+    is the only visible half. Not fixed in T11 — it breaks no acceptance criterion (the criterion is
+    the tray, which passed), and the fix is one line mirroring `ingestor.py:24`. Reported to the owner.
+  - **No `firmware/simulator` was built** (docs/06 §10's YAML and `/dev/scenarios/{name}:load` are
+    E16's): the trajectory is the smallest helper that drives the real path today, and the brief says
+    so explicitly.
+  - **matches the doc**, one line per behavior, each with its negative half:
+    - **matches the doc** — `water_stress` opens 6 h after θ_estrés = 15,3 % is crossed, at day
+      10,677 and NOT at day 10,667 (a 5 h 45 min run) nor at the crossing: docs/06 §10's
+      "Aritmética del escenario A" ("abre 6 h después (día ≈ 10,7)").
+    - **matches the doc** — the doc's rejected 20 % threshold is the negative: ten days of the fall
+      decide nothing, so no alert opens a week before FAO-56 says there is stress: docs/06 §10's last
+      bullet.
+    - **matches the doc** — `heat_stress` opens on its 3 h run and not at 2 h 45 min, and a 26–37 °C
+      day opens one alert per afternoon and resolves it in the night: docs/06 §3's rule table and its
+      60-minute resolution window.
+    - **matches the doc** — `water_stress` ends CRITICAL, the state the 2 h escalation clock counts
+      from: docs/06 §3 "Reloj de escalamiento" + D12.
+    - **matches the doc** — a plot alert notifies the owner and the producer, never the technician;
+      the escalation texts the technician: docs/06 §3 + D4.
+    - **matches the doc** — one escalation is one `sms` row however often the 5-minute sweep runs:
+      docs/10 §3's `cada 5 min: escalar críticas sin reconocer` + D43.
+    - **matches the doc** — the SMS appears in `GET /dev/outbox` with `rule_code` and `severity`,
+      because "una bandeja que solo dijera `sms enviado` no diría qué llegó": docs/04:182-210.
+    - **matches the doc** — two organizations in one flush and the first's fall never reaches the
+      second: docs/09:47.
+    - **matches the doc** — the deferred dispatch job is one the worker can CALL, which is what
+      "alerta crítica p95 < 2 min desde la lectura hasta el envío" rests on: docs/01:57 RNF-05 + D7.
+  - **Not done, deliberately:** the live browser push (owner runbook, PENDING); the production
+  SMS/WhatsApp provider (ADR-0016 future); `flood_risk`/`drought_risk` (E10); the `worker` logging
+  level (reported, not fixed); no push, no PR, no merge.
 
 ## Acceptance criteria
-- [ ] One non-resolved alert per rule and plot/node, enforced by a partial unique index.
-- [ ] Scenario-A readings open `heat_stress` and `water_stress` at the documented times and not
-  before; hysteresis prevents flapping.
-- [ ] Each warning/critical alert and its notification rows are written in one transaction; a
+- [x] One non-resolved alert per rule and plot/node, enforced by a partial unique index.
+  `test_second_non_resolved_alert_for_same_rule_and_plot_is_rejected` and
+  `..._and_node_is_rejected` (T1), and the index doing its job across a whole 14-day replay: 14
+  `heat_stress` cycles on one plot, each resolved before the next opens, with exactly one
+  non-resolved row at a time (T11, `test_scenario_a_ends_critical_with_a_daily_heat_cycle_and_two_organizations_apart`).
+- [x] Scenario-A readings open `heat_stress` and `water_stress` at the documented times and not
+  before; hysteresis prevents flapping. **Proven through the real ingest path**
+  (`ingest_uplinks` + the D9 hook, T11 `test_scenario_a_through_ingest_opens_both_alerts_at_the_documented_times`):
+  `water_stress` at sample 1025 = 922 500 s = day 10,677 — the doc's "día ≈ 10,7" — and not at 1024
+  (5 h 45 min) nor at the crossing; `heat_stress` at sample 12 and not at 11 (2 h 45 min). The
+  doc's numbers are hardcoded in the test, not read back from the fixture. Hysteresis and the
+  60-minute clear run were already proven per rule
+  (`test_condition_and_clear_tests_hysteresis`, `test_water_stress_resolves_above_the_hysteresis_band`,
+  `test_scenario_a_soil_moisture_linear_fall_and_resolution`) and are cited, not rewritten.
+- [x] Each warning/critical alert and its notification rows are written in one transaction; a
   push arrives (fake sender in tests, real browser in the demo); the escalation SMS appears in
-  `GET /dev/outbox`.
-- [ ] Retries follow 1 min / 5 min / 30 min / 2 h and stop at 5 attempts with `failed`; the
-  breaker opens after 5 consecutive failures and criticals switch channel.
-- [ ] Every alert, rule and subscription endpoint is org-isolated (404 across orgs).
-- [ ] All server (and web, for T9) checks green; RDD per work-unit commit.
+  `GET /dev/outbox`. One transaction — `test_a_failure_after_the_alert_insert_rolls_back_everything`
+  and `test_one_message_writes_its_rows_in_one_commit`. **The chain, end to end on the scenario's own
+  rows** (T11 `test_scenario_a_delivers_the_push_escalates_and_shows_the_sms_in_the_outbox`): the
+  4 push rows to owner+producer and none to the technician, every pending push delivered through the
+  fake sender, a sweep one second before the 2 h finding nothing and the sweep at the 2 h escalating
+  exactly one alert, a THIRD sweep finding nothing new, the SMS out through the REAL seminar
+  registration (`build_senders`) and in `GET /dev/outbox` as one `sms` for the technician. The real
+  browser push is **PENDING for the owner** (runbook below).
+- [x] Retries follow 1 min / 5 min / 30 min / 2 h and stop at 5 attempts with `failed`; the
+  breaker opens after 5 consecutive failures and criticals switch channel. Fully proven per unit and
+  CITED rather than rewritten: `test_retry_delays_follow_the_documented_backoff` (the ladder),
+  `test_a_failing_sender_schedules_the_next_attempt_with_backoff`,
+  `test_the_fifth_failed_attempt_gives_the_row_up` (`failed` at 5),
+  `test_five_failed_deliveries_open_the_circuit_and_the_next_one_is_not_attempted` (the breaker),
+  `test_a_critical_goes_to_the_alternate_channel_while_push_is_down` (D37/D40),
+  `test_a_critical_is_not_moved_by_a_channel_that_never_failed` and
+  `test_a_critical_does_not_fall_back_from_the_escalation_channel`. T11 added the piece none of
+  those covers — that the deferred job is one the worker can CALL (`6d0cf37`), which is what the
+  retry ladder rides on in a running stack.
+- [x] Every alert, rule and subscription endpoint is org-isolated (404 across orgs).
+  `test_listing_alerts_of_a_foreign_org_is_404`, `test_an_alert_of_another_org_is_404`,
+  `test_listing_alert_rules_of_a_foreign_org_is_404`,
+  `test_creating_an_alert_rule_in_a_foreign_org_is_404`, `test_patching_a_factory_rule_is_404`,
+  `test_deleting_another_users_push_subscription_is_404`, plus the repository-level pins
+  (`test_another_orgs_rule_never_opens_for_this_plot`, `test_the_lock_of_one_org_never_reaches_another_orgs_alert`,
+  `test_only_the_job_own_organization_is_decided`) — and T11 adds the isolation assertion INSIDE the
+  scenario: two organizations in the same flushes, the first's 14-day fall opens nothing on the
+  second, and reading the second's plot through the first's `org_id` answers nothing.
+- [x] All server (and web, for T9) checks green; RDD per work-unit commit. **696 passed** on the five
+  scoped modules (below) and the four static checks green; RDD ran as three lineages over the four
+  T11 work units, each approved and acknowledged with its authority burned.
 
 ## Review (RDD)
 - Boundary: `a899aa6`.
@@ -1437,6 +1587,45 @@ work unit (`domain-modeling`).
   will hit the next writer on this host, and because the tokens in any note go stale the moment a
   commit moves HEAD: take `expected-revision` / `target` / `repository-context` from a FRESH bound
   STATUS (the same lesson as #249's `role_capture_failed` diagnosis).
+- T11 slice 1 (`3120dac..075aa55`, 1 path, 519 lines): `assess --agent opencode --base-ref
+  3120dac --committed-only` → `medium`, `review_due: true` / `slice_budget_reached`; the consent
+  envelope was relayed and GRANTED by the owner (the brief's standing grant is why the envelope was
+  raised at all, but the contract requires the live answer, so it was asked — T9's lesson). Lineage
+  **`review-b13abff23ad3d0e1`**, one `review-reliability` lens, **APPROVED and acknowledged
+  (authority burned)**, target
+  `sha256:4bd478f5f345f789da0e4ddfa8a5a4b179af9b7cd27cc7801fce91eda8aae48a`.
+  - **One WARNING, non-blocking, and it is the reviewer being right**, so it is fixed here as its
+    own work unit (`f110fbe`) rather than filed: `R3-temperature-phase-shift`
+    (`test_scenario_a.py:112-116`, deterministic, introduced) — `_air_temp_c` derived the 26–37 °C wave
+    from the SAMPLE NUMBER while `_START` is 10:00 in Bogotá, so the trough sat ten hours away from
+    the timestamps the ingest path stores, and the docstring's "26 °C at local midnight" was a claim
+    the code could not honour. TDD: RED
+    `test_the_scenario_day_is_local_midnight_to_local_noon` → `assert 36.26313972081441 == 26.0 ± 0.01`;
+    GREEN after taking the hour from the reading's own clock in `America/Bogota`. Two consequences
+    followed from the same local day: the heat run now completes at sample 12 (not 47), and the coarse
+    flushes sit on the local noon and the local midnight. **No issue filed on purpose**: one finding,
+    fixed inside the task, and an issue with nothing left in it would be noise — the owner rule asks
+    for one issue per round only when findings remain.
+  - A writer error worth recording, because it is the one the feature doc already warns about twice:
+    the first bound STATUS was **hand-typed** and rejected with
+    `invalid_request … cause: flag provided but not defined: -target`. The provider-issued re-entry
+    carries a `--repository-context` token a hand-written command misses. Take
+    `next_transition.execute.command` verbatim (T9's #249 lesson, same shape).
+- T11 slice 2 (`82609c6e..4ac095e`, 1 path, **284 changed lines** = `f110fbe`'s 89 plus `4ac095e`'s 195, the two reviewed together because the fix is the same file the delivery chain extends):
+  `assess` → `medium`, `review_due: false` / `under_budget` — the owner asked for the round anyway
+  ("RDD over the committed work before the next behavior"), so the lifecycle ran from the
+  provider's own `fresh_target_ready` START. Lineage **`review-c60160b94d5d2336`**, one
+  `review-reliability` lens, **APPROVED with ZERO findings and acknowledged (authority burned)**,
+  target `sha256:84b6fbdee5a7cc22bdc7101ee17e2faf62205ac5accc93c412bb64387322cff5`.
+- T11 slice 3 (`22f8eb3c..6d0cf37`, 2 paths, 33 lines: the dispatch-args defect fix):
+  `assess` → `medium`, `under_budget`; run on the same owner instruction. Lineage
+  **`review-34054452efa459cf`**, one `review-reliability` lens, **APPROVED with ZERO findings and
+  acknowledged (authority burned)**, target
+  `sha256:746d23b2450ba1a32c7aa36c3ea5f53694efc59065a6fd337bafde337be33267`. No correction was
+  offered and none was made.
+- **No transport refusal happened in T11**: all three lens slots were captured from this host on the
+  first attempt, unlike T8's two. Recorded because the difference is worth having on the record — the
+  T8 note above is not stale advice, it just did not fire.
 
 ## Progress / evidence
 - 2026-09-26: docs read (AGENTS.md, docs/README, 00, 01, 03, 04, 05, 06 §1/§3/§4/§10, 09, 10,
@@ -1957,3 +2146,244 @@ work unit (`domain-modeling`).
     `sms` row with no alternate), a live browser push (T11 owns the seminar demo), the two
     SUGGESTIONs of slice 2 (they stay in #141), the feature doc's own entries until the last
     lineage closed, and any push, merge or PR.
+
+## T11 final report (2026-09-28)
+
+The epic closes on four work units on `feat/e7-t11-close` (from `feat/e7-alerts` @ `3120dac`),
+three approved lineages, one real production defect found by the demo and fixed, and one
+owner-pending item that needs a human with a browser.
+
+### Commits and line counts
+
+| commit | authored | what |
+| --- | --- | --- |
+| `075aa55` | 519 (1 new test file) | scenario A through `ingest_uplinks`: both alerts at the doc's instants and not before, the daily heat cycle, the critical `water_stress`, two organizations apart |
+| `f110fbe` | 89 | the RDD WARNING's fix: the scenario's day is a LOCAL day, not a sample count |
+| `4ac095e` | 195 | the delivery chain: push, the 2 h clock, `GET /dev/outbox` |
+| `6d0cf37` | 33 | the defect the demo found: the deferred dispatch job now carries its `timestamp` |
+
+Total **1,151 authored**, of which 1,146 is one new test file and 10 is the production fix.
+No production behavior of the alert rules changed: T11 proves the chain, it does not alter it.
+
+### Checks (own DB `techcamp-e7-db-t11` on 5439; `DATABASE_URL=…@localhost:5439/techcamp`)
+
+- `uv run pytest tests/alerts tests/notifications tests/telemetry tests/weather tests/irrigation`
+  → **696 passed, 2 warnings in 425.42 s** (the 2 warnings are `starlette`/`httpx` deprecations from
+  the existing `TestClient` usage, not from T11).
+- `uv run ruff check` → All checks passed!
+- `uv run ruff format --check` → 252 files already formatted
+- `uv run mypy` → Success: no issues found in 168 source files
+- `uv run lint-imports` → Hexagonal layers per module KEPT (1 kept, 0 broken)
+- Focused, while iterating: `uv run pytest tests/alerts/test_scenario_a.py` → 4 passed;
+  `tests/notifications/test_dispatch.py` → 52 passed.
+- `ruff format` is a source mutation, so it ran BEFORE each candidate was frozen and the tests were
+  re-run after it: the tested bytes are the committed bytes (the T8 lesson, kept).
+
+### Lineages
+
+| lineage | range | verdict |
+| --- | --- | --- |
+| `review-b13abff23ad3d0e1` | `3120dac..075aa55` | APPROVED, 1 WARNING (`R3-temperature-phase-shift`), fixed in `f110fbe`, acknowledged, authority burned |
+| `review-c60160b94d5d2336` | `82609c6e..4ac095e` | APPROVED, zero findings, acknowledged, authority burned |
+| `review-34054452efa459cf` | `22f8eb3c..6d0cf37` | APPROVED, zero findings, acknowledged, authority burned |
+
+Each one asked for its own consent and got a live grant. **No transport refusal in T11** — all three
+lens slots captured from this host on the first attempt, unlike T8's two.
+
+### The defect the demo found (fixed in `6d0cf37`)
+
+`enqueue_dispatch` deferred with `"args": json.dumps({})` while the task is
+`dispatch_outbox(timestamp: int)`. procrastinate supplies `timestamp` to the PERIODIC form, so the
+per-minute sweep worked and **every same-transaction defer died** with
+`TypeError: dispatch_outbox() missing 1 required positional argument: 'timestamp'`. D7's "at insert"
+half was dead: every alert write left a job that failed before it ran, and delivery only happened
+because the next minute's cron picked the row up — RNF-05's two minutes held by luck of the sweep.
+Observed in `procrastinate_jobs`: every cron job `succeeded` with
+`{"timestamp": …}`, every product-deferred job `failed` with `{}`. No test could see it because every
+test of D7 counts the job row. RED `assert {} == {'timestamp': 0}`; the fix is the codebase's own
+precedent (`{"timestamp": 0}`, as the `/dev/jobs` routes already defer), and the existing test now
+calls the task with the arguments the product wrote.
+
+### Seminar-stack demo (ADR-0021) — commands and observed output
+
+Project `techcamp-e7-t11`, so it collided with nothing. `podman-compose` was not installed on this
+host and was run through `uvx` (cache-only). Ports 5432, 8000, 1883, 9000, 9001 and 5173 were free
+first (`ss -ltn`); the other project on 5437 was never touched.
+
+```
+uvx podman-compose -p techcamp-e7-t11 -f infra/compose.yaml --profile seminar up -d
+# -> 8 containers created; postgres healthy, api/worker/ingestor/web up
+```
+
+**1) API health** (note `/health`, not docs/04's `/healthz`: `main.py:59` records the deviation on
+purpose — an operational probe is not a versioned resource):
+
+```
+curl -s -w " [%{http_code}]\n" http://localhost:8000/health      -> {"status":"ok"} [200]
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5173/   -> 200
+```
+
+**2) Org, farm and plot through the API.** Identity was **seeded by SQL** and marked as such:
+`verify_otp` signs in an EXISTING user only (docs/04 has no signup route, and
+`test_otp_verify_rejects_an_unknown_user` pins that refusal) and docs/04 has no
+`POST /organizations`, so the `app_user`, `organization` and `membership` rows were inserted
+directly. Everything after that went through the API:
+
+```
+POST /api/v1/dev/auth/otp {"phone": "+573009990002"}            -> 204
+  api console: [dev] OTP for +573009990002: 000496
+POST /api/v1/dev/auth/otp/verify {"phone": "...", "code": "000496"} -> 200, access_token
+GET  /api/v1/me -> user: Tecnico Demo | memberships: [('7bdcd2a2-…', 'technician')]
+
+POST /api/v1/farms  {"org_id":"7bdcd2a2-…","name":"Finca El Nino","municipality_code":"47001",
+                      "location":{"type":"Point","coordinates":[-74.1,10.9]},
+                      "technician_id":"97dd7396-…"}
+  -> farm: 01a0e96b-009a-7258-95ec-88f0d43f2644 | technician_id: 97dd7396-4cbb-40b9-85f7-4aa6dd505d1e
+POST /api/v1/farms/01a0e96b-009a-…/plots  {"name":"Lote 1","boundary":{"type":"Polygon",…},
+                      "irrigation_system":"drip"}
+  -> plot: 01a0e96b-0135-748d-ba90-d24b4699d192 | farm: 01a0e96b-009a-… | irrigation: drip
+```
+
+**3) ONE alert SEEDED by SQL** — the node simulator and `POST /dev/scenarios/{name}:load` are E16's,
+so no route can produce an alert. The demo is about the DELIVERY side; the ingest side is what
+`tests/alerts/test_scenario_a.py` proves.
+
+```
+INSERT INTO alert (id, org_id, rule_id, plot_id, state, severity, opened_at)
+  VALUES (gen_random_uuid(), '7bdcd2a2-…', <water_stress rule id>, '01a0e96b-0135-…',
+          'open', 'critical', now() - interval '2 hours 5 minutes');
+-> 8719a549-f7dd-4978-9429-79f8cbd6454f | open | critical | 2026-09-28 17:03:26+00
+curl -s http://localhost:8000/api/v1/dev/outbox      -> []      (nothing yet)
+```
+
+**4) The escalation came from the WORKER's own `*/5` sweep** — no manual trigger, and there is no
+`/dev/jobs` route for it (docs/04:181 names only `weather`, `irrigation`, `risk`, `metrics`):
+
+```
+19:10:00 UTC  the sweep fired; GET /dev/outbox -> one sms row, status "pending"
+              alert row: escalated_at = 2026-09-28 19:10:00.650455+00
+19:11:00 UTC  the per-minute dispatcher sent it through the seminar adapter
+```
+
+**5) The SMS in `GET /dev/outbox`:**
+
+```json
+[{"id": "01a0e96c-8df1-7313-bffe-d80c7d2615ef",
+  "alert_id": "8719a549-f7dd-4978-9429-79f8cbd6454f",
+  "user_id": "97dd7396-4cbb-40b9-85f7-4aa6dd505d1e",
+  "org_id": "7bdcd2a2-caf7-4624-9ce7-62b0eaed0b4b",
+  "channel": "sms", "status": "sent", "attempts": 0,
+  "rule_code": "water_stress", "severity": "critical",
+  "created_at": "2026-09-28T19:10:00.689346Z",
+  "sent_at": "2026-09-28T19:11:00.524463Z", "last_error": null}]
+```
+
+`attempts: 0` is right and not a typo: `attempts` counts the attempts that FAILED, and this one landed
+on its first send. The escalation took 2 h 00,5 s from `opened_at` to the row — D12's clock running
+from `opened_at`, and the `sms` row is the product's, written by the sweep, not by the test.
+
+**6) Tear down, confirmed:**
+
+```
+uvx podman-compose -p techcamp-e7-t11 -f infra/compose.yaml --profile seminar down -v
+podman ps --filter label=io.podman.compose.project=techcamp-e7-t11   -> (empty)
+ss -ltn | grep -E ':(5432|8000|1883|9000|5173) '                     -> all demo ports free
+```
+
+**Two honest gaps in the demo.** (1) The identity rows had to be seeded (no API route, above).
+(2) **D8's "the log IS the delivery" is FALSE in the running stack**: only `ingestor.py:24` calls
+`logging.basicConfig(level=INFO)`, so `SeminarSmsSender`'s `logger.info` never emits in the `worker`
+and the simulated SMS is invisible in `podman logs`; `GET /dev/outbox` was the only visible half.
+Not fixed in T11 — it breaks no acceptance criterion (the criterion is the tray, which passed) and the
+fix is one line mirroring the ingestor. **Reported to the owner** as the demo's only known shortfall
+in an otherwise passing run.
+
+### Owner runbook — the live browser push (PENDING, needs a human)
+
+A push needs a browser, a push service and a VAPID key pair. Nothing below is faked or simulated here.
+
+1. **Generate the pair.** The server needs the base64 **DER** of an EC2 (prime256v1) private key — the
+   format `py_vapid` writes, which `Vapid.from_string` routes to `from_der`
+   (`shared/config.py::vapid_private_key`, pinned by
+   `test_a_base64_der_vapid_key_from_the_config_path_signs`):
+   ```bash
+   openssl ecparam -name prime256v1 -genkey -noout -out /tmp/vapid.pem
+   openssl ec -in /tmp/vapid.pem -outform DER -out /tmp/vapid.der 2>/dev/null
+   VAPID_PRIVATE=$(base64 -w0 /tmp/vapid.der)
+   VAPID_PUBLIC=$(python3 -c "from py_vapid import Vapid; print(Vapid.from_file('/tmp/vapid.pem').public_key_url_safe_base64())")
+   ```
+2. **Give the private half to the worker and the public half to the web BUILD** (D32: the key is
+   public by design, it is a build-time variable, not an endpoint):
+   ```bash
+   echo "TECHCAMP_VAPID_PRIVATE_KEY=$VAPID_PRIVATE" >> infra/.env
+   echo "TECHCAMP_VAPID_SUBJECT=mailto:notificaciones@techcamp.local" >> infra/.env
+   cd web && echo "VITE_VAPID_PUBLIC_KEY=$VAPID_PUBLIC" >> .env.local
+   ```
+   `TECHCAMP_VAPID_SUBJECT` defaults to that mailto; set it only to override.
+3. **Rebuild the web bundle and restart the worker.** The public key is baked in at BUILD time, so a
+   new pair means a new bundle — T9's `R3-stale-vapid-subscription` was exactly this: the client
+   records the key it subscribed with in `localStorage` and replaces the subscription when the
+   build's key differs, but a stale bundle can never be repaired server-side.
+   ```bash
+   uvx podman-compose -p techcamp-e7-t11 -f infra/compose.yaml --profile seminar up -d --build web worker
+   ```
+   With the key set, `push` is registered in BOTH profiles; malformed, the channel stays unregistered
+   and says so (#140, D31) rather than failing every send.
+4. **What to click on `:5173`:** sign in with the OTP (the code is printed in the `api` console) →
+   the **`Más`** tab → "Ajustes y notificaciones" (docs/07's screen map) → **"Activar notificaciones"**
+   → accept the browser's permission prompt. The button reports one of: "Las notificaciones ya
+   estaban activas en este navegador", "Tu navegador no permite notificaciones…",
+   "Este navegador no admite notificaciones. Abre la app en la pantalla de inicio" (install the PWA
+   first), or "Las notificaciones no están disponibles en esta instalación" (the bundle was built
+   without `VITE_VAPID_PUBLIC_KEY`).
+5. **Then make an alert, following [#146](https://github.com/jabyn996/techcamp-v2/issues/146) step 5,
+   not this paragraph.** Nothing in the running stack can open one from the UI — that is the E16
+   simulator — and a hand-inserted `alert` writes NO notification rows, because the use case writes
+   the alert and its rows in one transaction (ADR-0016), so seeding only the alert never produces a
+   push. #146's step 5 seeds BOTH: the CRITICAL alert on a plot the signed-in user belongs to AND
+   one `push` row for that user (owner or producer of the farm). The per-minute outbox dispatcher
+   then sends it for real. Clicking the notification opens or focuses `/alertas` (D33). A critical's
+   SMS still needs the `farm.technician_id` the escalation reads (D4).
+
+### Open E7 issues at the close (one line each, all still open)
+
+| issue | what it holds |
+| --- | --- |
+| #112 | follow-ups from the RDD review of the alert lifecycle (T3) |
+| #113 | follow-ups from the RDD review of the T1/T2 quality unit |
+| #114 | follow-ups from the RDD review of the T4 API slice |
+| #131 | **open product question**: a plot rule over several sensors of one plot — per node, on an aggregate, or on the merged series. Owner decision needed |
+| #132 | follow-ups from the T5/T6a/T6b rounds; only `R3-forecast-uses-utc-date` is left (T6d fixed the class) |
+| #135 | T10's two: `R3-raw-gate` (the reading branch takes a θ_estrés from a balance with `RAW <= 0`) and `R3-org-failure-isolation`. **T11 decided the second stays here** — scenario A's plot has a representative sensor, so the balance evaluator's decision is never walked (D29); the gap is real at `evaluate_water_stress.py:103-117` and is not duplicated here |
+| #136 | T9's two web findings: the swallowed `notificationclick` navigation and the bypassable same-origin route check (they must be fixed together) |
+| #137 | follow-ups from the T7a outbox-dispatch review |
+| #138 | feature: unsubscribe the device's push subscription on logout (web) |
+| #139 | vague idea about deterministic tooling for agent-driven development — **not for now**, no epic |
+| #141 | T8's follow-ups; **only `R3-both-targets-accepted` is left** — the livelock, the poison pill, the node branch and the concurrency proof were all fixed inside T8 |
+| #134 | fixed on this branch (`8c57ff0`, T6c) — **stays open until delivery to main** |
+| #140 | fixed on this branch (`dddd38b`, T7c) — **stays open until delivery to main** |
+
+**T11 files no issue.** Its one review finding was fixed inside the task, and the demo's dispatch
+defect was fixed in `6d0cf37`; filing an issue with nothing left in it would be noise. The worker
+logging gap above is the one thing reported without a fix.
+
+### Two old non-terminal lineages, mentioned and left alone
+
+`review-5104…` (T5) and `review-411621a8…` (the T6a successor) are **non-terminal**: later approved
+reviews superseded them, and T11 does not recover, abandon or acknowledge them. Recorded so nobody
+reads their absence from the terminal list as a loss.
+
+### Open questions for the owner
+
+- **Q1** (D4): whether `owner` also receives plot alerts — decided as "yes" for small orgs, never
+  confirmed by the owner. The scenario test now pins the decision as it stands.
+- **Q3** (#131): the several-sensors question, still open and still the reason a plot rule over a
+  merged series can never open.
+- **The live browser push** is the one acceptance criterion with no automated evidence, and it stays
+  that way until a human runs the runbook above.
+
+### Not done, deliberately
+
+The production SMS/WhatsApp provider (ADR-0016 future; D37 leaves an `sms` row with no alternate); the
+live browser push (owner runbook, pending); `flood_risk`/`drought_risk` (E10); the `worker` logging
+level; the feature doc's own D24/"three tests" miscount corrected above; and any push, PR or merge.

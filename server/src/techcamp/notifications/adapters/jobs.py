@@ -54,6 +54,15 @@ async def enqueue_dispatch(session: AsyncSession) -> None:
     aborting the caller's transaction — the alert, its other writes and the
     rows already queued are unaffected, exactly as in the weather, irrigation
     and alerts fan-outs.
+
+    `args` carries the `timestamp` the task's own signature requires, for the
+    same reason the `/dev/jobs` routes pass `timestamp=0` to `defer_async`: the
+    periodic form gets it from procrastinate, and a job deferred with empty args
+    dies in the worker with `TypeError: dispatch_outbox() missing 1 required
+    positional argument`, which silently kills D7's "at insert" half while the
+    minute sweep still makes the delivery look fine. Found in the T11 seminar
+    demo on a live stack: every cron job `succeeded` and every deferred job
+    `failed`.
     """
     try:
         async with session.begin_nested():
@@ -69,7 +78,7 @@ async def enqueue_dispatch(session: AsyncSession) -> None:
                     "priority": 0,
                     "lock": _DISPATCH_LOCK,
                     "queueing_lock": _DISPATCH_LOCK,
-                    "args": json.dumps({}),
+                    "args": json.dumps({"timestamp": 0}),
                 },
             )
     except IntegrityError:
