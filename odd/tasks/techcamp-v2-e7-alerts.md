@@ -1243,8 +1243,10 @@ work unit (`domain-modeling`).
     `now().date()` (the CRITICAL T6b fixed) would keep the suite green unless CI happens to run
     inside the 19:00–23:59 local window. Both belong to #132 / the clock-injection follow-up.
 - Next step: T7a, T10 and T9 merged into `feat/e7-alerts` (follow-ups #137, #135, #136);
-  T7b is on `feat/e7-t7b-webpush` from `ab1daaf`, four work units, RDD APPROVED and
-  acknowledged (`review-0505a9c608b85c36`), ready for the owner to merge. Then T7c (circuit
+  T7b is on `feat/e7-t7b-webpush` from `ab1daaf`: four work units plus a
+  `4ceca00` RDD correction, two review rounds both APPROVED and acknowledged
+  (`review-0505a9c608b85c36`, `review-7c1f2a9d4b6e8f03`), non-blocking → #140, ready for the
+  owner to merge. Then T7c (circuit
   breaker + critical fallback to the alternate channel) in a fresh OpenCode session, T8 after
   T7, then T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
@@ -1470,9 +1472,50 @@ work unit (`domain-modeling`).
     shapes, and `test_the_transport_treats_both_404_and_410_as_a_gone_subscription` drives a real
     `WebPushException` through the gone path and passes. Filing it would put a false defect in the
     tracker; the owner may reopen this if they want it recorded anyway.
-  - Not done: the `deps`, `shape` and `tests` slices were never put through the lens — the
-    `deps` slice is 779 lines of which 770 is generated lock, and the tests only become a
-    reviewable candidate at a HEAD that includes them. `build_senders` is called from one place, so
-    the T7c circuit breaker will touch exactly the line this unit already documents. No live push
-    was sent to a real push service: that needs a real VAPID pair and a browser, and T11 owns the
-    seminar demo.
+  - RDD round 2, on the owner's decision to cover the slices round 1 never saw: candidate
+    `2c9aecf..30d416e` (15 paths, 1,115 lines — the deps commit and this feature doc excluded,
+    which is what kept it under the budget that refused the 1,894-line whole). Lineage
+    `review-c502d03578fe8b69`, one reliability lens, `correction_required` on
+    `R3-vapid-key-format` — **a claim that was refuted by execution and whose "corroboration"
+    was itself wrong.** It asserted the configured base64 DER VAPID key is not the raw private-key
+    scalar, so "every registered push row" would be undeliverable. `py_vapid.Vapid.from_string`
+    decides by length — 32 bytes is the raw scalar, anything else is DER — so the documented
+    format is exactly what it routes to `from_der`; run, it signs and emits a `vapid t=` header.
+  - **Both refuted lens claims, and the one root cause behind them.** Round 1 said
+    `WebPushException` has no `status_code`; round 2 said `Vapid.from_string` cannot take base64
+    DER. Both are false, and both were reasoned from this candidate's own docstrings: a frozen-diff
+    lens never sees `site-packages`, so any finding that turns on a third-party library's API is
+    unanswerable for it, and its own refuter brief says so and then ratified the premise anyway.
+    `correction_required` means "a finding was corroborated", never "the code is wrong" — so run
+    the claim before spending the one bounded correction, or you will edit correct code to match a
+    phantom. Neither was filed as an issue.
+  - **The bounded correction pins the refuted premise instead of changing code** (`4ceca00`, 57
+    lines: 54 test + 3 comment, against a 200 budget). `test_a_base64_der_vapid_key_from_the_config_path_signs`
+    walks env → `vapid_private_key()` → `build_senders()` → `PywebPushTransport` and then makes the
+    same call `webpush_async` makes, asserting an RFC 8292 `vapid t=` header comes out. It passes
+    against the current code, so the RED here is the reviewer's claim, not a code failure — and it
+    is a better outcome than dismissing the finding, because the claim can never be believed again.
+  - **Round 2 closed through a recovery, and the recovery gate is not a human signature.** The
+    worktree HEAD had moved onto the branch after the lineage froze, so the provider moved to
+    `action: recover` / `recovery_authorization_required` with `disposition: scope_changed`, and
+    `gentle-ai review recover` takes a `--maintainer-authorization` binding. This writer first read
+    that as an owner-only approval and stopped; **that was wrong**, and T6a's record in this same
+    epic had already settled it: the binding **self-mints** from the repository Git identity and a
+    closed reason constant, and *supplying* `--maintainer-authorization` is what triggers the exact
+    comparison that a hand-built record can never satisfy. Omitting it (with `--actor`/`--reason`,
+    and passing a fresh `--successor-lineage`) succeeded first try. The `maintainer` in the field
+    name is provenance, not consent — do not stall a round on it, and do read the epic's own
+    records before declaring a contract undiscoverable.
+  - RDD round 2 final: successor `review-7c1f2a9d4b6e8f03` (1,355 lines, corrected candidate),
+    one reliability lens → **APPROVED and acknowledged, authority burned** (target
+    `sha256:3f8d746b…`). One non-blocking WARNING, and this one is **real**:
+    `R3-001` (`senders.py:110-208`, deterministic, introduced) — `build_senders` registers `push`
+    for any non-empty key without checking it can sign, so a malformed value advertises a usable
+    channel and spends five attempts per row before `failed`, where an unset key correctly does
+    not. Non-blocking because it is loud, bounded and self-terminating and cannot mark a row
+    `sent` — → **#140**. The lens was right about a real gap and wrong about a library, in the
+    same round, which is the honest shape of the evidence and why the claim still had to be run.
+  - Not done: no live push to a real push service — that needs a real VAPID pair and a browser, and
+    T11 owns the seminar demo. `build_senders` is called from one place, so T7c's circuit breaker
+    and #140's key validation will touch the same function; #140 is filed, not fixed here, per the
+    non-blocking rule.
