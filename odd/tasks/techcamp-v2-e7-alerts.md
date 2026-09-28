@@ -404,6 +404,15 @@ work unit (`domain-modeling`).
     untouched. docs/06 §3 gets the absent-evidence line in the same commit — route: Herdr OpenCode
     (branch `review/e7-rdd`, isolated; the owner merges it into `feat/e7-alerts`) — forecast ~120 —
     actual 191 (`8c57ff0`; 56 production / 130 tests / 1 docs line)
+  - [x] T6d The `tests/alerts` job fixture picks its day in the product timezone: since `016df59`
+    the two weather jobs read the day with `local_date` (docs/10 §3, America/Bogota), but
+    `test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cell_day` still derived
+    `forecast_day`/`cell_day` from `datetime.now(UTC).date()`, so for the five hours a day in which
+    the two calendars disagree (19:00–23:59 local) the fixture stored the row one day off the one
+    the job reads and the job decided nothing. TEST-ONLY fix: both days now come from the same
+    `local_date` helper. No production change — CodeGraph shows both jobs read the day only
+    through `local_date` — route: Herdr OpenCode (branch `review/e7-rdd`) — forecast ~30 — actual 13
+    (`c9132d8`, 10 insertions / 3 deletions, one file)
 - [ ] T7 Notifications outbox
   - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
@@ -705,6 +714,10 @@ work unit (`domain-modeling`).
   owner merges it, and it is reviewed as a NEW candidate (a code change invalidates the frozen
   `review-411621a8a31dfb6b`, which therefore stays at `correction_required` and is not closed here).
   No consent envelope was raised, so the standing grant was not exercised.
+- T6d (`0b0209d..c9132d8`, 1 file, 13 changed lines, branch `review/e7-rdd`): `medium`
+  (`executable_change` on the test file), `review_due: false`, **`under_budget`** — no
+  `next_transition`, no lineage, no consent envelope. Boundary for this unit is `0b0209d` (the
+  merge of T5c + T6c), which is also where the next slice starts.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
@@ -806,10 +819,40 @@ work unit (`domain-modeling`).
     `next_transition`; no lineage started, boundary stays `91323cd` (see Review (RDD)).
   - Rollback: `8c57ff0` alone; it touches the two evaluator files, one test file and one docs
     line, and nothing else in the epic depends on the new name outside them.
+- T6d 2026-09-28 (writer: OpenCode on `review/e7-rdd`, fast-forwarded to `0b0209d` = the merge of
+  T5c + T6c): the pre-existing job-test failure T6c reported is the T6b wall-clock class, in its
+  purest form. CodeGraph first (`evaluate_org_forecast_rules` / `evaluate_org_fungal_risk` /
+  `local_date`), no production change.
+  - RED (the current failure, recorded before the change): run at **00:51 UTC = 19:51 Bogota** —
+    `AssertionError: assert [] == [('fungal_ris...ast', 'open')]` in
+    `test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cell_day`, with the
+    fixture lines still reading `forecast_day = now.date() + timedelta(days=1)` /
+    `cell_day = now.date() - timedelta(days=1)`. The `[]` is BOTH rules missing: the rows were
+    stored one calendar day off the day the jobs read.
+  - GREEN `uv run pytest tests/alerts` (own DB `techcamp-e7-db-134` on 5438): **114 passed**, 43 s,
+    zero failures — the first fully green `tests/alerts` in the epic's recorded history.
+  - Static checks: `uv run ruff check` All checks passed; `uv run ruff format --check` 230 files
+    already formatted; `uv run mypy` Success, no issues in 155 source files; `uv run lint-imports`
+    1 kept, 0 broken.
+  - Grepped the rest of `tests/alerts` for the same flaw: `now(UTC).date()` appears NOWHERE in the
+    directory. The two other `datetime.now(UTC)` uses in `test_jobs.py` (lines 162, 195) are
+    node-health INSTANTS, which `evaluate_org_node_health` reads as an instant, not a calendar day,
+    so they are not the same defect. No other job test derives a day from the clock.
+  - RDD: `gentle-ai review assess --cwd <worktree> --agent opencode --base-ref 0b0209d
+    --committed-only --json` → `risk: medium`, `review_due: false`, `under_budget`, no
+    `next_transition`; no lineage started (see Review (RDD)).
+  - NOT closed here, and it is the honest limit of a test-only fix: the fixture reads the clock and
+    the job reads it again, so a run that crosses Bogota midnight still sees two different days.
+    That is the `R3-job-test-wall-clock-boundary` class already filed in #132, and it cannot be
+    closed from the test side — the job would have to take its `now` as a parameter. A second
+    consequence: because the fixture now agrees with the job in every hour, reverting the job to
+    `now().date()` (the CRITICAL T6b fixed) would keep the suite green unless CI happens to run
+    inside the 19:00–23:59 local window. Both belong to #132 / the clock-injection follow-up.
 - Next step: T5c and `review/e7-rdd` (T6c, #134) merged into `feat/e7-alerts` by the parent
-  (2026-09-27); the `tests/alerts` rubric runs on the merge. T6c is PENDING review (under budget)
-  and the T6b job test `test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cell_day`
-  fails on the base. T7a/b/c run on `feat/e7-t7-outbox`, then T8, T9, T10, T11.
+  (2026-09-27); the `tests/alerts` rubric runs on the merge. T6c and T6d are PENDING review (both
+  under budget, no lineage started) and T6d takes the `tests/alerts` rubric to **114 passed, 0
+  failed** — the T6b job test that failed on the base is fixed. T7a/b/c run on
+  `feat/e7-t7-outbox`, then T8, T9, T10, T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
