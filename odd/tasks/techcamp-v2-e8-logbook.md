@@ -130,6 +130,14 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
   signing out never clears Dexie. `ponytail:` the outbox is per device, so on a shared phone the
   next user pushes it (the server stamps `created_by` = caller); per-user outbox if shared phones
   appear. Owner doc: docs/06 §7.
+- **D12 Delete payload** (parent, 2026-09-28, raised by T7): `op: "delete"` carries the row as
+  last saved, without `deleted_at`; the server sets the tombstone and never validates fields (a
+  change rejected as `invalid` can still be deleted). Stored row → D4 decides; if it wins, set
+  `deleted_at`, `client_updated_at`, new `server_version`. Never stored (created and deleted
+  offline) → `applied`, nothing written, `server_version: null`. Owner doc: docs/04 §Bitácora.
+- **D13 Deletes are final** (parent, 2026-09-28, raised by T7): docs/07 has no undelete; the client
+  keeps the local `deleted_at` on a re-save, and the server answers an `upsert` on a deleted id
+  with `rejected` (`not_found`). Owner doc: docs/04 §Bitácora.
 
 ## Open questions
 - None.
@@ -204,6 +212,20 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   a guard denies by default, so fix it with a per-entity role mapping (KeyError on unknown), not a
   dead branch. R3-decimal-nan-escapes-domain-error (WARNING): NaN/Infinity amounts. Both fixed now
   by `e8-t2`, one commit `Refs #143`. R3-weak-exception-assertions (SUGGESTION) stays in the issue.
+- T1 fix `08dd5ef` (`Refs #142`, +18/−2): gate 19 passed, static clean; assess `under_budget`
+  (20 lines) → pending, reviewed inside T5's first slice (base `f242508`).
+- T2 fix `174a7ac` (`Refs #143`, 74 lines): gate 44 passed, static clean; assess `under_budget`
+  but reviewed now (authorization guard, and the T2 lane carries no later commits); consent is a
+  fix candidate → relayed, **owner granted**; lineage `review-8d2d19fb3861286a` → **approved**,
+  acknowledged. Round 2 on #143: R3-unmapped-entity-keyerror (WARNING, bare `KeyError` → 500)
+  fixed with `.get(entity, frozenset())`, its commit reviewed inside T3's first slice (no fix-review
+  loop); R3-removed-public-role-constants verified harmless (0 importers); sNaN coverage
+  SUGGESTION stays in the issue.
+- T7a `182420b` (OpenCode, 640 lines: prod 395 / test 245): writer RED ×3 (incl. two real bugs:
+  local fields leaking into the payload, Dexie connection cached after a failed transaction), GREEN
+  7 tests. Parent gate: lint, typecheck clean; `npm test -- --run src/lib/db` 3 files / 7 passed;
+  build ok; size 163.38 kB. No `structuredClone` polyfill needed (jsdom provides it). Go given for
+  OpenCode's own RDD over `fe7fb09..182420b` (base `9d31e90`). Its two open points became D12, D13.
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from

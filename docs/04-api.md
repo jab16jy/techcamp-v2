@@ -179,6 +179,8 @@ POST /attachments:presign  { logbook_entry_id | extension_visit_id, content_type
 | `alert_plot_mismatch` | `alert_id` es de otra parcela |
 | `forbidden` | El rol no puede escribir esa entidad |
 
+**Borrado.** Un cambio `op: "delete"` lleva en `data` el registro tal como se guardó por última vez, sin `deleted_at`: el servidor pone el `deleted_at` y no valida los campos (una entrada rechazada por `invalid` se puede borrar). Si el registro existe, la última escritura decide igual que en un `upsert` y, si gana, se guarda `deleted_at`, el `client_updated_at` y un `server_version` nuevo. Si el servidor nunca lo recibió (se creó y se borró sin conexión), responde `applied` sin escribir nada y con `server_version: null`: nadie más lo tiene. Los borrados son definitivos: no hay forma de restaurar una entrada, y un `upsert` sobre un `id` borrado responde `rejected` (`not_found`).
+
 **Roles.** `logbook_entry`: `owner`, `technician` y `producer`; `viewer` recibe `forbidden`. `extension_visit`: solo `technician`, y `technician_id` debe ser quien sincroniza.
 
 **Pull.** Devuelve los `logbook_entry` y `extension_visit` de todas las organizaciones de quien sincroniza, mezclados por `server_version` ascendente. Un registro con `deleted_at` llega como `op: "delete"`. Las dos tablas comparten la secuencia, así que un solo cursor las cubre.
