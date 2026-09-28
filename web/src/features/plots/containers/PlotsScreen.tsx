@@ -36,6 +36,10 @@ export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScr
   const [visitingFarm, setVisitingFarm] = useState<FarmView | null>(null)
   const [selectedPlot, setSelectedPlot] = useState<PlotView | null>(null)
 
+  const plotsByFarmId = new Map<string, PlotView[]>(
+    farmIds.map((id, index) => [id, plotsQueries[index]?.data ?? []]),
+  )
+
   return (
     <div className="px-0 pt-6">
       <div className="flex items-center justify-between gap-2 px-4">
@@ -111,9 +115,7 @@ export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScr
       {visitingFarm && renderNewVisitSheet && (
         renderNewVisitSheet({
           farm: visitingFarm,
-          plots:
-            plotsQueries[farmsQuery.data?.farms.findIndex((f) => f.id === visitingFarm.id) ?? -1]
-              ?.data ?? [],
+          plots: plotsByFarmId.get(visitingFarm.id) ?? [],
           open: true,
           onOpenChange: (open) => !open && setVisitingFarm(null),
         })
