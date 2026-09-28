@@ -706,18 +706,33 @@ work unit (`domain-modeling`).
     not see, and the second confirmed the fix by reading it, including the rollback-failure path the
     author had only reasoned about. The `RuntimeError`-only double of the first round would have
     passed against the un-fixed code, which is the whole argument for the database-failure test.
-- T6c #134 (`91323cd..8c57ff0`, 4 files, 191 changed lines, branch `review/e7-rdd`): `medium`
-  (`executable_change` on `evaluate_weather_rules.py`), `review_due: false`,
-  **`under_budget`** — the native assess named no `next_transition` and no lineage was started, so
-  the slice stays PENDING review at the `91323cd` boundary until a later commit reaches the ~400
-  line delivery budget. That matches #134's own plan: the fix lands on the isolated branch, the
-  owner merges it, and it is reviewed as a NEW candidate (a code change invalidates the frozen
-  `review-411621a8a31dfb6b`, which therefore stays at `correction_required` and is not closed here).
-  No consent envelope was raised, so the standing grant was not exercised.
-- T6d (`0b0209d..c9132d8`, 1 file, 13 changed lines, branch `review/e7-rdd`): `medium`
-  (`executable_change` on the test file), `review_due: false`, **`under_budget`** — no
-  `next_transition`, no lineage, no consent envelope. Boundary for this unit is `0b0209d` (the
-  merge of T5c + T6c), which is also where the next slice starts.
+- T6c #134 + T6d (`91323cd..39f9274`, branch `review/e7-rdd`): **APPROVED, zero findings,
+  acknowledged (authority burned)**. The owner asked for this review explicitly in the T6d brief
+  ("RUN RDD on T6c+T6d … even if assess says under_budget", the same call made for T5c), so the
+  lifecycle was entered through the STATUS preflight, which is the only authority that may offer a
+  START. `gentle-ai review assess` had said `review_due: false` / `under_budget` for each unit
+  separately (T6c at `91323cd`, T6d at `0b0209d`); the explicit request overrode the standing
+  per-task budget, not the native contract.
+  - **The range could not be narrower than it is, and it pulls in T5c.** `8c57ff0`'s own parent IS
+    `91323cd`, so any base that covers T6c is `91323cd` or older, and the preflight re-derived the
+    same base as a TREE (`842df476`). The branch had already been fast-forwarded over merge
+    `0b0209d`, so T5c's four paths (`application/evaluate_readings.py`, `application/ports.py`,
+    `telemetry/application/ingest_uplinks.py`, `tests/alerts/test_evaluate_readings.py`) come in
+    with it: 11 paths, 706 changed lines, and the frozen tier's `executable_change` reason names
+    `adapters/evaluate_readings.py` (T5c), not T6c. T5c was already approved and acknowledged in
+    its own round (`review-3c61851425db7894`); re-reading it is context, not a second opinion.
+  - Lineage `review-78f380638683004d`, target `sha256:705186a3…`, medium (706 lines, budget 200),
+    **ONE `review-reliability` lens** → `findings: []`, `inspection.status: completed`, all 11
+    paths. APPROVED and acknowledged (`gentle-ai.review-acknowledged/v1`, `authority: burned`,
+    consumed revision `sha256:0e60ace4…`). Consent was the standing grant, applied on the owner's
+    explicit instruction. Boundary → `39f9274`.
+  - Its three evidence strings name what it checked: the plot-level exception boundary plus the
+    injected recovery and its propagating failure path; the tri-state worker evidence covered at
+    BOTH the domain and the evaluator level (unsaid temperature neither opens nor resolves while
+    humidity violates, and resolves when humidity alone clears the hysteresis band); and the
+    timezone fixture, where it explicitly read the residual clock-boundary limit as DOCUMENTED
+    rather than as closed by this test-only change — the same limit T6d recorded by hand.
+  - Nothing to append to #134: zero findings, blocking and non-blocking alike.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
@@ -816,7 +831,9 @@ work unit (`domain-modeling`).
     `uv run lint-imports` 1 kept, 0 broken.
   - RDD: `gentle-ai review assess --cwd <worktree> --agent opencode --base-ref 91323cd
     --committed-only --json` → `risk: medium`, `review_due: false`, `under_budget`, no
-    `next_transition`; no lineage started, boundary stays `91323cd` (see Review (RDD)).
+    `next_transition`; no lineage started by the assess alone. The owner then asked for the review
+    explicitly, and the lifecycle ran as `review-78f380638683004d`: **APPROVED, zero findings,
+    acknowledged** (see Review (RDD)).
   - Rollback: `8c57ff0` alone; it touches the two evaluator files, one test file and one docs
     line, and nothing else in the epic depends on the new name outside them.
 - T6d 2026-09-28 (writer: OpenCode on `review/e7-rdd`, fast-forwarded to `0b0209d` = the merge of
@@ -840,7 +857,8 @@ work unit (`domain-modeling`).
     so they are not the same defect. No other job test derives a day from the clock.
   - RDD: `gentle-ai review assess --cwd <worktree> --agent opencode --base-ref 0b0209d
     --committed-only --json` → `risk: medium`, `review_due: false`, `under_budget`, no
-    `next_transition`; no lineage started (see Review (RDD)).
+    `next_transition` by itself. Reviewed together with T6c at the owner's request in
+    `review-78f380638683004d`: **APPROVED, zero findings, acknowledged** (see Review (RDD)).
   - NOT closed here, and it is the honest limit of a test-only fix: the fixture reads the clock and
     the job reads it again, so a run that crosses Bogota midnight still sees two different days.
     That is the `R3-job-test-wall-clock-boundary` class already filed in #132, and it cannot be
@@ -849,10 +867,10 @@ work unit (`domain-modeling`).
     `now().date()` (the CRITICAL T6b fixed) would keep the suite green unless CI happens to run
     inside the 19:00–23:59 local window. Both belong to #132 / the clock-injection follow-up.
 - Next step: T5c and `review/e7-rdd` (T6c, #134) merged into `feat/e7-alerts` by the parent
-  (2026-09-27); the `tests/alerts` rubric runs on the merge. T6c and T6d are PENDING review (both
-  under budget, no lineage started) and T6d takes the `tests/alerts` rubric to **114 passed, 0
-  failed** — the T6b job test that failed on the base is fixed. T7a/b/c run on
-  `feat/e7-t7-outbox`, then T8, T9, T10, T11.
+  (2026-09-27); the `tests/alerts` rubric runs on the merge. T6c and T6d are REVIEWED and
+  ACKNOWLEDGED together (`review-78f380638683004d`, zero findings) and T6d takes the `tests/alerts`
+  rubric to **114 passed, 0 failed** — the T6b job test that failed on the base is fixed. T7a/b/c
+  run on `feat/e7-t7-outbox`, then T8, T9, T10, T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
