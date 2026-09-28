@@ -112,6 +112,7 @@ stateDiagram-v2
 
 - **Una sola alerta abierta** por (`rule_id`, `plot_id`/`node_id`). Lo garantiza un índice único parcial en la base, no el código.
 - `Pending` no se persiste como alerta; la condición sostenida se evalúa sin estado sobre las lecturas de la ventana (`min_duration_min` hacia atrás desde la última lectura), iniciando la racha en la primera lectura tras la última que incumplió la condición.
+- **Tolerancia de huecos y frescura:** dos lecturas solo cuentan como consecutivas si no media un hueco mayor que `max_gap`, que es 3 × `interval_s` del nodo que las produjo (el mismo margen que define `node_offline`). Un hueco mayor termina la racha igual que una lectura que incumple: la racha reinicia en la lectura siguiente al hueco. Y si la última lectura es más antigua que `max_gap` en el momento de evaluar, no hay racha: el nodo está caído y lo almacenado no es evidencia de que la condición siga vigente. Aplica igual a la racha que abre una alerta y a la de 60 min que la resuelve.
 - **Ventana de resolución:** la resolución automática exige que la condición de cierre (superando la banda de histéresis) se mantenga sostenida durante 60 minutos (constante de dominio).
 - **Reloj de escalamiento:** el plazo de 2 h para escalar una alerta crítica no reconocida corre desde `opened_at`; una alerta ascendida a crítica tras 48 h escala en su siguiente revisión.
 - Escalar una alerta crítica notifica por SMS o WhatsApp al técnico asignado a la finca (`farm.technician_id`).

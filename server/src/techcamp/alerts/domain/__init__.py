@@ -17,7 +17,6 @@ from techcamp.alerts.domain.models import (
     is_clear_met,
     is_condition_met,
     is_eligible_for_escalation,
-    is_escalation_eligible,
     resolve_threshold,
     sustained_run,
 )
@@ -40,7 +39,6 @@ __all__ = [
     "is_clear_met",
     "is_condition_met",
     "is_eligible_for_escalation",
-    "is_escalation_eligible",
     "resolve_threshold",
     "sustained_run",
 ]

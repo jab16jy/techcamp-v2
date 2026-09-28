@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -73,7 +72,9 @@ class AlertRule:
     """Alert evaluation rule value (docs/03:272-283; docs/06 §3).
 
     `id` is the stored rule the evaluator decided with, so `open_alert` never
-    looks a rule up by code. `org_id` is `None` for a factory rule.
+    looks a rule up by code. `org_id` is `None` for a factory rule. The
+    thresholds are the `Numeric` columns of `alert_rule` read as `float`: the
+    adapter converts on the way in, the domain compares numbers.
     """
 
     code: str
@@ -81,17 +82,11 @@ class AlertRule:
     org_id: UUID | None = None
     metric: str | None = None
     operator: str | None = None
-    threshold: Decimal | float | None = None
-    hysteresis: Decimal | float = Decimal(0)
+    threshold: float | None = None
+    hysteresis: float = 0.0
     min_duration: timedelta = timedelta(0)
     severity: Severity = Severity.WARNING
     crop_id: int | None = None
-
-    def __post_init__(self) -> None:
-        if isinstance(self.min_duration, (int, float)):
-            object.__setattr__(self, "min_duration", timedelta(minutes=self.min_duration))
-        if isinstance(self.severity, str) and not isinstance(self.severity, Severity):
-            object.__setattr__(self, "severity", Severity(self.severity))
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,12 +115,6 @@ class Alert:
     escalated_at: datetime | None = None
     resolution_note: str | None = None
     outcome: str | None = None
-
-    def __post_init__(self) -> None:
-        if isinstance(self.state, str) and not isinstance(self.state, AlertState):
-            object.__setattr__(self, "state", AlertState(self.state))
-        if isinstance(self.severity, str) and not isinstance(self.severity, Severity):
-            object.__setattr__(self, "severity", Severity(self.severity))
 
     def acknowledge(self, at: datetime) -> Alert:
         """Acknowledge an open alert (docs/06 §3). Acknowledging acknowledged is a no-op."""
@@ -182,74 +171,69 @@ class AlertDecision:
     alert: Alert | None = None
 
 
-def is_condition_met(
-    operator: str | None,
-    value: float | Decimal,
-    threshold: float | Decimal,
-) -> bool:
+def is_condition_met(operator: str | None, value: float, threshold: float) -> bool:
     """True when reading `value` violates the rule condition (docs/06 §3).
 
     For '<': value < threshold
     For '>': value > threshold
     """
-    v = float(value)
-    t = float(threshold)
     if operator == "<":
-        return v < t
+        return value < threshold
     if operator == ">":
-        return v > t
+        return value > threshold
     return False
 
 
 def is_clear_met(
-    operator: str | None,
-    value: float | Decimal,
-    threshold: float | Decimal,
-    hysteresis: float | Decimal = Decimal(0),
+    operator: str | None, value: float, threshold: float, hysteresis: float = 0.0
 ) -> bool:
     """True when reading `value` clears the condition beyond the hysteresis band (docs/06 §3).
 
     For '<': value > threshold + hysteresis
     For '>': value < threshold - hysteresis
     """
-    v = float(value)
-    t = float(threshold)
-    h = float(hysteresis)
     if operator == "<":
-        return v > t + h
+        return value > threshold + hysteresis
     if operator == ">":
-        return v < t - h
+        return value < threshold - hysteresis
     return False
 
 
 def sustained_run(
-    samples: Sequence[tuple[datetime, float | Decimal]],
+    samples: Sequence[tuple[datetime, float]],
     predicate: Callable[[float], bool],
-    at: datetime | None = None,
+    at: datetime,
+    *,
+    max_gap: timedelta,
 ) -> timedelta | None:
     """How long the predicate has held continuously up to the latest sample (D1).
 
-    The run starts at the first sample after the last sample that failed the predicate.
-    Returns None when there is no run (no samples, or the latest sample fails the
-    predicate), so a zero-length run of one violating sample stays distinguishable.
+    The run starts at the first sample after the last sample that failed the
+    predicate. `max_gap` is the caller's 3 × `interval_s` of the node that produced
+    the samples (the same margin that defines `node_offline`, docs/06 §3): two
+    samples farther apart than that are not consecutive evidence, so the gap ends
+    the run the same way a failing sample does, and a latest sample older than
+    `max_gap` is no evidence at all (the node is offline).
+
+    Returns None when there is no run (no samples, a stale latest sample, or the
+    latest sample fails the predicate), so a zero-length run of one violating
+    sample stays distinguishable.
     """
-    if not samples:
-        return None
-    if at is not None:
-        filtered = [s for s in samples if s[0] <= at]
-    else:
-        filtered = list(samples)
+    filtered = [sample for sample in samples if sample[0] <= at]
     if not filtered:
+        return None
+    if at - filtered[-1][0] > max_gap:
         return None
 
     # Latest sample must satisfy the predicate
-    if not predicate(float(filtered[-1][1])):
+    if not predicate(filtered[-1][1]):
         return None
 
-    # Search backwards for the last failing sample
+    # Search backwards for the last failing sample, or the last gap
     start_index = 0
     for i in range(len(filtered) - 2, -1, -1):
-        if not predicate(float(filtered[i][1])):
+        ends_run = not predicate(filtered[i][1]) or filtered[i + 1][0] - filtered[i][0] > max_gap
+        if ends_run:
             start_index = i + 1
             break
 
@@ -259,9 +243,9 @@ def sustained_run(
 def resolve_threshold(
     rule: AlertRule,
     *,
-    stress_moisture_pct: float | Decimal | None = None,
-    field_capacity_pct: float | Decimal | None = None,
-) -> float | Decimal | None:
+    stress_moisture_pct: float | None = None,
+    field_capacity_pct: float | None = None,
+) -> float | None:
     """Determine effective threshold for a rule (docs/06 §3; ADR-0022).
 
     - water_stress -> plot's stress_moisture_pct (missing -> None, no evaluation)
@@ -273,8 +257,6 @@ def resolve_threshold(
     if rule.code == "waterlogging":
         if field_capacity_pct is None:
             return None
-        if isinstance(field_capacity_pct, Decimal):
-            return field_capacity_pct + Decimal(5)
         return field_capacity_pct + 5
     return rule.threshold
 
@@ -289,27 +271,60 @@ def is_eligible_for_escalation(alert: Alert, now: datetime) -> bool:
     )
 
 
-# Alias for convenience
-is_escalation_eligible = is_eligible_for_escalation
+def _condition_run(
+    rule: AlertRule,
+    samples: Sequence[tuple[datetime, float]],
+    at: datetime,
+    *,
+    max_gap: timedelta,
+    threshold: float,
+) -> timedelta | None:
+    """How long the rule's violating condition has held (the run that opens)."""
+    return sustained_run(
+        samples,
+        lambda value: is_condition_met(rule.operator, value, threshold),
+        at,
+        max_gap=max_gap,
+    )
+
+
+def _clear_run(
+    rule: AlertRule,
+    samples: Sequence[tuple[datetime, float]],
+    at: datetime,
+    *,
+    max_gap: timedelta,
+    threshold: float,
+) -> timedelta | None:
+    """How long the rule has cleared beyond its hysteresis band (the 60 min run)."""
+    return sustained_run(
+        samples,
+        lambda value: is_clear_met(rule.operator, value, threshold, rule.hysteresis),
+        at,
+        max_gap=max_gap,
+    )
 
 
 def decide_alert(
     rule: AlertRule,
-    samples: Sequence[tuple[datetime, float | Decimal]],
+    samples: Sequence[tuple[datetime, float]],
     at: datetime,
     *,
-    threshold: float | Decimal | None = None,
+    max_gap: timedelta,
+    threshold: float | None = None,
     current_alert: Alert | None = None,
-    stress_moisture_pct: float | Decimal | None = None,
-    field_capacity_pct: float | Decimal | None = None,
+    stress_moisture_pct: float | None = None,
+    field_capacity_pct: float | None = None,
 ) -> AlertDecision:
     """Decide alert action for one rule and target given time-ordered samples (docs/06 §3).
 
-    - none + condition run >= min_duration -> open (the caller opens the stored alert)
+    - no alert + condition run >= min_duration -> open (the caller opens the stored alert)
     - open/acknowledged + clear run >= 60 min -> resolve
-    - water_stress open/acknowledged, still warning, and at - opened_at >= 48 h ->
-      upgrade to critical
+    - water_stress open/acknowledged, still warning, at - opened_at >= 48 h and the
+      condition still holding -> upgrade to critical
     - otherwise no action
+
+    `max_gap` is the caller's 3 × `interval_s` (see `sustained_run`).
     """
     if threshold is None:
         threshold = resolve_threshold(
@@ -317,45 +332,45 @@ def decide_alert(
             stress_moisture_pct=stress_moisture_pct,
             field_capacity_pct=field_capacity_pct,
         )
+    # A resolved alert no longer holds its (rule, target): it is decided as no
+    # alert, so the condition is evaluated from scratch and may open a new one.
+    if current_alert is not None and current_alert.state is AlertState.RESOLVED:
+        current_alert = None
 
     if current_alert is None:
         if threshold is None or rule.operator not in ("<", ">"):
             return AlertDecision(action=AlertAction.NO_ACTION, alert=None)
 
-        thresh_f = float(threshold)
-        cond_run = sustained_run(
-            samples,
-            lambda v: is_condition_met(rule.operator, v, thresh_f),
-            at=at,
-        )
+        cond_run = _condition_run(rule, samples, at, max_gap=max_gap, threshold=threshold)
         if cond_run is not None and cond_run >= rule.min_duration:
             # No alert yet, so none to return: `open_alert` builds the stored
             # value with its id, org and rule (an `Alert` always carries them).
             return AlertDecision(action=AlertAction.OPEN, alert=None)
         return AlertDecision(action=AlertAction.NO_ACTION, alert=None)
 
-    if current_alert.state in (AlertState.OPEN, AlertState.ACKNOWLEDGED):
-        # 1. Check resolution (D2: 60 min clear run)
-        if threshold is not None and rule.operator in ("<", ">"):
-            thresh_f = float(threshold)
-            hyst_f = float(rule.hysteresis)
-            clear_run = sustained_run(
-                samples,
-                lambda v: is_clear_met(rule.operator, v, thresh_f, hyst_f),
-                at=at,
-            )
-            if clear_run is not None and clear_run >= RESOLUTION_WINDOW:
-                return AlertDecision(
-                    action=AlertAction.RESOLVE,
-                    alert=current_alert.resolve_automatically(at),
-                )
+    if threshold is None or rule.operator not in ("<", ">"):
+        return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)
 
-        # 2. Check upgrade for water_stress at 48 h
-        if rule.code == "water_stress" and current_alert.severity == Severity.WARNING:
-            if at - current_alert.opened_at >= WATER_STRESS_UPGRADE_AFTER:
-                return AlertDecision(
-                    action=AlertAction.UPGRADE,
-                    alert=replace(current_alert, severity=Severity.CRITICAL),
-                )
+    # 1. Check resolution (D2: 60 min clear run)
+    clear_run = _clear_run(rule, samples, at, max_gap=max_gap, threshold=threshold)
+    if clear_run is not None and clear_run >= RESOLUTION_WINDOW:
+        return AlertDecision(
+            action=AlertAction.RESOLVE,
+            alert=current_alert.resolve_automatically(at),
+        )
+
+    # 2. Check upgrade for water_stress at 48 h, only while the condition holds:
+    # docs/06 §3 "crítica si dura 48 h". A plot already recovering has no
+    # violating run left, so it was resolved above or is left alone here.
+    if (
+        rule.code == "water_stress"
+        and current_alert.severity is Severity.WARNING
+        and at - current_alert.opened_at >= WATER_STRESS_UPGRADE_AFTER
+        and _condition_run(rule, samples, at, max_gap=max_gap, threshold=threshold) is not None
+    ):
+        return AlertDecision(
+            action=AlertAction.UPGRADE,
+            alert=current_alert.upgrade_to_critical(),
+        )
 
     return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)

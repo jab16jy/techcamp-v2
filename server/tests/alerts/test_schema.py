@@ -5,19 +5,43 @@ from __future__ import annotations
 import decimal
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
+from techcamp.alerts.adapters.seed import FACTORY_RULES, seed_factory_rules
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import OrganizationRow
+from techcamp.shared.db import engine
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow
 
 pytestmark = pytest.mark.anyio
+
+_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "migrations"
+    / "versions"
+    / "d4e6f8a0b2c1_add_alerts_and_notifications_schema.py"
+)
+
+# The condition and severity docs/06 §3 fixes per factory rule code.
+_DOCUMENTED_RULES: dict[str, tuple[str | None, decimal.Decimal | None, int, str]] = {
+    "water_stress": ("<", None, 360, "warning"),
+    "waterlogging": (">", None, 1440, "warning"),
+    "heat_stress": (">", decimal.Decimal("35"), 180, "warning"),
+    "fungal_risk": (">", decimal.Decimal("85"), 600, "warning"),
+    "heavy_rain_forecast": (">", decimal.Decimal("50"), 0, "warning"),
+    "flood_risk": (None, None, 0, "critical"),
+    "drought_risk": (None, None, 0, "critical"),
+    "node_offline": (None, None, 0, "warning"),
+    "node_battery_low": ("<", decimal.Decimal("3.4"), 0, "info"),
+}
 
 _POINT = "SRID=4326;POINT(-74.1 10.9)"
 _BOUNDARY = (
@@ -74,113 +98,156 @@ async def _create_test_plot_and_node(
     return org_id, plot_id, node_id
 
 
-async def test_factory_rules_are_present_with_correct_values(db_session: AsyncSession) -> None:
-    """Factory rules seeded by migration have org_id=None and match docs/06 §3 specification."""
-    result = await db_session.execute(select(AlertRuleRow).where(AlertRuleRow.org_id.is_(None)))
-    rules = {r.code: r for r in result.scalars().all()}
+def test_the_alerts_migration_freezes_its_factory_seed_copy() -> None:
+    """A revision is frozen once merged: it may not import application code that
+    can change underneath it, so the factory rules it inserts are a literal copy
+    of the rows. `test_the_migrated_factory_rules_equal_the_runtime_seed` is what
+    keeps that copy equal to the runtime seed.
+    """
+    app_imports = [
+        line
+        for line in _MIGRATION.read_text(encoding="utf-8").splitlines()
+        if line.startswith(("import techcamp", "from techcamp"))
+    ]
+    assert app_imports == []
 
-    expected_rules = {
-        "water_stress": {
-            "metric": "soil_moisture",
-            "operator": "<",
-            "threshold": None,
-            "hysteresis": decimal.Decimal("3"),
-            "min_duration_min": 360,
-            "severity": "warning",
-            "crop_id": None,
-        },
-        "waterlogging": {
-            "metric": "soil_moisture",
-            "operator": ">",
-            "threshold": None,
-            "hysteresis": decimal.Decimal("3"),
-            "min_duration_min": 1440,
-            "severity": "warning",
-            "crop_id": None,
-        },
-        "heat_stress": {
-            "metric": "air_temp",
-            "operator": ">",
-            "threshold": decimal.Decimal("35"),
-            "hysteresis": decimal.Decimal("1"),
-            "min_duration_min": 180,
-            "severity": "warning",
-            "crop_id": None,
-        },
-        "fungal_risk": {
-            "metric": "air_rh",
-            "operator": ">",
-            "threshold": decimal.Decimal("85"),
-            "hysteresis": decimal.Decimal("5"),
-            "min_duration_min": 600,
-            "severity": "warning",
-            "crop_id": None,
-        },
-        "heavy_rain_forecast": {
-            "metric": "rain",
-            "operator": ">",
-            "threshold": decimal.Decimal("50"),
-            "hysteresis": decimal.Decimal("0"),
-            "min_duration_min": 0,
-            "severity": "warning",
-            "crop_id": None,
-        },
-        "flood_risk": {
-            "metric": None,
-            "operator": None,
-            "threshold": None,
-            "hysteresis": decimal.Decimal("0"),
-            "min_duration_min": 0,
-            "severity": "critical",
-            "crop_id": None,
-        },
-        "drought_risk": {
-            "metric": None,
-            "operator": None,
-            "threshold": None,
-            "hysteresis": decimal.Decimal("0"),
-            "min_duration_min": 0,
-            "severity": "critical",
-            "crop_id": None,
-        },
-        "node_offline": {
-            "metric": None,
-            "operator": None,
-            "threshold": None,
-            "hysteresis": decimal.Decimal("0"),
-            "min_duration_min": 0,
-            "severity": "warning",
-            "crop_id": None,
-        },
-        "node_battery_low": {
-            "metric": "battery_v",
-            "operator": "<",
-            "threshold": decimal.Decimal("3.4"),
-            "hysteresis": decimal.Decimal("0.1"),
-            "min_duration_min": 0,
-            "severity": "info",
-            "crop_id": None,
-        },
+
+async def test_the_migrated_factory_rules_equal_the_runtime_seed(
+    db_session: AsyncSession,
+) -> None:
+    """The revision inserts a frozen copy of `FACTORY_RULES` (it cannot import it),
+    so this is the guard that keeps the two copies from drifting apart."""
+    rows = (
+        await db_session.execute(select(AlertRuleRow).where(AlertRuleRow.org_id.is_(None)))
+    ).scalars()
+    columns = (
+        "id",
+        "org_id",
+        "metric",
+        "operator",
+        "threshold",
+        "hysteresis",
+        "min_duration_min",
+        "severity",
+        "crop_id",
+    )
+    assert {row.code: tuple(getattr(row, c) for c in columns) for row in rows} == {
+        rule["code"]: tuple(rule[c] for c in columns) for rule in FACTORY_RULES
     }
 
-    assert len(rules) == 9
-    for code, expected in expected_rules.items():
-        assert code in rules, f"Missing factory rule: {code}"
-        rule = rules[code]
-        assert rule.metric == expected["metric"]
-        assert rule.operator == expected["operator"]
-        assert rule.threshold == expected["threshold"]
-        assert rule.hysteresis == expected["hysteresis"]
-        assert rule.min_duration_min == expected["min_duration_min"]
-        assert rule.severity == expected["severity"]
-        assert rule.crop_id == expected["crop_id"]
 
+async def test_the_seeded_factory_rules_match_the_documented_conditions(
+    db_session: AsyncSession,
+) -> None:
+    """Condition and severity per code as docs/06 §3 fixes them.
 
-async def test_factory_rules_survive_per_test_cleanup(db_session: AsyncSession) -> None:
-    """Proves factory rules survive per-test TRUNCATE CASCADE cleanup."""
+    `water_stress` and `waterlogging` have no `threshold` of their own: it is
+    resolved per plot (θ_estrés, field capacity + 5), and the model's
+    `flood_risk`/`drought_risk` have none either. The `hysteresis` of each rule is
+    not asserted: the doc does not state it yet (D13, pending agronomist
+    validation).
+    """
     result = await db_session.execute(select(AlertRuleRow).where(AlertRuleRow.org_id.is_(None)))
-    rules = list(result.scalars().all())
-    assert len(rules) == 9, "Factory rules must survive db_session cleanup"
+    rules = {row.code: row for row in result.scalars()}
+
+    assert set(rules) == set(_DOCUMENTED_RULES)
+    for code, condition in _DOCUMENTED_RULES.items():
+        rule = rules[code]
+        assert (rule.operator, rule.threshold, rule.min_duration_min, rule.severity) == condition, (
+            code
+        )
+
+
+async def test_factory_rules_survive_a_truncate_and_a_re_seed() -> None:
+    """`TRUNCATE organization CASCADE` wipes `alert_rule` (its `org_id` FK), which is
+    why the teardown re-seeds the factory rules. This test runs that cleanup itself
+    instead of relying on which tests ran before it."""
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE organization CASCADE"))
+        await seed_factory_rules(conn)
+        result = await conn.execute(select(AlertRuleRow))
+        assert len(list(result.scalars())) == 9
+
+
+def _rule_values(org_id: uuid.UUID | None, **overrides: Any) -> dict[str, Any]:
+    """A valid `alert_rule`: every column the CHECKs and the not-nulls demand."""
+    return {
+        "id": uuid7(),
+        "org_id": org_id,
+        "code": "custom_temp",
+        "metric": "air_temp",
+        "operator": ">",
+        "threshold": decimal.Decimal("40"),
+        "hysteresis": decimal.Decimal("0"),
+        "min_duration_min": 60,
+        "severity": "warning",
+        **overrides,
+    }
+
+
+async def _alert_values(db_session: AsyncSession) -> dict[str, Any]:
+    """A valid `alert`, so the column under test is the only thing a CHECK can catch."""
+    org_id, plot_id, _node_id = await _create_test_plot_and_node(db_session)
+    rule_id = (
+        (await db_session.execute(select(AlertRuleRow).where(AlertRuleRow.code == "heat_stress")))
+        .scalar_one()
+        .id
+    )
+    return {
+        "id": uuid7(),
+        "org_id": org_id,
+        "rule_id": rule_id,
+        "plot_id": plot_id,
+        "node_id": None,
+        "state": "open",
+        "severity": "warning",
+        "opened_at": datetime.now(UTC),
+    }
+
+
+@pytest.mark.parametrize(
+    ("column", "bad_value"),
+    [("state", "closed"), ("severity", "urgent"), ("outcome", "maybe")],
+)
+async def test_alert_rejects_a_value_outside_its_checked_domain(
+    db_session: AsyncSession, column: str, bad_value: str
+) -> None:
+    """docs/03 `alert`: `ck_alert_state`, `ck_alert_severity`, `ck_alert_outcome`."""
+    values = await _alert_values(db_session)
+    values[column] = bad_value
+
+    db_session.add(AlertRow(**values))
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+@pytest.mark.parametrize(("column", "bad_value"), [("operator", "="), ("severity", "fatal")])
+async def test_alert_rule_rejects_a_value_outside_its_checked_domain(
+    db_session: AsyncSession, column: str, bad_value: str
+) -> None:
+    """docs/03 `alert_rule`: `ck_alert_rule_operator`, `ck_alert_rule_severity`."""
+    org_id, _plot_id, _node_id = await _create_test_plot_and_node(db_session)
+
+    db_session.add(AlertRuleRow(**_rule_values(org_id, **{column: bad_value})))
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_a_second_factory_rule_with_an_existing_code_is_rejected(
+    db_session: AsyncSession,
+) -> None:
+    """`uq_alert_rule_factory_code` is unique on `code` where `org_id IS NULL`: a
+    second factory rule cannot reuse a code, but an org's own rule may."""
+    db_session.add(AlertRuleRow(**_rule_values(None, code="heat_stress")))
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+    org_id, _plot_id, _node_id = await _create_test_plot_and_node(db_session)
+    db_session.add(AlertRuleRow(**_rule_values(org_id, code="heat_stress")))
+    await db_session.commit()
 
 
 async def test_alert_rejects_both_or_neither_target(db_session: AsyncSession) -> None:

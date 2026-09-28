@@ -156,7 +156,11 @@ async def _make_org(session: AsyncSession, *, with_technician: bool = True) -> O
 
 
 async def _rule(session: AsyncSession, code: str) -> AlertRule:
-    """A factory rule as the evaluator holds it (docs/06 §3, `org_id = null`)."""
+    """A factory rule as the evaluator holds it (docs/06 §3, `org_id = null`).
+
+    The adapter boundary: `alert_rule` stores its thresholds as `Numeric`, and the
+    domain takes them as `float`.
+    """
     row = (
         await session.execute(select(AlertRuleRow).where(AlertRuleRow.code == code))
     ).scalar_one()
@@ -166,8 +170,8 @@ async def _rule(session: AsyncSession, code: str) -> AlertRule:
         org_id=row.org_id,
         metric=row.metric,
         operator=row.operator,
-        threshold=row.threshold,
-        hysteresis=row.hysteresis,
+        threshold=float(row.threshold) if row.threshold is not None else None,
+        hysteresis=float(row.hysteresis),
         min_duration=timedelta(minutes=row.min_duration_min),
         severity=Severity(row.severity),
         crop_id=row.crop_id,
