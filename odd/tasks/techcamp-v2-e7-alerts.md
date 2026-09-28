@@ -2336,11 +2336,14 @@ A push needs a browser, a push service and a VAPID key pair. Nothing below is fa
    "Este navegador no admite notificaciones. Abre la app en la pantalla de inicio" (install the PWA
    first), or "Las notificaciones no están disponibles en esta instalación" (the bundle was built
    without `VITE_VAPID_PUBLIC_KEY`).
-5. **Then make an alert.** Nothing in the running stack can open one from the UI — that is the
-   E16 simulator. Use the seeded-alert SQL from the demo above with a CRITICAL alert on a plot the
-   signed-in user belongs to; the `push` rows go to the owner and the producer, so sign in as one of
-   them. Clicking the notification opens or focuses `/alertas` (D33). A critical's SMS still needs the
-   `farm.technician_id` the escalation reads (D4).
+5. **Then make an alert, following [#146](https://github.com/jabyn996/techcamp-v2/issues/146) step 5,
+   not this paragraph.** Nothing in the running stack can open one from the UI — that is the E16
+   simulator — and a hand-inserted `alert` writes NO notification rows, because the use case writes
+   the alert and its rows in one transaction (ADR-0016), so seeding only the alert never produces a
+   push. #146's step 5 seeds BOTH: the CRITICAL alert on a plot the signed-in user belongs to AND
+   one `push` row for that user (owner or producer of the farm). The per-minute outbox dispatcher
+   then sends it for real. Clicking the notification opens or focuses `/alertas` (D33). A critical's
+   SMS still needs the `farm.technician_id` the escalation reads (D4).
 
 ### Open E7 issues at the close (one line each, all still open)
 
