@@ -392,6 +392,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   word-splitting of a shared-argument variable); bound STATUS re-offered the same four slots,
   relaunched with literal tokens.
 
+- T9a RDD `review-305a9f040645709b` → **approved**, acknowledged, no blockers. Findings →
+  [#162](https://github.com/jab16jy/techcamp-v2/issues/162): WARNINGs visit save without catch
+  (Dexie failure silent, RNF-01), `/me` seed treated as fresh and not tied to the token,
+  technician error in `topicError`, inline `findIndex ?? -1` plot lookup; SUGGESTIONs plaintext
+  profile in localStorage, implicit cache coupling, weak offline/outside-plot tests. All sent to
+  `e8-t9a` now (AGY rule).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
