@@ -281,6 +281,22 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   checks, skip reference checks; (3) duplicated delete branch in `_apply_visit`. Writer judgment
   call accepted: an unknown `kind` is that change's `rejected invalid`, not a batch `422` (D5).
 
+- T3 gate file: the first send pointed at a scratchpad file whose write had failed; the writer
+  stopped instead of guessing (correct). Findings re-sent as `e8-t3/.git-brief-e8-t3-gate.md`.
+- T7 #147 fixes `58fb730` (unknown pull entity fails closed, page aborts, cursor holds),
+  `27ce906` (non-JSON 2xx → `unavailable`; triggers go through one catching `startRun`),
+  `6d73169` (one follow-up run for a write during an in-flight run). Parent gate: lint, typecheck
+  clean; db+sync 5 files / 35 passed; build ok; 163.37 kB. Accepted: a page the client cannot
+  parse blocks the cursor (T8 should show "sync blocked"); `console.error` in `startRun`. Quality
+  issue sent back: the `startSynchronizer` JSDoc was left orphaned above `startRun`. Review of the
+  three fixes rides in T8's first slice (base `d105968`).
+- T6 `baa2545` deps boto3, `9efe910` presign, `0b19fd3` MinIO bucket init + S3 settings (1,339
+  lines incl. `uv.lock`). Parent gate (DB 5445): attachments tests 15 passed, ruff, format (270),
+  mypy (181), lint-imports clean. Accepted: validate before any query, 404 non-member / 403 role,
+  sign before insert, production S3 keys without defaults (503), `minio/mc:latest` with a pin-later
+  note. Gap sent back: the presigned PUT does not sign the length, so D8's 200 KB is only checked
+  on the declared `bytes`: sign `ContentLength` (or report if botocore cannot).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
