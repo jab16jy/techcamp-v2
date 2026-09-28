@@ -238,6 +238,29 @@ async def _open_on(
     )
 
 
+async def _open_node(
+    session: AsyncSession,
+    alerts: SqlAlchemyAlertRepository,
+    org: Org,
+    *,
+    code: str = "node_offline",
+    at: datetime = _OPENED,
+) -> Alert:
+    """A critical alert about the org's NODE, the other half of `alert`'s target.
+
+    `node_offline` is seeded `warning` (docs/06 §3: node health warns the
+    technician), so a critical node alert is the D20 severity override — the same
+    one a model rule uses when the evidence decides the severity.
+    """
+    return await open_alert(
+        rule=await _rule(session, code),
+        node_id=org.node_id,
+        at=at,
+        severity=Severity.CRITICAL,
+        alerts=alerts,
+    )
+
+
 class _OfferingOneRefusedRow(SqlAlchemyAlertRepository):
     """The lock keeps handing back a row the domain refuses (D42).
 
@@ -340,6 +363,51 @@ async def test_one_unresolvable_alert_does_not_stop_the_rest_of_its_org(
     assert rows[unreadable.id] is None
     assert [row.user_id for row in await _rows(db_session, readable.id, "sms")] == [org.technician]
     assert await _rows(db_session, unreadable.id, "sms") == []
+
+
+async def test_a_critical_node_alert_escalates_to_the_farms_technician(
+    db_session: AsyncSession,
+) -> None:
+    """R3-node-branch-untested: `get_escalation_target` has TWO statements, one
+    per target kind, and only the plot one was covered. A `node_offline` critical
+    reaches the technician through the plot its node hangs on (docs/06 §3
+    "Salud del nodo": node alerts go to the technician, not the producer)."""
+    org = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    alert = await _open_node(db_session, alerts, org)
+
+    escalated = await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+
+    assert escalated == 1
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert (row.plot_id, row.node_id, row.escalated_at) == (None, org.node_id, _DUE)
+    sms = await _rows(db_session, alert.id, "sms")
+    assert [row.user_id for row in sms] == [org.technician]
+    # The negative half: a node alert's push already went to the technician
+    # (D4), so the escalation must not reach the producer or the viewer, and it
+    # must not add a second sms of its own.
+    assert {row.user_id for row in await _rows(db_session, alert.id, "push")} == {org.technician}
+    assert len(sms) == 1
+
+
+async def test_a_node_alert_of_one_org_never_texts_another_orgs_technician(
+    db_session: AsyncSession,
+) -> None:
+    """R3-node-branch-untested, the isolation half: the node statement joins node to
+    plot to farm, and it is the org filter on that join that keeps one
+    organization's node alert away from another organization's technician
+    (docs/09)."""
+    org = await _make_org(db_session)
+    other = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    mine = await _open_node(db_session, alerts, org)
+    theirs = await _open_node(db_session, alerts, other)
+
+    await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+    await escalate_due_alerts(org_id=other.org_id, at=_DUE, alerts=alerts)
+
+    assert [row.user_id for row in await _rows(db_session, mine.id, "sms")] == [org.technician]
+    assert [row.user_id for row in await _rows(db_session, theirs.id, "sms")] == [other.technician]
 
 
 # -- the candidate the lock hands the sweep (docs/06 §3, D12) --
