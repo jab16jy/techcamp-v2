@@ -450,9 +450,32 @@ work unit (`domain-modeling`).
     OpenCode (same session as T7a) — forecast ~400
 - [ ] T8 Escalation job: critical unacknowledged ≥ 2 h → `escalated_at` + SMS to the technician
   (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr OpenCode — forecast ~300
-- [ ] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
+- [x] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
   registration against `POST /push-subscriptions`, one entry point reusing E1 primitives — route:
-  Herdr OpenCode + `impeccable` — forecast ~300
+  Herdr OpenCode + `impeccable` — forecast ~300 — actual 807 + 143 (`e354af8` schema regen, `51558be`
+  the unit, `98df0a0` the R3 correction). Two commits before it, and the split is honest rather
+  than cosmetic: `web/src/lib/api/schema.d.ts` was generated before E7, so the typed
+  `openapi-fetch` client could not name `POST /push-subscriptions` at all; regenerating it
+  (`npm run gen:api`, no server change) is its own commit so the T9 slice stays reviewable, and
+  generated lines do not count against the forecast. The forecast missed mostly because two costs
+  it did not name landed: 375 lines of Vitest (TDD is on) and a 30-line `tsconfig.worker.json`,
+  mandatory because `lib: DOM` and `lib: WebWorker` cannot share one program. Production code
+  alone is 336 lines, close to the estimate. **matches the doc**: the `push` handler shows a
+  notification per docs/06 §4's outbox push; the subscription body is exactly T4's documented
+  `{ endpoint, keys: { p256dh, auth } }` and re-posting is safe because docs/04's UNIQUE
+  `endpoint` makes it an upsert; the entry point sits where docs/07's screen map puts "Ajustes y
+  notificaciones" and reuses E1's `Button` and tokens unchanged. **Owner decision D25** (VAPID key
+  at build time, not an endpoint) and its docs/04 line landed in the same work unit as the code;
+  D26 fixed `notificationclick` on `/alertas`. RED: 4 suites failed on unresolved imports before
+  any implementation existed, then the three stale-key cases failed before the R3 correction. One
+  real build failure was found and fixed rather than shipped: `filename: 'features/push/sw.ts'`
+  makes vite-plugin-pwa build `dist/sw.js` and then rename a `dist/features/push/sw.js` that was
+  never written, so `srcDir` locates the source and `filename` stays flat. Checks (web/):
+  `npx vitest --run src/features/push src/app/routes.test.tsx`: 30 passed;
+  `npm test -- --run`: 222 passed (30 files); `npm run lint`: clean; `npm run typecheck`: clean
+  (both programs); `npm run build`: `dist/sw.js` with both handlers and 15 precache entries,
+  registered at scope `/`; `npm run size`: 163.38 kB gzipped of the 200 kB budget. No server
+  code touched, so no pytest was run.
 - [ ] T10 `water_stress` (after E6's `water_balance_daily` is on `main`; rebase first): trigger a
   over readings vs `stress_moisture_pct` with a representative sensor, trigger b `Dr > RAW`
   without one (ADR-0022, Q2) — route: Herdr OpenCode — forecast ~450
@@ -759,6 +782,37 @@ work unit (`domain-modeling`).
     rather than as closed by this test-only change — the same limit T6d recorded by hand.
   - Nothing to append to #134: zero findings, blocking and non-blocking alike.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
+- T9 (`84dc963..98df0a0`, 20 paths; base `84dc963` = `feat/e7-alerts` as the brief pinned it,
+  worktree `e7-t9`, branch `feat/e7-t9-push-client`): medium, `slice_budget_reached` (807 authored
+  lines against a ~400 slice), one reliability lens, **APPROVED and acknowledged (authority
+  burned)**. Lineage `review-6420fc1b733500db`, revision
+  `sha256:dcf70ff1f6ff85c642bf38cfd990566aeb5e47c2c2970adb07ce204201a1a0b9`, acknowledged target
+  `sha256:cdae347bbe6ecb045eb1bc3e52a701addf51cc60cae21c2f540d171e1b5bf820`. Consent was relayed
+  as a `gentle-ai.review-integration.consent/v3` envelope and granted by the owner, matching the
+  brief's "grant consent" — the brief's standing instruction is why the envelope was raised at
+  all, but the contract requires the live answer, so it was asked rather than assumed.
+  - **One CRITICAL, corrected in the bounded correction (`98df0a0`, 143 lines).**
+    `R3-stale-vapid-subscription` (`push.ts:70-78`, inferential, introduced): any existing
+    subscription was re-registered and reported `already-active` without checking which
+    `applicationServerKey` it was created with. D25 makes the client key a build-time value, so a
+    rotation plus rebuild strands every installation on a subscription the server cannot reach —
+    reported active, never delivered, and unrepairable by retrying. The refuter corroborated it.
+    The platform never exposes that key on a `PushSubscription`, so the fix records the key it
+    subscribed with in `localStorage` and replaces the subscription when the build's key differs;
+    storage-unavailable falls back to trusting the subscription instead of churning one per tap.
+    One honest limit recorded in D25 and still true: rotating the key pair means a web rebuild.
+  - **Two WARNINGs, non-blocking → #136** (`review-follow-up`, `epic:e7`, `area:web`, `type:bug`),
+    filed as the single issue for this round and not fixed here:
+    `R3-navigation-failure-swallowed` (`sw.ts:72-74`, deterministic) — the click handler closes the
+    notification and then swallows a navigation rejection, so a failed focus/navigate produces no
+    screen and no failure; and `R3-worker-route-parser-bypass` (`pushPayload.ts:68-70`,
+    deterministic) — the same-origin guard misses a slash-then-backslash route, which WHATWG URL
+    parsing normalizes to `//`, and both `routeForNotification` and `sw.ts`'s `routeOf` share the
+    check, so they must be fixed together.
+  - One writer error worth recording: the first `review start` was hand-retyped and a mistyped
+    `--target` hash was rejected (`the token and the identity come from different negotiations`).
+    The fix is to take `next_transition.execute.command` from STATUS and run it verbatim, never to
+    retype a provider-issued token.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -900,3 +954,53 @@ work unit (`domain-modeling`).
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
   failure is silence, not an exception — which is why the whole suite was green through both.
+- T9 2026-09-27 (writer: OpenCode, worktree `e7-t9`, branch `feat/e7-t9-push-client`, base
+  `84dc963`): the Web Push client, three commits (`e354af8` generated schema regen, `51558be` the
+  unit, `98df0a0` the R3 correction). CodeGraph first: `gentle-ai codegraph init` on this worktree
+  (329 files indexed), then `codegraph_explore` for T4's `notifications/adapters/api/router.py`
+  and `PushKeys` — which is what proved the endpoint takes exactly `{ endpoint, keys: { p256dh,
+  auth } }` and returns `{ id }`, and that no VAPID exposure route exists. Docs read and cited:
+  AGENTS.md, docs/00, docs/01 (RF-08), docs/03:491, docs/04 §Alertas y notificaciones, docs/05,
+  docs/06 §4, docs/07, ADR-0006. Skills: `impeccable` (Operate mode — one plain button, E1's
+  `Button` and tokens reused as-is, no new primitive and no visual change, as the frozen design
+  requires), `work-unit-commits`, `find-docs`/ctx7 for the Push API (`applicationServerKey`,
+  `PushManager.subscribe`, `getSubscription`, `Notification.requestPermission`) and
+  vite-plugin-pwa `injectManifest`. Engram: `mem_search` "E1 design system PWA" and "E7 T4
+  push-subscriptions" before starting.
+  - **matches the doc** — the `push` handler shows one notification per docs/06 §4's outbox push,
+    and `notificationclick` opens `/alertas`, which docs/07's screen map names as the home of open
+    alerts (D26); the subscription POST body is exactly T4's documented shape and re-posting an
+    existing subscription is safe because docs/04 makes `endpoint` UNIQUE and therefore an upsert;
+    `VITE_VAPID_PUBLIC_KEY` reaching the client at build time is now stated in docs/04 itself, in
+    the same work unit as the code (D25); the entry point lives where docs/07 hangs "Ajustes y
+    notificaciones" (the `Más` tab) and reuses E1's primitives unchanged; permission denied,
+    unsupported browser, existing subscription and a build with no VAPID key are four distinct,
+    separately tested outcomes, and a build without the key reports `not-configured` rather than
+    throwing, exactly as D25 requires.
+  - RED then GREEN, recorded from the runs: RED 1 — `npx vitest --run src/features/push` failed
+    all 4 suites on unresolved imports (`./push`, `./pushPayload`, `./pushApi`, `../push`) before
+    any implementation existed; RED 2 — the three stale-key cases failed
+    (`expected { status: 'already-active' } to deeply equal { status: 'subscribed' }`) before the
+    R3 correction. GREEN — 32 passed in `src/features/push`, 222 in the full suite.
+  - Checks, as `<command>: <result>`: `npx vitest --run src/features/push src/app/routes.test.tsx`:
+    30 passed (5 files); `npm test -- --run`: 222 passed (30 files; baseline before T9 was 190 in
+    26); `npm run lint`: clean; `npm run typecheck`: clean, both the app and the worker program;
+    `npm run build`: `dist/sw.js` emitted with both `push` and `notificationclick` handlers and a
+    15-entry precache manifest, and `registerSW.js` registering it at scope `/`;
+    `npm run size`: 163.38 kB gzipped of the 200 kB budget. No server file was touched, so no
+    pytest was run and none was needed.
+  - Two things found by checking rather than assuming, both fixed in the same unit: the emitted
+    worker registers no push handler at all unless the plugin strategy is `injectManifest`, and a
+    nested `filename` makes vite-plugin-pwa build `dist/sw.js` then fail renaming a
+    `dist/features/push/sw.js` that was never written (`ENOENT`) — `srcDir` locates the source and
+    `filename` must stay flat. Also: `web/README.md` documented no `VITE_` variables at all, so the
+    brief's conditional ("add it to whatever documents them, if one exists") had no existing home;
+    a short "Environment variables" section was added there rather than leaving a build-time
+    requirement discoverable only in source.
+  - RDD: assessed `review_due: true` / `slice_budget_reached`, STATUS preflight, consent granted,
+    lineage `review-6420fc1b733500db`, one reliability lens → 1 CRITICAL (corroborated) + 2
+    WARNINGs, one bounded correction (`98df0a0`), targeted validation approved, acknowledged with
+    authority burned. Non-blocking findings → **#136**. Not done: no live-browser push
+    demonstration (needs T7's sender and a real push service; T11 owns the seminar demo), and
+    `DELETE /push-subscriptions/{id}` is not called from the client — the brief scoped T9 to
+    registration, and unsubscribing is the server's `410 Gone` path plus a future settings screen.
