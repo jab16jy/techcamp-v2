@@ -7,6 +7,7 @@ SQLAlchemy, and none of them decides a sync outcome.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import date, datetime
 from typing import Any
@@ -28,7 +29,7 @@ from techcamp.logbook.application.ports import (
     StoredSyncRow,
 )
 from techcamp.logbook.domain.errors import InvalidEntryError
-from techcamp.logbook.domain.models import ExtensionVisit, SyncEntity
+from techcamp.logbook.domain.models import ExtensionVisit, LogbookEntry, SyncEntity
 
 SYNC_LOCK_KEY = int.from_bytes(b"tcsyncv1", "big")
 """D1's fixed `pg_advisory_xact_lock` key, the first eight bytes of a name no
@@ -92,6 +93,33 @@ def _check_violation(entity: str) -> InvalidEntryError:
     `SqlAlchemyAlertRuleRepository.create` follows).
     """
     return InvalidEntryError(f"{entity} violates a table constraint")
+
+
+def _entry_from_row(row: LogbookEntryRow) -> LogbookEntry:
+
+    return LogbookEntry(
+        id=row.id,
+        org_id=row.org_id,
+        plot_id=row.plot_id,
+        crop_cycle_id=row.crop_cycle_id,
+        kind=row.kind,
+        occurred_on=row.occurred_on,
+        quantity=row.quantity,
+        unit=row.unit,
+        cost_cop=row.cost_cop,
+        yield_kg=row.yield_kg,
+        sold_kg=row.sold_kg,
+        sale_price_cop_per_kg=row.sale_price_cop_per_kg,
+        labor_days=row.labor_days,
+        irrigation_mm=row.irrigation_mm,
+        alert_id=row.alert_id,
+        notes=row.notes,
+        created_by=row.created_by,
+        created_offline=row.created_offline,
+        client_updated_at=row.client_updated_at,
+        server_version=row.server_version,
+        deleted_at=row.deleted_at,
+    )
 
 
 class SqlAlchemyLogbookEntrySyncRepository:
@@ -204,6 +232,23 @@ class SqlAlchemyLogbookEntrySyncRepository:
             )
         )
 
+    async def list_for_pull(
+        self, org_ids: Sequence[UUID], *, since: int, limit: int
+    ) -> list[LogbookEntry]:
+        if not org_ids:
+            return []
+        stmt = (
+            select(LogbookEntryRow)
+            .where(
+                LogbookEntryRow.org_id.in_(org_ids),
+                LogbookEntryRow.server_version > since,
+            )
+            .order_by(LogbookEntryRow.server_version.asc())
+            .limit(limit + 1)
+        )
+        result = await self._session.execute(stmt)
+        return [_entry_from_row(row) for row in result.scalars()]
+
 
 class SqlAlchemyExtensionVisitSyncRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -289,8 +334,26 @@ class SqlAlchemyExtensionVisitSyncRepository:
             )
         )
 
+    async def list_for_pull(
+        self, org_ids: Sequence[UUID], *, since: int, limit: int
+    ) -> list[ExtensionVisit]:
+        if not org_ids:
+            return []
+        stmt = (
+            select(ExtensionVisitRow)
+            .where(
+                ExtensionVisitRow.org_id.in_(org_ids),
+                ExtensionVisitRow.server_version > since,
+            )
+            .order_by(ExtensionVisitRow.server_version.asc())
+            .limit(limit + 1)
+        )
+        result = await self._session.execute(stmt)
+        return [_visit_from_row(row) for row in result.scalars()]
+
 
 def _visit_from_row(row: ExtensionVisitRow) -> ExtensionVisit:
+
     return ExtensionVisit(
         id=row.id,
         org_id=row.org_id,

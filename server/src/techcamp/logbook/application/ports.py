@@ -9,6 +9,7 @@ answer to "what does the row under the lock hold".
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -16,7 +17,7 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.logbook.domain.models import ExtensionVisit, SyncEntity, SyncOp
+from techcamp.logbook.domain.models import ExtensionVisit, LogbookEntry, SyncEntity, SyncOp
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +153,14 @@ class LogbookEntrySyncRepository(Protocol):
         change rejected as `invalid` can still be deleted."""
         ...
 
+    async def list_for_pull(
+        self, org_ids: Sequence[UUID], *, since: int, limit: int
+    ) -> list[LogbookEntry]:
+        """Rows with org_id IN (:orgs) and server_version > :since, ordered by
+        server_version ascending, up to limit + 1. Tombstones included (D2).
+        """
+        ...
+
 
 class ExtensionVisitSyncRepository(Protocol):
     async def get_for_update(self, visit_id: UUID) -> StoredSyncRow | None: ...
@@ -173,6 +182,14 @@ class ExtensionVisitSyncRepository(Protocol):
         client_updated_at: datetime,
         server_version: int,
     ) -> None: ...
+
+    async def list_for_pull(
+        self, org_ids: Sequence[UUID], *, since: int, limit: int
+    ) -> list[ExtensionVisit]:
+        """Rows with org_id IN (:orgs) and server_version > :since, ordered by
+        server_version ascending, up to limit + 1. Tombstones included (D2).
+        """
+        ...
 
 
 class ExtensionVisitRepository(Protocol):
