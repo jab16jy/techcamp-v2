@@ -299,6 +299,31 @@ work unit (`domain-modeling`).
   `endpoint` and re-binds the row to the caller, replacing its `keys`; `DELETE` only serves the
   caller's own row (anything else 404). Read `GET /alert-rules` serves any member of the org
   (viewer included); `POST`/`PATCH` need role `owner` of the rule's org.
+- D25 **T9's VAPID public key source: the build-time `VITE_VAPID_PUBLIC_KEY`, not an endpoint.**
+  Owner decision 2026-09-27, and the doc line it rests on is the one T9 adds to docs/04's
+  "Alertas y notificaciones" section, in the same work unit. The gap this closes: docs/04 named
+  `POST`/`DELETE /push-subscriptions` but **no** source for the VAPID public key, and
+  `PushManager.subscribe()` cannot subscribe without an `applicationServerKey` — the endpoint
+  alone was not enough to register anything. A full `docs/**` grep found no VAPID exposure
+  anywhere (only docs/03:491, which says the credentials live in `keys JSONB`). Options weighed:
+  a build-time `VITE_` variable (reuses `client.ts`'s existing `VITE_API_TEST_BASE_URL` pattern,
+  web-only, zero server work, no doc contradiction) against a new `GET` route (a docs/04 change
+  first, server code, schema regen, `uv run pytest tests/alerts`, and a T9 well past its ~300-line
+  forecast). The owner chose the build-time variable: **the key is public by design**, so a route
+  to deliver it protects nothing, and the cost lands where the value already has to live. Two
+  consequences, both accepted: rotating the key pair means rebuilding the web bundle, and a
+  build with the variable unset must fail *softly* (push off, the rest of the app intact), not
+  throw. T7b's server adapter must read the matching key pair from its own config.
+- D26 **`notificationclick` opens or focuses the app's `/alertas` tab (docs/07's screen map:
+  `alerts`).** docs/07's map puts open alerts on the `Alertas` bottom tab and hangs "Detalle de
+  alerta + reconocer" off it, so that tab is where a pushed alert belongs; the payload carries no
+  deep link of its own yet (T7's outbox payload is not written), so the handler resolves a route
+  from what the payload does carry and falls back to `/alertas` rather than inventing a per-alert
+  URL shape ahead of T7. It focuses a matching client when one is open and opens the route in a
+  new client otherwise, which is the app root's own shell — `/alertas` is a tab inside it, so
+  "open the app" and "open the alerts tab" are the same navigation. `/alertas` is a
+  `PlaceholderPage` until its own task replaces it, which is deliberate: the handler names the
+  documented destination, not the   screen that happens to exist today.
 
 ## E6 coordination (2026-09-26)
 - E6 merged to `main` (PRs #104–#111, `main` @ `b627b66`): `water_balance_daily` (`plot_id`, `day`,
