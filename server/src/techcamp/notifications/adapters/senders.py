@@ -176,12 +176,12 @@ def build_senders(
 ) -> dict[Channel, NotificationSender]:
     """The senders this profile has (ADR-0016; ADR-0021; D31, D32, D34).
 
-    `push` is registered wherever there is a VAPID key to sign with, in both
-    profiles (ADR-0021:26), and left out when there is none — the same soft
-    failure the web client has when its `VITE_VAPID_PUBLIC_KEY` is unset, and the
-    same shape as D31's rule: a channel nobody can send is not registered, so its
-    rows are never even claimed and no attempts are spent on a provider that
-    cannot be built.
+    `push` is registered wherever there is a VAPID key that can SIGN with, in
+    both profiles (ADR-0021:26), and left out when there is none — or when the one
+    there is cannot sign (#140). Both are the same soft failure the web client has
+    when its `VITE_VAPID_PUBLIC_KEY` is unset, and the same shape as D31's rule: a
+    channel nobody can send is not registered, so its rows are never even claimed
+    and no attempts are spent on a provider that cannot be built.
 
     The production SMS/WhatsApp provider is future work: the seminar adapter is
     the only simulated one, so production registers nothing rather than pretending
@@ -197,10 +197,28 @@ def build_senders(
     senders: dict[Channel, NotificationSender] = {}
     private_key = vapid_private_key()
     if private_key:
-        senders[Channel.PUSH] = WebPushSender(
-            subscriptions=subscriptions,
-            transport=PywebPushTransport(private_key=private_key, subject=vapid_subject()),
-        )
+        transport = PywebPushTransport(private_key=private_key, subject=vapid_subject())
+        signing_error = transport.signing_error()
+        if signing_error is None:
+            senders[Channel.PUSH] = WebPushSender(
+                subscriptions=subscriptions,
+                transport=transport,
+            )
+        else:
+            # A key that cannot sign is a channel nobody can send, so D31's rule
+            # answers for it exactly as it does for a missing one: the rows are
+            # never claimed and no attempt is spent on a provider that cannot
+            # exist. It is logged rather than raised because a worker that refuses
+            # to start over a configuration mistake also refuses to deliver every
+            # other channel, and the warning repeats until an operator fixes the
+            # key — which is the moment it was asked to be seen (#140).
+            logger.warning(
+                "push is not registered: the configured VAPID key cannot sign (%s). "
+                "Set TECHCAMP_VAPID_PRIVATE_KEY to the base64 DER of an EC2 "
+                "(prime256v1) private key and TECHCAMP_VAPID_SUBJECT to a mailto: "
+                "or https: URI (D32, D31)",
+                signing_error,
+            )
     if is_seminar_profile():
         sms = SeminarSmsSender()
         senders[Channel.SMS] = sms

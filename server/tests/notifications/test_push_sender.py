@@ -14,6 +14,7 @@ makes the 404/410 mapping testable without a live service.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -22,6 +23,9 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from py_vapid import Vapid
+from py_vapid.utils import b64urlencode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -464,6 +468,25 @@ async def test_any_other_push_service_status_is_an_ordinary_failure() -> None:
             ).deliver(subscription, payload="{}", topic="t", ttl=60)
 
 
+def _a_signable_vapid_key() -> str:
+    """A real, throwaway VAPID private key in the shape the config holds (D32).
+
+    `build_senders` checks that the key can actually SIGN (#140), so a test that
+    wants the channel registered needs a key that really signs. Generated per test
+    rather than committed: a private key in a repository is a private key in a
+    repository, however obviously it is only a test.
+    """
+    generated = Vapid()
+    generated.generate_keys()
+    return b64urlencode(
+        generated.private_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+
 async def test_push_is_registered_only_where_there_is_a_vapid_key_to_sign_with(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -484,6 +507,55 @@ async def test_push_is_registered_only_where_there_is_a_vapid_key_to_sign_with(
     assert set(senders) == {Channel.SMS, Channel.WHATSAPP}
 
 
+async def test_a_vapid_key_that_cannot_sign_leaves_push_unregistered_and_says_so(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A *wrong* key must be no stronger a signal than an absent one (#140).
+
+    `build_senders` used to register `push` for any non-empty string, so a
+    truncated base64, a PEM pasted without its header or a key of the wrong curve
+    produced a channel that looks configured and can never deliver: every row
+    walks the whole 1 min / 5 min / 30 min / 2 h backoff and ends `failed`, and
+    nothing says why. D31's rule already covers "a channel nobody can send is not
+    even claimed", and this is the same rule for a value that cannot sign.
+    """
+    from techcamp.notifications.adapters import senders as senders_module
+
+    monkeypatch.setattr(senders_module, "is_seminar_profile", lambda: True)
+    monkeypatch.setattr(senders_module, "vapid_private_key", lambda: "a-private-key")
+    monkeypatch.setattr(senders_module, "vapid_subject", lambda: "mailto:soporte@techcamp.local")
+
+    with caplog.at_level(logging.WARNING):
+        senders = build_senders(_subs(db_session))
+
+    assert Channel.PUSH not in senders
+    # The negative half, and the part that makes it a D31 rule and not a broken
+    # profile: the channels that CAN send are untouched.
+    assert set(senders) == {Channel.SMS, Channel.WHATSAPP}
+    # Silent misconfiguration is the other half of the bug: an operator has to be
+    # able to find this in the worker's log.
+    assert any("VAPID" in record.message for record in caplog.records)
+
+
+async def test_a_vapid_key_that_can_sign_registers_push(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the pair above: a key that really signs still gets the
+    channel, so the check cannot be satisfied by rejecting everything. The key is
+    generated per test rather than committed, because a committed private key in
+    a repository is a private key in a repository."""
+    from techcamp.notifications.adapters import senders as senders_module
+
+    monkeypatch.setattr(senders_module, "is_seminar_profile", lambda: True)
+    monkeypatch.setattr(senders_module, "vapid_private_key", _a_signable_vapid_key)
+    monkeypatch.setattr(senders_module, "vapid_subject", lambda: "mailto:soporte@techcamp.local")
+
+    senders = build_senders(_subs(db_session))
+
+    assert isinstance(senders.get(Channel.PUSH), WebPushSender)
+    assert set(senders) == {Channel.PUSH, Channel.SMS, Channel.WHATSAPP}
+
+
 async def test_the_production_profile_registers_push_too(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -494,7 +566,7 @@ async def test_the_production_profile_registers_push_too(
     from techcamp.notifications.adapters import senders as senders_module
 
     monkeypatch.setattr(senders_module, "is_seminar_profile", lambda: False)
-    monkeypatch.setattr(senders_module, "vapid_private_key", lambda: "private-key")
+    monkeypatch.setattr(senders_module, "vapid_private_key", _a_signable_vapid_key)
     monkeypatch.setattr(senders_module, "vapid_subject", lambda: "mailto:soporte@techcamp.local")
 
     senders = build_senders(_subs(db_session))

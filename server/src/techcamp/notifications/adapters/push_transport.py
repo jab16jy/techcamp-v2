@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 
+from py_vapid import Vapid
 from pywebpush import WebPushException, webpush_async
 
 from techcamp.notifications.domain.errors import PushSubscriptionGoneError
@@ -31,6 +32,14 @@ same "remove this subscription" case, and there is no world in which a 404 from 
 push service means the browser is still there. Treating only 410 would leave a
 row that can never be delivered to sitting in the table forever, retried five
 times per alert.
+"""
+
+_PROBE_AUDIENCE = "https://push.invalid"
+"""The `aud` the signing probe claims.
+
+The audience of a REAL delivery is the endpoint's own, which `webpush_async`
+derives per call; the probe only has to prove a token can be signed at all, and
+`.invalid` is the reserved TLD for exactly this.
 """
 
 _TIMEOUT_SECONDS = 10
@@ -56,6 +65,31 @@ class PywebPushTransport:
     def __init__(self, *, private_key: str, subject: str) -> None:
         self._private_key = private_key
         self._subject = subject
+
+    def signing_error(self) -> str | None:
+        """Why this transport cannot sign a push, or `None` when it can.
+
+        docs/04:143 leaves the key pair to the server's configuration, and a value
+        that cannot sign is not a configured provider: truncated base64, a PEM
+        pasted without its header, a key of the wrong curve, a `sub` that is not
+        the `mailto:`/`https:` URI RFC 8292 asks for. Registering the channel
+        anyway spends all five attempts of every `push` row on a delivery that
+        cannot happen, and says nothing until a farmer reports no alert (#140).
+
+        The probe makes the two calls `webpush_async` makes — `Vapid.from_string`
+        and `sign`, with THIS transport's own `sub` — so the check is the real
+        path rather than a second opinion about it, and it costs one signature at
+        the moment the senders are built. A pure query: it says whether a push
+        could be signed, and `build_senders` is what decides what to do about it
+        and tells the operator.
+        """
+        try:
+            Vapid.from_string(self._private_key).sign(
+                {"sub": self._subject, "aud": _PROBE_AUDIENCE}
+            )
+        except Exception as exc:  # noqa: BLE001 — any configuration value fails softly
+            return f"{type(exc).__name__}: {exc}"
+        return None
 
     async def deliver(
         self, subscription: PushSubscription, *, payload: str, topic: str, ttl: int
