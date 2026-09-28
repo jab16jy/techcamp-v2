@@ -440,6 +440,12 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   `techcamp-e8-db-t2..t6` deleted. Kept: integration `e8-logbook` + `techcamp-e8-db` (5441). Lane
   branches kept (merged; they back the RDD lineages). New lanes reuse ports from 5442.
 
+- T8 started (owner go, 2026-09-28): lane `e8-t8` (`feat/e8-t8-logbook` from `39eb6b9`, web, no
+  DB, CodeGraph index), AGY `e8-t8` medium, brief `.git-brief-e8-T8.md`; `impeccable` mandatory,
+  design frozen. Open point: the T7 #147 fixes (`58fb730..ddb46bc`) are already under T8's base
+  (merged in `ca97354`), so T8's slice cannot cover them as planned; they need their own short
+  review or an explicit owner waiver.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
