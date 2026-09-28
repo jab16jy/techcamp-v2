@@ -26,7 +26,9 @@ from techcamp.notifications.domain.models import (
     CRITICAL_SEVERITY,
     MAX_ATTEMPTS,
     Channel,
+    FinalAttempt,
     PendingNotification,
+    RetrySchedule,
     in_quiet_hours,
     quiet_hours_until,
     retry_delay,
@@ -239,6 +241,19 @@ async def _deliver(
     commit is what releases the claim's locks, and a commit per row would leave
     the message's remaining rows `pending` and unlocked after the message was
     already delivered, which is a duplicate waiting for a second worker (R3-001).
+
+    A failed message writes TWICE — the rows that are given up first, the rows
+    that will retry second — and the order is the safety, because the first
+    commit already released the locks: a row that is still `pending` and still
+    due at that moment is claimable by a second worker. The given-up row is
+    `failed` before that happens, and the retrying rows carry a `next_attempt_at`
+    in the future, which the claim's `next_attempt_at <= now` refuses.
+
+    Each row's own count moves by one and its own instant is derived from that
+    count: `attempts` is a column of the notification (docs/03) and "máximo 5
+    intentos" is per notification (docs/06 §4), so one delivery that covered
+    several alerts is one attempt for each of them and not the oldest row's count
+    written over the rest (R3-002).
     """
     sent = retried = failed = 0
     rows = [notification.id for notification in group]
@@ -251,24 +266,47 @@ async def _deliver(
             # the channel that was used, which for a critical on an open push
             # circuit is the alternate.
             circuits.record_failure(channel)
-        attempts = group[0].attempts + 1
         error = str(exc)[:_MAX_ERROR_CHARS] or type(exc).__name__
-        if attempts >= MAX_ATTEMPTS:
-            await outbox.mark_failed(rows, attempts=attempts, error=error)
-            failed = len(rows)
-        else:
-            await outbox.mark_retry(
-                rows,
-                attempts=attempts,
-                next_attempt_at=now + retry_delay(attempts),
-                error=error,
-            )
-            retried = len(rows)
+        given_up, retrying = _outcomes(group, now=now)
+        if given_up:
+            await outbox.mark_failed(given_up, error=error)
+            failed = len(given_up)
+        if retrying:
+            await outbox.mark_retry(retrying, error=error)
+            retried = len(retrying)
     else:
         circuits.record_success(channel)
         await outbox.mark_sent(rows, at=now)
         sent = len(rows)
     return DispatchReport(0, sent, retried, failed, 0, 0)
+
+
+def _outcomes(
+    group: Sequence[PendingNotification], *, now: datetime
+) -> tuple[list[FinalAttempt], list[RetrySchedule]]:
+    """A failed message's own outcome for every row it covered, split by fate.
+
+    One attempt added to EACH row's count, and each row's next instant derived
+    from that same count, so a group of rows of different ages ends the message
+    with a row at 5 `failed` beside a row at 1 waiting a minute — and never the
+    reverse (docs/06 §4; R3-002). The two lists are disjoint by construction: a
+    row's fate is decided once, from its own count.
+    """
+    given_up: list[FinalAttempt] = []
+    retrying: list[RetrySchedule] = []
+    for notification in group:
+        attempts = notification.attempts + 1
+        if attempts >= MAX_ATTEMPTS:
+            given_up.append(FinalAttempt(notification_id=notification.id, attempts=attempts))
+        else:
+            retrying.append(
+                RetrySchedule(
+                    notification_id=notification.id,
+                    attempts=attempts,
+                    next_attempt_at=now + retry_delay(attempts),
+                )
+            )
+    return given_up, retrying
 
 
 def _is_silenced(notification: PendingNotification, now: datetime) -> bool:

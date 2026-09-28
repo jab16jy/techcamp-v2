@@ -18,8 +18,10 @@ from uuid import UUID
 from techcamp.notifications.domain.models import (
     CLAIM_LIMIT,
     Channel,
+    FinalAttempt,
     PendingNotification,
     PushSubscription,
+    RetrySchedule,
 )
 
 
@@ -181,24 +183,25 @@ class OutboxRepository(Protocol):
         """
         ...
 
-    async def mark_retry(
-        self,
-        notification_ids: Sequence[UUID],
-        *,
-        attempts: int,
-        next_attempt_at: datetime,
-        error: str,
-    ) -> None:
-        """Record a failed attempt and the instant the rows become due again.
+    async def mark_retry(self, rows: Sequence[RetrySchedule], *, error: str) -> None:
+        """Record a failed attempt per row, each with its OWN count and instant.
 
-        One commit for the whole message, for the same reason as `mark_sent`.
+        One commit for the whole message, for the same reason as `mark_sent`. The
+        counts travel per row rather than as one number because `attempts` is a
+        column of the notification (docs/03) and "máximo 5 intentos" is per
+        notification (docs/06 §4): a message that covers rows of different ages
+        must not hand the oldest one's count to the newest (R3-002).
         """
         ...
 
-    async def mark_failed(
-        self, notification_ids: Sequence[UUID], *, attempts: int, error: str
-    ) -> None:
-        """Give a message up after `MAX_ATTEMPTS` (docs/06 §4), in one commit."""
+    async def mark_failed(self, rows: Sequence[FinalAttempt], *, error: str) -> None:
+        """Give up the rows that reached `MAX_ATTEMPTS` of a failed message.
+
+        A row group of one is a single row, exactly as before. The rows that had
+        attempts left are NOT in this call: they keep retrying (docs/06 §4's
+        "máximo 5 intentos" is per notification, and one delivery that covered
+        several alerts is still one attempt for each of them).
+        """
         ...
 
     async def mark_deferred(

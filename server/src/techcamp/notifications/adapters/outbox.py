@@ -21,7 +21,13 @@ from sqlalchemy.orm import aliased
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.farms.adapters.orm import PlotRow
 from techcamp.notifications.adapters.orm import NotificationRow
-from techcamp.notifications.domain.models import CLAIM_LIMIT, Channel, PendingNotification
+from techcamp.notifications.domain.models import (
+    CLAIM_LIMIT,
+    Channel,
+    FinalAttempt,
+    PendingNotification,
+    RetrySchedule,
+)
 from techcamp.telemetry.adapters.orm import NodeRow
 
 _RULE_CODE = AlertRuleRow.code.label("rule_code")
@@ -52,8 +58,13 @@ class SqlAlchemyOutboxRepository:
 
     Every write commits. The claim's `FOR UPDATE SKIP LOCKED` locks live until
     the transaction ends, so the commit is what releases a row once its outcome
-    is durable — and it is per row, not per batch: a message that reached the
-    provider must not be sent again because a later row in the same batch died.
+    is durable.
+
+    The unit of a commit is one MESSAGE, and it is neither one row nor one claim
+    batch: a message that reached the provider must not be sent again because a
+    commit happened, so all of its rows are written together (R3-001), and a crash
+    in one message must not strand another one's rows, so two messages are never
+    written together either. A message of one row is one row's commit.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -113,14 +124,16 @@ class SqlAlchemyOutboxRepository:
         ]
 
     async def hold(self, notification_id: UUID, *, now: datetime) -> bool:
-        """Take one row's own lock right before it is sent; `False` if another
-        worker holds it already or has already finished it.
+        """Take one row's own lock right before its message is sent; `False` if
+        another worker holds it already or has already finished it.
 
-        The claim locks the whole batch at once, and its first outcome commits,
-        which ends that transaction and releases every lock it took — including
-        the ones on rows not sent yet. This is the lock that protects the send
-        itself, and `SKIP LOCKED` is what lets the row go to the worker that
-        already has it rather than sending it twice. `status` and
+        The claim locks the whole batch at once, and the first commit ends that
+        transaction and releases every lock it took — including the ones on rows
+        not sent yet. This is the lock that protects the send itself, and it
+        covers the WHOLE message this row belongs to, so the rows after it in that
+        message are held for as long as the send runs and not for the fraction of
+        it that had already been written. `SKIP LOCKED` is what lets the row go to
+        the worker that already has it rather than sending it twice. `status` and
         `next_attempt_at` are re-checked because that gap is real: in it another
         worker can claim the row, send it and close it, and an id-only lock would
         hand this worker a row that is no longer ours to send.
@@ -138,33 +151,28 @@ class SqlAlchemyOutboxRepository:
         ).scalar_one_or_none() is not None
 
     async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
-        for row in await self._locked_all(notification_ids):
+        for row in (await self._locked_by_id(notification_ids)).values():
             row.status = "sent"
             row.sent_at = at
             row.last_error = None
         await self._session.commit()
 
-    async def mark_retry(
-        self,
-        notification_ids: Sequence[UUID],
-        *,
-        attempts: int,
-        next_attempt_at: datetime,
-        error: str,
-    ) -> None:
-        for row in await self._locked_all(notification_ids):
+    async def mark_retry(self, rows: Sequence[RetrySchedule], *, error: str) -> None:
+        locked = await self._locked_by_id([outcome.notification_id for outcome in rows])
+        for outcome in rows:
+            row = locked[outcome.notification_id]
             row.status = "pending"
-            row.attempts = attempts
-            row.next_attempt_at = next_attempt_at
+            row.attempts = outcome.attempts
+            row.next_attempt_at = outcome.next_attempt_at
             row.last_error = error
         await self._session.commit()
 
-    async def mark_failed(
-        self, notification_ids: Sequence[UUID], *, attempts: int, error: str
-    ) -> None:
-        for row in await self._locked_all(notification_ids):
+    async def mark_failed(self, rows: Sequence[FinalAttempt], *, error: str) -> None:
+        locked = await self._locked_by_id([outcome.notification_id for outcome in rows])
+        for outcome in rows:
+            row = locked[outcome.notification_id]
             row.status = "failed"
-            row.attempts = attempts
+            row.attempts = outcome.attempts
             row.last_error = error
         await self._session.commit()
 
@@ -186,7 +194,7 @@ class SqlAlchemyOutboxRepository:
         row.last_error = reason
         await self._session.commit()
 
-    async def _locked_all(self, notification_ids: Sequence[UUID]) -> Sequence[NotificationRow]:
+    async def _locked_by_id(self, notification_ids: Sequence[UUID]) -> dict[UUID, NotificationRow]:
         """One message's rows, taken under their own locks in ONE statement.
 
         Every row of a message is re-read under `FOR UPDATE` before it is written,
@@ -194,15 +202,19 @@ class SqlAlchemyOutboxRepository:
         commit: a message's rows must never be `pending` and unlocked while the
         message has already been delivered (R3-001). A single row is the same
         query as before.
+
+        Keyed by id rather than returned in a list, because the value each row is
+        written with comes from the caller in ITS order and `WHERE id IN (...)`
+        gives PostgreSQL no order to pair them against.
         """
         if not notification_ids:
-            return []
+            return {}
         result = await self._session.execute(
             select(NotificationRow)
             .where(NotificationRow.id.in_(tuple(notification_ids)))
             .with_for_update()
         )
-        return result.scalars().all()
+        return {row.id: row for row in result.scalars().all()}
 
     async def _locked(self, notification_id: UUID) -> NotificationRow:
         """The claimed row, re-read under its own lock.

@@ -144,6 +144,37 @@ def next_attempt_at(
 
 
 @dataclass(frozen=True, slots=True)
+class RetrySchedule:
+    """A row that lost a message and will be tried again, on its own count.
+
+    `attempts` is a column of the ROW (docs/03) and docs/06 §4's "máximo 5
+    intentos" is per notification, so a message covering several rows adds one
+    attempt to each of them and derives each one's next instant from that row's
+    own count — never one row's count written over the others, which is how a row
+    that had never been attempted could reach `failed` on its first real delivery
+    (R3-002).
+    """
+
+    notification_id: UUID
+    attempts: int
+    next_attempt_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FinalAttempt:
+    """A row whose last attempt of a message has failed (docs/06 §4).
+
+    No instant, and deliberately not a nullable one: a row being given up is not
+    due again, and the two facts are different facts rather than one value and a
+    hole. A grouped message ends with a `FinalAttempt` beside a `RetrySchedule`,
+    never one row's fate written over another's.
+    """
+
+    notification_id: UUID
+    attempts: int
+
+
+@dataclass(frozen=True, slots=True)
 class PendingNotification:
     """A due outbox row, as the dispatcher holds it (docs/06 §4; ADR-0016).
 

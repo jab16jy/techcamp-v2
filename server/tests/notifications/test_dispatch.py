@@ -40,8 +40,10 @@ from techcamp.notifications.domain.models import (
     BREAKER_FAILURE_THRESHOLD,
     MAX_ATTEMPTS,
     Channel,
+    FinalAttempt,
     NotificationDraft,
     PendingNotification,
+    RetrySchedule,
     retry_delay,
 )
 from techcamp.shared.db import async_session_factory
@@ -1171,6 +1173,91 @@ async def test_a_lone_row_and_two_messages_are_still_one_commit_each(
     )
 
     assert commits == [[lone], [other_farm]]
+
+
+async def test_a_failed_group_costs_every_row_its_own_attempt(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """One message, one failed DELIVERY, and each row's own count (R3-002).
+
+    `notification.attempts` is a column of the row (docs/03) and docs/06 §4's
+    "máximo 5 intentos, luego `failed`" is a per-notification limit, so a grouped
+    message that fails adds ONE to each row and no more. Reading the count off
+    `group[0]` and writing it to every row meant a row that had never been
+    attempted was marked `failed` on its first real delivery whenever it happened
+    to group with a row that had four — the one way a `warning` dies without ever
+    being tried.
+
+    So the fresh row is `pending` at 1 and the old one is `failed` at 5, and the
+    two negative halves: the fresh row is NOT failed and the old one is NOT
+    backed off, because a row that is never going out is not the same as a row
+    that has to wait.
+    """
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    fresh = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    fresh_id = fresh.id
+    spent = await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)
+    spent_id = spent.id
+    fresh.attempts = 0
+    spent.attempts = MAX_ATTEMPTS - 1
+    await db_session.commit()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert (report.retried, report.failed) == (1, 1)
+    retried = await _row(db_session, fresh_id)
+    assert (retried.status, retried.attempts) == ("pending", 1)
+    assert retried.next_attempt_at == _DUE + retry_delay(1)
+    given_up = await _row(db_session, spent_id)
+    assert (given_up.status, given_up.attempts) == ("failed", MAX_ATTEMPTS)
+
+
+async def test_a_failed_row_is_written_before_the_ones_that_retry(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The two writes of one failed message are ordered, and the order is the
+    safety: the first commit releases the claim's locks, so a row still `pending`
+    and still due at that moment could be claimed and sent by another worker. The
+    row being given up goes first — after the first commit it is `failed` and
+    unclaimable — and the rows that will retry go second, with a `next_attempt_at`
+    in the future, which the claim's `next_attempt_at <= now` refuses.
+
+    Recorded, because the two orders differ only in a window no end state shows.
+    """
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    fresh = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    fresh_id = fresh.id
+    spent = await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)
+    spent_id = spent.id
+    spent.attempts = MAX_ATTEMPTS - 1
+    await db_session.commit()
+    order: list[tuple[str, list[UUID]]] = []
+
+    class _OrderedOutbox(SqlAlchemyOutboxRepository):
+        async def mark_failed(self, rows: Sequence[FinalAttempt], *, error: str) -> None:
+            order.append(("failed", [row.notification_id for row in rows]))
+            await super().mark_failed(rows, error=error)
+
+        async def mark_retry(self, rows: Sequence[RetrySchedule], *, error: str) -> None:
+            order.append(("retry", [row.notification_id for row in rows]))
+            await super().mark_retry(rows, error=error)
+
+    await dispatch_due_notifications(
+        outbox=_OrderedOutbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    # The negative half, in the only form it matters: the row that leaves the
+    # claimable set is written first, and the row that stays pending is written
+    # after it with a future `next_attempt_at`, never before.
+    assert order == [("failed", [spent_id]), ("retry", [fresh_id])]
 
 
 async def test_a_due_sms_row_is_sent_and_marked_sent(
