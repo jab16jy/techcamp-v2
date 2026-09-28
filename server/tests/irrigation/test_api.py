@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from itertools import count
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,11 +30,10 @@ from techcamp.irrigation.domain.models import (
     WaterBalanceDay,
 )
 from techcamp.main import app
+from techcamp.shared.dates import BOGOTA_TZ as _BOGOTA_TZ
 from techcamp.shared.ids import uuid7
 
 pytestmark = pytest.mark.anyio
-
-_BOGOTA_TZ = ZoneInfo("America/Bogota")
 _POINT = "SRID=4326;POINT(-74.1 10.9)"
 _BOUNDARY = (
     "SRID=4326;POLYGON((-74.10 10.90, -74.10 10.91, -74.09 10.91, -74.09 10.90, -74.10 10.90))"
@@ -162,7 +160,7 @@ async def test_get_recommendation_default_day(db_session: AsyncSession) -> None:
     plot_id = await _make_plot(db_session, org_id, irrigation_system="drip")
     rec_repo = SqlAlchemyIrrigationRecommendationRepository(db_session)
 
-    fixed_now = datetime(2026, 9, 26, 15, 0, tzinfo=UTC)
+    fixed_now = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
     today = fixed_now.astimezone(_BOGOTA_TZ).date()
 
     rec = IrrigationRecommendation(
@@ -188,7 +186,7 @@ async def test_get_recommendation_default_day(db_session: AsyncSession) -> None:
             assert data["day"] == today.isoformat()
             assert data["kind"] == "not_needed"
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_now, None)
 
 
 async def test_get_recommendation_missing_day_returns_404_with_distinct_title(
@@ -313,7 +311,7 @@ async def test_get_water_balance_defaults(db_session: AsyncSession) -> None:
     plot_id = await _make_plot(db_session, org_id)
     wb_repo = SqlAlchemyWaterBalanceRepository(db_session)
 
-    fixed_now = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
+    fixed_now = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
     local_today = fixed_now.astimezone(_BOGOTA_TZ).date()  # 2026-09-26
     local_yesterday = local_today - timedelta(days=1)  # 2026-09-25
     default_from = local_yesterday - timedelta(days=29)  # 2026-08-27
@@ -337,7 +335,7 @@ async def test_get_water_balance_defaults(db_session: AsyncSession) -> None:
             days = [item["day"] for item in resp.json()]
             assert days == [default_from.isoformat(), local_yesterday.isoformat()]
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_now, None)
 
 
 async def test_get_water_balance_validation_errors(db_session: AsyncSession) -> None:
@@ -352,19 +350,23 @@ async def test_get_water_balance_validation_errors(db_session: AsyncSession) -> 
             headers=_auth(token),
         )
         assert resp_inverted.status_code == 422
+        assert resp_inverted.headers["content-type"] == "application/problem+json"
+        assert resp_inverted.json()["title"] == "Invalid date range"
 
-        # Case 2: range > 366 days -> 422
+        # Case 2: range > 366 days (367 inclusive days -> (to - from).days == 366 > 365) -> 422
         resp_too_wide = client.get(
             f"/api/v1/plots/{plot_id}/water-balance",
-            params={"from": "2025-01-01", "to": "2026-01-03"},
+            params={"from": "2025-01-01", "to": "2026-01-02"},
             headers=_auth(token),
         )
         assert resp_too_wide.status_code == 422
+        assert resp_too_wide.headers["content-type"] == "application/problem+json"
+        assert resp_too_wide.json()["title"] == "Invalid date range"
 
-        # Case 3: range == 366 days -> 200 (valid)
+        # Case 3: range == 366 days (366 inclusive days -> (to - from).days == 365 <= 365) -> 200
         resp_ok = client.get(
             f"/api/v1/plots/{plot_id}/water-balance",
-            params={"from": "2025-01-01", "to": "2026-01-02"},
+            params={"from": "2025-01-01", "to": "2026-01-01"},
             headers=_auth(token),
         )
         assert resp_ok.status_code == 200

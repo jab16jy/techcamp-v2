@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from techcamp.farms.domain.models import CropStage, KcSource
+from techcamp.irrigation.domain.errors import InvalidCropStagesError
 from techcamp.irrigation.domain.models import (
     K_ASSIMILATION_DEFAULT,
     K_ASSIMILATION_NONE,
@@ -276,20 +277,53 @@ def test_compute_observed_depletion_matches_formula() -> None:
     Arithmetic:
       θFC = 0.25 (25%), θobs = 0.18 (18%), Zr = 0.8 m
       Dr_obs = 1000 * (0.25 - 0.18) * 0.8 = 1000 * 0.07 * 0.8 = 56.0 mm
+      TAW = 100.0 mm, well above 56.0, so the clamp is a no-op here.
     """
-    assert compute_observed_depletion(fc=0.25, theta_obs=0.18, root_depth_m=0.8) == pytest.approx(
-        56.0
-    )
+    assert compute_observed_depletion(
+        fc=0.25, theta_obs=0.18, root_depth_m=0.8, taw_mm=100.0
+    ) == pytest.approx(56.0)
+
+
+def test_compute_observed_depletion_clamps_to_0_taw() -> None:
+    """R3-001: theta_obs above field capacity or below wilting point must not push
+    Dr_obs outside [0, TAW] (docs/06 §5: Dr is a depletion of TAW, never negative
+    or beyond it), the same clamp `compute_model_depletion` already applies.
+    """
+    # theta_obs (0.30) above fc (0.25) after heavy rain -> raw formula is negative.
+    assert compute_observed_depletion(
+        fc=0.25, theta_obs=0.30, root_depth_m=0.8, taw_mm=100.0
+    ) == pytest.approx(0.0)
+
+    # theta_obs (0.05) below wp -> raw formula (1000 * 0.20 * 0.8 = 160.0) exceeds TAW.
+    assert compute_observed_depletion(
+        fc=0.25, theta_obs=0.05, root_depth_m=0.8, taw_mm=100.0
+    ) == pytest.approx(100.0)
 
 
 def test_assimilate_depletion_weighted_correction() -> None:
     """ADR-0022 / docs/06 §5: Dr = Dr_model + K * (Dr_obs - Dr_model)."""
-    assert assimilate_depletion(dr_model=30.0, dr_obs=50.0, k=K_ASSIMILATION_NONE) == pytest.approx(
-        30.0
-    )
     assert assimilate_depletion(
-        dr_model=30.0, dr_obs=50.0, k=K_ASSIMILATION_DEFAULT
+        dr_model=30.0, dr_obs=50.0, k=K_ASSIMILATION_NONE, taw_mm=100.0
+    ) == pytest.approx(30.0)
+    assert assimilate_depletion(
+        dr_model=30.0, dr_obs=50.0, k=K_ASSIMILATION_DEFAULT, taw_mm=100.0
     ) == pytest.approx(40.0)
+
+
+def test_assimilate_depletion_clamps_to_0_taw() -> None:
+    """R3-001: an unclamped Dr_obs (e.g. from a sensor above field capacity or below
+    wilting point) must not carry a negative or above-TAW value through assimilation,
+    since the assimilated Dr drives status, the decision, and next day's `dr_prev`.
+    """
+    # dr_obs (-10.0, e.g. theta_obs above fc) pulls the assimilated Dr below 0.
+    assert assimilate_depletion(
+        dr_model=5.0, dr_obs=-10.0, k=K_ASSIMILATION_DEFAULT, taw_mm=100.0
+    ) == pytest.approx(0.0)
+
+    # dr_obs (150.0, e.g. theta_obs below wp) pulls the assimilated Dr above TAW.
+    assert assimilate_depletion(
+        dr_model=95.0, dr_obs=150.0, k=K_ASSIMILATION_DEFAULT, taw_mm=100.0
+    ) == pytest.approx(100.0)
 
 
 # --- 10. Sensor weight K and representative depth rules (docs/06 §5) ---
@@ -304,17 +338,26 @@ def test_sensor_depth_representative_single_sensor_near_half_root_depth() -> Non
     Sensor at 10 cm: |10 - 50| = 40 cm > 15 cm -> False
     (docs/06 §5: 10 cm does not represent maize root).
     """
-    assert is_sensor_depth_representative([45.0], root_depth=100.0) is True
-    assert is_sensor_depth_representative([50.0], root_depth=100.0) is True
-    assert is_sensor_depth_representative([10.0], root_depth=100.0) is False
+    assert is_sensor_depth_representative([45.0], root_depth_cm=100.0) is True
+    assert is_sensor_depth_representative([50.0], root_depth_cm=100.0) is True
+    assert is_sensor_depth_representative([10.0], root_depth_cm=100.0) is False
 
 
 def test_sensor_depth_representative_two_sensors_in_root_zone() -> None:
     """docs/06 §5: two sensors at different depths inside root zone are representative."""
-    assert is_sensor_depth_representative([30.0, 70.0], root_depth=100.0) is True
-    assert is_sensor_depth_representative([30.0, 30.0], root_depth=100.0) is False
-    assert is_sensor_depth_representative([30.0, 120.0], root_depth=100.0) is False
-    assert is_sensor_depth_representative([], root_depth=100.0) is False
+    assert is_sensor_depth_representative([30.0, 70.0], root_depth_cm=100.0) is True
+    assert is_sensor_depth_representative([30.0, 30.0], root_depth_cm=100.0) is False
+    assert is_sensor_depth_representative([30.0, 120.0], root_depth_cm=100.0) is False
+    assert is_sensor_depth_representative([], root_depth_cm=100.0) is False
+
+
+def test_sensor_depth_representative_params_are_centimetres_not_metres() -> None:
+    """R3-002: both parameters are centimetres. Zr = 1.0 m root depth passed as metres
+    (instead of the required 100.0 cm) must not accidentally read as representative:
+    a sensor at 45 cm would be far outside a (wrongly) 1.0 cm root zone.
+    """
+    assert is_sensor_depth_representative([45.0], root_depth_cm=1.0) is False
+    assert is_sensor_depth_representative([45.0], root_depth_cm=100.0) is True
 
 
 def test_determine_sensor_weight_rules() -> None:
@@ -413,6 +456,44 @@ def test_compute_water_balance_status_at_raw_is_watch_for_rainfed() -> None:
     )
 
 
+def test_compute_water_balance_status_at_0_8_raw_boundary_is_watch() -> None:
+    """R3-004: at exactly 0.8 * RAW the threshold is inclusive -> 'watch', not 'ok'."""
+    raw = 50.0
+    watch_boundary = WATCH_THRESHOLD_RATIO * raw  # 40.0
+
+    assert (
+        compute_water_balance_status(dr=watch_boundary, raw=raw, is_rainfed=False)
+        is WaterBalanceStatus.WATCH
+    )
+    assert (
+        compute_water_balance_status(dr=watch_boundary, raw=raw, is_rainfed=True)
+        is WaterBalanceStatus.WATCH
+    )
+    # Just below the boundary is still 'ok'.
+    assert (
+        compute_water_balance_status(dr=watch_boundary - 0.01, raw=raw, is_rainfed=False)
+        is WaterBalanceStatus.OK
+    )
+
+
+def test_compute_water_balance_status_zero_raw_is_ok() -> None:
+    """D5 (feature doc, R3-003): RAW <= 0 (degenerate soil, e.g. θFC == θWP, or
+    TAW = 0 from incomplete soil data) has no positive depletion threshold, so the
+    status is 'ok' regardless of Dr or plot type, never 'irrigate'/'stress'.
+    """
+    assert compute_water_balance_status(dr=0.0, raw=0.0, is_rainfed=False) is WaterBalanceStatus.OK
+    assert compute_water_balance_status(dr=0.0, raw=0.0, is_rainfed=True) is WaterBalanceStatus.OK
+    assert compute_water_balance_status(dr=5.0, raw=0.0, is_rainfed=False) is WaterBalanceStatus.OK
+    # R3-zero-raw-rainfed-dr-positive-untested: without the guard this would be
+    # 'stress' (dr > raw), since 5.0 > 0.0.
+    assert compute_water_balance_status(dr=5.0, raw=0.0, is_rainfed=True) is WaterBalanceStatus.OK
+    # Negative RAW (e.g. a corrupt/inverted soil profile) is just as degenerate.
+    assert (
+        compute_water_balance_status(dr=5.0, raw=-10.0, is_rainfed=False) is WaterBalanceStatus.OK
+    )
+    assert compute_water_balance_status(dr=5.0, raw=-10.0, is_rainfed=True) is WaterBalanceStatus.OK
+
+
 # --- 12. Rainfed Advice Evaluation in Table Order (docs/06 §5 table) ---
 
 
@@ -490,6 +571,21 @@ def test_evaluate_rainfed_advice_active_cycle_branches() -> None:
         forecast_et0_7d_mm=30.0,
         stage="late",
     ) == (RainfedAdvice.CONSERVE_MOISTURE, RainfedAdvice.PRIORITIZE_HARVEST)
+
+
+def test_evaluate_rainfed_advice_zero_raw_is_no_action() -> None:
+    """D5 (feature doc, R3-003 / R3-status-zero-raw-edge): RAW <= 0 (degenerate soil)
+    has no positive threshold to be at or above, so it reads as 'no_action' even
+    though Dr (0.0) >= RAW (0.0) numerically.
+    """
+    assert evaluate_rainfed_advice(
+        has_active_cycle=True,
+        dr=0.0,
+        raw=0.0,
+        forecast_rain_7d_mm=0.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+    ) == (RainfedAdvice.NO_ACTION,)
 
 
 # --- 13. Recommendation Decision Flowchart (docs/06 §5 flowchart) ---
@@ -590,6 +686,80 @@ def test_decide_recommendation_irrigated_not_needed() -> None:
     assert rec.kind is RecommendationKind.NOT_NEEDED
     assert rec.depth_mm is None
     assert rec.duration_min is None
+
+
+def test_decide_recommendation_irrigated_at_raw_boundary_is_irrigate_not_postponed() -> None:
+    """R3-004: Dr == RAW is inclusive on the 'needs water' side (docs/06 §5 flowchart
+    `Dr >= RAW`), so it must not fall into `not_needed`; with 48h rain below Dr it
+    is `irrigate`, not `postpone`.
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.FAO56.value,
+        dr=50.0,
+        raw=50.0,
+        irrigation_efficiency=0.9,
+        area_m2=10000.0,
+        system_flow_lph=5000.0,
+        forecast_rain_48h_mm=10.0,  # < dr, so no postpone
+        forecast_rain_7d_mm=10.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.IRRIGATE
+
+
+def test_decide_recommendation_irrigated_zero_raw_is_not_needed() -> None:
+    """D5 (feature doc, R3-003): RAW <= 0 (degenerate soil) must not postpone forever
+    (forecast_rain_48h_mm >= dr is trivially true at dr=0.0) or fall through to
+    irrigate; it is `not_needed`, since there is no positive threshold to cross.
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.FAO56.value,
+        dr=0.0,
+        raw=0.0,
+        irrigation_efficiency=0.9,
+        area_m2=10000.0,
+        system_flow_lph=5000.0,
+        forecast_rain_48h_mm=0.0,
+        forecast_rain_7d_mm=0.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.NOT_NEEDED
+
+
+def test_decide_recommendation_rainfed_active_cycle_returns_advice() -> None:
+    """R3-004: the rainfed active-cycle path through `decide_recommendation` (not just
+    `evaluate_rainfed_advice` directly) returns kind=rainfed with the advice codes.
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=True,
+        kc_source=KcSource.FAO56.value,
+        dr=55.0,
+        raw=50.0,
+        irrigation_efficiency=None,
+        area_m2=10000.0,
+        system_flow_lph=None,
+        forecast_rain_48h_mm=0.0,
+        forecast_rain_7d_mm=20.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.RAINFED
+    assert rec.depth_mm is None
+    assert rec.duration_min is None
+    assert rec.advice == (RainfedAdvice.CONSERVE_MOISTURE,)
 
 
 def test_decide_recommendation_irrigated_postpone() -> None:
@@ -724,3 +894,101 @@ def test_decide_recommendation_rationale_contents() -> None:
     assert rationale["forecast_rain_48h_mm"] == 10.0
     assert rationale["forecast_rain_7d_mm"] == 20.0
     assert rationale["forecast_et0_7d_mm"] == 30.0
+
+
+@pytest.mark.parametrize("efficiency", [None, 0.0, -0.5])
+def test_decide_recommendation_efficiency_fallback_to_1_0(efficiency: float | None) -> None:
+    """R3-004: efficiency None or <= 0 falls back to 1.0 (no efficiency loss assumed),
+    so depth_mm == Dr exactly.
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.FAO56.value,
+        dr=54.0,
+        raw=50.0,
+        irrigation_efficiency=efficiency,
+        area_m2=5000.0,
+        system_flow_lph=10000.0,
+        forecast_rain_48h_mm=10.0,
+        forecast_rain_7d_mm=20.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.IRRIGATE
+    assert rec.depth_mm == pytest.approx(54.0)
+
+
+@pytest.mark.parametrize(
+    ("system_flow_lph", "area_m2"),
+    [(None, 5000.0), (0.0, 5000.0), (10000.0, 0.0)],
+)
+def test_decide_recommendation_duration_none_without_flow_or_area(
+    system_flow_lph: float | None, area_m2: float
+) -> None:
+    """R3-004: duration_min stays None when there is no usable flow rate or area,
+    since minutes cannot be derived without both.
+    """
+    rec = decide_recommendation(
+        has_active_cycle=True,
+        is_rainfed=False,
+        kc_source=KcSource.FAO56.value,
+        dr=54.0,
+        raw=50.0,
+        irrigation_efficiency=0.9,
+        area_m2=area_m2,
+        system_flow_lph=system_flow_lph,
+        forecast_rain_48h_mm=10.0,
+        forecast_rain_7d_mm=20.0,
+        forecast_et0_7d_mm=30.0,
+        stage="mid",
+        rationale_context={},
+    )
+    assert rec is not None
+    assert rec.kind is RecommendationKind.IRRIGATE
+    assert rec.duration_min is None
+
+
+# --- 14. Stage lookup edge cases (docs/06 §5; R3-004, R3-005) ---
+
+
+def test_stage_for_cycle_day_rejects_non_positive_day_of_cycle() -> None:
+    with pytest.raises(ValueError, match="day_of_cycle must be >= 1"):
+        stage_for_cycle_day(_MAIZE_STAGES, day_of_cycle=0)
+
+
+def test_stage_for_cycle_day_rejects_empty_stages() -> None:
+    """R3-broad-valueerror-catch: raises InvalidCropStagesError specifically (a
+    ValueError subclass), not IndexError from an empty-sequence access.
+    """
+    with pytest.raises(InvalidCropStagesError, match="stages must not be empty"):
+        stage_for_cycle_day((), day_of_cycle=1)
+
+
+def test_compute_kc_for_cycle_day_rejects_empty_stages() -> None:
+    """R3-broad-valueerror-catch: raises InvalidCropStagesError specifically (a
+    ValueError subclass), not IndexError from crop.stages[-1] on an empty tuple.
+    """
+    with pytest.raises(InvalidCropStagesError, match="stages must not be empty"):
+        compute_kc_for_cycle_day((), day_of_cycle=1)
+
+
+def test_compute_kc_for_cycle_day_fails_loudly_on_unknown_stage_name() -> None:
+    """R3-005: a stage name outside initial/development/mid/late (misspelled or
+    localized) must raise, not silently fall back and disagree with
+    `stage_for_cycle_day`, which identifies stages positionally.
+    """
+    stages = (
+        CropStage(stage="inicial", length_days=18, kc=0.30, depletion_fraction_p=0.55),
+        CropStage(stage="development", length_days=27, kc=0.75, depletion_fraction_p=0.55),
+        CropStage(stage="mid", length_days=31, kc=1.20, depletion_fraction_p=0.55),
+        CropStage(stage="late", length_days=14, kc=0.35, depletion_fraction_p=0.55),
+    )
+    with pytest.raises(InvalidCropStagesError, match="unknown crop stage name"):
+        compute_kc_for_cycle_day(stages, day_of_cycle=5)
+
+    # stage_for_cycle_day does not look up by name, so it silently disagrees
+    # (this is exactly the scenario R3-005 wants caught elsewhere, not fixed here).
+    assert stage_for_cycle_day(stages, day_of_cycle=5) == "inicial"

@@ -269,7 +269,7 @@ async def _latest_soil_moisture(
             if sensor.metric != "soil_moisture":
                 continue
             for point in await readings.query_valid_raw(
-                sensor.id, start=at - _SATURATION_LOOKBACK, end=at + _ONE_SECOND
+                sensor.id, plot.org_id, start=at - _SATURATION_LOOKBACK, end=at + _ONE_SECOND
             ):
                 if newest is None or point.time > newest[0]:
                     newest = (point.time, point.value)

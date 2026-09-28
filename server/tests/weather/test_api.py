@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from itertools import count
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,14 +19,13 @@ from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.main import app
+from techcamp.shared.dates import BOGOTA_TZ as _BOGOTA_TZ
 from techcamp.shared.ids import uuid7
 from techcamp.weather.adapters.api.deps import get_now
 from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
 from techcamp.weather.domain.models import WeatherDay
 
 pytestmark = pytest.mark.anyio
-
-_BOGOTA_TZ = ZoneInfo("America/Bogota")
 _POINT = "SRID=4326;POINT(-74.1 10.9)"
 _BOUNDARY = (
     "SRID=4326;POLYGON((-74.10 10.90, -74.10 10.91, -74.09 10.91, -74.09 10.90, -74.10 10.90))"

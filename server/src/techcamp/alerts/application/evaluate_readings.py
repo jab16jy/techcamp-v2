@@ -180,6 +180,7 @@ async def _evaluate_plot(
         window = max(rule.min_duration, RESOLUTION_WINDOW)
         samples = await _samples(
             metric,
+            org_id=plot.org_id,
             sensors_by_metric=sensors_by_metric,
             readings=readings,
             start=at - window,
@@ -247,6 +248,7 @@ async def _sensors_by_metric(
 async def _samples(
     metric: str,
     *,
+    org_id: UUID,
     sensors_by_metric: Mapping[str, Sequence[Sensor]],
     readings: ReadingRepository,
     start: datetime,
@@ -257,12 +259,13 @@ async def _samples(
 
     `query_valid_raw` is the read that excludes the out-of-range readings
     (docs/06 §1: they "no disparan alertas"), flag by flag and without touching
-    what the readings API returns.
+    what the readings API returns, and it is scoped to `org_id`
+    (docs/09:47) like every other read of a rule.
     """
     samples: list[tuple[datetime, float]] = []
     for sensor in sensors_by_metric.get(metric, ()):
         samples.extend(
             (point.time, point.value)
-            for point in await readings.query_valid_raw(sensor.id, start=start, end=end)
+            for point in await readings.query_valid_raw(sensor.id, org_id, start=start, end=end)
         )
     return sorted(samples)

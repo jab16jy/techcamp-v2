@@ -185,8 +185,8 @@ Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8) ([ADR-
 | θ_estrés | `θFC − p × (θFC − θWP)`: la humedad a la que `Dr = RAW` | Se guarda en `water_balance_daily.stress_moisture_pct` para la regla `water_stress` |
 | Pe | `0,8 × P` si P > 5 mm; si no, 0 | Lluvia de la celda o del pluviómetro del nodo |
 | Dr modelado | `Dr_modelo(i) = clamp(Dr(i−1) − Pe − I + ETc, 0, TAW)` | Balance diario |
-| Dr observado | `1000 × (θFC − θobs) × Zr` | Promedio diario de humedad del sensor representativo |
-| Dr | `Dr_modelo + K × (Dr_obs − Dr_modelo)` | Asimilación ponderada; `K` según la tabla siguiente |
+| Dr observado | `clamp(1000 × (θFC − θobs) × Zr, 0, TAW)` | Promedio diario de humedad del sensor representativo |
+| Dr | `clamp(Dr_modelo + K × (Dr_obs − Dr_modelo), 0, TAW)` | Asimilación ponderada; `K` según la tabla siguiente |
 
 **Peso del sensor (`K`).** Un sensor capacitivo barato no es la verdad de la zona de raíces: con calibración de laboratorio llevada al campo su error es de 5,5–19 puntos de humedad, y con calibración de campo baja a 0,5–3,6 puntos ([investigación, H3.2](investigacion/tecnificacion-campo.md#rq3--supuestos-técnicos)). Por eso el sensor corrige el balance, no lo reemplaza:
 
@@ -196,7 +196,7 @@ Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8) ([ADR-
 | Calibración `field` y profundidad representativa | 0,5 (valor inicial; se ajusta con el error modelo − observado registrado) |
 
 - **Profundidad representativa:** un sensor cerca de la mitad de la zona de raíces (Zr/2), o el promedio de dos sensores a profundidades distintas dentro de ella. Un sensor a 10 cm no representa la raíz del maíz (1,0–1,7 m en FAO-56). La tolerancia alrededor de Zr/2 y las profundidades por cultivo están pendientes de validación agronómica.
-- **Sensor representativo** es el que cumple las condiciones de `K > 0`: lectura válida en 24 h, profundidad representativa y calibración `field`. Solo ese sensor alimenta la regla `water_stress` sobre lecturas.
+- **Sensor representativo** es el que cumple las condiciones de `K > 0`: lectura válida en 24 h, profundidad representativa y calibración `field`. Solo ese sensor alimenta la regla `water_stress` sobre lecturas. Una **lectura válida** es aquella con valor calibrado y sin la bandera de fuera de rango (`reading.quality` bit 2 excluido, [03](03-modelo-datos.md#calibración)). La ventana del promedio diario del sensor y el chequeo de lectura en 24 h corresponden al día local D−1 en America/Bogota (00:00–24:00 local, convertido a instantes UTC) y se anclan al final de ese día local (no a la hora de corrida `now`, para que una reejecución o backfill sea determinista; D2 y D3).
 - `K` es fijo por tipo de calibración. Si el error modelo − observado sigue alto con datos reales, el paso siguiente es un filtro de Kalman que estime `K` cada día a partir de la varianza del modelo y del sensor.
 
 ```mermaid
@@ -235,10 +235,13 @@ flowchart TD
 - **Eficiencia del sistema:** `plot.irrigation_efficiency`, que al crear la parcela toma el valor por defecto de su `irrigation_system`: goteo 0,90, aspersión 0,75, gravedad 0,60.
 - **`kind`** de la recomendación según la rama: `irrigate` (lámina), `postpone` (va a llover), `not_needed` (ok o watch), `no_kc` o `rainfed` ([03](03-modelo-datos.md#plot-e-irrigation_recommendation-parcelas-con-riego-y-de-secano)).
 - **`rationale`** guarda los números usados (ET0, Kc y su `kc_source`, p, RAW, Dr modelado y asimilado, `K`, pronóstico). Lo muestra la interfaz y lo usa el asistente para explicar la recomendación. Un Kc `approximate` se muestra como tal.
+- **Pronóstico incompleto:** si algún día de la ventana `[D, D+6]` no tiene fila de pronóstico, o la fila existe pero `et0_mm`/`rain_mm` es nulo, el cálculo sigue (esos valores suman 0, el supuesto conservador) pero se marca `forecast_missing: true` en el `rationale`, igual que `low_confidence`, en vez de mostrar la recomendación como si el pronóstico estuviera completo (D1, feature doc `techcamp-v2-e6-followups.md`).
 - Con sensor representativo, `water_stress` la abre la regla sobre lecturas contra el θ_estrés del día; sin él, la abre este job cuando `Dr > RAW` ([§3](#3-evaluación-de-alertas)). Vale igual en secano.
 - El error entre modelo y observación es el SLI "error de humedad" ([11-metricas](11-metricas.md)).
 - **Semántica temporal de la corrida:** una corrida para el día local D (America/Bogota) calcula la fila de balance para D−1 con el clima observado consolidado de ese día (o pronóstico si falta el observado, señalado en el `rationale`); y guarda la recomendación para el día D a partir de Dr(D−1), evaluando la lluvia pronosticada a 48 h (D..D+1) y a 7 días (D..D+6) y la ET0 pronosticada a 7 días. El día del ciclo es `(D−1 − sown_on).days + 1`; el balance previo es el de D−2 (`Dr_prev = 0` si falta). Clima con `fetched_at` de más de 24 h se marca `low_confidence` en el `rationale`.
 - **Datos de suelo incompletos:** si el `soil_profile` de la parcela carece de θFC, θWP o `root_depth_cm` (Zr), no se guarda fila de balance ni recomendación para el día; el job registra la omisión.
+- **ET0 de D−1 faltante:** si ni la fila observada ni la de pronóstico de D−1 traen `et0_mm`, no se guarda fila de balance ni recomendación para el día (como los demás datos incompletos), en vez de calcular ETc = 0 en silencio (D1, feature doc `techcamp-v2-e6-followups.md`).
+- **RAW ≤ 0** (suelo degenerado, p. ej. θFC = θWP): no hay un umbral positivo de depleción que comparar, así que el estado es `ok`, el consejo de secano es `no_action` y una parcela con riego recibe `not_needed` en vez de `postpone` indefinido.
 
 ### Parcelas de secano
 

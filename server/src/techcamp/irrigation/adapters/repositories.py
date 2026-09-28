@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import logging
 from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
@@ -29,6 +30,8 @@ from techcamp.irrigation.domain.models import (
     WaterBalanceDay,
 )
 from techcamp.shared.ids import uuid7
+
+logger = logging.getLogger(__name__)
 
 
 def _as_decimal(value: float | decimal.Decimal | None) -> decimal.Decimal | None:
@@ -59,14 +62,19 @@ def _balance_from_row(row: WaterBalanceDailyRow) -> WaterBalanceDay:
 
 def _recommendation_from_row(row: IrrigationRecommendationRow) -> IrrigationRecommendation:
     raw_advice: Sequence[Any] = row.advice or ()
-    parsed_advice: tuple[RainfedAdvice, ...] = tuple(
-        RainfedAdvice(a) for a in raw_advice if a in RainfedAdvice._value2member_map_
-    )
+    parsed_advice: list[RainfedAdvice] = []
+    for code in raw_advice:
+        if code in RainfedAdvice._value2member_map_:
+            parsed_advice.append(RainfedAdvice(code))
+        else:
+            logger.warning(
+                "dropping unknown advice code %r from irrigation_recommendation %s", code, row.id
+            )
     return IrrigationRecommendation(
         kind=RecommendationKind(row.kind),
         depth_mm=float(row.depth_mm) if row.depth_mm is not None else None,
         duration_min=row.duration_min,
-        advice=parsed_advice,
+        advice=tuple(parsed_advice),
         rationale=row.rationale or {},
         id=row.id,
         plot_id=row.plot_id,
@@ -178,8 +186,23 @@ class SqlAlchemyIrrigationRecommendationRepository:
     ) -> IrrigationRecommendation:
         """Upsert recommendation for (plot_id, day).
 
-        Updates existing decision in place if re-run on the same day.
+        Updates existing decision in place if re-run on the same day. `plot_id`/`day`
+        are separate keyword arguments because `decide_recommendation` builds
+        `recommendation` before either identity field is known (both are `None` on
+        that path); when the model does carry them (e.g. re-saving one just read
+        back), they must agree with the keywords, or the row would silently
+        persist under a different identity than the one on `recommendation`.
         """
+        if recommendation.plot_id is not None and recommendation.plot_id != plot_id:
+            raise ValueError(
+                f"recommendation.plot_id ({recommendation.plot_id}) does not match "
+                f"plot_id ({plot_id})"
+            )
+        if recommendation.day is not None and recommendation.day != day:
+            raise ValueError(
+                f"recommendation.day ({recommendation.day}) does not match day ({day})"
+            )
+
         rec_id = recommendation.id or recommendation_id or uuid7()
         advice_list = [a.value for a in recommendation.advice]
         kind_str = recommendation.kind.value
@@ -207,6 +230,11 @@ class SqlAlchemyIrrigationRecommendationRepository:
                 "rationale": excluded.rationale,
             },
         ).returning(IrrigationRecommendationRow)
+        # `populate_existing` (R3-upsert-returning-stale): without it, a row already
+        # in this session's identity map (e.g. from an earlier upsert or get_for_plot
+        # on the same id) is handed back unrefreshed instead of with the values this
+        # RETURNING just wrote.
+        upsert_stmt = upsert_stmt.execution_options(populate_existing=True)
         result = await self._session.execute(upsert_stmt)
         await self._session.flush()
         saved_row = result.scalar_one()

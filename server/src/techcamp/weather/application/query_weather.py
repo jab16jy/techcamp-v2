@@ -12,15 +12,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from techcamp.farms.application.manage_plots import resolve_plot_access
 from techcamp.farms.application.ports import PlotRepository
 from techcamp.identity.application.ports import MembershipRepository
+from techcamp.shared.dates import local_today
 from techcamp.weather.application.ports import WeatherRepository
 from techcamp.weather.domain.models import is_stale
-
-BOGOTA_TZ = ZoneInfo("America/Bogota")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +61,7 @@ async def query_plot_weather(
     elif now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
 
-    today = now.astimezone(BOGOTA_TZ).date()
+    today = local_today(now)
 
     observed_from = today - timedelta(days=days)
     observed_to = today - timedelta(days=1)

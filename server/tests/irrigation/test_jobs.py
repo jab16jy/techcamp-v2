@@ -13,26 +13,27 @@ from __future__ import annotations
 
 import datetime
 import importlib
+import logging
+from collections.abc import Container
 from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from asyncpg.exceptions import UniqueViolationError
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow, SoilProfileRow
-from techcamp.farms.adapters.repositories import (
-    SqlAlchemyCropRepository,
-    SqlAlchemyWeatherRepository,
-)
+from techcamp.farms.adapters.repositories import SqlAlchemyCropRepository
 from techcamp.farms.domain.models import CropCycleStatus
 from techcamp.identity.adapters.orm import OrganizationRow
 from techcamp.irrigation.adapters.jobs import (
     QUEUE_NAME,
     RUN_DAILY_PLOTS_TASK_NAME,
     RUN_PLOT_BALANCE_TASK_NAME,
-    local_today,
+    _defer_plot_job,
     run_daily_plots,
     run_plot_balance,
 )
@@ -41,8 +42,10 @@ from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyWaterBalanceRepository,
 )
 from techcamp.main import app
+from techcamp.shared.dates import local_today
 from techcamp.shared.ids import uuid7
 from techcamp.weather.adapters.orm import WeatherDailyRow
+from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
 
 pytestmark = pytest.mark.anyio
 
@@ -129,7 +132,9 @@ async def _create_plot(
     return plot_id
 
 
-async def _queued_jobs(db_session: AsyncSession) -> list[dict[str, object]]:
+async def _queued_jobs(
+    db_session: AsyncSession, *, plot_ids: Container[UUID | str] | None = None
+) -> list[dict[str, object]]:
     result = await db_session.execute(
         text(
             "SELECT id, queue_name, task_name, lock, queueing_lock, args, status "
@@ -137,7 +142,11 @@ async def _queued_jobs(db_session: AsyncSession) -> list[dict[str, object]]:
         ),
         {"queue": QUEUE_NAME},
     )
-    return [dict(row) for row in result.mappings().all()]
+    all_jobs = [dict(row) for row in result.mappings().all()]
+    if plot_ids is not None:
+        target_ids = {str(pid) for pid in plot_ids}
+        return [job for job in all_jobs if str(job["args"].get("plot_id")) in target_ids]
+    return all_jobs
 
 
 async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_without_cycle(
@@ -147,6 +156,8 @@ async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_wi
 
     plots with an active cycle plus rainfed plots without one.
     An irrigated plot without an active cycle must NOT be queued.
+    Assertions are scoped to the test's own plots to guarantee isolation
+    regardless of rows committed by other tests (R3-fanout-test-isolation).
     """
     org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
 
@@ -185,7 +196,8 @@ async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_wi
 
     await run_daily_plots(timestamp=0)
 
-    jobs = await _queued_jobs(db_session)
+    test_plot_ids = {plot_irrigated_with_cycle, plot_rainfed_no_cycle, plot_irrigated_no_cycle}
+    jobs = await _queued_jobs(db_session, plot_ids=test_plot_ids)
     queued_plot_ids = {str(job["args"]["plot_id"]) for job in jobs}
 
     assert str(plot_irrigated_with_cycle) in queued_plot_ids
@@ -209,9 +221,10 @@ async def test_fanout_rerun_same_day_does_not_duplicate_jobs(
     """Re-running the daily fan-out for the same day must deduplicate jobs:
 
     a plot that already has a 'todo' job for day D is not enqueued a second time.
+    Scoped to the test's own plot for deterministic count isolation.
     """
     org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
-    await _create_plot(
+    plot_id = await _create_plot(
         db_session,
         org_id=org_id,
         farm_id=farm_id,
@@ -223,14 +236,85 @@ async def test_fanout_rerun_same_day_does_not_duplicate_jobs(
 
     # First run queues 1 job
     await run_daily_plots(timestamp=0)
-    jobs_first = await _queued_jobs(db_session)
+    jobs_first = await _queued_jobs(db_session, plot_ids=[plot_id])
     assert len(jobs_first) == 1
 
     # Second run for the same day (today) should not duplicate
     await run_daily_plots(timestamp=0)
-    jobs_second = await _queued_jobs(db_session)
+    jobs_second = await _queued_jobs(db_session, plot_ids=[plot_id])
     assert len(jobs_second) == 1
     assert jobs_second[0]["id"] == jobs_first[0]["id"]
+
+
+async def test_defer_plot_job_catches_queueing_lock_conflict(
+    db_session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_defer_plot_job catches duplicate queueing_lock IntegrityError and logs a warning."""
+    plot_id = uuid7()
+    args = {"plot_id": str(plot_id), "day": "2026-09-27"}
+    suffix = ":2026-09-27"
+
+    # First enqueue succeeds
+    await _defer_plot_job(
+        db_session,
+        task_name=RUN_PLOT_BALANCE_TASK_NAME,
+        plot_id=plot_id,
+        args=args,
+        queueing_suffix=suffix,
+    )
+
+    # Second enqueue with identical queueing_lock triggers unique constraint violation
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        await _defer_plot_job(
+            db_session,
+            task_name=RUN_PLOT_BALANCE_TASK_NAME,
+            plot_id=plot_id,
+            args=args,
+            queueing_suffix=suffix,
+        )
+
+    assert f"irrigation: job for plot {plot_id} with suffix {suffix} already queued" in caplog.text
+
+
+async def test_defer_plot_job_reraises_other_integrity_error(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_defer_plot_job re-raises any IntegrityError that is NOT the queueing lock
+
+    (R3-broad-integrityerror-swallow, R3-reraise-test-skips-constraint-name-branch).
+    Chains a real asyncpg UniqueViolationError with a different constraint_name
+    to prove that the constraint_name check is executed.
+    """
+    plot_id = uuid7()
+
+    unique_cause = UniqueViolationError(
+        "duplicate key value violates unique constraint 'procrastinate_jobs_pkey'"
+    )
+    unique_cause.constraint_name = "procrastinate_jobs_pkey"
+    driver_error = Exception("driver error")
+    driver_error.__cause__ = unique_cause
+
+    other_error = IntegrityError(
+        statement="SELECT procrastinate_defer_jobs_v1(...)",
+        params={},
+        orig=driver_error,
+    )
+
+    async def _failing_execute(*args: object, **kwargs: object) -> None:
+        raise other_error
+
+    monkeypatch.setattr(db_session, "execute", _failing_execute)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _defer_plot_job(
+            db_session,
+            task_name=RUN_PLOT_BALANCE_TASK_NAME,
+            plot_id=plot_id,
+            args={"plot_id": str(plot_id)},
+            queueing_suffix="",
+        )
+    assert exc_info.value is other_error
 
 
 async def _set_weather(
@@ -378,6 +462,73 @@ async def test_skipped_plot_logs_and_stores_nothing(
 
     assert await balances.get_for_plot(plot_id, d_minus_1) is None
     assert await recs.get_for_plot(plot_id, target_day) is None
+
+
+class _RaisingRecommendationRepository:
+    """Always raises on upsert, standing in for
+    `SqlAlchemyIrrigationRecommendationRepository` to prove atomicity
+    (R3-atomic-write-unproved): `run_daily_balance` itself never commits (only
+    flushes, T3b/docs check), and the caller (`run_plot_balance`) commits once
+    at the end, so a failure here must leave no balance row behind either.
+    """
+
+    def __init__(self, _session: AsyncSession) -> None:
+        pass
+
+    async def upsert(
+        self, recommendation: object, *, plot_id: UUID, day: datetime.date, **_: object
+    ) -> object:
+        raise RuntimeError("boom: recommendation upsert failed")
+
+    async def get_for_plot(
+        self, plot_id: UUID, day: datetime.date, org_id: UUID | None = None
+    ) -> object | None:
+        return None
+
+
+async def test_per_plot_task_leaves_no_balance_row_if_recommendation_upsert_fails(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The per-plot task's own session is only committed once, at the end
+    (jobs.py docstring). If the recommendation upsert fails after the balance
+    upsert already flushed within that same (never-committed) session, no
+    balance row survives — proven from this test's own, separate session.
+    """
+    target_day = local_today()
+    d_minus_1 = target_day - datetime.timedelta(days=1)
+    org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
+    plot_id = await _create_plot(
+        db_session,
+        org_id=org_id,
+        farm_id=farm_id,
+        cell_id=cell_id,
+        name="Lote Atomic",
+        irrigation_system="drip",
+        has_active_cycle=True,
+    )
+    db_session.add(
+        SoilProfileRow(
+            plot_id=plot_id,
+            source="lab",
+            texture="sandy_loam",
+            field_capacity_pct=Decimal("23.0"),
+            wilting_point_pct=Decimal("9.0"),
+            root_depth_cm=Decimal("60.0"),
+        )
+    )
+    await db_session.commit()
+    await _set_weather(db_session, cell_id, target_day)
+
+    monkeypatch.setattr(
+        "techcamp.irrigation.adapters.jobs.SqlAlchemyIrrigationRecommendationRepository",
+        _RaisingRecommendationRepository,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_plot_balance(plot_id=str(plot_id), day=target_day.isoformat())
+
+    balances = SqlAlchemyWaterBalanceRepository(db_session)
+    assert await balances.get_for_plot(plot_id, d_minus_1) is None
 
 
 def _client() -> TestClient:
