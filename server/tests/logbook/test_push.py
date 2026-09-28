@@ -47,6 +47,13 @@ _LOCK_WINDOW = 1.0
 push still being pending, never on the push having finished."""
 
 
+async def _sequence_tip(witness: Any) -> int:
+    """The last value `nextval` handed out, read from a connection that is not
+    the one holding the lock. A sequence is not transactional, so this is the
+    cheapest witness that the blocked push allocated nothing."""
+    return await witness.fetchval("SELECT last_value FROM sync_server_version_seq")
+
+
 def _later(env: SyncEnv) -> datetime:
     """One hour after the change's clock: the newer of two devices editing the
     same entry offline (ADR-0013)."""
@@ -631,27 +638,46 @@ async def test_a_push_that_takes_the_lock_later_gets_a_strictly_greater_server_v
     """
     producer = env.mine.users["producer"]
     change = _entry(env)
+    # Two plain connections: `holder` only takes the lock and commits, and
+    # `witness` only reads the sequence, so no read ever runs on a connection
+    # whose session is blocked.
     holder = await asyncpg.connect(_DSN)
+    witness = await asyncpg.connect(_DSN)
     try:
         held = holder.transaction()
         await held.start()
         await holder.execute("SELECT pg_advisory_xact_lock($1)", SYNC_LOCK_KEY)
-        before = await holder.fetchval("SELECT nextval('sync_server_version_seq')")
+        before = await witness.fetchval("SELECT nextval('sync_server_version_seq')")
+        # The baseline: `last_value` is what `nextval` last handed out, and a
+        # sequence is not transactional, so a version consumed by any other
+        # transaction shows up here at once. Checking it against the sample
+        # proves this reading can see one move before it is trusted below.
+        assert await _sequence_tip(witness) == before
 
         async with async_session_factory() as later:
             task = asyncio.ensure_future(
                 _push_and_commit(pusher_for(later), change, caller_id=producer)
             )
             _, pending = await asyncio.wait([task], timeout=_LOCK_WINDOW)
-            # The push is still waiting for the lock, so it has allocated
-            # nothing: that is the guarantee, not a timing coincidence.
-            assert pending, "the push allocated a server_version without holding the D1 lock"
-
+            # Read the witness while the lock is still held and the push is
+            # still blocked, then release and drain before asserting: a failed
+            # assertion must never leave a blocked task behind for the
+            # teardown to trip over.
+            tip_while_blocked = await _sequence_tip(witness)
             await asyncio.wait_for(held.commit(), timeout=_NO_HANG)
             status = await asyncio.wait_for(task, timeout=_NO_HANG)
+
     finally:
         await holder.close()
+        await witness.close()
 
+    # Waiting is not the proof, the sequence not moving is. An implementation
+    # that consumed a version and *then* took the lock leaves this task
+    # pending and passes every other assertion here.
+    assert pending, "the push did not wait for the D1 lock"
+    assert tip_while_blocked == before, (
+        "the push advanced the version sequence before holding the D1 lock"
+    )
     assert status is SyncStatus.APPLIED
     stored = await _stored_entry(pusher.session, change.id)
     assert stored is not None
