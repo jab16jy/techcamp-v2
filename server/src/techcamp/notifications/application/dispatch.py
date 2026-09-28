@@ -21,9 +21,12 @@ from techcamp.notifications.application.ports import (
 )
 from techcamp.notifications.domain.errors import RowNotDeliverableError
 from techcamp.notifications.domain.models import (
+    ALTERNATE_CHANNELS,
     CLAIM_LIMIT,
+    CRITICAL_SEVERITY,
     MAX_ATTEMPTS,
     Channel,
+    PendingNotification,
     retry_delay,
 )
 
@@ -119,7 +122,8 @@ async def _one_pass(
         if not await outbox.hold(notification.id, now=now):
             skipped += 1
             continue
-        if not circuits.allows(notification.channel):
+        channel = _where_it_can_go(notification, senders=senders, circuits=circuits)
+        if channel is None:
             # The provider is refusing, and a refused call would cost this row one
             # of its five attempts on a delivery nothing could have fixed. The row
             # is held until the circuit's own cooldown, so it becomes due exactly
@@ -133,12 +137,14 @@ async def _one_pass(
             deferred += 1
             continue
         try:
-            await senders[notification.channel].send(notification)
+            await senders[channel].send(notification)
         except Exception as exc:  # noqa: BLE001 — every provider failure is the same to us
             if not isinstance(exc, RowNotDeliverableError):
                 # docs/06 §4 counts the failures of a PROVIDER, and a row that
-                # cannot be delivered at all is not one of them (D36).
-                circuits.record_failure(notification.channel)
+                # cannot be delivered at all is not one of them (D36). The failure
+                # belongs to the channel that was used, which for a critical on an
+                # open push circuit is the alternate.
+                circuits.record_failure(channel)
             attempts = notification.attempts + 1
             error = str(exc)[:_MAX_ERROR_CHARS] or type(exc).__name__
             if attempts >= MAX_ATTEMPTS:
@@ -153,7 +159,7 @@ async def _one_pass(
                 )
                 retried += 1
         else:
-            circuits.record_success(notification.channel)
+            circuits.record_success(channel)
             await outbox.mark_sent(notification.id, at=now)
             sent += 1
     return DispatchReport(
@@ -164,3 +170,33 @@ async def _one_pass(
         skipped=skipped,
         deferred=deferred,
     )
+
+
+def _where_it_can_go(
+    notification: PendingNotification,
+    *,
+    senders: Mapping[Channel, NotificationSender],
+    circuits: ProviderCircuits,
+) -> Channel | None:
+    """The channel this row's message goes out on now, or `None` while it waits.
+
+    Its own channel whenever that channel's circuit allows a call. When it does
+    not, only a critical has anywhere else to go (docs/06 §4: "mientras tanto las
+    críticas pasan al canal alterno"; D5, D37), and the alternates are the ones
+    `ALTERNATE_CHANNELS` names that have a sender of their own and a circuit that
+    is not refusing — so one provider being down never means the row is sent to a
+    second one that is down too, and never means it is sent through a channel with
+    no adapter (D31).
+
+    `None` is a real answer, not a failure: the caller holds the row without
+    spending an attempt, and `pending` is what keeps a critical from being lost
+    while every provider is down.
+    """
+    if circuits.allows(notification.channel):
+        return notification.channel
+    if notification.severity != CRITICAL_SEVERITY:
+        return None
+    for candidate in ALTERNATE_CHANNELS.get(notification.channel, ()):
+        if candidate in senders and circuits.allows(candidate):
+            return candidate
+    return None

@@ -6,6 +6,7 @@ so `notifications` never imports `alerts` (no cycle, docs/05 D14).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -52,6 +53,34 @@ class Channel(StrEnum):
     PUSH = "push"
     SMS = "sms"
     WHATSAPP = "whatsapp"
+
+
+CRITICAL_SEVERITY = "critical"
+"""docs/03:288, the one severity `docs/06 §4` gives a second channel.
+
+Spelled out here rather than imported from `alerts.domain.Severity` because
+`notifications` never imports `alerts` (D14, docs/05) — and `Severity` is a
+`StrEnum`, so the value compared against `PendingNotification.severity` is this
+same string either way.
+"""
+
+ALTERNATE_CHANNELS: Mapping[Channel, tuple[Channel, ...]] = {
+    Channel.PUSH: (Channel.SMS, Channel.WHATSAPP),
+}
+"""Where a row goes when its own channel's provider is down (docs/06 §4).
+
+docs/06 §4's circuit-breaker row: "mientras tanto las críticas pasan al canal
+alterno", and docs/01 RF-08 names the alternates for a critical: "SMS o
+WhatsApp como respaldo para alertas críticas". The order is the doc's own
+severity order — push first, then SMS or WhatsApp — so the first one that has a
+sender and a closed circuit is the one to use.
+
+A channel missing from this map has NO alternate, and that is deliberate for
+`sms`/`whatsapp`: docs/06 §4's "Canales por severidad" makes them the last
+resort, D34 leaves the critical's `sms` row to T8's escalation job, and D4 sends
+that row to the farm's technician. Falling back from an escalation to push would
+turn the escalation back into the notification the recipient already got.
+"""
 
 
 @dataclass(frozen=True, slots=True)

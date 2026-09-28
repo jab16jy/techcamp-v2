@@ -126,8 +126,13 @@ class Seeded:
     alert_id: UUID
 
 
-async def _seed_alert(session: AsyncSession) -> Seeded:
-    """An organization, its one recipient and one open plot alert to hang rows off."""
+async def _seed_alert(session: AsyncSession, *, severity: str = "warning") -> Seeded:
+    """An organization, its one recipient and one open plot alert to hang rows off.
+
+    The severity is a parameter because docs/06 §4's channels-by-severity rule
+    makes it decide the row's whole future: a critical may move to another channel
+    and a warning may not (D5, D37).
+    """
     org_id, user_id, farm_id, plot_id = uuid7(), uuid7(), uuid7(), uuid7()
     session.add(AppUserRow(id=user_id, phone=f"+57{uuid7().int % 10**13:013d}"))
     session.add(OrganizationRow(id=org_id, name="Test Org", kind="individual"))
@@ -164,7 +169,7 @@ async def _seed_alert(session: AsyncSession) -> Seeded:
             rule_id=rule_id,
             plot_id=plot_id,
             state="open",
-            severity="warning",
+            severity=severity,
             opened_at=_DUE,
         )
     )
@@ -177,6 +182,12 @@ async def seeded(db_session: AsyncSession) -> Seeded:
     """One alert per test, so a test that writes three rows does not end up
     comparing ids across three organizations' alerts."""
     return await _seed_alert(db_session)
+
+
+@pytest.fixture
+async def critical(db_session: AsyncSession) -> Seeded:
+    """The same, at the severity that may change channel (docs/06 §4)."""
+    return await _seed_alert(db_session, severity="critical")
 
 
 async def _pending_row(
@@ -438,6 +449,163 @@ async def test_a_circuit_opened_for_one_channel_leaves_the_others_alone(
     assert (report.deferred, report.sent) == (1, 1)
     assert landing.sent == [sms.id]
     assert (await _row(db_session, push.id)).status == "pending"
+
+
+async def test_a_critical_goes_to_the_alternate_channel_while_push_is_down(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """docs/06 §4: "mientras tanto las críticas pasan al canal alterno", and
+    docs/01 RF-08 asks for "SMS o WhatsApp como respaldo para alertas críticas".
+    The push service is down, so a critical that has no other way to be heard
+    waits 5 minutes; a critical that has one goes there now."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    push, sms = _FailingSender(), _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: push, Channel.SMS: sms},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert sms.sent == [row.id]
+    assert push.sent == [], "the push provider was called while its circuit was open"
+    assert (await _row(db_session, row.id)).status == "sent"
+    # The row is not rewritten: it is still the `push` row the alert's transaction
+    # wrote (D34), and it is `sent` because the farmer did hear the alert — over
+    # the channel that was left. The escalation to the technician two hours later
+    # is T8's own row and a different recipient (D4), so nothing is sent twice.
+    assert (await _row(db_session, row.id)).attempts == 0
+
+
+async def test_a_critical_is_not_moved_by_a_channel_that_never_failed(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """No evidence is not evidence of failure. A circuit that has seen nothing is
+    closed, and a closed circuit must be left alone: moving a critical to SMS
+    because nobody has called push yet would spend the escalation channel on the
+    first outage that never comes, and RNF-05's two minutes would be spent on a
+    provider that is answering."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    push, sms = _LandingSender(), _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: push, Channel.SMS: sms},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert push.sent == [row.id]
+    assert sms.sent == []
+
+
+async def test_a_critical_waits_when_no_other_channel_can_send(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """In production the SMS/WhatsApp provider is future work (ADR-0016, D31), so
+    a critical can face an open push circuit with nowhere to go. Holding it is the
+    only answer that is not a lost alert: it stays `pending`, spends no attempt,
+    and the row is there when push comes back. Marking it `failed`, or counting the
+    refusal as an attempt, would turn a provider outage into a dead critical."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent, report.failed) == (1, 0, 0)
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == _DUE + BREAKER_COOLDOWN
+
+
+async def test_a_critical_does_not_fall_back_from_the_escalation_channel(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """docs/06 §4's severity order is `warning` by push and `critical` by push
+    then SMS/WhatsApp, and the alternate channel is the one AFTER the channel that
+    is down. An escalated `sms` row is the last resort (D34: T8 writes it, D4:
+    it goes to the technician), so falling back from it to push would turn the
+    escalation back into the notification the farmer already got — the opposite of
+    escalating, and a message to a browser that may not even be registered."""
+    row = await _pending_row(db_session, critical, channel=Channel.SMS)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.SMS)
+    push = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: push, Channel.SMS: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent) == (1, 0)
+    assert push.sent == []
+    assert (await _row(db_session, row.id)).status == "pending"
+
+
+async def test_a_critical_takes_the_first_alternate_whose_circuit_allows_it(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """The alternates are tried in docs/06 §4's order and the first one that can
+    actually send is the one used: an SMS provider that is down does not stop the
+    critical, it moves it to WhatsApp."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    _open(circuits, Channel.SMS)
+    sms, whatsapp = _FailingSender(), _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender(), Channel.SMS: sms, Channel.WHATSAPP: whatsapp},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert whatsapp.sent == [row.id]
+    assert sms.sent == [], "an open circuit did not stop the SMS provider being used"
+
+
+async def test_a_critical_waits_when_every_channel_is_refusing(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """Both providers down is not "send it anyway". The row waits, and no circuit
+    is touched by the refusal: no delivery was attempted through any of them, so
+    there is no evidence about them either way."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    for channel in (Channel.PUSH, Channel.SMS, Channel.WHATSAPP):
+        _open(circuits, channel)
+    whatsapp = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={
+            Channel.PUSH: _FailingSender(),
+            Channel.SMS: _FailingSender(),
+            Channel.WHATSAPP: whatsapp,
+        },
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent) == (1, 0)
+    assert whatsapp.sent == []
+    assert (await _row(db_session, row.id)).status == "pending"
 
 
 async def test_a_due_sms_row_is_sent_and_marked_sent(
