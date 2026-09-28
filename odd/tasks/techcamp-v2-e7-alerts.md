@@ -538,6 +538,46 @@ work unit (`domain-modeling`).
     log IS the delivery, so it said the opposite of what happened. `SeminarSmsSender` now knows the
     channel it stands for, which is the honest sentence and is also what makes the fallback
     visible in the demo.
+- D41 **An escalation with nobody to text STILL escalates, and the gap is logged.** D4's fallback
+  ends at the org's owners, and an organization can have neither a `farm.technician_id` nor an
+  owner — then there is no recipient, which is a third state and not "no escalation". The clock is
+  the alert's own (docs/06 §3, D12), so the alert escalates: `escalated_at` is set, the
+  `alert.updated` reaches the farm's stream, and the missing recipient is a `logger.warning`
+  naming the org and the alert. The two wrong answers are both worse: skipping it would leave a
+  critical unacknowledged for good with no trace, and a 5-minute sweep re-finding it every round
+  for the life of the product. A silent row nobody can read is not an audit trail either, which is
+  why the log carries it and the test asserts the row set is empty.
+- D42 **The escalation sweep takes ONE alert per transaction, under that row's own lock, and steps
+  over what it cannot act on.** Two facts force the shape, and both are the same fact D31 already
+  paid for in the dispatcher: `save` commits per alert (ADR-0016), and that commit releases every
+  lock the session held, so a claimed PAGE would leave its later rows unlocked for a second worker
+  to escalate again. So `lock_escalation_candidate` hands one row `FOR UPDATE SKIP LOCKED`,
+  oldest `opened_at` first, the decision is taken under that lock, and the sweep loops until the
+  lock returns nothing. `save`'s CAS cannot do this job alone: it guards `state` and `severity`,
+  and an escalation changes NEITHER — only `escalated_at` — so two workers would both land and
+  write a second SMS. What a row cannot be acted on (the domain refuses it, or its target does
+  not resolve) goes into a per-round `skip` set: the lock orders by age and would otherwise hand
+  the same row back on every call, so the round would spin on it, and the alert behind it would
+  never escalate. The set only grows within a round and dies with it, so the loop always ends.
+  A target that does not resolve leaves its alert OPEN and un-escalated rather than escalated to
+  nobody — the farm is what the `sms` and the `NOTIFY` are addressed to (ADR-0015) and
+  `escalated_at` would close the question with nobody ever told — and the next round tries again.
+  docs/06 §3 and D4 do not cover either case. The unresolvable target is unreachable with real
+  rows (`alert.plot_id` / `node_id` are `NO ACTION` foreign keys, so a target cannot be deleted,
+  and `ck_alert_target_exactly_one` keeps it to exactly one), which is why both branches are
+  reached through the port in the tests instead of by corrupting a row.
+- D43 **The escalation sweep runs every 5 minutes, per organization, on its own `escalation`
+  lock.** The hour is the one docs/10 §3 does not name, fixed the way D23 and D28 fixed theirs:
+  the same cadence as the node-health sweep, because both are the notice a technician gets that
+  something is wrong, and RNF-05's two minutes belong to the push that already went out, not to
+  the second line. The delivery does not wait on this hour either — the outbox that carries the
+  SMS sweeps every minute (docs/06 §4) — so the sweep bounds only how long an already-overdue
+  critical sits before the technician is told. The fan-out is D21's, one job per org on a lock
+  with the `escalation` suffix so it never waits on the forecast, fungal or balance sweeps of the
+  same organization, and it reads the orgs that have PLOTS: an alert targets a plot or a node, and
+  a node alert belongs to the plot its node hangs on, so an org with a plot covers both target
+  kinds and an org with no plot cannot hold an alert at all. `docs/10 §3` gains the job in the
+  same work unit as the code.
 
 
 ## E6 coordination (2026-09-26)
@@ -699,8 +739,92 @@ work unit (`domain-modeling`).
     `captured_artifacts_unverifiable`) and `review-58ceb05149b6a5c6` **APPROVED and acknowledged
     (authority burned, zero findings)** over the four fix commits — 317 passed on 5440, static
     green (see Review)
-- [ ] T8 Escalation job: critical unacknowledged ≥ 2 h → `escalated_at` + SMS to the technician
-  (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr OpenCode — forecast ~300
+- [x] T8 Escalation job: critical unacknowledged ≥ 2 h → `escalated_at` + SMS to the technician
+  (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr OpenCode (`e7-t8`,
+  branch `feat/e7-t8-escalation` from `feat/e7-alerts` @ `fe2ea52`; own DB `techcamp-e7-db-t8` on
+  **5439**) — forecast ~300 — actual 1,235 authored over 9 work units — two lineages, both
+  APPROVED and acknowledged (zero blocking findings)
+  - Route: delegated direct. Triggers fired: mapping (12 docs, 5 modules — CodeGraph `explore` on
+    `ESCALATION_DELAY` / `is_eligible_for_escalation` / `Alert.escalate` / `upgrade_to_critical`, on
+    the `AlertRepository` port and `SqlAlchemyAlertRepository`, on `sweep_node_health` /
+    `_defer_org_job` / `_orgs_with_plots` / `local_date`, and on `plan_notifications` /
+    `Channel` / `next_attempt_at` — before any grep or read, no fallback), and writer (2+
+    non-trivial files in every unit).
+  - **Docs read before planning:** AGENTS.md, docs/06 §3 (the state diagram, "Reloj de
+    escalamiento", "Reglas de fábrica", "Salud del nodo") and §4 (the whole rule table: canales
+    por severidad, disparo, horas de silencio, outbox), docs/01:31 RF-08 and :57 RNF-05, docs/03:
+    284-311 (`alert.escalated_at`, `notification.channel`), docs/09:47, docs/10 §3 (the E7 exit
+    and the `continuos` block), ADR-0012, ADR-0015, ADR-0016, ADR-0022, and this doc's D3, D4, D5,
+    D6, D7, D12, D21, D22, D30, D31, D34, D37, D38, D39, D40.
+  - **What already existed (verified, not trusted):** `ESCALATION_DELAY`, `is_eligible_for_escalation`
+    and `Alert.escalate()` in `alerts/domain/models.py` since T2 — with NO caller, so nothing ever
+    read the clock; `escalated_at` in the ORM, `_to_row`, `save` and `AlertView`; `save()` as the
+    one transaction (update + outbox rows + `alert.updated` + commit); `get_target_context`
+    already resolving the technician with D4's owner fallback for node alerts; `plan_notifications`
+    whose docstring already said the escalated `sms` row belongs to this job; the dispatcher's own
+    `sms`/WhatsApp path and `GET /dev/outbox`.
+  - **Item 2 (D5) was already built and tested — confirmed, not rebuilt.** `upgrade_to_critical`
+    (`use_cases.py:91`) re-plans the alert's push rows as critical inside the alert's own
+    transaction. Evidence: `test_upgrade_to_critical_notifies_again_as_critical` (4 rows: 2 warning
+    + 2 critical), `test_upgrading_an_already_critical_alert_adds_no_rows`,
+    `test_two_concurrent_upgrades_write_one_critical_outbox_set`,
+    `test_a_resolved_alert_is_not_upgraded_to_critical`, and
+    `test_a_stressed_balance_stays_a_warning_for_two_days_and_upgrades_on_the_third`. The one
+    uncovered path was the evaluator→use-case wiring, so the unit added the 48 h reading-branch
+    upgrade driven through `evaluate_landed_readings` (test-only, passes as written).
+  - **Commit split** (9 work units, shape → behavior, tests with each):
+    `1d711ba` the escalation sweep locks its next due critical (lock + narrowing tests);
+    `f68c957` a due critical alert escalates and texts the technician (use case, recipients, D12,
+    org isolation, `alert.updated`); `c8e3e0f` the sweep steps over what it cannot act on
+    (#141's two WARNINGs, D42); `64748a7` a critical node alert escalates to the technician
+    (#141's third WARNING); `d5f7f69` the 5-minute per-org sweep + `docs/10 §3` in the same unit
+    (D43); `72ac237` two concurrent sweeps escalate an alert once (#141's
+    `R3-no-concurrency-proof`); `7542ee8` the D5 48 h upgrade pin; `c49d3be` the concurrency test
+    cleans up and pins the lock's order (#141, slice 2); `903adf5` the sweep section cites D43.
+  - **REDs observed:** `AttributeError: 'SqlAlchemyAlertRepository' object has no attribute
+    'lock_escalation_candidate'`; `ImportError: cannot import name 'escalate_due_alerts' from
+    'techcamp.alerts.application'`; `AssertionError: the sweep re-read a row it had already
+    refused` (D42's livelock); `ValueError: Target is not a plot or node of org <uuid>` (the
+    poison pill escaping the whole sweep); `ImportError: cannot import name
+    'ESCALATE_ORG_TASK_NAME' from 'techcamp.alerts.adapters.jobs'`. Three premises were WRONG and
+    the code was right, recorded because a wrong RED is a wrong lesson: a critical upgraded at 48 h
+    is due IMMEDIATELY (D12's clock runs from `opened_at`), so the "nothing escalates yet" half
+    belongs BEFORE the upgrade; `lock_escalation_candidate` called twice without escalating in
+    between returns the same row, so "the next call finds the one that is left" only holds once
+    the sweep escalates it; and the job fixture's farm has no technician, so the first
+    end-to-end job test expected an `sms` row where D41 says there is nobody to text.
+  - **Checks** (own DB `techcamp-e7-db-t8`, **5439**; `DATABASE_URL=…@localhost:5439/techcamp`):
+    `uv run pytest tests/alerts` -> 152 passed; `uv run pytest tests/alerts tests/notifications`
+    -> 252 passed; `uv run ruff check` -> All checks passed!; `uv run ruff format --check` -> 251
+    files already formatted; `uv run mypy` -> Success: no issues found in 168 source files;
+    `uv run lint-imports` -> Hexagonal layers per module KEPT, 1 kept / 0 broken. `ruff format` is a
+    source mutation, so it ran BEFORE each candidate was frozen and the tests were re-run after it:
+    the tested bytes are the committed bytes.
+  - **matches the doc**, one line per behavior (each asserted by a test that carries its negative
+    half):
+    - **matches the doc** — a critical, still `open`, not already escalated, 2 h from
+      `opened_at` is the one that escalates: docs/06 §3 "Reloj de escalamiento" (the state
+      diagram's `Open --> Escalated: crítica sin reconocer 2 h`) + D12.
+    - **matches the doc** — the clock runs from `opened_at` and never from the upgrade, so a
+      `water_stress` that became critical at 48 h escalates on its very next sweep, with no second
+      evaluation of the rule in between: docs/06 §3 "Reloj de escalamiento" + D12.
+    - **matches the doc** — the SMS goes to `farm.technician_id`, the org's owners when the farm has
+      none, and never to a `viewer`: docs/06 §3 "Escalar una alerta crítica notifica por SMS o
+      WhatsApp al técnico asignado a la finca" + D4.
+    - **matches the doc** — the notice is an outbox ROW written with the alert, never a send from
+      the job: docs/06 §4 "Garantía" (alert and notification in one transaction) + ADR-0016 + D5.
+    - **matches the doc** — it is due NOW, even at night: docs/06 §4 "Horas de silencio" ("solo
+      notificaciones críticas") + D39.
+    - **matches the doc** — the escalation is a change of the alert, so the farm's SSE stream sees
+      `alert.updated`: docs/04:193-194 + ADR-0015.
+    - **matches the doc** — every read keeps `org_id`, and an alert of one organization can never
+      text another organization's technician, through either target kind: docs/09:47 + D21.
+    - **matches the doc** — the job is the DAG's own: docs/10 §3 `continuos` gains "cada 5 min:
+      escalar críticas sin reconocer", updated in the same work unit as the code (AGENTS.md rule 3).
+  - **Not done, deliberately:** the production SMS/WhatsApp provider (ADR-0016 puts it in future
+    work, and D37 leaves an `sms` row with no alternate); a live browser push (T11 owns the seminar
+    demo); the two SUGGESTIONs of slice 2, which stay in #141 per the non-blocking rule; no push,
+    no merge, no PR.
 - [x] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
   registration against `POST /push-subscriptions`, one entry point reusing E1 primitives — route:
   Herdr OpenCode + `impeccable` — forecast ~300 — actual 807 + 143 (`e354af8` schema regen, `51558be`
@@ -1285,6 +1409,34 @@ work unit (`domain-modeling`).
     (escalated by a `fix_scope_mismatch` against R3-001) and `review-85bf8a32f01a8c7a`
     (`captured_artifacts_unverifiable`). Neither burned an approval, so this lineage is what
     actually reviewed the four fix commits.
+- T8 slice 1 (`fe2ea52..f68c957`, 5 paths, 683 lines): medium (`executable_change` on
+  `alerts/adapters/repositories.py`), `slice_budget_reached`; consent granted on the standing
+  grant; lineage `review-0318453b92e6cf35`, one `review-reliability` lens, **APPROVED and
+  acknowledged (authority burned)**. Five findings, all non-blocking → **#141**. The three
+  WARNINGs were fixed inside T8 per the owner's rule, in two work units: `c8e3e0f`
+  (`R3-ineligible-continue-livelock` + `R3-unresolvable-target-poison-pill`, both with an observed
+  RED) and `64748a7` (`R3-node-branch-untested`, test-only, which PASSED as written — a coverage
+  gap, not a defect). `R3-no-concurrency-proof` was `72ac237`. The two SUGGESTIONs stay in #141.
+- T8 slice 2 (`f68c957..7542ee8`, 8 paths, 560 lines): medium (`executable_change` on
+  `alerts/adapters/jobs.py`), `slice_budget_reached`; lineage `review-ab021a1c8a932458`, one
+  `review-reliability` lens, **APPROVED and acknowledged (authority burned)**. Two non-blocking
+  findings, both test-only, both fixed now: `c49d3be` — the concurrency test committed outside any
+  fixture, so its rows survived to a later test's teardown and made
+  `test_the_escalation_sweep_defers_one_job_per_org_with_its_own_lock` (which asserts the EXACT
+  deferred org set) order-dependent; and the unresolvable-target test opened both alerts at the
+  same instant, so the age order it claims to prove was the primary key's doing.
+  `gentle-ai review assess --base-ref 7542ee8 --committed-only` after the fix: **medium**,
+  `review_due: false` / `under_budget`, 18 lines — no third lineage, and the boundary is the slice.
+- **Both T8 lens slots were run by the parent as `--agent claude-code`, not from this writer's
+  host.** From OpenCode the `task` call carrying the byte-exact provider-issued `provider_task`
+  was refused with `opencode_review_transport_binding_invalid: Task prompt binding is
+  incomplete` — twice on `review-0318453b92e6cf35` and once on `review-ab021a1c8a932458`, each
+  after a retained target-bound read-only STATUS that re-offered the same slot. That is a
+  role-capture refusal, and the rule was to stop and report rather than reconstruct the binding,
+  hand-write a result or start a second lineage to dodge it. Recorded because the same refusal
+  will hit the next writer on this host, and because the tokens in any note go stale the moment a
+  commit moves HEAD: take `expected-revision` / `target` / `repository-context` from a FRESH bound
+  STATUS (the same lesson as #249's `role_capture_failed` diagnosis).
 
 ## Progress / evidence
 - 2026-09-26: docs read (AGENTS.md, docs/README, 00, 01, 03, 04, 05, 06 §1/§3/§4/§10, 09, 10,
@@ -1760,3 +1912,48 @@ work unit (`domain-modeling`).
   - Not done: no non-blocking findings to file (every finding in this round was CRITICAL and needed
     the owner's decision, not a tracker issue); no live push to a real push service (needs a real
     VAPID pair and a browser — T11 owns the seminar demo); T8 untouched; no push, no merge.
+- T8 2026-09-28 (worktree `e7-t8`, branch `feat/e7-t8-escalation` from `feat/e7-alerts` @
+  `fe2ea52`; own DB `techcamp-e7-db-t8` on **5439**; 9 work units, 1,235 authored lines against a
+  ~300 forecast — the over-run is almost entirely the 15 tests TDD is on and the two review-fix
+  units, not production code).
+  - CodeGraph first, no fallback: `explore` on `ESCALATION_DELAY` / `is_eligible_for_escalation` /
+    `Alert.escalate` / `upgrade_to_critical` (which found the three domain pieces already there
+    with no caller), on `AlertRepository` / `AlertTarget` / `SqlAlchemyAlertRepository.save` /
+    `get_target_context` / `_members`, on `plan_notifications` / `Channel` / `next_attempt_at` /
+    `NotificationDraft` / `insert_drafts`, and on `sweep_node_health` / `_defer_org_job` /
+    `_orgs_with_plots` / `local_date` for the job shape. Every structural question went through it
+    before any grep or read.
+  - Decisions D41 (escalate with nobody to text, log the gap), D42 (one alert per transaction
+    under its own lock, and the per-round step-over) and D43 (the 5-minute hour) are in the
+    Decisions section; `docs/10 §3` gained the job in the same work unit as the code, which is the
+    doc that names every other job hour in this module.
+  - Two structural facts this unit had to earn, both worth keeping:
+    `save()`'s CAS guards `state` and `severity`, and an escalation changes NEITHER — so a CAS
+    alone cannot prevent a double escalation, and only the row's own `FOR UPDATE SKIP LOCKED` can
+    (proved by `72ac237`: two sessions, results `[0, 1]`, one `sms` row). And `save()` commits per
+    alert, which releases every lock the session held — the same fact D31 paid for in the
+    dispatcher's `hold`, and the reason the lock hands ONE alert instead of a page.
+  - One test hung once, on its first run, and its own `asyncio.timeout(30)` could not unwind a
+    cancelled session's close. A traced standalone repro of the same path showed the correct
+    interleaving and five consecutive runs are green, so the hang was a lock left by the
+    250-test suite I had just run against the same database (the same hazard the two
+    test-infrastructure notes above describe), not a defect in the sweep. Recorded in `72ac237` and
+    here because "it hung once and then it was fine" is exactly the evidence that gets lost and
+    then rediscovered as a mystery.
+  - RDD: `assess --base-ref fe2ea52` → medium, `review_due: true` / `slice_budget_reached` (683
+    lines); lineage `review-0318453b92e6cf35` APPROVED and acknowledged, 5 findings → #141, the
+    three WARNINGs fixed in `c8e3e0f` / `64748a7` and the concurrency proof in `72ac237`.
+    `assess --base-ref f68c957` after the fixes → medium, `under_budget` (273). After W3–W5,
+    `assess --base-ref f68c957` → medium, `review_due: true` / `slice_budget_reached` (560);
+    lineage `review-ab021a1c8a932458` APPROVED and acknowledged, 2 test-only findings fixed in
+    `c49d3be`. `assess --base-ref 7542ee8` → medium, `under_budget` (18). Both lens slots were run
+    by the parent as `--agent claude-code` after this host refused them with
+    `opencode_review_transport_binding_invalid` (see Review (RDD)).
+  - Checks: `uv run pytest tests/alerts` → 152 passed; `uv run pytest tests/alerts
+    tests/notifications` → 252 passed; `uv run ruff check` → All checks passed!; `uv run ruff
+    format --check` → 251 files already formatted; `uv run mypy` → Success: no issues found in 168
+    source files; `uv run lint-imports` → Hexagonal layers per module KEPT (1 kept, 0 broken).
+  - Not done, on purpose: the production SMS/WhatsApp provider (ADR-0016 future work; D37 leaves an
+    `sms` row with no alternate), a live browser push (T11 owns the seminar demo), the two
+    SUGGESTIONs of slice 2 (they stay in #141), the feature doc's own entries until the last
+    lineage closed, and any push, merge or PR.

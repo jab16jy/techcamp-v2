@@ -38,6 +38,7 @@ from techcamp.alerts.adapters.repositories import (
     SqlAlchemyAlertRuleRepository,
 )
 from techcamp.alerts.application import (
+    escalate_due_alerts,
     evaluate_balance_rules,
     evaluate_node_health,
     evaluate_weather_rules,
@@ -71,6 +72,8 @@ FUNGAL_SWEEP_TASK_NAME = "alerts.sweep_fungal_risk"
 EVALUATE_ORG_FUNGAL_TASK_NAME = "alerts.evaluate_org_fungal_risk"
 BALANCE_SWEEP_TASK_NAME = "alerts.sweep_balance_rules"
 EVALUATE_ORG_BALANCE_TASK_NAME = "alerts.evaluate_org_balance_rules"
+ESCALATION_SWEEP_TASK_NAME = "alerts.sweep_escalations"
+ESCALATE_ORG_TASK_NAME = "alerts.escalate_org_alerts"
 
 
 async def _orgs_with_nodes(session: AsyncSession) -> list[UUID]:
@@ -159,6 +162,36 @@ async def sweep_node_health(timestamp: int) -> None:
     async with async_session_factory() as session:
         for org_id in await _orgs_with_nodes(session):
             await _defer_org_job(session, task_name=EVALUATE_ORG_TASK_NAME, org_id=org_id)
+        await session.commit()
+
+
+@app.periodic(cron="*/5 * * * *", queue=QUEUE_NAME)
+@app.task(
+    name=ESCALATION_SWEEP_TASK_NAME,
+    queue=QUEUE_NAME,
+    retry=RetryStrategy(max_attempts=2, linear_wait=30),
+)
+async def sweep_escalations(timestamp: int) -> None:
+    """Every 5 min: one escalation job per organization (docs/06 §3 "Reloj de
+    escalamiento"; docs/10 §3; D43).
+
+    The hour docs/10 §3 does not name, fixed the way D23 and D28 fixed theirs: the
+    same 5 minutes as the node-health sweep, because both are the notice a
+    technician gets that something is wrong, and the outbox that carries the SMS
+    already sweeps every minute (docs/06 §4), so the delivery does not wait on
+    this hour. The cron is read in the worker's own local time, so the `worker`
+    service runs in `America/Bogota` (infra/compose.yaml).
+
+    The orgs are the ones that have PLOTS, like the weather sweeps: an alert
+    targets a plot or a node, and a node alert belongs to the plot its node hangs
+    on, so an organization with a plot covers both. An org with no plot cannot
+    hold an alert, so it must not cost a job.
+    """
+    async with async_session_factory() as session:
+        for org_id in await _orgs_with_plots(session):
+            await _defer_org_job(
+                session, task_name=ESCALATE_ORG_TASK_NAME, org_id=org_id, source="escalation"
+            )
         await session.commit()
 
 
@@ -254,6 +287,31 @@ async def evaluate_org_node_health(org_id: str) -> None:
             nodes=SqlAlchemyNodeRepository(session),
             sensors=SqlAlchemySensorRepository(session),
             readings=SqlAlchemyReadingRepository(session),
+            alerts=SqlAlchemyAlertRepository(session),
+        )
+        await session.commit()
+
+
+@app.task(
+    name=ESCALATE_ORG_TASK_NAME,
+    queue=QUEUE_NAME,
+    retry=RetryStrategy(max_attempts=2, linear_wait=30),
+)
+async def escalate_org_alerts(org_id: str) -> None:
+    """Escalate one organization's criticals whose 2 h are up (docs/06 §3; D12).
+
+    The job decides at its own run time, `datetime.now(UTC)`, for the same reason
+    `evaluate_org_node_health` does: a retry decides at a LATER `at` than the
+    attempt that failed, and here a later `at` can only bring MORE alerts into
+    the window — never undo an escalation, since `escalated_at` is already set.
+    The lock inside the use case is what keeps two workers from escalating the
+    same alert twice, and the SMS is not sent from here: the row goes through the
+    outbox (ADR-0016).
+    """
+    async with async_session_factory() as session:
+        await escalate_due_alerts(
+            org_id=UUID(org_id),
+            at=datetime.now(UTC),
             alerts=SqlAlchemyAlertRepository(session),
         )
         await session.commit()
