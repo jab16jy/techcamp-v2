@@ -46,6 +46,10 @@ class LogbookEntryChange:
     irrigation_mm: Decimal | None
     alert_id: UUID | None
     notes: str | None
+    created_offline: bool
+    """docs/11 counts "entradas de bitácora creadas sin conexión", so only the
+    client knows this: the phone stamps it at first save and sends it in
+    `data` (docs/04 §Bitácora). Stored on insert, never rewritten."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,9 +124,9 @@ class LogbookEntrySyncRepository(Protocol):
         caller_id: UUID,
         server_version: int,
     ) -> None:
-        """A new id: `created_by` is the caller and the row is stamped
-        `created_offline`, the only way a row reaches this table (docs/03:
-        the client creates it with no signal)."""
+        """A new id: `created_by` is the caller, and `created_offline` is what
+        the client said it was (docs/11 counts those entries, so the server
+        never guesses it)."""
         ...
 
     async def update(
@@ -130,7 +134,8 @@ class LogbookEntrySyncRepository(Protocol):
     ) -> None:
         """The change wins: every data column plus `client_updated_at` and the
         new `server_version`. `org_id`, `created_by` and `created_offline` are
-        not written, so the audit columns keep the row's first author."""
+        not written, so the audit columns keep the facts of the first save:
+        a later edit from a phone back online must not relabel the entry."""
         ...
 
     async def soft_delete(

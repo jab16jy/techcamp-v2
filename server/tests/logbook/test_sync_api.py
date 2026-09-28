@@ -104,6 +104,8 @@ async def test_a_pushed_entry_applies_and_the_same_batch_again_is_a_duplicate(
     assert second["server_version"] == first["server_version"]
     assert stored.notes == "primera"
     assert stored.created_by == env.mine.users["producer"]
+    # `data` may carry `created_offline`; absent means the client did not say so
+    assert stored.created_offline is False
     count = (
         await db_session.execute(select(func.count()).select_from(LogbookEntryRow))
     ).scalar_one()

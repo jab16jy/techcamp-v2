@@ -79,6 +79,7 @@ def _entry(env: SyncEnv, **overrides: Any) -> LogbookEntryChange:
         "irrigation_mm": None,
         "alert_id": None,
         "notes": None,
+        "created_offline": False,
     }
     return LogbookEntryChange(**{**base, **overrides})
 
@@ -164,11 +165,39 @@ async def test_a_new_entry_is_applied_once_and_the_same_change_again_is_a_duplic
     assert first.server_version is not None
     assert stored is not None
     assert stored.created_by == producer
-    assert stored.created_offline is True
     assert stored.client_updated_at == env.now
     assert stored.notes == "cosecha 120 kg"
     assert (second.status, second.server_version) == (SyncStatus.DUPLICATE, first.server_version)
     assert await _entry_count(pusher.session) == 1
+
+
+async def test_created_offline_is_the_clients_fact_stored_once_and_never_rewritten(
+    env: SyncEnv, pusher: Pusher
+) -> None:
+    """docs/11 counts "entradas creadas sin conexión" out of the entries, and
+    docs/03 says the *client* knows: the phone stamps it at first save
+    (`!navigator.onLine`) and sends it in `data`. The server stores what it was
+    told on insert; an update never rewrites a creation fact, or a later edit
+    from a phone back online would relabel the whole entry."""
+    producer = env.mine.users["producer"]
+    change = _entry(env, created_offline=False)
+
+    applied = await pusher.entry(change, caller_id=producer)
+    stored = await _stored_entry(pusher.session, change.id)
+
+    assert applied.status is SyncStatus.APPLIED
+    assert stored is not None
+    assert stored.created_offline is False
+
+    later_update = await pusher.entry(
+        _entry(env, id=change.id, client_updated_at=_later(env), created_offline=True),
+        caller_id=producer,
+    )
+    stored_after_update = await _stored_entry(pusher.session, change.id)
+
+    assert later_update.status is SyncStatus.APPLIED
+    assert stored_after_update is not None
+    assert stored_after_update.created_offline is False
 
 
 async def test_the_newer_client_updated_at_wins_and_the_older_push_is_conflict_overwritten(

@@ -56,6 +56,9 @@ class LogbookEntryData(BaseModel):
     irrigation_mm: Decimal | None = None
     alert_id: UUID | None = None
     notes: str | None = None
+    created_offline: bool = False
+    """docs/11 counts the entries the client created with no signal, so the
+    phone sends it; absent means the client did not claim it."""
 
 
 class ExtensionVisitData(BaseModel):
@@ -132,6 +135,7 @@ def _entry_change(body: LogbookEntryChangeBody) -> LogbookEntryChange:
         irrigation_mm=body.data.irrigation_mm,
         alert_id=body.data.alert_id,
         notes=body.data.notes,
+        created_offline=body.data.created_offline,
     )
 
 

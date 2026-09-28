@@ -146,9 +146,7 @@ class SqlAlchemyLogbookEntrySyncRepository:
                     alert_id=change.alert_id,
                     notes=change.notes,
                     created_by=caller_id,
-                    # The only way a row reaches this table is a client creating
-                    # it with no signal (docs/03: `created_offline`).
-                    created_offline=True,
+                    created_offline=change.created_offline,
                     client_updated_at=change.client_updated_at,
                     server_version=server_version,
                     deleted_at=None,
