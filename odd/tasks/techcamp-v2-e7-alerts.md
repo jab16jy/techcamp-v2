@@ -357,7 +357,7 @@ work unit (`domain-modeling`).
   - [x] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
-    forecast ~450 — actual 1,171 (`XXX`, 336 prod / 835 tests; 7 prod files, 2 test files)
+    forecast ~450 — actual 1,250 (`836e7f1`, 336 prod / 835 tests / 79 docs+config)
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
     subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
