@@ -111,7 +111,9 @@ class AlertRepository(Protocol):
         """
         ...
 
-    async def lock_escalation_candidate(self, *, org_id: UUID, at: datetime) -> Alert | None:
+    async def lock_escalation_candidate(
+        self, *, org_id: UUID, at: datetime, skip: frozenset[UUID] = frozenset()
+    ) -> Alert | None:
         """The next critical alert of one org whose 2 h are up, locked, or nothing.
 
         The row is taken `FOR UPDATE SKIP LOCKED` and the caller decides under
@@ -120,6 +122,10 @@ class AlertRepository(Protocol):
         row another one holds instead of waiting on it, and one alert per
         transaction is the unit `save` already is. `org_id` is required, never
         optional (docs/09).
+
+        `skip` is the sweep's own memory of the rows it could not act on: the
+        lock orders by age and would otherwise hand the same refused row back on
+        the next call, forever.
         """
         ...
 

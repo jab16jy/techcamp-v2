@@ -33,20 +33,50 @@ async def escalate_due_alerts(*, org_id: UUID, at: datetime, alerts: AlertReposi
     commit is what releases the lock (D42): the row is decided and escalated under
     its own lock, and the next one is locked only after the previous escalation is
     committed. The lock's own filter and the domain's `is_eligible_for_escalation`
-    agree by construction here, and the domain has the last word: a row that is
-    not eligible escalates nothing and costs no notice.
+    agree by construction here, and the domain has the last word.
 
-    A second sweep over the same org finds nothing: the escalated alert is no
+    A row the sweep cannot act on is stepped over for the rest of the round, and
+    never blocks another alert: the lock orders by age and would hand the same
+    refused row back on every call, so the round would spin on it (D42). The set
+    only grows within a round and is discarded with it, so the loop always ends.
+    A second sweep over the same org finds nothing new: the escalated alert is no
     longer a candidate, so one escalation is one `sms` row however often the
     5-minute sweep runs.
     """
     escalated = 0
-    while (alert := await alerts.lock_escalation_candidate(org_id=org_id, at=at)) is not None:
-        if not is_eligible_for_escalation(alert, at):
-            continue
-        target = await alerts.get_escalation_target(
-            org_id=alert.org_id, plot_id=alert.plot_id, node_id=alert.node_id
+    skipped: set[UUID] = set()
+    while (
+        alert := await alerts.lock_escalation_candidate(
+            org_id=org_id, at=at, skip=frozenset(skipped)
         )
+    ) is not None:
+        if not is_eligible_for_escalation(alert, at):
+            skipped.add(alert.id)
+            logger.error(
+                "alerts: the escalation page offered alert %s, which %s is not eligible for; "
+                "stepping over it for this round",
+                alert.id,
+                at.isoformat(),
+            )
+            continue
+        try:
+            target = await alerts.get_escalation_target(
+                org_id=alert.org_id, plot_id=alert.plot_id, node_id=alert.node_id
+            )
+        except ValueError:
+            # An alert whose target does not resolve is unreadable, not
+            # un-escalatable: the farm is what the SMS and the `NOTIFY` are
+            # addressed to (ADR-0015), so there is nobody this alert could be
+            # told to. It stays open and un-escalated so the next round tries
+            # again, and every other alert of the org goes on being escalated.
+            skipped.add(alert.id)
+            logger.error(
+                "alerts: cannot resolve the target of alert %s of org %s; "
+                "leaving it un-escalated and going on with the rest",
+                alert.id,
+                alert.org_id,
+            )
+            continue
         if not target.recipients:
             # The third state, not "false": a farm with no technician and an org
             # with no owner to fall back to has nobody to act on the alert. The

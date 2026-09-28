@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -30,6 +30,7 @@ from techcamp.alerts.application import (
     resolve_automatically,
     upgrade_to_critical,
 )
+from techcamp.alerts.application.ports import EscalationTarget
 from techcamp.alerts.domain import ESCALATION_DELAY, Alert, AlertRule, Severity
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
@@ -199,6 +200,146 @@ async def _rows(session: AsyncSession, alert_id: UUID, channel: str) -> list[Not
         )
     )
     return list(result.scalars())
+
+
+async def _add_plot(session: AsyncSession, org: Org, name: str = "Lote 2") -> UUID:
+    """A second plot of the same farm, so one test can hold two alert targets."""
+    plot_id = uuid7()
+    session.add(
+        PlotRow(
+            id=plot_id,
+            org_id=org.org_id,
+            farm_id=org.farm_id,
+            name=name,
+            boundary=_BOUNDARY,
+            irrigation_system="drip",
+        )
+    )
+    await session.commit()
+    return plot_id
+
+
+async def _open_on(
+    session: AsyncSession,
+    alerts: SqlAlchemyAlertRepository,
+    org: Org,
+    *,
+    plot_id: UUID,
+    code: str,
+    at: datetime = _OPENED,
+) -> Alert:
+    """The same as `_open` but for a plot the test names itself."""
+    return await open_alert(
+        rule=await _rule(session, code),
+        plot_id=plot_id,
+        at=at,
+        severity=Severity.CRITICAL,
+        alerts=alerts,
+    )
+
+
+class _OfferingOneRefusedRow(SqlAlchemyAlertRepository):
+    """The lock keeps handing back a row the domain refuses (D42).
+
+    The page filter and `is_eligible_for_escalation` state the same rule, so real
+    rows cannot do this — which is exactly why the loop must be proved to make
+    progress: a sweep that re-reads what it already refused never finishes, and
+    this job runs every five minutes for the rest of the life of the product.
+    """
+
+    def __init__(self, session: AsyncSession, *, row: Alert, max_offers: int = 3) -> None:
+        super().__init__(session)
+        self._row = row
+        self._max_offers = max_offers
+        self.offers = 0
+
+    async def lock_escalation_candidate(
+        self, *, org_id: UUID, at: datetime, skip: frozenset[UUID] = frozenset()
+    ) -> Alert | None:
+        if self._row.id in skip:
+            return None
+        self.offers += 1
+        if self.offers > self._max_offers:
+            raise AssertionError("the sweep re-read a row it had already refused")
+        return self._row
+
+
+class _TargetUnresolvableForOnePlot(SqlAlchemyAlertRepository):
+    """`get_escalation_target` fails for one plot, as it would for an alert whose
+    target no longer resolves (D42).
+
+    Unreachable with real rows — `alert.plot_id` is a `NO ACTION` foreign key, so
+    the plot of an alert cannot be deleted — and reachable only as a defence. The
+    cost of getting the defence wrong is one alert stopping its whole
+    organization's escalations, which is what this seam makes testable.
+    """
+
+    def __init__(self, session: AsyncSession, *, plot_id: UUID) -> None:
+        super().__init__(session)
+        self._plot_id = plot_id
+
+    async def get_escalation_target(
+        self, *, org_id: UUID, plot_id: UUID | None, node_id: UUID | None
+    ) -> EscalationTarget:
+        if plot_id == self._plot_id:
+            raise ValueError(f"Target is not a plot or node of org {org_id}")
+        return await super().get_escalation_target(org_id=org_id, plot_id=plot_id, node_id=node_id)
+
+
+async def test_the_sweep_steps_over_a_row_it_cannot_act_on_and_finishes(
+    db_session: AsyncSession,
+) -> None:
+    """D42: the sweep must make progress. A row the domain refuses is never
+    escalated, and it must not be handed back on the next read either — otherwise
+    the 5-minute job spins on it forever and no later alert of the org is ever
+    escalated."""
+    org = await _make_org(db_session)
+    real = SqlAlchemyAlertRepository(db_session)
+    alert = await _open(db_session, real, org, code="water_stress")
+    # The same row as the query found it, minus two hours: the query would have
+    # offered it, the domain refuses it.
+    refused = replace(alert, opened_at=alert.opened_at + timedelta(hours=2))
+    alerts = _OfferingOneRefusedRow(db_session, row=refused)
+
+    escalated = await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+
+    assert escalated == 0
+    # Offered once and never again: the sweep's memory of the row is what ends the
+    # round, not a second refusal of the same row.
+    assert alerts.offers == 1
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert row.escalated_at is None
+    assert await _rows(db_session, alert.id, "sms") == []
+
+
+async def test_one_unresolvable_alert_does_not_stop_the_rest_of_its_org(
+    db_session: AsyncSession,
+) -> None:
+    """D42: the alert whose target cannot be resolved is the OLDEST of the two, so
+    it comes off the lock first — and the alert behind it must still escalate. One
+    unreadable row is not an organization's escalation outage."""
+    org = await _make_org(db_session)
+    second_plot = await _add_plot(db_session, org)
+    real = SqlAlchemyAlertRepository(db_session)
+    unreadable = await _open(db_session, real, org, code="water_stress", at=_OPENED)
+    readable = await _open_on(
+        db_session, real, org, plot_id=second_plot, code="heat_stress", at=_OPENED
+    )
+    alerts = _TargetUnresolvableForOnePlot(db_session, plot_id=org.plot_id)
+
+    escalated = await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+
+    assert escalated == 1
+    rows = {
+        row.id: row.escalated_at for row in (await db_session.execute(select(AlertRow))).scalars()
+    }
+    assert rows[readable.id] == _DUE
+    # The negative half: the unreadable one is left exactly as it was — NOT
+    # escalated, because nobody could be told about it and `escalated_at` would
+    # close the question for good. It is retried on the next round instead.
+    assert rows[unreadable.id] is None
+    assert [row.user_id for row in await _rows(db_session, readable.id, "sms")] == [org.technician]
+    assert await _rows(db_session, unreadable.id, "sms") == []
 
 
 # -- the candidate the lock hands the sweep (docs/06 §3, D12) --

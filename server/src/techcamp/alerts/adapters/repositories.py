@@ -234,7 +234,9 @@ class SqlAlchemyAlertRepository:
         )
         return EscalationTarget(farm_id=farm_id, recipients=recipients)
 
-    async def lock_escalation_candidate(self, *, org_id: UUID, at: datetime) -> Alert | None:
+    async def lock_escalation_candidate(
+        self, *, org_id: UUID, at: datetime, skip: frozenset[UUID] = frozenset()
+    ) -> Alert | None:
         """One due critical of this org, oldest first, held for the decision.
 
         ONE row and not a page: `save` commits per alert, and that commit is what
@@ -246,7 +248,9 @@ class SqlAlchemyAlertRepository:
         The narrowing here (critical, open, unescalated, 2 h from `opened_at`) is
         the sweep's page filter, not the decision: `is_eligible_for_escalation`
         decides on the value read under this lock, and an alert that fails it
-        escalates nothing.
+        escalates nothing. `skip` is how a row that failed it stops coming back
+        (D42); the set holds the round's own un-actionable rows, which is what
+        makes the sweep terminate.
         """
         stmt = (
             select(*_ALERT_COLUMNS, _RULE_CODE)
@@ -262,6 +266,8 @@ class SqlAlchemyAlertRepository:
             .limit(1)
             .with_for_update(skip_locked=True)
         )
+        if skip:
+            stmt = stmt.where(AlertRow.id.not_in(skip))
         row = (await self._session.execute(stmt)).one_or_none()
         return _alert_from_row(row) if row is not None else None
 
