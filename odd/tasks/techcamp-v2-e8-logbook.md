@@ -435,6 +435,11 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   static clean. **T4 merged** into integration: tests/logbook 129 passed, ruff, format (278), mypy
   (184), lint-imports clean. #161 closed, `e8-t4` session closed. T8 unblocked (T3, T4, T7 in).
 
+- Cleanup (owner, 2026-09-28): merged lane worktrees `e8-t2`, `e8-t3`, `e8-t4`, `e8-t5`,
+  `e8-t6`, `e8-t7`, `e8-t9` removed (all clean, all merged) and their DB containers
+  `techcamp-e8-db-t2..t6` deleted. Kept: integration `e8-logbook` + `techcamp-e8-db` (5441). Lane
+  branches kept (merged; they back the RDD lineages). New lanes reuse ports from 5442.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
