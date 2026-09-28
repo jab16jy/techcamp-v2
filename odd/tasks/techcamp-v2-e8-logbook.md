@@ -311,6 +311,16 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   equal the presigned `bytes` (never re-encode after presign). Go given for OpenCode's own RDD
   (base `3cf2653`).
 
+- T6 RDD (OpenCode, consent granted by the parent under the standing grant): lineage
+  `review-9ed2f09b8ef0ddd5`, lens `review-reliability`, one **CRITICAL R3-MINIO-STARTUP-RACE**
+  (short `depends_on` waits for MinIO to start, not to serve; `api` waits on
+  `service_completed_successfully`, so one early `mc` failure kept the stack down) fixed in the
+  bounded correction `f0d484c` (bounded 10× retry, 22 lines), validator approved, acknowledged. No
+  non-blocking findings. Open design note (not a finding): `api` still hard-depends on
+  `minio-init`, so a broken MinIO keeps the API down although presign alone would 503.
+  **T6 merged** into integration: tests/logbook 85 passed, ruff, format (270), mypy (181),
+  lint-imports clean. `e8-t6` session closed.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
