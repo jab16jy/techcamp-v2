@@ -130,6 +130,42 @@ describe('deleteLogbookEntry', () => {
   })
 })
 
+describe('saving a row that was deleted', () => {
+  it('refuses to re-save a deleted entry, so a stale edit cannot undo the delete', async () => {
+    const draft = harvestDraft()
+    await saveLogbookEntry(draft)
+    await deleteLogbookEntry(draft.id)
+    const deleted = await db.logbookEntries.get(draft.id)
+    expect(deleted?.deleted_at).not.toBeNull()
+
+    await expect(saveLogbookEntry({ ...draft, notes: 'no debe revivir' })).rejects.toThrow(/deleted/)
+
+    const after = await db.logbookEntries.get(draft.id)
+    expect(after?.deleted_at).toBe(deleted?.deleted_at)
+    expect(after?.notes).toBe(draft.notes)
+    // The queued change is still the delete, not a resurrected upsert.
+    const items = await db.outbox.toArray()
+    expect(items).toHaveLength(1)
+    expect(items[0].op).toBe('delete')
+    expect(items[0].client_updated_at).toBe(deleted?.client_updated_at)
+  })
+
+  it('refuses to re-save a deleted visit, the same way', async () => {
+    const draft = visitDraft()
+    await saveExtensionVisit(draft)
+    await deleteExtensionVisit(draft.id)
+
+    await expect(saveExtensionVisit({ ...draft, notes: 'no debe revivir' })).rejects.toThrow(/deleted/)
+
+    const after = await db.extensionVisits.get(draft.id)
+    expect(after?.notes).toBe(draft.notes)
+    const items = await db.outbox.toArray()
+    expect(items).toHaveLength(1)
+    expect(items[0].op).toBe('delete')
+    expect(items[0].entity).toBe('extension_visit')
+  })
+})
+
 describe('extension visits', () => {
   it('stores a visit and its outbox change as an extension_visit, and soft-deletes it the same way', async () => {
     const draft = visitDraft({ notes: 'visita de prueba' })
