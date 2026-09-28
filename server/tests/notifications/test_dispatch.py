@@ -1098,6 +1098,81 @@ async def test_a_group_is_not_formed_out_of_rows_the_night_holds(
     assert (await _row(db_session, ids[1])).status == "sent"
 
 
+async def test_one_message_writes_its_rows_in_one_commit(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """A message's outcome is ONE commit, never one per row (R3-001).
+
+    The per-row commit is why every row takes its own `hold()` lock: the claim's
+    locks all die with the first commit. Two commits for one message would put
+    the group's second row back in the table as `pending` and UNLOCKED between
+    them, and a second worker's claim — which skips locked rows, not pending ones
+    — would take it and send it a second time: the farmer gets the same alert twice
+    from the same message, and the row that first `hold()` refused would be
+    reported as `skipped` after it was already delivered.
+
+    Counted, because a race like that is not observable from the end state: both
+    rows end `sent` either way. The negative half is the row group of one, which
+    must still be a single call, and the two separate `push` rows of two farms,
+    which must still be two.
+    """
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    grouped = [
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH)).id,
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)).id,
+    ]
+    commits: list[list[UUID]] = []
+
+    class _CountingOutbox(SqlAlchemyOutboxRepository):
+        async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
+            commits.append(list(notification_ids))
+            await super().mark_sent(notification_ids, at=at)
+
+    await dispatch_due_notifications(
+        outbox=_CountingOutbox(db_session),
+        senders={Channel.PUSH: _LandingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert commits == [grouped]
+    assert (await _row(db_session, grouped[0])).status == "sent"
+    assert (await _row(db_session, grouped[1])).status == "sent"
+
+
+async def test_a_lone_row_and_two_messages_are_still_one_commit_each(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The negative half of the pair above, in the two shapes that must NOT be
+    batched: a group of one (almost every message) and two rows of two different
+    farms (two different messages). Grouping is a message, not a claim batch —
+    docs/06 §4's Reclamo row wants the outcome of a message committed, and D31
+    wants a crash in one message not to strand another one's rows."""
+    commits: list[list[UUID]] = []
+
+    class _CountingOutbox(SqlAlchemyOutboxRepository):
+        async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
+            commits.append(list(notification_ids))
+            await super().mark_sent(notification_ids, at=at)
+
+    lone = (await _pending_row(db_session, seeded, channel=Channel.PUSH)).id
+    other_alert = await _alert_on(
+        db_session, seeded, code="heat_stress", plot_id=seeded.other_plot_id
+    )
+    other_farm = (
+        await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)
+    ).id
+
+    await dispatch_due_notifications(
+        outbox=_CountingOutbox(db_session),
+        senders={Channel.PUSH: _LandingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert commits == [[lone], [other_farm]]
+
+
 async def test_a_due_sms_row_is_sent_and_marked_sent(
     db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:

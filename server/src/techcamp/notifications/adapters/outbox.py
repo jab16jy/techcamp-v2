@@ -137,28 +137,35 @@ class SqlAlchemyOutboxRepository:
             )
         ).scalar_one_or_none() is not None
 
-    async def mark_sent(self, notification_id: UUID, *, at: datetime) -> None:
-        row = await self._locked(notification_id)
-        row.status = "sent"
-        row.sent_at = at
-        row.last_error = None
+    async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
+        for row in await self._locked_all(notification_ids):
+            row.status = "sent"
+            row.sent_at = at
+            row.last_error = None
         await self._session.commit()
 
     async def mark_retry(
-        self, notification_id: UUID, *, attempts: int, next_attempt_at: datetime, error: str
+        self,
+        notification_ids: Sequence[UUID],
+        *,
+        attempts: int,
+        next_attempt_at: datetime,
+        error: str,
     ) -> None:
-        row = await self._locked(notification_id)
-        row.status = "pending"
-        row.attempts = attempts
-        row.next_attempt_at = next_attempt_at
-        row.last_error = error
+        for row in await self._locked_all(notification_ids):
+            row.status = "pending"
+            row.attempts = attempts
+            row.next_attempt_at = next_attempt_at
+            row.last_error = error
         await self._session.commit()
 
-    async def mark_failed(self, notification_id: UUID, *, attempts: int, error: str) -> None:
-        row = await self._locked(notification_id)
-        row.status = "failed"
-        row.attempts = attempts
-        row.last_error = error
+    async def mark_failed(
+        self, notification_ids: Sequence[UUID], *, attempts: int, error: str
+    ) -> None:
+        for row in await self._locked_all(notification_ids):
+            row.status = "failed"
+            row.attempts = attempts
+            row.last_error = error
         await self._session.commit()
 
     async def mark_deferred(
@@ -178,6 +185,24 @@ class SqlAlchemyOutboxRepository:
         row.next_attempt_at = next_attempt_at
         row.last_error = reason
         await self._session.commit()
+
+    async def _locked_all(self, notification_ids: Sequence[UUID]) -> Sequence[NotificationRow]:
+        """One message's rows, taken under their own locks in ONE statement.
+
+        Every row of a message is re-read under `FOR UPDATE` before it is written,
+        and they are locked together, because the write that follows is one
+        commit: a message's rows must never be `pending` and unlocked while the
+        message has already been delivered (R3-001). A single row is the same
+        query as before.
+        """
+        if not notification_ids:
+            return []
+        result = await self._session.execute(
+            select(NotificationRow)
+            .where(NotificationRow.id.in_(tuple(notification_ids)))
+            .with_for_update()
+        )
+        return result.scalars().all()
 
     async def _locked(self, notification_id: UUID) -> NotificationRow:
         """The claimed row, re-read under its own lock.

@@ -234,8 +234,14 @@ async def _deliver(
     for all of them; the group's `attempts` is read from its first row for that
     reason, and a group is never built out of rows of different ages because the
     claim takes them in due order.
+
+    The outcome is written ONCE for the whole message, not once per row: the
+    commit is what releases the claim's locks, and a commit per row would leave
+    the message's remaining rows `pending` and unlocked after the message was
+    already delivered, which is a duplicate waiting for a second worker (R3-001).
     """
     sent = retried = failed = 0
+    rows = [notification.id for notification in group]
     try:
         await senders[channel].send(group)
     except Exception as exc:  # noqa: BLE001 — every provider failure is the same to us
@@ -247,23 +253,21 @@ async def _deliver(
             circuits.record_failure(channel)
         attempts = group[0].attempts + 1
         error = str(exc)[:_MAX_ERROR_CHARS] or type(exc).__name__
-        for notification in group:
-            if attempts >= MAX_ATTEMPTS:
-                await outbox.mark_failed(notification.id, attempts=attempts, error=error)
-                failed += 1
-            else:
-                await outbox.mark_retry(
-                    notification.id,
-                    attempts=attempts,
-                    next_attempt_at=now + retry_delay(attempts),
-                    error=error,
-                )
-                retried += 1
+        if attempts >= MAX_ATTEMPTS:
+            await outbox.mark_failed(rows, attempts=attempts, error=error)
+            failed = len(rows)
+        else:
+            await outbox.mark_retry(
+                rows,
+                attempts=attempts,
+                next_attempt_at=now + retry_delay(attempts),
+                error=error,
+            )
+            retried = len(rows)
     else:
         circuits.record_success(channel)
-        for notification in group:
-            await outbox.mark_sent(notification.id, at=now)
-            sent += 1
+        await outbox.mark_sent(rows, at=now)
+        sent = len(rows)
     return DispatchReport(0, sent, retried, failed, 0, 0)
 
 

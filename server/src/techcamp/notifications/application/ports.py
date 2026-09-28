@@ -168,18 +168,37 @@ class OutboxRepository(Protocol):
         is not ours to send."""
         ...
 
-    async def mark_sent(self, notification_id: UUID, *, at: datetime) -> None:
-        """Close a delivered row, and release the claim's lock."""
+    async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
+        """Close a delivered message, and release the claim's lock.
+
+        The rows of ONE message, written and committed together, because the
+        commit is what releases the claim's `FOR UPDATE SKIP LOCKED` locks: a
+        commit per row would put the message's remaining rows back in the table as
+        `pending` and unlocked, and a second worker's claim — which skips LOCKED
+        rows, not PENDING ones — would take one and deliver it a second time
+        (R3-001). One message is the unit, not one row and not one claim batch:
+        a row group of one is a single row's commit, exactly as before.
+        """
         ...
 
     async def mark_retry(
-        self, notification_id: UUID, *, attempts: int, next_attempt_at: datetime, error: str
+        self,
+        notification_ids: Sequence[UUID],
+        *,
+        attempts: int,
+        next_attempt_at: datetime,
+        error: str,
     ) -> None:
-        """Record a failed attempt and the instant the row becomes due again."""
+        """Record a failed attempt and the instant the rows become due again.
+
+        One commit for the whole message, for the same reason as `mark_sent`.
+        """
         ...
 
-    async def mark_failed(self, notification_id: UUID, *, attempts: int, error: str) -> None:
-        """Give a row up after `MAX_ATTEMPTS` (docs/06 §4)."""
+    async def mark_failed(
+        self, notification_ids: Sequence[UUID], *, attempts: int, error: str
+    ) -> None:
+        """Give a message up after `MAX_ATTEMPTS` (docs/06 §4), in one commit."""
         ...
 
     async def mark_deferred(
