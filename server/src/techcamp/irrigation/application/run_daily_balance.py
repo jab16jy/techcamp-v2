@@ -21,6 +21,8 @@ from techcamp.irrigation.application.ports import (
     IrrigationRecommendationRepository,
     WaterBalanceRepository,
 )
+from techcamp.irrigation.application.water_stress import representative_soil_moisture_sensors
+from techcamp.irrigation.domain.errors import InvalidCropStagesError
 from techcamp.irrigation.domain.models import (
     K_ASSIMILATION_DEFAULT,
     K_ASSIMILATION_NONE,
@@ -38,16 +40,15 @@ from techcamp.irrigation.domain.models import (
     compute_stress_moisture,
     compute_taw,
     decide_recommendation,
-    is_sensor_depth_representative,
     stage_for_cycle_day,
 )
+from techcamp.shared.dates import BOGOTA_TZ
 from techcamp.telemetry.application.ports import (
     CalibrationRepository,
     NodeRepository,
     ReadingRepository,
     SensorRepository,
 )
-from techcamp.telemetry.domain.models import CalibrationKind
 from techcamp.weather.application.ports import WeatherRepository
 from techcamp.weather.domain.models import WeatherDay
 
@@ -81,6 +82,7 @@ class ForecastSummary:
     rain_7d_mm: float
     et0_7d_mm: float
     low_confidence: bool
+    forecast_missing: bool
 
 
 def _summarize_forecast(
@@ -89,10 +91,26 @@ def _summarize_forecast(
     d_rec: date,
     now: datetime,
 ) -> ForecastSummary:
-    """Sum the 48 h and 7-day forecast rain, the 7-day forecast ET0, and flag
-    rows fetched more than 24 h ago as low confidence (docs/06 §5, §6).
+    """Sum the 48 h and 7-day forecast rain, the 7-day forecast ET0, flag rows
+    fetched more than 24 h ago as low confidence, and flag a gap in the [D, D+6]
+    forecast window as forecast_missing (docs/06 §5, §6; D1, feature doc
+    `techcamp-v2-e6-followups.md`).
+
+    A day in the window with no forecast row, or a row with a null rain_mm or
+    et0_mm, still sums as 0 for that day (a conservative default: "no rain
+    forecast" is the safer assumption for the postpone/rainfed advice
+    branches) — but forecast_missing flags it in the rationale instead of
+    silently presenting the recommendation as fully trustworthy (R3-missing-
+    forecast-silently-zero).
     """
     d_plus_6 = d_rec + timedelta(days=6)
+    forecast_by_day = {r.day: r for r in weather_rows if r.is_forecast}
+    forecast_missing = any(
+        (row := forecast_by_day.get(d_rec + timedelta(days=offset))) is None
+        or row.rain_mm is None
+        or row.et0_mm is None
+        for offset in range(7)
+    )
     return ForecastSummary(
         rain_48h_mm=sum(
             float(r.rain_mm)
@@ -116,6 +134,7 @@ def _summarize_forecast(
             for r in weather_rows
             if r.fetched_at is not None
         ),
+        forecast_missing=forecast_missing,
     )
 
 
@@ -199,7 +218,10 @@ async def run_daily_balance(
             forecast_rain_7d_mm=forecast.rain_7d_mm,
             forecast_et0_7d_mm=forecast.et0_7d_mm,
             stage="",
-            rationale_context={"low_confidence": forecast.low_confidence},
+            rationale_context={
+                "low_confidence": forecast.low_confidence,
+                "forecast_missing": forecast.forecast_missing,
+            },
         )
         saved_rec: IrrigationRecommendation | None = None
         if rec is not None:
@@ -235,7 +257,10 @@ async def run_daily_balance(
             forecast_rain_7d_mm=forecast.rain_7d_mm,
             forecast_et0_7d_mm=forecast.et0_7d_mm,
             stage="",
-            rationale_context={"low_confidence": forecast.low_confidence},
+            rationale_context={
+                "low_confidence": forecast.low_confidence,
+                "forecast_missing": forecast.forecast_missing,
+            },
         )
         saved_rec = None
         if rec is not None:
@@ -281,7 +306,29 @@ async def run_daily_balance(
             skip_reason="missing_weather_for_balance_day",
         )
 
-    et0_d_minus_1 = float(weather_d_minus_1.et0_mm) if weather_d_minus_1.et0_mm is not None else 0.0
+    # A null ET0 on D-1 must not silently become ETc 0 (D1, R3-missing-forecast-
+    # silently-zero): fall back to the other D-1 row (observed/forecast) if it has
+    # one, and skip this plot with a typed reason only if neither does — rain
+    # keeps its 0.0 default, since a missing rainfall reading is the conservative
+    # (not the risky) direction for Pe.
+    other_row_d_minus_1 = forecast_row_d_minus_1 if weather_d_minus_1 is obs_row else obs_row
+    et0_mm_d_minus_1 = weather_d_minus_1.et0_mm
+    if et0_mm_d_minus_1 is None and other_row_d_minus_1 is not None:
+        et0_mm_d_minus_1 = other_row_d_minus_1.et0_mm
+        # ET0 itself came from the forecast row even though rain came from the
+        # observed row: flag it like a fully-missing observed row (docs/06 §5
+        # "pronóstico si falta el observado, señalado en el rationale"; R3-et0-
+        # fallback-untested-and-unflagged) instead of only reflecting which row
+        # was picked for the day as a whole.
+        missing_observed = True
+    if et0_mm_d_minus_1 is None:
+        return DailyBalanceResult(
+            balance=None,
+            recommendation=None,
+            skipped=True,
+            skip_reason="missing_et0_for_balance_day",
+        )
+    et0_d_minus_1 = float(et0_mm_d_minus_1)
     rain_d_minus_1 = (
         float(weather_d_minus_1.rain_mm) if weather_d_minus_1.rain_mm is not None else 0.0
     )
@@ -302,8 +349,23 @@ async def run_daily_balance(
     wp = float(soil.wilting_point_pct) / 100.0
     root_depth_m = float(soil.root_depth_cm) / 100.0
     taw = compute_taw(fc, wp, root_depth_m)
-    stage = stage_for_cycle_day(crop.stages, day_of_cycle)
-    kc = compute_kc_for_cycle_day(crop.stages, day_of_cycle)
+    try:
+        stage = stage_for_cycle_day(crop.stages, day_of_cycle)
+        kc = compute_kc_for_cycle_day(crop.stages, day_of_cycle)
+    except InvalidCropStagesError:
+        # Empty stages or a stage name compute_kc_for_cycle_day does not recognize
+        # (docs/06 §5 R3-005/R3-empty-stages-indexerror/R3-kc-unknown-stage-raises-in-job):
+        # skip this one plot like the other data-quality guards, instead of aborting
+        # the whole daily job with an uncaught ValueError. A narrow except
+        # (R3-broad-valueerror-catch): day_of_cycle is already validated above, so
+        # the only ValueError subtype these two functions can still raise here is
+        # this one, about the stage data itself.
+        return DailyBalanceResult(
+            balance=None,
+            recommendation=None,
+            skipped=True,
+            skip_reason="crop_stage_invalid",
+        )
     etc = compute_etc(kc, et0_d_minus_1)
 
     stage_obj = next((s for s in crop.stages if s.stage == stage), crop.stages[-1])
@@ -328,50 +390,35 @@ async def run_daily_balance(
         and calibrations is not None
         and readings is not None
     ):
-        node_list = await nodes.list_for_org(plot.org_id, plot_id=plot.id, limit=500)
-        candidate_sensors: list[tuple[float, float]] = []
-        daily_start = datetime(d_balance.year, d_balance.month, d_balance.day, tzinfo=UTC)
-        daily_end = daily_start + timedelta(days=1)
+        # Local day D-1 in America/Bogota (D3; docs/06 §5), converted to UTC instants
+        local_day_start = datetime(
+            d_balance.year, d_balance.month, d_balance.day, 0, 0, 0, tzinfo=BOGOTA_TZ
+        )
+        local_day_end = local_day_start + timedelta(days=1)
+        day_start_utc = local_day_start.astimezone(UTC)
+        day_end_utc = local_day_end.astimezone(UTC)
 
-        for node in node_list:
-            node_sensors = await sensors.list_for_node(node.id, plot.org_id)
-            for sensor in node_sensors:
-                if sensor.metric != "soil_moisture" or sensor.depth_cm is None:
-                    continue
-
-                # 1. Reading in the last 24 h before the run
-                recent = await readings.query_raw(
-                    sensor.id, start=now - timedelta(hours=24), end=now
-                )
-                if not recent:
-                    continue
-
-                # 2. Latest valid calibration kind `field`
-                cal = await calibrations.get_latest_valid_at(sensor.id, plot.org_id, at=now)
-                if cal is None:
-                    continue
-                if cal.kind != CalibrationKind.FIELD:
-                    continue
-
-                # 3. Daily mean of D-1 from query_daily
-                daily_points = await readings.query_daily(
-                    sensor.id, start=daily_start, end=daily_end
-                )
-                if not daily_points:
-                    continue
-
-                candidate_sensors.append((float(sensor.depth_cm), daily_points[0].value))
-
-        root_depth_cm = float(soil.root_depth_cm)
-        if len(candidate_sensors) in (1, 2):
-            sensor_depths = [depth for depth, _ in candidate_sensors]
-            if is_sensor_depth_representative(sensor_depths, root_depth_cm):
-                k = K_ASSIMILATION_DEFAULT
-                theta_obs_pct = sum(mean for _, mean in candidate_sensors) / len(candidate_sensors)
-                theta_obs = theta_obs_pct / 100.0
-                dr_obs = compute_observed_depletion(fc, theta_obs, root_depth_m)
-                dr_assimilated = assimilate_depletion(dr_model, dr_obs, k)
-                soil_moisture_obs_pct = theta_obs_pct
+        # The `K > 0` sensor is the same one the `water_stress` reading rule uses
+        # (D26): `irrigation.application.water_stress` owns that rule so the daily
+        # balance and the alert cannot answer it differently.
+        representative = await representative_soil_moisture_sensors(
+            org_id=plot.org_id,
+            plot_id=plot.id,
+            root_depth_cm=float(soil.root_depth_cm),
+            start=day_start_utc,
+            end=day_end_utc,
+            nodes=nodes,
+            sensors=sensors,
+            calibrations=calibrations,
+            readings=readings,
+        )
+        if representative:
+            k = K_ASSIMILATION_DEFAULT
+            theta_obs_pct = sum(s.mean_moisture_pct for s in representative) / len(representative)
+            theta_obs = theta_obs_pct / 100.0
+            dr_obs = compute_observed_depletion(fc, theta_obs, root_depth_m, taw)
+            dr_assimilated = assimilate_depletion(dr_model, dr_obs, k, taw)
+            soil_moisture_obs_pct = theta_obs_pct
 
     rec = decide_recommendation(
         has_active_cycle=True,
@@ -394,6 +441,7 @@ async def run_daily_balance(
             "dr_model": dr_model,
             "k": k,
             "low_confidence": forecast.low_confidence,
+            "forecast_missing": forecast.forecast_missing,
             "missing_observed_weather": missing_observed,
         },
     )

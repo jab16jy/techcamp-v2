@@ -12,9 +12,11 @@ Tests against real Postgres with TDD:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
@@ -27,13 +29,16 @@ from techcamp.farms.adapters.repositories import (
     SqlAlchemyPlotRepository,
     SqlAlchemySoilProfileRepository,
 )
-from techcamp.farms.domain.models import CropCycleStatus
+from techcamp.farms.domain.models import Crop, CropCycleStatus, CropStage, KcSource
 from techcamp.identity.adapters.orm import OrganizationRow
 from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyIrrigationRecommendationRepository,
     SqlAlchemyWaterBalanceRepository,
 )
-from techcamp.irrigation.application.run_daily_balance import run_daily_balance
+from techcamp.irrigation.application.run_daily_balance import (
+    DailyBalanceResult,
+    run_daily_balance,
+)
 from techcamp.irrigation.domain.models import RainfedAdvice, RecommendationKind, WaterBalanceDay
 from techcamp.shared.db import engine
 from techcamp.shared.ids import uuid7
@@ -776,7 +781,11 @@ async def test_sensor_assimilation_field_representative_fresh(db_session: AsyncS
     assert result.balance is not None
     assert result.balance.assimilation_k == pytest.approx(0.5)
     assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
-    assert result.balance.depletion_mm != result.balance.depletion_model_mm
+    expected_dr_obs = 1000.0 * (0.23 - 0.16) * 0.6  # 42.0 mm
+    expected_dr_assimilated = result.balance.depletion_model_mm + 0.5 * (
+        expected_dr_obs - result.balance.depletion_model_mm
+    )
+    assert result.balance.depletion_mm == pytest.approx(expected_dr_assimilated)
     assert result.recommendation is not None
     assert result.recommendation.rationale.get("without_sensor") is False
     assert result.recommendation.rationale.get("k") == pytest.approx(0.5)
@@ -1003,6 +1012,1001 @@ async def test_sensor_assimilation_two_sensors_averaged(db_session: AsyncSession
     assert result.balance is not None
     assert result.balance.assimilation_k == pytest.approx(0.5)
     assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+    expected_dr_obs = 1000.0 * (0.23 - 0.16) * 0.6  # 42.0 mm
+    expected_dr_assimilated = result.balance.depletion_model_mm + 0.5 * (
+        expected_dr_obs - result.balance.depletion_model_mm
+    )
+    assert result.balance.depletion_mm == pytest.approx(expected_dr_assimilated)
     assert result.recommendation is not None
     assert result.recommendation.rationale.get("without_sensor") is False
     assert result.recommendation.rationale.get("k") == pytest.approx(0.5)
+
+
+# --- Issue #99 T4 Sensor assimilation tests ---
+
+
+@dataclass(frozen=True)
+class SensorSpec:
+    depth_cm: int | None = 30
+    metric: str = "soil_moisture"
+    calibration_kind: str = "field"
+    readings: Sequence[tuple[datetime, float, int]] = ()
+
+
+async def _setup_plot_with_sensors(
+    db_session: AsyncSession,
+    sensors: Sequence[SensorSpec],
+    *,
+    target_day: date = date(2026, 9, 25),
+    now: datetime | None = None,
+) -> tuple[UUID, UUID]:
+    """Creates a plot with weather, node, and the specified field-calibrated sensors + readings."""
+    ref_time = now or datetime(target_day.year, target_day.month, target_day.day, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=ref_time)
+
+    node_id = uuid7()
+    db_session.add(
+        NodeRow(
+            id=node_id,
+            org_id=org_id,
+            plot_id=plot_id,
+            transport="lorawan",
+            claim_code=f"claim-{uuid4().hex[:6]}",
+            credential_hash="hash",
+            interval_s=900,
+            status="online",
+            claimed_at=ref_time - timedelta(days=10),
+            last_seen_at=ref_time,
+        )
+    )
+    await db_session.flush()
+
+    for s in sensors:
+        sensor_row = SensorRow(
+            node_id=node_id,
+            channel_key=f"s_{s.metric}_{s.depth_cm}_{uuid4().hex[:6]}",
+            metric=s.metric,
+            depth_cm=s.depth_cm,
+            unit="pct" if s.metric == "soil_moisture" else "c",
+        )
+        db_session.add(sensor_row)
+        await db_session.flush()
+
+        db_session.add(
+            CalibrationRow(
+                id=uuid7(),
+                sensor_id=sensor_row.id,
+                version=1,
+                method="linear",
+                kind=s.calibration_kind,
+                params={"scale": 1.0, "offset": 0.0},
+                rmse_pct=None,
+                valid_from=ref_time - timedelta(days=10),
+            )
+        )
+        for t, val, qual in s.readings:
+            db_session.add(
+                ReadingRow(
+                    time=t,
+                    sensor_id=sensor_row.id,
+                    raw_value=val,
+                    value=val,
+                    received_at=t,
+                    quality=qual,
+                )
+            )
+
+    await db_session.commit()
+    return org_id, plot_id
+
+
+async def _run_plot_daily_balance(
+    db_session: AsyncSession,
+    plot_id: UUID,
+    target_day: date = date(2026, 9, 25),
+    *,
+    now: datetime | None = None,
+) -> DailyBalanceResult:
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+    return result
+
+
+async def test_sensor_assimilation_rerun_with_now_far_from_d_gives_same_result(
+    db_session: AsyncSession,
+) -> None:
+    """D2: Freshness and calibration lookup anchor to local day D-1 end, not now."""
+    target_day = date(2026, 9, 25)
+    now_day_d = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t1 = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t1, 16.0, 0)])],
+        target_day=target_day,
+        now=now_day_d,
+    )
+
+    res_initial = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now_day_d)
+    assert not res_initial.skipped
+    assert res_initial.balance is not None
+    assert res_initial.balance.assimilation_k == pytest.approx(0.5)
+
+    now_rerun = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    res_rerun = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now_rerun)
+    assert not res_rerun.skipped
+    assert res_rerun.balance is not None
+    assert res_rerun.balance.assimilation_k == pytest.approx(0.5)
+    assert res_rerun.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+    expected_dr_obs = 1000.0 * (0.23 - 0.16) * 0.6
+    expected_dr = res_rerun.balance.depletion_model_mm + 0.5 * (
+        expected_dr_obs - res_rerun.balance.depletion_model_mm
+    )
+    assert res_rerun.balance.depletion_mm == pytest.approx(expected_dr)
+
+
+async def test_sensor_assimilation_reading_at_0200_utc_day_d_belongs_to_local_d_minus_1(
+    db_session: AsyncSession,
+) -> None:
+    """D3: A reading at 02:00 UTC of day D is 21:00 Bogota of day D-1, so it belongs to D-1."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 25, 2, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, 16.0, 0)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+
+
+async def test_sensor_assimilation_start_boundary_pair_0459_excluded_0500_included(
+    db_session: AsyncSession,
+) -> None:
+    """R3-001: 04:59 UTC on day D-1 is excluded (local D-2) while 05:00 UTC is included.
+    Both readings are fresh relative to now (<24 h), isolating the local-day window start."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    # 04:59 UTC on Sep 24 is fresh (<24 h from now), but before local day D-1 start (05:00 UTC)
+    t_excluded = datetime(2026, 9, 24, 4, 59, tzinfo=UTC)
+    # 05:00 UTC on Sep 24 is the exact start boundary of local day D-1 [05:00 UTC D-1, 05:00 UTC D)
+    t_included = datetime(2026, 9, 24, 5, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t_excluded, 10.0, 0), (t_included, 16.0, 0)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    # If 04:59 UTC were included, mean would be (10.0 + 16.0) / 2 = 13.0
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+
+
+async def test_sensor_assimilation_out_of_range_reading_excluded_from_daily_mean(
+    db_session: AsyncSession,
+) -> None:
+    """D3: Out-of-range reading (quality & 2 != 0) is excluded from sensor daily mean."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t1 = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+    t2 = datetime(2026, 9, 24, 14, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t1, 16.0, 0), (t2, 99.0, 2)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+
+
+async def test_sensor_assimilation_sensor_with_no_valid_readings_or_nan_mean_yields_k_zero(
+    db_session: AsyncSession,
+) -> None:
+    """R3-daily-value-none: Sensor with out-of-range readings falls back to K=0, no TypeError."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, 999.0, 2)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+async def test_sensor_assimilation_nan_reading_filtered_valid_reading_assimilated(
+    db_session: AsyncSession,
+) -> None:
+    """R3-002: A reading with value=NaN is excluded by the NaN filter next to a valid reading,
+    so observed moisture equals the valid reading and K > 0 (fails if NaN reaches the mean)."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t_nan = datetime(2026, 9, 24, 10, 0, tzinfo=UTC)
+    t_valid = datetime(2026, 9, 24, 14, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t_nan, float("nan"), 0), (t_valid, 16.0, 0)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert result.balance.soil_moisture_obs_pct == pytest.approx(16.0)
+    expected_dr_obs = 1000.0 * (0.23 - 0.16) * 0.6
+    expected_dr = result.balance.depletion_model_mm + 0.5 * (
+        expected_dr_obs - result.balance.depletion_model_mm
+    )
+    assert result.balance.depletion_mm == pytest.approx(expected_dr)
+
+
+async def test_sensor_assimilation_nan_only_reading_yields_k_zero(
+    db_session: AsyncSession,
+) -> None:
+    """R3-nan-test-name-contradicts-assertion (#120): When only a NaN reading exists in the
+    balance window, the NaN filter leaves no valid readings -> K=0 and without_sensor rationale."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, float("nan"), 0)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+async def test_sensor_assimilation_fresh_reading_no_balance_day_readings_yields_k_zero(
+    db_session: AsyncSession,
+) -> None:
+    """R3-untested-branches (a): Sensor has fresh reading outside D-1, but none in D-1 -> K=0."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 8, 0, tzinfo=UTC)
+    # Reading at 07:00 UTC day D (02:00 Bogota day D) is after the end of local day D-1 (05:00 UTC)
+    t = datetime(2026, 9, 25, 7, 0, tzinfo=UTC)
+
+    _, plot_id = await _setup_plot_with_sensors(
+        db_session,
+        [SensorSpec(depth_cm=30, readings=[(t, 16.0, 0)])],
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+async def test_sensor_assimilation_three_or_more_sensors_yields_k_zero(
+    db_session: AsyncSession,
+) -> None:
+    """R3-untested-branches (b): 3 or more qualifying sensors -> K=0 (only 1 or 2 supported)."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    sensors = [
+        SensorSpec(depth_cm=d, readings=[(t, v, 0)])
+        for d, v in [(20, 14.0), (30, 16.0), (40, 18.0)]
+    ]
+    _, plot_id = await _setup_plot_with_sensors(db_session, sensors, target_day=target_day, now=now)
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+async def test_sensor_assimilation_non_soil_moisture_or_null_depth_ignored(
+    db_session: AsyncSession,
+) -> None:
+    """R3-untested-branches (c): Non soil-moisture metric or null depth sensor is ignored."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    t = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    sensors = [
+        SensorSpec(depth_cm=30, metric="air_temp", readings=[(t, 25.0, 0)]),
+        SensorSpec(depth_cm=None, metric="soil_moisture", readings=[(t, 25.0, 0)]),
+    ]
+    _, plot_id = await _setup_plot_with_sensors(db_session, sensors, target_day=target_day, now=now)
+
+    result = await _run_plot_daily_balance(db_session, plot_id, target_day, now=now)
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.0)
+    assert result.balance.soil_moisture_obs_pct is None
+    assert result.balance.depletion_mm == result.balance.depletion_model_mm
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("without_sensor") is True
+
+
+# --- Issue #115 round 1 findings ---
+
+
+@dataclass
+class _FakeCropRepositoryWithBadStage:
+    """A stage name outside initial/development/mid/late that only a
+    hand-built `Crop` can carry: `crop_stage`'s `ck_crop_stage_name` CHECK
+    constraint rejects it at the real Postgres adapter, so this fakes the
+    farms port instead of writing an invalid row (R3-kc-unknown-stage-
+    raises-in-job)."""
+
+    crop: Crop
+
+    async def get(self, crop_id: int) -> Crop | None:
+        return self.crop
+
+
+async def test_invalid_crop_stage_name_skips_with_typed_reason_and_no_rows(
+    db_session: AsyncSession,
+) -> None:
+    """A stage name compute_kc_for_cycle_day does not recognize must skip this one
+    plot with a typed reason, not abort the whole job with an uncaught ValueError
+    (R3-kc-unknown-stage-raises-in-job).
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    bad_crop = Crop(
+        id=crop_id,
+        code="maize",
+        name_es="Maíz",
+        kc_source=KcSource.FAO56,
+        stages=(
+            CropStage(stage="inicial", length_days=18, kc=0.30, depletion_fraction_p=0.55),
+            CropStage(stage="development", length_days=27, kc=0.75, depletion_fraction_p=0.55),
+            CropStage(stage="mid", length_days=31, kc=1.20, depletion_fraction_p=0.55),
+            CropStage(stage="late", length_days=14, kc=0.35, depletion_fraction_p=0.55),
+        ),
+    )
+
+    wb_repo = SqlAlchemyWaterBalanceRepository(db_session)
+    rec_repo = SqlAlchemyIrrigationRecommendationRepository(db_session)
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=_FakeCropRepositoryWithBadStage(bad_crop),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=wb_repo,
+        recommendations=rec_repo,
+    )
+    await db_session.commit()
+
+    assert result.skipped
+    assert result.skip_reason == "crop_stage_invalid"
+    assert result.balance is None
+    assert result.recommendation is None
+
+    d_minus_1 = target_day - timedelta(days=1)
+    assert await wb_repo.get_for_plot(plot_id, d_minus_1) is None
+    assert await rec_repo.get_for_plot(plot_id, target_day) is None
+
+
+async def test_sensor_assimilation_clamps_depletion_within_0_taw_at_app_level(
+    db_session: AsyncSession,
+) -> None:
+    """R3-clamp-wiring-untested-at-app-level: a field-calibrated representative
+    sensor reading far above field capacity (fc=23%) must still persist
+    depletion_mm inside [0, TAW], not a negative value from the raw formula.
+    """
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Sensor at Zr/2 (30 cm of a 60 cm root zone) reads 40% (well above fc=23%,
+    # e.g. right after heavy rain): the raw Dr_obs formula alone would be negative.
+    await _setup_sensor(
+        db_session,
+        org_id=org_id,
+        plot_id=plot_id,
+        depth_cm=30,
+        calibration_kind="field",
+        reading_fresh=True,
+        daily_value=40.0,
+        target_day=target_day,
+        now=now,
+    )
+
+    result = await run_daily_balance(
+        plot_id=plot_id,
+        day=target_day,
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+        nodes=SqlAlchemyNodeRepository(db_session),
+        sensors=SqlAlchemySensorRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        readings=SqlAlchemyReadingRepository(db_session),
+        now=now,
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.balance is not None
+    assert result.balance.assimilation_k == pytest.approx(0.5)
+    assert 0.0 <= result.balance.depletion_mm <= result.balance.taw_mm
+
+
+# --- T3: #97 daily balance use case follow-ups ---
+
+
+def _core_repos(db_session: AsyncSession, *, crops: object | None = None) -> dict[str, object]:
+    """The repository set every T3 test below passes, `crops` overridable for a fake."""
+    return dict(
+        plots=SqlAlchemyPlotRepository(db_session),
+        crop_cycles=SqlAlchemyCropCycleRepository(db_session),
+        crops=crops if crops is not None else SqlAlchemyCropRepository(db_session),
+        soil_profiles=SqlAlchemySoilProfileRepository(db_session),
+        weather=SqlAlchemyWeatherRepository(db_session),
+        water_balances=SqlAlchemyWaterBalanceRepository(db_session),
+        recommendations=SqlAlchemyIrrigationRecommendationRepository(db_session),
+    )
+
+
+async def _assert_skipped_no_rows(
+    db_session: AsyncSession,
+    plot_id: UUID,
+    target_day: date,
+    reason: str,
+    *,
+    crops: object | None = None,
+) -> None:
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, **_core_repos(db_session, crops=crops)
+    )
+    await db_session.commit()
+    assert result.skipped
+    assert result.skip_reason == reason
+    assert result.balance is None
+    assert result.recommendation is None
+    d_minus_1 = target_day - timedelta(days=1)
+    wb_repo = SqlAlchemyWaterBalanceRepository(db_session)
+    rec_repo = SqlAlchemyIrrigationRecommendationRepository(db_session)
+    assert await wb_repo.get_for_plot(plot_id, d_minus_1) is None
+    assert await rec_repo.get_for_plot(plot_id, target_day) is None
+
+
+async def test_forecast_missing_flagged_when_window_has_no_forecast_rows(
+    db_session: AsyncSession,
+) -> None:
+    """D1 (R3-missing-forecast-silently-zero): no forecast rows for [D, D+6] keeps
+    computing (not skipped) but flags forecast_missing in the rationale, instead of
+    silently presenting zeroed forecast sums as trustworthy.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    # Only the D-1 observed row, no forecast rows for D..D+6 at all.
+
+    d_minus_1 = target_day - timedelta(days=1)
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=False,
+            et0_mm=Decimal("5.0"),
+            rain_mm=Decimal("0.0"),
+            tmin_c=Decimal("22.0"),
+            tmax_c=Decimal("32.0"),
+            rh_mean_pct=Decimal("65.0"),
+            fetched_at=datetime.now(UTC) - timedelta(hours=2),
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True
+
+
+async def test_forecast_missing_false_when_window_is_complete(db_session: AsyncSession) -> None:
+    """The normal fixture populates all 7 forecast days with non-null rain/ET0."""
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day)
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is False
+
+
+async def test_missing_et0_on_balance_day_skips_with_typed_reason(db_session: AsyncSession) -> None:
+    """D1: a D-1 row with a null et0_mm and no other D-1 row to fall back to must
+    skip with a typed reason, not silently compute ETc = 0.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+
+    d_minus_1 = target_day - timedelta(days=1)
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=False,
+            et0_mm=None,
+            rain_mm=Decimal("0.0"),
+            tmin_c=Decimal("22.0"),
+            tmax_c=Decimal("32.0"),
+            rh_mean_pct=Decimal("65.0"),
+            fetched_at=datetime.now(UTC) - timedelta(hours=2),
+        )
+    )
+    await db_session.commit()
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "missing_et0_for_balance_day")
+
+
+async def test_low_confidence_true_when_weather_fetched_over_24h_ago(
+    db_session: AsyncSession,
+) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, stale_weather=True)
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("low_confidence") is True
+
+
+async def test_low_confidence_false_at_exactly_24h_boundary(db_session: AsyncSession) -> None:
+    """R3-low-confidence-untested: fetched_at exactly 24h before `now` is NOT low
+    confidence — the contract is "more than 24 h" (docs/06 §5/§6), strictly greater.
+    """
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, now=now)
+
+    # Overwrite every row's fetched_at to exactly 24h before `now`.
+    rows = (
+        await db_session.execute(
+            text("SELECT cell_id, day, is_forecast FROM weather_daily WHERE cell_id = :c"),
+            {"c": cell_id},
+        )
+    ).all()
+    for cell_id_, day_, is_forecast_ in rows:
+        await db_session.merge(
+            WeatherDailyRow(
+                cell_id=cell_id_,
+                day=day_,
+                is_forecast=is_forecast_,
+                fetched_at=now - timedelta(hours=24),
+                et0_mm=Decimal("5.0"),
+                rain_mm=Decimal("0.0"),
+                tmin_c=Decimal("22.0"),
+                tmax_c=Decimal("32.0"),
+                rh_mean_pct=Decimal("65.0"),
+            )
+        )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("low_confidence") is False
+
+
+async def test_low_confidence_handles_naive_now_as_utc(db_session: AsyncSession) -> None:
+    """R3-low-confidence-untested: a naive `now` (no tzinfo) is read as UTC, matching
+    `local_today`'s own contract, so staleness compares against the right instant.
+    """
+    target_day = date(2026, 9, 25)
+    aware_now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    naive_now = aware_now.replace(tzinfo=None)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, stale_weather=True, now=aware_now)
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=naive_now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("low_confidence") is True
+
+
+async def test_skip_crop_stage_empty(db_session: AsyncSession) -> None:
+    """R3-empty-stages-indexerror: an empty stages tuple on a non-none kc_source
+    crop must skip with a typed reason instead of `crop.stages[-1]` raising
+    IndexError. Faked at the port for the same reason as the bad-name test.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    empty_stage_crop = Crop(
+        id=crop_id, code="maize", name_es="Maíz", kc_source=KcSource.FAO56, stages=()
+    )
+
+    await _assert_skipped_no_rows(
+        db_session,
+        plot_id,
+        target_day,
+        "crop_stage_invalid",
+        crops=_FakeCropRepositoryWithBadStage(empty_stage_crop),
+    )
+
+
+async def test_skip_plot_not_found(db_session: AsyncSession) -> None:
+    await _assert_skipped_no_rows(db_session, uuid7(), date(2026, 9, 25), "plot_not_found")
+
+
+async def test_skip_plot_has_no_weather_cell(db_session: AsyncSession) -> None:
+    org_id = uuid7()
+    db_session.add(OrganizationRow(id=org_id, name="Test Org", kind="individual"))
+    await db_session.commit()
+    farm_id = uuid7()
+    db_session.add(
+        FarmRow(
+            id=farm_id, org_id=org_id, name="Test Farm", municipality_code="47001", location=_POINT
+        )
+    )
+    await db_session.commit()
+    plot_id = uuid7()
+    db_session.add(
+        PlotRow(
+            id=plot_id,
+            org_id=org_id,
+            farm_id=farm_id,
+            name="No Cell",
+            boundary=_BOUNDARY,
+            weather_cell_id=None,
+            irrigation_system="drip",
+            irrigation_efficiency=Decimal("0.90"),
+            system_flow_lph=Decimal("1000.0"),
+        )
+    )
+    await db_session.commit()
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, date(2026, 9, 25), "plot_has_no_weather_cell"
+    )
+
+
+async def test_skip_no_active_cycle_on_irrigated_plot(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", has_cycle=False, day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, target_day, "no_active_cycle_on_irrigated_plot"
+    )
+
+
+async def test_skip_crop_not_found(db_session: AsyncSession) -> None:
+    """R3-skip-branches-untested: the crop lookup returning None (e.g. deleted
+    between the cycle read and this job run) skips this plot rather than crashing.
+    Faked at the port, since `crop_cycle.crop_id` has a real FK to `crop`.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, irrigation_system="drip", day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    @dataclass
+    class _NoCropRepository:
+        async def get(self, crop_id: int) -> Crop | None:
+            return None
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, target_day, "crop_not_found", crops=_NoCropRepository()
+    )
+
+
+async def test_skip_missing_weather_for_balance_day(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, _cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    # No weather rows created at all.
+
+    await _assert_skipped_no_rows(
+        db_session, plot_id, target_day, "missing_weather_for_balance_day"
+    )
+
+
+async def test_skip_cycle_not_started(db_session: AsyncSession) -> None:
+    """R3-skip-branches-untested: a cycle sown after the balance day (D-1) skips
+    instead of computing a negative cycle day."""
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, days_sown_ago=0, day=target_day
+    )
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "cycle_not_started")
+
+
+async def test_skip_soil_incomplete_missing_wilting_point(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, has_soil=False, day=target_day
+    )
+    db_session.add(
+        SoilProfileRow(
+            plot_id=plot_id,
+            source="lab",
+            texture="sandy_loam",
+            field_capacity_pct=Decimal("23.0"),
+            wilting_point_pct=None,
+            root_depth_cm=Decimal("60.0"),
+        )
+    )
+    await db_session.commit()
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "soil_profile_incomplete")
+
+
+async def test_skip_soil_incomplete_missing_root_depth(db_session: AsyncSession) -> None:
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(
+        db_session, has_soil=False, day=target_day
+    )
+    db_session.add(
+        SoilProfileRow(
+            plot_id=plot_id,
+            source="lab",
+            texture="sandy_loam",
+            field_capacity_pct=Decimal("23.0"),
+            wilting_point_pct=Decimal("9.0"),
+            root_depth_cm=None,
+        )
+    )
+    await db_session.commit()
+    await _set_weather(db_session, cell_id, target_day)
+
+    await _assert_skipped_no_rows(db_session, plot_id, target_day, "soil_profile_incomplete")
+
+
+# --- Issue #116 round 2 findings ---
+
+
+async def test_et0_fallback_to_forecast_flags_missing_observed_weather(
+    db_session: AsyncSession,
+) -> None:
+    """R3-et0-fallback-untested-and-unflagged: D-1 has both an observed row (used
+    for rain) and a forecast row; the observed row's et0_mm is null, so ET0 comes
+    from the forecast row instead. docs/06 §5 requires the fallback be noted in
+    the rationale, so missing_observed_weather must be True even though the
+    observed row itself was found (it just could not supply et0).
+    """
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, rain_d_minus_1=2.0, now=now)
+
+    d_minus_1 = target_day - timedelta(days=1)
+    fetched_at = now - timedelta(hours=2)
+    # Overwrite the D-1 observed row: et0_mm -> null, rain_mm stays.
+    await db_session.merge(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=False,
+            et0_mm=None,
+            rain_mm=Decimal("2.0"),
+            tmin_c=Decimal("22.0"),
+            tmax_c=Decimal("32.0"),
+            rh_mean_pct=Decimal("65.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    # Add a D-1 forecast row: the fallback source for et0.
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=d_minus_1,
+            is_forecast=True,
+            et0_mm=Decimal("4.5"),
+            rain_mm=Decimal("1.0"),
+            tmin_c=Decimal("23.0"),
+            tmax_c=Decimal("33.0"),
+            rh_mean_pct=Decimal("60.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("missing_observed_weather") is True
+    assert result.recommendation.rationale.get("et0_mm") == pytest.approx(4.5)
+
+
+async def test_forecast_missing_true_when_a_single_day_is_missing_at_d_plus_6(
+    db_session: AsyncSession,
+) -> None:
+    """R3-forecast-missing-partial-window-untested: a gap at the far edge of the
+    window (D+6) must flag forecast_missing, not only a fully-empty window.
+    """
+    target_day = date(2026, 9, 25)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day)
+    d_plus_6 = target_day + timedelta(days=6)
+    await db_session.execute(
+        text("DELETE FROM weather_daily WHERE cell_id = :c AND day = :d AND is_forecast"),
+        {"c": cell_id, "d": d_plus_6},
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(plot_id=plot_id, day=target_day, **_core_repos(db_session))
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True
+
+
+async def test_forecast_missing_true_when_a_forecast_row_has_null_rain(
+    db_session: AsyncSession,
+) -> None:
+    """R3-forecast-missing-partial-window-untested: a present forecast row with a
+    null rain_mm must still flag forecast_missing, not just an absent row."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, now=now)
+    fetched_at = now - timedelta(hours=2)
+    await db_session.merge(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=target_day,
+            is_forecast=True,
+            et0_mm=Decimal("5.0"),
+            rain_mm=None,
+            tmin_c=Decimal("23.0"),
+            tmax_c=Decimal("33.0"),
+            rh_mean_pct=Decimal("60.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True
+
+
+async def test_forecast_missing_true_when_a_forecast_row_has_null_et0(
+    db_session: AsyncSession,
+) -> None:
+    """R3-forecast-missing-partial-window-untested: a present forecast row with a
+    null et0_mm must still flag forecast_missing, not just an absent row."""
+    target_day = date(2026, 9, 25)
+    now = datetime(2026, 9, 25, 4, 30, tzinfo=UTC)
+    _org_id, plot_id, cell_id, _crop_id = await _create_test_fixture(db_session, day=target_day)
+    await _set_weather(db_session, cell_id, target_day, now=now)
+    fetched_at = now - timedelta(hours=2)
+    await db_session.merge(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=target_day,
+            is_forecast=True,
+            et0_mm=None,
+            rain_mm=Decimal("0.0"),
+            tmin_c=Decimal("23.0"),
+            tmax_c=Decimal("33.0"),
+            rh_mean_pct=Decimal("60.0"),
+            fetched_at=fetched_at,
+        )
+    )
+    await db_session.commit()
+
+    result = await run_daily_balance(
+        plot_id=plot_id, day=target_day, now=now, **_core_repos(db_session)
+    )
+    await db_session.commit()
+
+    assert not result.skipped
+    assert result.recommendation is not None
+    assert result.recommendation.rationale.get("forecast_missing") is True

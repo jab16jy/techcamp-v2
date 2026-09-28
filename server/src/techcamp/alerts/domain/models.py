@@ -71,6 +71,12 @@ def ensure_can_manage_rules(role: Role) -> None:
 RESOLUTION_WINDOW = timedelta(minutes=60)
 """D2: resolution condition sustained for 60 minutes (domain constant)."""
 
+BALANCE_STRESS_MAX_GAP = timedelta(days=3)
+"""The `max_gap` of the DAILY balance series of `water_stress` (D27): 3 × its
+cadence, the same margin docs/06 §3's "Tolerancia de huecos y frescura" sets for
+every other series, so a day the 04:30 balance job did not run is not a gap that
+ends the run."""
+
 WATER_STRESS_UPGRADE_AFTER = timedelta(hours=48)
 """docs/06 §3: water_stress alert upgraded to critical after 48 h."""
 
@@ -580,6 +586,27 @@ def resolve_threshold(
             return None
         return field_capacity_pct + 5
     return rule.threshold
+
+
+def balance_rule_for_stress(rule: AlertRule) -> AlertRule:
+    """The `water_stress` rule as the DAILY BALANCE decides it (docs/06 §3
+    "Balance hídrico", §5; ADR-0022; D27).
+
+    The rule's own threshold is the plot's θ_estrés in moisture percentage, the
+    unit the reading branch compares a sensor in, so it says nothing about the
+    balance. The balance speaks in millimetres and in `RAW`, which moves with
+    ETc every day, so the caller decides on the per-day margin
+    `(Dr / RAW) - 1` and this rule is that comparison: `> 0` IS `Dr > RAW`.
+
+    - `hysteresis = 0`: the rule's 3 points are moisture percentage of the
+      READING series (docs/06 §3: 15,3 % resolves above 18,3 %). On a dimensionless
+      margin it would put the clear condition at `< -3`, an alert that can never
+      resolve, and the daily balance is already a daily mean.
+    - `min_duration = 0`: D22's reasoning applied to daily evidence. One balance
+      per day is a zero-length run, so a 6 h minimum would be a rule that can
+      never fire; the daily balance IS the decision.
+    """
+    return replace(rule, operator=">", threshold=0.0, hysteresis=0.0, min_duration=timedelta(0))
 
 
 def is_eligible_for_escalation(alert: Alert, now: datetime) -> bool:

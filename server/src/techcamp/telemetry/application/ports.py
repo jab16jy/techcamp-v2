@@ -138,11 +138,13 @@ class ReadingRepository(Protocol):
         ...
 
     async def query_valid_raw(
-        self, sensor_id: int, *, start: datetime, end: datetime
+        self, sensor_id: int, org_id: UUID, *, start: datetime, end: datetime
     ) -> list[ReadingPoint]:
         """`query_raw` without the readings outside the physical range
         (docs/06-diseno-detallado.md §1: a calibrated value outside the variable's
-        range "activa la bandera 2 de `quality` y no dispara alertas").
+        range "activa la bandera 2 de `quality` y no dispara alertas"), scoped to
+        `org_id` through the sensor->node relationship
+        (docs/09-cuellos-de-botella.md:47).
 
         Only bit 2 is excluded, because a `ts` corrected by `received_at` (bit 1)
         is valid evidence for a sustained run; the flags are independent bits

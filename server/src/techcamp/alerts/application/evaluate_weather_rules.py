@@ -237,13 +237,15 @@ async def _is_saturated(
 
     It is read at that latest sample, not at the representative depth E6 selects
     for the water balance: `irrigation.is_sensor_depth_representative` is a pure
-    function, but the sensor set it judges is assembled by `run_daily_balance`
-    (nodes, sensors, a valid `field` calibration and a daily mean per sensor), so
-    reusing it here would mean either importing another module's domain
-    (`docs/05` grants `alerts` the `irrigation` application package, not its
-    domain) or duplicating that agronomic rule. The depth-aware version belongs
-    with `water_stress`, which is the rule E6's representative sensor is decided
-    on (ADR-0022, T10).
+    function, but the sensor set it judges is assembled by
+    `irrigation.application.water_stress.representative_soil_moisture_sensors`
+    (T10 wrote it there, and `run_daily_balance` calls the same one), which
+    returns the sensors it accepted for a window. Asking it for the saturation
+    decision would read a different window (the last 24 h for this rule, the local
+    day D−1 for the balance) and answer a question this proxy does not ask: the
+    saturation signal is the plot's newest sample, whichever sensor it came from.
+    The depth-aware version belongs with `water_stress`, which is the rule E6's
+    representative sensor IS decided for (ADR-0022, D26, D29).
     """
     soil = await soils.get_for_plot(plot.id)
     if soil is None or soil.field_capacity_pct is None:
@@ -269,7 +271,7 @@ async def _latest_soil_moisture(
             if sensor.metric != "soil_moisture":
                 continue
             for point in await readings.query_valid_raw(
-                sensor.id, start=at - _SATURATION_LOOKBACK, end=at + _ONE_SECOND
+                sensor.id, plot.org_id, start=at - _SATURATION_LOOKBACK, end=at + _ONE_SECOND
             ):
                 if newest is None or point.time > newest[0]:
                     newest = (point.time, point.value)

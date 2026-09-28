@@ -11,6 +11,7 @@ resolved by `open_alert` (D4) whether or not a test person is attached.
 
 from __future__ import annotations
 
+import decimal
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -21,23 +22,27 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.jobs import (
+    EVALUATE_ORG_BALANCE_TASK_NAME,
     EVALUATE_ORG_FORECAST_TASK_NAME,
     EVALUATE_ORG_FUNGAL_TASK_NAME,
     EVALUATE_ORG_TASK_NAME,
     QUEUE_NAME,
+    evaluate_org_balance_rules,
     evaluate_org_forecast_rules,
     evaluate_org_fungal_risk,
     evaluate_org_node_health,
     local_date,
+    sweep_balance_rules,
     sweep_forecast_rules,
     sweep_fungal_risk,
     sweep_node_health,
 )
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
-from techcamp.farms.adapters.orm import FarmRow, PlotRow
+from techcamp.farms.adapters.orm import FarmRow, PlotRow, SoilProfileRow
 from techcamp.identity.adapters.orm import OrganizationRow
+from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
 from techcamp.shared.ids import uuid7
-from techcamp.telemetry.adapters.orm import NodeRow
+from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, ReadingRow, SensorRow
 from techcamp.weather.adapters.orm import WeatherCellRow, WeatherDailyRow
 
 
@@ -347,3 +352,153 @@ async def _plot_alerts(db_session: AsyncSession, org_id: UUID) -> list[tuple[str
         .where(AlertRow.org_id == org_id)
     )
     return [(code, state) for code, state in rows]
+
+
+# -- the balance branch of water_stress on its own periodic (D28, Q2) --
+
+
+async def test_the_balance_sweep_defers_one_job_per_org_with_its_own_lock(
+    db_session: AsyncSession,
+) -> None:
+    """D28 fixes the hour docs/10 §3 does not name: 04:50, after the 04:30 balance
+    and before the 05:00 morning push. It reads the orgs that have PLOTS and
+    defers one job per org on the `balance` lock, so it never waits on the
+    forecast or fungal sweeps of the same organization."""
+    first = await _make_org(db_session)
+    second = await _make_org(db_session)
+
+    await sweep_balance_rules(timestamp=0)
+
+    jobs = await _jobs(db_session)
+    assert len(jobs) == 2
+    assert {job.task_name for job in jobs} == {EVALUATE_ORG_BALANCE_TASK_NAME}
+    assert {job.args["org_id"] for job in jobs} == {str(first.org_id), str(second.org_id)}
+    assert {job.lock for job in jobs} == {
+        f"alerts:org:{org_id}:balance" for org_id in (str(first.org_id), str(second.org_id))
+    }
+
+
+async def test_the_balance_job_opens_the_stress_of_a_plot_with_no_representative_sensor(
+    db_session: AsyncSession,
+) -> None:
+    """The job end to end: it reads the balance row for D−1 in the PRODUCT's day
+    (docs/10 §3) and opens the warning on `Dr > RAW` (ADR-0022).
+
+    The first plot carries no sensor at all, so no representative sensor exists
+    and the balance owns the plot (D29). The SECOND plot of the SAME organization
+    has one, so however deep its depletion this job must open nothing for it: the
+    reading rule owns that plot, and one job deciding both ways would be two
+    sources on one alert."""
+    org = await _make_org(db_session)
+    now = datetime.now(UTC)
+    today = local_date(now)
+    # The 04:30 run for D wrote the row for D−1.
+    _store_balance(db_session, org.plot_id, today - timedelta(days=1), depletion_mm=60.0)
+    with_sensor = await _add_plot_to_farm(db_session, org)
+    _store_balance(db_session, with_sensor, today - timedelta(days=1), depletion_mm=60.0)
+    await _add_representative_sensor(db_session, org, plot_id=with_sensor)
+    await _commit(db_session)
+
+    await evaluate_org_balance_rules(org_id=str(org.org_id))
+
+    assert await _plot_alerts(db_session, org.org_id) == [("water_stress", "open")]
+
+
+async def _add_plot_to_farm(db_session: AsyncSession, org: Org) -> UUID:
+    """A second plot of the same farm (the same org, so the same job decides it)."""
+    plot_id = uuid7()
+    db_session.add(
+        PlotRow(
+            id=plot_id,
+            org_id=org.org_id,
+            farm_id=org.farm_id,
+            name="Lote 2",
+            boundary=_BOUNDARY,
+            irrigation_system="drip",
+        )
+    )
+    await db_session.flush()
+    return plot_id
+
+
+def _store_balance(
+    db_session: AsyncSession, plot_id: UUID, day: date, *, depletion_mm: float
+) -> None:
+    """One `water_balance_daily` row, as the 04:30 irrigation job writes it."""
+    db_session.add(
+        WaterBalanceDailyRow(
+            plot_id=plot_id,
+            day=day,
+            etc_mm=decimal.Decimal("5.0"),
+            effective_rain_mm=decimal.Decimal("0.0"),
+            irrigation_mm=decimal.Decimal("0.0"),
+            taw_mm=decimal.Decimal("100.0"),
+            raw_mm=decimal.Decimal("50.0"),
+            depletion_model_mm=decimal.Decimal(str(depletion_mm)),
+            depletion_mm=decimal.Decimal(str(depletion_mm)),
+            soil_moisture_obs_pct=None,
+            assimilation_k=decimal.Decimal("0"),
+            stress_moisture_pct=decimal.Decimal("15.3"),
+        )
+    )
+
+
+async def _add_representative_sensor(db_session: AsyncSession, org: Org, *, plot_id: UUID) -> None:
+    """A `field`-calibrated soil-moisture sensor at Zr/2 of a 100 cm root zone
+    with a valid reading in the last 24 h: the plot's representative sensor
+    (docs/06 §5, ADR-0022)."""
+    now = datetime.now(UTC)
+    node_id = uuid7()
+    db_session.add(
+        NodeRow(
+            id=node_id,
+            org_id=org.org_id,
+            plot_id=plot_id,
+            transport="wifi",
+            claim_code=f"claim-{uuid7().hex}",
+            credential_hash="hash",
+            interval_s=300,
+            claimed_at=now - timedelta(days=30),
+            status="online",
+        )
+    )
+    sensor = SensorRow(
+        node_id=node_id,
+        channel_key="soil_moisture_0",
+        metric="soil_moisture",
+        unit="pct",
+        depth_cm=50,
+    )
+    db_session.add(sensor)
+    db_session.add(
+        SoilProfileRow(
+            plot_id=plot_id,
+            source="lab",
+            field_capacity_pct=23.0,
+            wilting_point_pct=9.0,
+            root_depth_cm=100.0,
+        )
+    )
+    await db_session.flush()
+    db_session.add(
+        CalibrationRow(
+            id=uuid7(),
+            sensor_id=sensor.id,
+            version=1,
+            method="linear",
+            kind="field",
+            params={"scale": 1.0, "offset": 0.0},
+            valid_from=now - timedelta(days=30),
+        )
+    )
+    db_session.add(
+        ReadingRow(
+            time=now - timedelta(hours=2),
+            sensor_id=sensor.id,
+            raw_value=18.0,
+            value=18.0,
+            received_at=now - timedelta(hours=2),
+            quality=0,
+        )
+    )
+    await db_session.flush()

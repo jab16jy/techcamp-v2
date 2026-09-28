@@ -37,17 +37,23 @@ from techcamp.alerts.adapters.repositories import (
     SqlAlchemyAlertRepository,
     SqlAlchemyAlertRuleRepository,
 )
-from techcamp.alerts.application import evaluate_node_health, evaluate_weather_rules
+from techcamp.alerts.application import (
+    evaluate_balance_rules,
+    evaluate_node_health,
+    evaluate_weather_rules,
+)
 from techcamp.farms.adapters.orm import PlotRow
 from techcamp.farms.adapters.repositories import (
     SqlAlchemyFarmRepository,
     SqlAlchemyPlotRepository,
     SqlAlchemySoilProfileRepository,
 )
+from techcamp.irrigation.adapters.repositories import SqlAlchemyWaterBalanceRepository
 from techcamp.shared.db import async_session_factory
 from techcamp.shared.jobs import app
 from techcamp.telemetry.adapters.orm import NodeRow
 from techcamp.telemetry.adapters.repositories import (
+    SqlAlchemyCalibrationRepository,
     SqlAlchemyNodeRepository,
     SqlAlchemyReadingRepository,
     SqlAlchemySensorRepository,
@@ -63,6 +69,8 @@ FORECAST_SWEEP_TASK_NAME = "alerts.sweep_forecast_rules"
 EVALUATE_ORG_FORECAST_TASK_NAME = "alerts.evaluate_org_forecast_rules"
 FUNGAL_SWEEP_TASK_NAME = "alerts.sweep_fungal_risk"
 EVALUATE_ORG_FUNGAL_TASK_NAME = "alerts.evaluate_org_fungal_risk"
+BALANCE_SWEEP_TASK_NAME = "alerts.sweep_balance_rules"
+EVALUATE_ORG_BALANCE_TASK_NAME = "alerts.evaluate_org_balance_rules"
 
 
 async def _orgs_with_nodes(session: AsyncSession) -> list[UUID]:
@@ -199,6 +207,33 @@ async def sweep_fungal_risk(timestamp: int) -> None:
         await session.commit()
 
 
+@app.periodic(cron="50 4 * * *", queue=QUEUE_NAME)
+@app.task(
+    name=BALANCE_SWEEP_TASK_NAME,
+    queue=QUEUE_NAME,
+    retry=RetryStrategy(max_attempts=2, linear_wait=30),
+)
+async def sweep_balance_rules(timestamp: int) -> None:
+    """Daily at 04:50: one balance-rules job per organization (D28).
+
+    The balance branch of `water_stress` runs on its OWN periodic, never called by
+    the irrigation job: docs/05 has no `irrigation → alerts` edge and E6 wires no
+    call into its job. The hour is the one docs/10 §3 does not name, fixed like
+    D23 fixed `fungal_risk`: after the 04:30 balance and the 04:45 fungal rule,
+    before the 05:00 morning push, so the day's stress alert is in the tray the
+    producer opens. The cron carries one honest assumption, as D23's does: it
+    reads whatever `water_balance_daily` holds at 04:50, so a slower balance run
+    leaves one round without the newest day; the job is idempotent and the next
+    round catches up.
+    """
+    async with async_session_factory() as session:
+        for org_id in await _orgs_with_plots(session):
+            await _defer_org_job(
+                session, task_name=EVALUATE_ORG_BALANCE_TASK_NAME, org_id=org_id, source="balance"
+            )
+        await session.commit()
+
+
 @app.task(
     name=EVALUATE_ORG_TASK_NAME,
     queue=QUEUE_NAME,
@@ -287,3 +322,35 @@ async def evaluate_org_fungal_risk(org_id: str) -> None:
     now = datetime.now(UTC)
     async with async_session_factory() as session:
         await _evaluate_weather(session, UUID(org_id), local_date(now) - timedelta(days=1))
+
+
+@app.task(
+    name=EVALUATE_ORG_BALANCE_TASK_NAME,
+    queue=QUEUE_NAME,
+    retry=RetryStrategy(max_attempts=2, linear_wait=30),
+)
+async def evaluate_org_balance_rules(org_id: str) -> None:
+    """The balance branch of `water_stress` for one organization (D28, Q2).
+
+    The day is the product's day, not UTC's (docs/10 §3), and it is the day this
+    run decided: the balance job that ran before it wrote the row for D−1
+    (docs/06 §5), which is the newest row this job reads.
+    """
+    now = datetime.now(UTC)
+    async with async_session_factory() as session:
+        await evaluate_balance_rules(
+            org_id=UUID(org_id),
+            at=now,
+            day=local_date(now),
+            rules=SqlAlchemyAlertRuleRepository(session),
+            farms=SqlAlchemyFarmRepository(session),
+            plots=SqlAlchemyPlotRepository(session),
+            soils=SqlAlchemySoilProfileRepository(session),
+            balances=SqlAlchemyWaterBalanceRepository(session),
+            nodes=SqlAlchemyNodeRepository(session),
+            sensors=SqlAlchemySensorRepository(session),
+            calibrations=SqlAlchemyCalibrationRepository(session),
+            readings=SqlAlchemyReadingRepository(session),
+            alerts=SqlAlchemyAlertRepository(session),
+        )
+        await session.commit()

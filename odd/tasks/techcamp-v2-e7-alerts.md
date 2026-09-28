@@ -319,6 +319,76 @@ work unit (`domain-modeling`).
   worth revisiting only with a provider that supports a deduplication key: then exactly once
   becomes reachable without holding a `sending` state. Numbered D27, not D25: D25 (T10) and D26
   (T9) were taken on sibling branches, so do not renumber this down when merging.
+- D25 T10 reads E6's balance through `irrigation`'s **application** package, and docs/05 gains
+  `alerts --> irrigation`. docs/06 §3's "Balance hídrico" source and ADR-0022 both need
+  `water_balance_daily` and the `K > 0` sensor rule, and docs/05 had no edge for it, so T10 adds
+  it in the same work unit (rule 7). The direction is legal: `irrigation` depends on `farms`,
+  `weather` and `telemetry` only, so nothing new can cycle. The edge is one application-level read
+  module (`irrigation.application.water_stress`), not a port: `alerts` never declares a balance
+  port of its own (AGENTS.md: a port exists only with two implementations or external I/O needing
+  a test double) and never imports `irrigation.domain` — the representative-depth test and
+  `WaterBalanceDay` stay behind `irrigation.application`, the same seam D17's
+  `evaluate_weather_rules._is_saturated` refused to cross. `alerts.adapters.jobs` composes the
+  `irrigation.adapters` repository, as it already does for `weather.adapters.repositories` and
+  `farms.adapters.repositories`.
+- D26 T10's **one** representative-sensor rule, in the module both callers share
+  (`irrigation.application.water_stress.representative_soil_moisture_sensors`), extracted from
+  `run_daily_balance` instead of copied into `alerts`. docs/06 §5 and ADR-0022 define
+  "sensor representativo" once (`K > 0`: field calibration, representative depth, valid reading in
+  the window) and use it for BOTH consumers: the balance's assimilation and, per docs/06 §3
+  ("Solo ese sensor alimenta la regla `water_stress` sobre lecturas"), the reading rule. A second
+  copy in `alerts` would be a second answer to an agronomic question the docs give once, and
+  `_is_saturated`'s docstring already pointed at this unit. Only the window differs: the balance
+  passes the local day D−1 anchored at its end (E6's D2/D3, so a rerun is deterministic) and the
+  reading rule passes the rolling 24 h ending at the decision instant; the calibration in effect
+  is read at the window's end in both, which is E6's anchor and a fraction of a second later than
+  `at` for the reading rule.
+- D27 The **balance** branch of `water_stress` (trigger b) is decided by the same
+  `decide_alert`, on the daily balances as its series, with the rule expressed in units the
+  balance can answer: each day contributes the margin `(Dr / RAW) − 1` and the rule is derived to
+  `>` 0, hysteresis 0, no `min_duration`. Why each part (docs/06 §3, §5, ADR-0022, D22):
+  - `Dr > RAW` is the documented condition (docs/04:75, ADR-0022); the margin makes `RAW` a
+    per-day quantity instead of a frozen threshold, because `p` moves with ETc every day, and it
+    keeps the comparison dimensionless.
+  - hysteresis 0, not the rule's 3: that 3 is moisture percentage points of the *reading* series
+    (docs/06 §3's example, θ_estrés 15,3 % → resolves above 18,3 %). On a dimensionless margin it
+    would be nonsense (it would push the clear condition to `margin < −3`, an alert that can never
+    resolve), and the daily balance is already a daily mean — the anti-flap mechanism the
+    hysteresis band exists for.
+  - no `min_duration`, not the rule's 6 h: D22's reasoning applied to the daily evidence. A 6 h
+    sustained run is not computable from one balance per day (a single sample is a zero-length
+    run), and a zero-length run that satisfies a positive minimum is a rule that can never fire.
+    The daily balance IS the decision, so it opens on the first day that shows `Dr > RAW`.
+  - `max_gap` is 3 × the daily cadence (3 days), the same margin as everywhere else
+    (docs/06 §3 "Tolerancia de huecos y frescura"), and each day is anchored at the instant its
+    local day ended, E6's D2 anchor: a balance for D−1 describes the day that closed at local
+    midnight of D.
+  - Consequences, stated because they are visible: the 60-minute resolution window is not
+    computable either, so an open alert resolves on the **second** consecutive clear balance (a
+    one-day clear run is zero-length); and the 48 h critical upgrade fires on the third
+    consecutive stressed balance (48 h is only reached at the third sample), not at exactly 48 h.
+    Daily evidence cannot resolve better than a day, and inventing a finer rule would be a
+    precision the evidence does not have (D22). Trigger a keeps its 6 h run and its 48 h upgrade on
+    the reading series, both unchanged.
+- D28 T10's balance job is a `alerts` periodic of its own at `50 4 * * *` (04:50), never called by
+  the irrigation job: same shape and same reason as D10 (docs/05 has no `irrigation → alerts`
+  edge, and the coordination note in the E6 boundary says E6 wires no call into its job). The hour
+  is the one docs/10 §3 does not name, fixed as D23 fixed `fungal_risk`: after the 04:30 balance
+  and the 04:45 fungal rule, before the 05:00 morning push, so the day's stress alert is in the
+  tray the producer opens. The cron carries one honest assumption, recorded as D23's does: it
+  reads whatever `water_balance_daily` holds at 04:50, so a slower balance run leaves one round
+  without the newest day; the job is idempotent and the next round catches up. docs/10 §3's
+  `continuos` block gains the node.
+- D29 A plot is decided by **exactly one** of the two triggers, and which one is decided by the
+  same representative-sensor answer both read (D26): with a representative sensor the reading rule
+  owns the plot (trigger a, over readings, against the balance's θ_estrés), without one the daily
+  balance owns it (trigger b). The balance row's own `soil_moisture_obs_pct` / `assimilation_k`
+  is NOT the switch: a plot can have an observed moisture and still have `K = 0` (a `lab`
+  calibration, a depth outside the root zone, three or more sensors), and docs/06 §3's row splits
+  the rule on the sensor, not on the assimilation. A plot whose sensor set is not representative
+  therefore gets no reading decision at all (its soil-moisture series is not evidence) and a
+  balance decision instead. Overlapping the two would open the same alert from two sources with
+  two different clocks on `opened_at`, and the 48 h upgrade would depend on which one ran.
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
@@ -344,6 +414,27 @@ work unit (`domain-modeling`).
   in this doc are pre-rebase.
 - The informative irrigation push (docs/06 §5) stays an E6 follow-up to wire through this outbox
   once E7 is on `main`.
+- T10's prerequisite, done 2026-09-27 in worktree `e7-t10` (branch `feat/e7-t10-water-stress`,
+  from `feat/e7-alerts` @ `84dc963`): `git merge --no-ff origin/main` → `4ec4d0d`. ONE conflict,
+  `telemetry/adapters/repositories.py`, both sides having added
+  `SqlAlchemyReadingRepository.query_valid_raw`: main's took `org_id` and joined sensor→node to
+  filter it, E7's (T5, `4e7201d`) took no `org_id` and reused `_raw`. Resolved with ONE method on
+  main's org-scoped signature and E7's docstring intent (only bit 2 of `quality` filtered): `_raw`
+  grew an `org_id` parameter that adds the join, so the two public reads cannot drift apart on the
+  window or the `value IS NULL` filter. `telemetry/application/ports.py` declares it once (the
+  auto-merge had left BOTH declarations), and the two E7 callers pass the plot's own `org_id`
+  (`alerts/application/evaluate_readings.py::_samples`, which has the plot, and
+  `evaluate_weather_rules.py::_latest_soil_moisture`). No E7 test double implements the port (the
+  alerts tests use the real repository), so nothing else changed. "Matches the doc": every
+  repository filters by `org_id` (docs/09:47), and the reading rules keep E7's "only bit 2 of
+  `quality`" (docs/06 §1, `reading.quality` bits).
+- E6's follow-ups DID add the shared local-day helper: `shared/dates.py::local_today` (T7 of
+  `techcamp-v2-e6-followups.md`, #103) now serves irrigation, weather and `query_weather`, and
+  `alerts/adapters/jobs.py::local_date` (with its own `_LOCAL = ZoneInfo("America/Bogota")`) is the
+  same rule twice — that is #132. Noted, NOT refactored here: `alerts/adapters/jobs.py` is the
+  only remaining caller and T10 kept reading the local day through the alerts helper so this unit
+  does not mix a cleanup into a feature. The E6 module docstring that pointed at
+  `irrigation/domain/models.py::local_today` for the same duplication is now stale in the same way.
 
 ## Open questions
 - Q1 Plot-alert recipients: docs name the technician for node alerts and escalations and the
@@ -458,9 +549,38 @@ work unit (`domain-modeling`).
 - [ ] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
   registration against `POST /push-subscriptions`, one entry point reusing E1 primitives — route:
   Herdr OpenCode + `impeccable` — forecast ~300
-- [ ] T10 `water_stress` (after E6's `water_balance_daily` is on `main`; rebase first): trigger a
+- [x] T10 `water_stress` (after E6's `water_balance_daily` is on `main`; merge first): trigger a
   over readings vs `stress_moisture_pct` with a representative sensor, trigger b `Dr > RAW`
-  without one (ADR-0022, Q2) — route: Herdr OpenCode — forecast ~450
+  without one (ADR-0022, Q2) — route: Herdr OpenCode (worktree `e7-t10`, branch
+  `feat/e7-t10-water-stress`) — forecast ~450 — actual 764 authored (500 production / 264 tests),
+  over the ~400 delivery budget: the owner cuts the PR slice, not the unit. step 0 merge
+  `4ec4d0d`, T10 in `2ae494e`.
+  - Trigger a: `evaluate_readings` reads the plot's θ_estrés and its representative sensor once
+    per plot and passes the narrowed series to `decide_alert` (`stress_moisture_pct`); the
+    ingestor hook composes `SqlAlchemyCalibrationRepository` + `SqlAlchemyWaterBalanceRepository`.
+  - Trigger b: `alerts.application.evaluate_water_stress` on its own 04:50 periodic and per-org
+    job, deciding `Dr > RAW` on the daily balances through the same `decide_alert`.
+  - Shared, not copied: `irrigation.application.water_stress` owns the `K > 0` sensor rule
+    (extracted from `run_daily_balance`, which now calls it) and the balance evidence; docs/05
+    gains `alerts --> irrigation` (D25).
+  - Docs in the same unit: docs/05 (the edge), docs/06 §3 (the `water_stress` row, the two
+    branches, their evidence and the two visible consequences on daily evidence), docs/10 §3 (the
+    04:50 job in `continuos`).
+  - RED: `test_a_dry_run_below_the_plots_stress_moisture_opens_water_stress` →
+    `AssertionError: assert [] == [('water_stress', OPEN)]`; RED (trigger b):
+    `ImportError: cannot import name 'evaluate_balance_rules' from 'techcamp.alerts.application'`.
+  - Checks (`DATABASE_URL` on the T10 container :5440): `uv run pytest tests/alerts
+    tests/irrigation` → 271 passed; `uv run ruff check` → All checks passed; `uv run ruff format
+    --check` → 236 files already formatted; `uv run mypy` → no issues in 158 source files; `uv run
+    lint-imports` → Hexagonal layers per module KEPT.
+  - "Matches the doc": θ_estrés as the reading threshold and the representative sensor as the only
+    series — docs/06 §3 "Reglas de fábrica" (`water_stress`) + §5 ("Solo ese sensor alimenta la
+    regla `water_stress` sobre lecturas") + ADR-0022. `Dr > RAW` on the daily balance, with no
+    duration and no hysteresis on that branch, and the second-clear-day resolution / third-day
+    critical consequences — docs/06 §3 "Balance hídrico" + docs/04:75 + ADR-0022 + D22/D27. The
+    `alerts --> irrigation` edge — docs/05 (D25) + the hexagonal rule that another module's domain
+    is not reachable. Org filter on every read of both branches — docs/09:47. The 04:50 hour and
+    the product's day — docs/10 §3 (D28).
 - [ ] T11 Close: scenario-A integration test (readings through ingest → `heat_stress` and
   `water_stress` open → push via the fake sender → escalation SMS in `/dev/outbox`), retries and
   escalation proven; seminar-stack demo; final report — route: Herdr OpenCode — forecast ~250
@@ -808,6 +928,25 @@ work unit (`domain-modeling`).
     caller-org filter; a full all-refused pass can loop; `limit=0` never terminates the dispatch
     loop; `SeminarSmsSender` registered for two channels; a stale `DispatchReport.deferred` name;
     retry backoff measured from the run's start instead of the failure).
+- T10 step 0, on `feat/e7-t10-water-stress` (`84dc963..4ec4d0d`, 30 files / 2,292 lines
+  incl. main's E6 follow-ups): `assess --agent opencode --base-ref 84dc963 --committed-only` →
+  `medium`, `slice_budget_reached`; standing grant applied per the brief; lineage
+  `review-df6d86e988c0e106`, one `review-reliability` lens, **APPROVED, zero findings**,
+  acknowledged (authority burned). Boundary → `4ec4d0d`.
+- T10 (`4ec4d0d..2ae494e`, 19 files / 1,937 lines): `assess --agent opencode --base-ref
+  4ec4d0d --committed-only` → `medium`, `slice_budget_reached`; grant applied; lineage
+  `review-fbe89638809515c9`, one `review-reliability` lens, **APPROVED**, acknowledged
+  (authority burned). Zero BLOCKER/CRITICAL; 2 WARNING, non-blocking → **#135**
+  (R3-raw-gate: the reading branch still takes a θ_estrés from a newest balance with
+  `RAW <= 0`, which the doc bullet reads as plot-wide; R3-org-failure-isolation:
+  `evaluate_balance_rules` has no D24 per-plot isolation, so one plot's failure ends the
+  whole organization's round). Neither is fixed here, per AGENTS.md Workflow. Boundary →
+  `2ae494e`.
+  - Lesson to carry into T11: the third job-side evaluator (T10's) was written WITHOUT D24's
+    per-plot `try` + `recover`, and no test caught it, because a failure there is a
+    repository failure and the tests are all happy paths. When T11 proves the whole
+    `water_stress` path end to end, add the per-plot isolation (or file it as #135 does) in
+    the same spirit as D24.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -940,8 +1079,8 @@ work unit (`domain-modeling`).
     consequence: because the fixture now agrees with the job in every hour, reverting the job to
     `now().date()` (the CRITICAL T6b fixed) would keep the suite green unless CI happens to run
     inside the 19:00–23:59 local window. Both belong to #132 / the clock-injection follow-up.
-- Next step: T7a merged into `feat/e7-alerts` (RDD approved at `45197b5`, follow-ups #137);
-  T10 and T9 merge next. Then T7b (Web Push adapter) and T7c in fresh OpenCode sessions, T8 after
+- Next step: T7a and T10 merged into `feat/e7-alerts` (follow-ups #137, #135);
+  T9 merges next. Then T7b (Web Push adapter) and T7c in fresh OpenCode sessions, T8 after
   T7, then T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
@@ -1001,3 +1140,34 @@ work unit (`domain-modeling`).
   Success: no issues found in 160 source files; `uv run lint-imports` → 1 kept, 0 broken.
   Lineage `review-3c56ad3aef34dbf2` APPROVED and acknowledged (authority burned, target
   `sha256:4494bec6…`); the 6 non-blocking WARNING → #137. T7b not started.
+- 2026-09-27, step 0 (writer `e7-t10`, branch `feat/e7-t10-water-stress`): docs read for T10 —
+  AGENTS.md, docs/05 (the module graph, to add the edge), docs/06 §3 ("Reglas de fábrica" +
+  "Balance hídrico" + the resolution window) and §5 (the `K` table, the representative sensor, the
+  θ_estrés row), docs/04:75 (the `Dr > RAW` boundary), docs/03 (`water_balance_daily`,
+  `alert_rule`), docs/09:47 (org isolation), docs/10 §3 (the job hours), ADR-0022, ADR-0009, and
+  this doc's Q2, D5, D17, D22 and T10. Code mapped with CodeGraph (`gentle-ai codegraph init`
+  once in the worktree: 329 files; `codegraph callers query_valid_raw`, then
+  `codegraph_explore "NON_PLOT_RULE_CODES plot_rule_metric decide_alert open_alert jobs"`): no grep
+  or broad read before it, and no fallback was needed.
+- Step 0 merge `4ec4d0d` (`merge: bring main (E6 follow-ups) into E7 before T10`): the one
+  conflict resolved as the E6 coordination section records; `uv run ruff format` folded its two
+  reformattings into the same commit (amended, unpushed, so the reviewed boundary is one commit).
+  Checks after the merge, own DB `techcamp-e7-db-t10` on :5440: `uv run pytest tests/alerts
+  tests/telemetry` → 333 passed; `uv run ruff check` → All checks passed; `uv run ruff format
+  --check` → 232 files already formatted; `uv run mypy` → no issues in 156 source files; `uv run
+  lint-imports` → KEPT. RDD: `assess --agent opencode --base-ref 84dc963 --committed-only` →
+  `medium`, `slice_budget_reached`; lineage `review-df6d86e988c0e106`, one `review-reliability`
+  lens, **APPROVED with zero findings**, acknowledged (authority burned). Boundary → `4ec4d0d`.
+- T10 2026-09-27 (same writer): RED → GREEN per trigger, as the T10 task records. The two REDs, the
+  checks and the "matches the doc" lines are under T10 above. Design read before writing: the
+  representative sensor was EXTRACTED from `run_daily_balance` rather than copied (D26), so
+  `tests/irrigation/test_run_daily_balance.py`'s own sensor tests keep covering it through the
+  balance; `tests/irrigation/test_water_stress.py` adds only what the ALERTS caller asks (a plot
+  with no root depth, the balance evidence of D27). The one behaviour the tests had to teach me,
+  recorded because it is a real trap: a balance row for local day D is only visible to a run that
+  decides at or after local midnight of D, because the sample is anchored at the instant the local
+  day ENDED (D27/E6's D2 anchor) — the upgrade test failed until each round decided a day later
+  than the row it reads.
+- T10 review (2026-09-27, same writer): lineage `review-fbe89638809515c9` APPROVED and
+  acknowledged with 2 non-blocking WARNINGs → #135, as recorded under Review (RDD). No
+  correction was spent, so the delivered behaviour is exactly what the tests above pin.

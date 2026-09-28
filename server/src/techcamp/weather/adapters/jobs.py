@@ -22,13 +22,13 @@ import datetime
 import json
 import logging
 from functools import lru_cache
-from zoneinfo import ZoneInfo
 
 from procrastinate import RetryStrategy
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.shared.dates import local_today
 from techcamp.shared.db import async_session_factory
 from techcamp.shared.jobs import app
 from techcamp.weather.adapters.open_meteo import (
@@ -62,18 +62,6 @@ false` row and nothing else retries it — the next 03:00 run only consolidated
 the new "yesterday", leaving a gap `weather_daily` never fills. A small
 constant, not a config knob: the DAG runs daily, so a gap this window cannot
 repair needs a human notice, not a longer queue."""
-
-_LOCAL = ZoneInfo("America/Bogota")
-"""The zone the orchestration DAG fixes every job hour to
-(docs/10-dag.md:156), and so the zone a "day" means here. The provider answers
-in the cell's own zone (`timezone=auto`); the cells are the Colombian Caribbean,
-so the two agree on where a day starts."""
-
-
-def local_today() -> datetime.date:
-    """Today in the DAG's zone, which is what "the previous day" counts back
-    from (docs/10-dag.md §3: "03:00 consolidar clima del día anterior")."""
-    return datetime.datetime.now(_LOCAL).date()
 
 
 def previous_day() -> datetime.date:

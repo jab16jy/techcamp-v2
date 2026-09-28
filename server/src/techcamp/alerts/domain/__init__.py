@@ -7,6 +7,7 @@ from techcamp.alerts.domain.errors import (
     InvalidAlertRuleError,
 )
 from techcamp.alerts.domain.models import (
+    BALANCE_STRESS_MAX_GAP,
     ESCALATION_DELAY,
     FUNGAL_MAX_TEMP_C,
     FUNGAL_MIN_TEMP_C,
@@ -26,6 +27,7 @@ from techcamp.alerts.domain.models import (
     InvalidAlertTransitionError,
     Severity,
     WorkerRuleEvidence,
+    balance_rule_for_stress,
     decide_alert,
     decide_node_health,
     decide_worker_rule,
@@ -48,6 +50,7 @@ __all__ = [
     "ESCALATION_DELAY",
     "FUNGAL_MAX_TEMP_C",
     "FUNGAL_MIN_TEMP_C",
+    "BALANCE_STRESS_MAX_GAP",
     "NON_PLOT_RULE_CODES",
     "NODE_SILENCE_INTERVALS",
     "RESOLUTION_WINDOW",
@@ -80,6 +83,7 @@ __all__ = [
     "mean_daily_temp_c",
     "node_silence_window",
     "plot_rule_metric",
+    "balance_rule_for_stress",
     "resolve_threshold",
     "sustained_run",
     "worker_rule_evidence",
