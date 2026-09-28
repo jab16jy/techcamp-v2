@@ -2,6 +2,17 @@
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
+## Environment variables
+
+Vite only exposes variables prefixed with `VITE_` to the browser bundle. This project has two:
+
+| Variable | Needed for | Notes |
+| --- | --- | --- |
+| `VITE_VAPID_PUBLIC_KEY` | Web Push subscription (docs/04-api.md, "Alertas y notificaciones") | The public half of the server's VAPID key pair, base64url. Public by design, so it ships in the bundle; it must match the server's configured key pair. Without it the app runs normally but push stays off. |
+| `VITE_API_TEST_BASE_URL` | Vitest only | Never set outside tests; `vite.config.ts`'s `test.env` sets it. |
+
+`API_PROXY_TARGET` is deliberately **not** `VITE_`-prefixed: it is this dev proxy's forwarding target and must never reach the browser bundle.
+
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)

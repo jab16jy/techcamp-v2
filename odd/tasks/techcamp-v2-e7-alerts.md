@@ -291,7 +291,7 @@ work unit (`domain-modeling`).
   nodes, so N × R sensor reads become N, with the readings still read per rule because each rule
   has its own window. Same behavior, and the sample semantics are deliberately untouched — what a
   plot rule MEANS over several sensors is still undecided (#131).
-- D28 T7a's dispatcher (numbered D24 on its branch; renumbered at merge, T5c owns D24) treats a channel with no registered sender as NOT an attempt, and does
+- D31 T7a's dispatcher (D24 on its branch; renumbered at merge: T5c owns D24, T10 owns D25-D29) treats a channel with no registered sender as NOT an attempt, and does
   not even claim it. `push` has no adapter until T7b, and ADR-0016 puts the real SMS/WhatsApp
   provider in future work, so a naive dispatcher would count a missing adapter as a failure and
   burn all five retries: a row would go `failed` before any provider existed, and the escalation
@@ -304,7 +304,7 @@ work unit (`domain-modeling`).
   holds its claim; and because that per-row commit ends the claim's transaction, every row takes
   its OWN lock (`hold`) right before it is sent, or a second worker could pick up an unprocessed
   row of the same batch (correction, below).
-- D27 T7a's outbox delivery is **AT LEAST ONCE**, and docs/06 §4 says so. The table row promised
+- D30 (D27 on its branch; renumbered at merge, T10 owns D25-D29) T7a's outbox delivery is **AT LEAST ONCE**, and docs/06 §4 says so. The table row promised
   "cada fila se envía una sola vez" — exactly once, which no external provider can give: a worker
   that dies after the provider accepted the message but before `sent` is committed leaves the row
   `pending`, and the next sweep sends it again. The obvious alternative, marking the row `sending`
@@ -317,8 +317,8 @@ work unit (`domain-modeling`).
   `next_attempt_at <= now` under the lock precisely so the "no process died" half is enforced by
   the database rather than by hope (the correction's `R4-completed-worker-race`). The alternative
   worth revisiting only with a provider that supports a deduplication key: then exactly once
-  becomes reachable without holding a `sending` state. Numbered D27, not D25: D25 (T10) and D26
-  (T9) were taken on sibling branches, so do not renumber this down when merging.
+  becomes reachable without holding a `sending` state. Numbered D30 at merge (D25-D29 belong to T10, D32-D33 to T9;
+  D31 is T7a's channel rule), so do not renumber it down.
 - D25 T10 reads E6's balance through `irrigation`'s **application** package, and docs/05 gains
   `alerts --> irrigation`. docs/06 §3's "Balance hídrico" source and ADR-0022 both need
   `water_balance_daily` and the `K > 0` sensor rule, and docs/05 had no edge for it, so T10 adds
@@ -397,6 +397,31 @@ work unit (`domain-modeling`).
   `endpoint` and re-binds the row to the caller, replacing its `keys`; `DELETE` only serves the
   caller's own row (anything else 404). Read `GET /alert-rules` serves any member of the org
   (viewer included); `POST`/`PATCH` need role `owner` of the rule's org.
+- D32 **T9's VAPID public key source: the build-time `VITE_VAPID_PUBLIC_KEY`, not an endpoint.** (D25 on its branch; renumbered at merge, T10 owns D25-D29.)
+  Owner decision 2026-09-27, and the doc line it rests on is the one T9 adds to docs/04's
+  "Alertas y notificaciones" section, in the same work unit. The gap this closes: docs/04 named
+  `POST`/`DELETE /push-subscriptions` but **no** source for the VAPID public key, and
+  `PushManager.subscribe()` cannot subscribe without an `applicationServerKey` — the endpoint
+  alone was not enough to register anything. A full `docs/**` grep found no VAPID exposure
+  anywhere (only docs/03:491, which says the credentials live in `keys JSONB`). Options weighed:
+  a build-time `VITE_` variable (reuses `client.ts`'s existing `VITE_API_TEST_BASE_URL` pattern,
+  web-only, zero server work, no doc contradiction) against a new `GET` route (a docs/04 change
+  first, server code, schema regen, `uv run pytest tests/alerts`, and a T9 well past its ~300-line
+  forecast). The owner chose the build-time variable: **the key is public by design**, so a route
+  to deliver it protects nothing, and the cost lands where the value already has to live. Two
+  consequences, both accepted: rotating the key pair means rebuilding the web bundle, and a
+  build with the variable unset must fail *softly* (push off, the rest of the app intact), not
+  throw. T7b's server adapter must read the matching key pair from its own config.
+- D33 (D26 on its branch; renumbered at merge) **`notificationclick` opens or focuses the app's `/alertas` tab (docs/07's screen map:
+  `alerts`).** docs/07's map puts open alerts on the `Alertas` bottom tab and hangs "Detalle de
+  alerta + reconocer" off it, so that tab is where a pushed alert belongs; the payload carries no
+  deep link of its own yet (T7's outbox payload is not written), so the handler resolves a route
+  from what the payload does carry and falls back to `/alertas` rather than inventing a per-alert
+  URL shape ahead of T7. It focuses a matching client when one is open and opens the route in a
+  new client otherwise, which is the app root's own shell — `/alertas` is a tab inside it, so
+  "open the app" and "open the alerts tab" are the same navigation. `/alertas` is a
+  `PlaceholderPage` until its own task replaces it, which is deliberate: the handler names the
+  documented destination, not the   screen that happens to exist today.
 
 ## E6 coordination (2026-09-26)
 - E6 merged to `main` (PRs #104–#111, `main` @ `b627b66`): `water_balance_daily` (`plot_id`, `day`,
@@ -538,7 +563,7 @@ work unit (`domain-modeling`).
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
     forecast ~450 — actual 1,250 (`836e7f1`, 607 src / 564 tests / 79 docs+config), plus the
     RDD correction `f165854` (236: 117 src / 94 tests / 25 docs) and the RDD correction
-    `45197b5` (59, closing the two remaining CRITICALs, D27) — APPROVED and acknowledged
+    `45197b5` (59, closing the two remaining CRITICALs, D30) — APPROVED and acknowledged
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
     subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
@@ -546,9 +571,32 @@ work unit (`domain-modeling`).
     OpenCode (same session as T7a) — forecast ~400
 - [ ] T8 Escalation job: critical unacknowledged ≥ 2 h → `escalated_at` + SMS to the technician
   (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr OpenCode — forecast ~300
-- [ ] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
+- [x] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
   registration against `POST /push-subscriptions`, one entry point reusing E1 primitives — route:
-  Herdr OpenCode + `impeccable` — forecast ~300
+  Herdr OpenCode + `impeccable` — forecast ~300 — actual 807 + 143 (`e354af8` schema regen, `51558be`
+  the unit, `98df0a0` the R3 correction). Two commits before it, and the split is honest rather
+  than cosmetic: `web/src/lib/api/schema.d.ts` was generated before E7, so the typed
+  `openapi-fetch` client could not name `POST /push-subscriptions` at all; regenerating it
+  (`npm run gen:api`, no server change) is its own commit so the T9 slice stays reviewable, and
+  generated lines do not count against the forecast. The forecast missed mostly because two costs
+  it did not name landed: 375 lines of Vitest (TDD is on) and a 30-line `tsconfig.worker.json`,
+  mandatory because `lib: DOM` and `lib: WebWorker` cannot share one program. Production code
+  alone is 336 lines, close to the estimate. **matches the doc**: the `push` handler shows a
+  notification per docs/06 §4's outbox push; the subscription body is exactly T4's documented
+  `{ endpoint, keys: { p256dh, auth } }` and re-posting is safe because docs/04's UNIQUE
+  `endpoint` makes it an upsert; the entry point sits where docs/07's screen map puts "Ajustes y
+  notificaciones" and reuses E1's `Button` and tokens unchanged. **Owner decision D32** (VAPID key
+  at build time, not an endpoint) and its docs/04 line landed in the same work unit as the code;
+  D33 fixed `notificationclick` on `/alertas`. RED: 4 suites failed on unresolved imports before
+  any implementation existed, then the three stale-key cases failed before the R3 correction. One
+  real build failure was found and fixed rather than shipped: `filename: 'features/push/sw.ts'`
+  makes vite-plugin-pwa build `dist/sw.js` and then rename a `dist/features/push/sw.js` that was
+  never written, so `srcDir` locates the source and `filename` stays flat. Checks (web/):
+  `npx vitest --run src/features/push src/app/routes.test.tsx`: 30 passed;
+  `npm test -- --run`: 222 passed (30 files); `npm run lint`: clean; `npm run typecheck`: clean
+  (both programs); `npm run build`: `dist/sw.js` with both handlers and 15 precache entries,
+  registered at scope `/`; `npm run size`: 163.38 kB gzipped of the 200 kB budget. No server
+  code touched, so no pytest was run.
 - [x] T10 `water_stress` (after E6's `water_balance_daily` is on `main`; merge first): trigger a
   over readings vs `stress_moisture_pct` with a representative sensor, trigger b `Dr > RAW`
   without one (ADR-0022, Q2) — route: Herdr OpenCode (worktree `e7-t10`, branch
@@ -911,7 +959,7 @@ work unit (`domain-modeling`).
   - Gate on `f165854` (own DB, 5439): `pytest tests/notifications tests/alerts` → 148 passed,
     1 pre-existing failure (the T6b forecast-day test, identical on the stashed base); ruff,
     format, mypy, lint-imports green. docs/06 §4's "Reclamo" and "Canal sin adaptador" rows and
-    D28 (then D24) were updated in the same commit, so the doc states all three rules.
+    D31 (D24 on its branch) were updated in the same commit, so the doc states all three rules.
   - The first correction was refused: the actual correction was 288 changed lines against a frozen
     budget of 200 (the plan had counted source lines only). Rewritten to **59** lines
     (47 additions, 12 deletions) across five files, then accepted.
@@ -920,7 +968,7 @@ work unit (`domain-modeling`).
     under the same `FOR UPDATE SKIP LOCKED`, so a row another worker finished in the window where
     the claim's locks were released is neither held nor sent (pinned by
     `test_hold_takes_only_a_row_that_is_still_pending_and_due`, negative assertions included); and
-    `R3-001`, answered by D27 (delivery is at least once) rather than by machinery — docs/06 §4's
+    `R3-001`, answered by D30 (delivery is at least once) rather than by machinery — docs/06 §4's
     "Reclamo" row and `dispatch_due_notifications`' docstring now state it. Targeted validation ran
     on the OpenCode host with no refusal, APPROVED and acknowledged (target
     `sha256:4494bec6…`, `review-acknowledged/v1`, authority `burned`). Boundary → `45197b5`.
@@ -947,6 +995,37 @@ work unit (`domain-modeling`).
     repository failure and the tests are all happy paths. When T11 proves the whole
     `water_stress` path end to end, add the per-plot isolation (or file it as #135 does) in
     the same spirit as D24.
+- T9 (`84dc963..98df0a0`, 20 paths; base `84dc963` = `feat/e7-alerts` as the brief pinned it,
+  worktree `e7-t9`, branch `feat/e7-t9-push-client`): medium, `slice_budget_reached` (807 authored
+  lines against a ~400 slice), one reliability lens, **APPROVED and acknowledged (authority
+  burned)**. Lineage `review-6420fc1b733500db`, revision
+  `sha256:dcf70ff1f6ff85c642bf38cfd990566aeb5e47c2c2970adb07ce204201a1a0b9`, acknowledged target
+  `sha256:cdae347bbe6ecb045eb1bc3e52a701addf51cc60cae21c2f540d171e1b5bf820`. Consent was relayed
+  as a `gentle-ai.review-integration.consent/v3` envelope and granted by the owner, matching the
+  brief's "grant consent" — the brief's standing instruction is why the envelope was raised at
+  all, but the contract requires the live answer, so it was asked rather than assumed.
+  - **One CRITICAL, corrected in the bounded correction (`98df0a0`, 143 lines).**
+    `R3-stale-vapid-subscription` (`push.ts:70-78`, inferential, introduced): any existing
+    subscription was re-registered and reported `already-active` without checking which
+    `applicationServerKey` it was created with. D32 makes the client key a build-time value, so a
+    rotation plus rebuild strands every installation on a subscription the server cannot reach —
+    reported active, never delivered, and unrepairable by retrying. The refuter corroborated it.
+    The platform never exposes that key on a `PushSubscription`, so the fix records the key it
+    subscribed with in `localStorage` and replaces the subscription when the build's key differs;
+    storage-unavailable falls back to trusting the subscription instead of churning one per tap.
+    One honest limit recorded in D32 and still true: rotating the key pair means a web rebuild.
+  - **Two WARNINGs, non-blocking → #136** (`review-follow-up`, `epic:e7`, `area:web`, `type:bug`),
+    filed as the single issue for this round and not fixed here:
+    `R3-navigation-failure-swallowed` (`sw.ts:72-74`, deterministic) — the click handler closes the
+    notification and then swallows a navigation rejection, so a failed focus/navigate produces no
+    screen and no failure; and `R3-worker-route-parser-bypass` (`pushPayload.ts:68-70`,
+    deterministic) — the same-origin guard misses a slash-then-backslash route, which WHATWG URL
+    parsing normalizes to `//`, and both `routeForNotification` and `sw.ts`'s `routeOf` share the
+    check, so they must be fixed together.
+  - One writer error worth recording: the first `review start` was hand-retyped and a mistyped
+    `--target` hash was rejected (`the token and the identity come from different negotiations`).
+    The fix is to take `next_transition.execute.command` from STATUS and run it verbatim, never to
+    retype a provider-issued token.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -1130,7 +1209,7 @@ work unit (`domain-modeling`).
 - T7a correction `45197b5` (fresh writer, 2026-09-27): TDD RED `TypeError:
   SqlAlchemyOutboxRepository.hold() got an unexpected keyword argument 'now'`, then GREEN. Fixed
   `R4-completed-worker-race` in `outbox.py::hold` (re-check `status`/`next_attempt_at` under the
-  lock) with the port and the dispatcher call site updated, and answered `R3-001` with D27 plus
+  lock) with the port and the dispatcher call site updated, and answered `R3-001` with D30 plus
   docs/06 §4's "Reclamo" row and the `dispatch_due_notifications` docstring — no code path.
   59 changed lines (47/12) against a 200 frozen budget; the first attempt at 288 had been refused.
   Checks (own DB, 5439): `uv run pytest tests/notifications tests/alerts` → 149 passed, 1 failed —
@@ -1171,3 +1250,53 @@ work unit (`domain-modeling`).
 - T10 review (2026-09-27, same writer): lineage `review-fbe89638809515c9` APPROVED and
   acknowledged with 2 non-blocking WARNINGs → #135, as recorded under Review (RDD). No
   correction was spent, so the delivered behaviour is exactly what the tests above pin.
+- T9 2026-09-27 (writer: OpenCode, worktree `e7-t9`, branch `feat/e7-t9-push-client`, base
+  `84dc963`): the Web Push client, three commits (`e354af8` generated schema regen, `51558be` the
+  unit, `98df0a0` the R3 correction). CodeGraph first: `gentle-ai codegraph init` on this worktree
+  (329 files indexed), then `codegraph_explore` for T4's `notifications/adapters/api/router.py`
+  and `PushKeys` — which is what proved the endpoint takes exactly `{ endpoint, keys: { p256dh,
+  auth } }` and returns `{ id }`, and that no VAPID exposure route exists. Docs read and cited:
+  AGENTS.md, docs/00, docs/01 (RF-08), docs/03:491, docs/04 §Alertas y notificaciones, docs/05,
+  docs/06 §4, docs/07, ADR-0006. Skills: `impeccable` (Operate mode — one plain button, E1's
+  `Button` and tokens reused as-is, no new primitive and no visual change, as the frozen design
+  requires), `work-unit-commits`, `find-docs`/ctx7 for the Push API (`applicationServerKey`,
+  `PushManager.subscribe`, `getSubscription`, `Notification.requestPermission`) and
+  vite-plugin-pwa `injectManifest`. Engram: `mem_search` "E1 design system PWA" and "E7 T4
+  push-subscriptions" before starting.
+  - **matches the doc** — the `push` handler shows one notification per docs/06 §4's outbox push,
+    and `notificationclick` opens `/alertas`, which docs/07's screen map names as the home of open
+    alerts (D33); the subscription POST body is exactly T4's documented shape and re-posting an
+    existing subscription is safe because docs/04 makes `endpoint` UNIQUE and therefore an upsert;
+    `VITE_VAPID_PUBLIC_KEY` reaching the client at build time is now stated in docs/04 itself, in
+    the same work unit as the code (D32); the entry point lives where docs/07 hangs "Ajustes y
+    notificaciones" (the `Más` tab) and reuses E1's primitives unchanged; permission denied,
+    unsupported browser, existing subscription and a build with no VAPID key are four distinct,
+    separately tested outcomes, and a build without the key reports `not-configured` rather than
+    throwing, exactly as D32 requires.
+  - RED then GREEN, recorded from the runs: RED 1 — `npx vitest --run src/features/push` failed
+    all 4 suites on unresolved imports (`./push`, `./pushPayload`, `./pushApi`, `../push`) before
+    any implementation existed; RED 2 — the three stale-key cases failed
+    (`expected { status: 'already-active' } to deeply equal { status: 'subscribed' }`) before the
+    R3 correction. GREEN — 32 passed in `src/features/push`, 222 in the full suite.
+  - Checks, as `<command>: <result>`: `npx vitest --run src/features/push src/app/routes.test.tsx`:
+    30 passed (5 files); `npm test -- --run`: 222 passed (30 files; baseline before T9 was 190 in
+    26); `npm run lint`: clean; `npm run typecheck`: clean, both the app and the worker program;
+    `npm run build`: `dist/sw.js` emitted with both `push` and `notificationclick` handlers and a
+    15-entry precache manifest, and `registerSW.js` registering it at scope `/`;
+    `npm run size`: 163.38 kB gzipped of the 200 kB budget. No server file was touched, so no
+    pytest was run and none was needed.
+  - Two things found by checking rather than assuming, both fixed in the same unit: the emitted
+    worker registers no push handler at all unless the plugin strategy is `injectManifest`, and a
+    nested `filename` makes vite-plugin-pwa build `dist/sw.js` then fail renaming a
+    `dist/features/push/sw.js` that was never written (`ENOENT`) — `srcDir` locates the source and
+    `filename` must stay flat. Also: `web/README.md` documented no `VITE_` variables at all, so the
+    brief's conditional ("add it to whatever documents them, if one exists") had no existing home;
+    a short "Environment variables" section was added there rather than leaving a build-time
+    requirement discoverable only in source.
+  - RDD: assessed `review_due: true` / `slice_budget_reached`, STATUS preflight, consent granted,
+    lineage `review-6420fc1b733500db`, one reliability lens → 1 CRITICAL (corroborated) + 2
+    WARNINGs, one bounded correction (`98df0a0`), targeted validation approved, acknowledged with
+    authority burned. Non-blocking findings → **#136**. Not done: no live-browser push
+    demonstration (needs T7's sender and a real push service; T11 owns the seminar demo), and
+    `DELETE /push-subscriptions/{id}` is not called from the client — the brief scoped T9 to
+    registration, and unsubscribing is the server's `410 Gone` path plus a future settings screen.
