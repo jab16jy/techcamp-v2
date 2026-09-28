@@ -35,6 +35,7 @@ from techcamp.logbook.application.push import (
 )
 from techcamp.logbook.domain.models import SyncEntity, SyncOp
 from techcamp.shared.db import SessionDep
+from techcamp.shared.errors import ProblemError
 
 router = APIRouter(tags=["logbook"])
 
@@ -310,6 +311,14 @@ async def pull(
     Runs in a single REPEATABLE READ (read-only) transaction so that entries and visits
     see one snapshot, preventing cursor gaps (D1; RNF-01).
     """
+    if session.in_transaction():
+        raise ProblemError(
+            status=500,
+            title="Session already in transaction",
+            detail=(
+                "GET /sync/pull requires a fresh session to configure REPEATABLE READ isolation."
+            ),
+        )
     await session.connection(
         execution_options={"isolation_level": "REPEATABLE READ", "postgresql_readonly": True}
     )

@@ -19,6 +19,7 @@ from uuid import UUID
 import asyncpg
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +33,7 @@ from techcamp.logbook.application.ports import ExtensionVisitChange, LogbookEntr
 from techcamp.logbook.domain.models import SyncOp, SyncStatus
 from techcamp.main import app
 from techcamp.shared.config import database_url
-from techcamp.shared.db import async_session_factory
+from techcamp.shared.db import async_session_factory, get_session
 from techcamp.shared.ids import uuid7
 
 if TYPE_CHECKING:
@@ -647,3 +648,26 @@ async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
         change_ids2 = [c["id"] for c in page2["changes"]]
         assert str(concurrent_entry_id) in change_ids2
         assert str(concurrent_visit_id) in change_ids2
+
+
+async def test_pull_fails_when_session_already_in_transaction(env: SyncEnv) -> None:
+    """R3-001: pull fails loudly (500) if session was used before handler established isolation."""
+    from collections.abc import AsyncIterator
+
+    token = env.mine.tokens["producer"]
+
+    async def dirty_session() -> AsyncIterator[AsyncSession]:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+            assert session.in_transaction()
+            yield session
+
+    app.dependency_overrides[get_session] = dirty_session
+    try:
+        with _client() as client:
+            resp = client.get("/sync/pull?since=0", headers=_auth(token))
+        assert resp.status_code == 500
+        problem = resp.json()
+        assert problem["title"] == "Session already in transaction"
+    finally:
+        app.dependency_overrides.pop(get_session, None)
