@@ -264,6 +264,16 @@ work unit (`domain-modeling`).
   docs/06 §1 to state that guarantee instead of the old one, and keeps the transactional
   refactor out of the epic on purpose: making `ingest_uplinks` own the transaction would touch
   the status path and the flush retry, which is a unit of its own.
+- D24 T7a's dispatcher treats a channel with no registered sender as NOT an attempt. `push` has
+  no adapter until T7b, and ADR-0016 puts the real SMS/WhatsApp provider in future work, so a
+  naive dispatcher would count a missing adapter as a failure and burn all five retries: a row
+  would go `failed` before any provider existed, and the escalation SMS the room needs would
+  never be simulated either (production registers nothing at all). The row is left `pending` with
+  the same due time and counted as `deferred`. Also T7a: the claim's outcome is committed PER ROW,
+  not per batch — the message reached the provider, so a crash later in the batch must not leave
+  it `pending` and send it again; and `FOR UPDATE OF notification` names the outbox table because
+  the join brings `alert` and `alert_rule` in, whose rows must stay writable while the dispatcher
+  holds its claim.
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
@@ -344,10 +354,10 @@ work unit (`domain-modeling`).
     `_NOT_MILD_RH` fake sample, the docs/06 §3 rows in the same commit, and the saturation test
     recorded as a proxy (D20)
 - [ ] T7 Notifications outbox
-  - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
+  - [x] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
-    forecast ~450
+    forecast ~450 — actual 1,171 (`XXX`, 336 prod / 835 tests; 7 prod files, 2 test files)
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
     subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
@@ -578,3 +588,43 @@ work unit (`domain-modeling`).
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
   failure is silence, not an exception — which is why the whole suite was green through both.
+- T7a 2026-09-27 (writer: OpenCode, worktree `e7-t7-outbox` on `feat/e7-t7-outbox` from
+  `8cbae7f`, own DB `techcamp-e7-db-t7` on 5439, brief `.git-brief-e7-T7.md`): D7 and D8 as
+  written. CodeGraph initialized in the worktree and used for the map (outbox write, notification
+  domain, weather breaker, `shared/jobs.py`, the alerts fan-out). `ctx7` was NOT available in this
+  runtime (no ctx7 tool exposed), so procrastinate / `SKIP LOCKED` / `pywebpush` were verified
+  against the installed package and by compiling the statements with the postgresql dialect
+  instead of the docs; that limitation is disclosed here rather than papered over.
+  - RED (recorded, not reconstructed): `ImportError: cannot import name 'senders' from
+    'techcamp.notifications.adapters'` and
+    `AttributeError: SqlAlchemyOutboxRepository.claim_due() missing 1 required keyword-only
+    argument: 'limit'` while the modules did not exist yet.
+  - Delivered: `NotificationSender` + `OutboxRepository` ports, `dispatch_due_notifications`
+    (sent / retried / failed / deferred, backoff, 5 attempts), `SqlAlchemyOutboxRepository` (the
+    claim, per-row commits), `SeminarSmsSender` + `build_senders`, `notifications/adapters/jobs.py`
+    (insert-time defer in a savepoint + `* * * * *` sweep on the `notifications` queue, worker
+    listens to it), `GET /dev/outbox` in the seminar profile, D7's "at insert + every minute" in
+    docs/06 §4 and docs/10 §3, the tray's shape in docs/04.
+  - `notifications/adapters/outbox.py` is a new module rather than a class in `repositories.py`
+    because the dispatch job needs the repository and the job must not import the module that
+    enqueues it; the dependency runs one way (`repositories.py` → `jobs.py` → `outbox.py`), the
+    same direction `telemetry` and `farms` use to enqueue a neighbour's job.
+  - **Defect found and fixed in this unit:** `migrations/env.py` calls
+    `logging.config.fileConfig(alembic.ini)`, and `fileConfig` defaults
+    `disable_existing_loggers=True`, which sets `disabled` on every logger not named in
+    `[loggers] keys` (only `root`, `sqlalchemy`, `alembic`). The first migration therefore
+    silenced every `techcamp.*` logger for the rest of the process — which is why no test in this
+    repo had ever been able to assert anything the application logs. Fixed by passing
+    `disable_existing_loggers=False` (it is a function argument in Python 3.12, NOT a key in
+    `alembic.ini` — the first attempt put it in the ini and changed nothing), with the reason
+    written in both files. Found because ADR-0021's "writes to the log" had to be testable.
+  - Checks (own DB, 5439): `uv run pytest tests/notifications tests/alerts` → 144 passed, 1 failed;
+    the failure is `tests/alerts/test_jobs.py::test_the_forecast_job_reads_the_forecast_day_and_
+    the_daily_job_the_cell_day`, and it fails identically on the stashed base (`8cbae7f`), so it
+    is a pre-existing environmental failure, not T7a's. `uv run ruff check` → All checks passed!
+    `uv run ruff format --check` → 237 files already formatted. `uv run mypy` → Success: no issues
+    found in 160 source files. `uv run lint-imports` → 1 kept, 0 broken.
+  - Size: ~1,210 changed lines against a ~450 forecast — reported, not trimmed. 336 production,
+    835 tests, ~40 docs/config. The overage is behaviour tests against real Postgres (this repo's
+    stated rule, conftest: "no SQLite double"), because the claim's `SKIP LOCKED` promise and the
+    same-transaction defer are only provable against the database.

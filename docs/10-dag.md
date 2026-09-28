@@ -169,7 +169,7 @@ flowchart LR
   subgraph continuos [Continuos]
     k[cada 3 h: pronóstico de celdas activas] --> l[10 min después: reglas de pronóstico]
     m[cada 5 min: salud de nodos]
-    n[cada 5 s: outbox de notificaciones]
+    n[al insertar y cada min: outbox de notificaciones]
     q[04:45 diario: riesgo de hongos<br/>sobre el día anterior consolidado]
   end
 
