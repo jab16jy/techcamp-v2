@@ -85,6 +85,9 @@ class _RecordingTransport:
 class Seeded:
     user_id: UUID
     alert_id: UUID
+    org_id: UUID
+    plot_id: UUID
+    rule_id: UUID
 
 
 async def _seed(session: AsyncSession) -> Seeded:
@@ -137,14 +140,51 @@ async def _seed(session: AsyncSession) -> Seeded:
         )
     )
     await session.commit()
-    return Seeded(user_id=user_id, alert_id=alert_id)
+    return Seeded(
+        user_id=user_id, alert_id=alert_id, org_id=org_id, plot_id=plot_id, rule_id=rule_id
+    )
 
 
-async def _pending_push(session: AsyncSession, seeded: Seeded) -> NotificationRow:
+async def _second_alert(
+    session: AsyncSession, seeded: Seeded, *, code: str = "heat_stress"
+) -> UUID:
+    """A second open alert on the seeded plot.
+
+    A DIFFERENT rule because the partial unique index allows one non-resolved alert
+    per (rule, plot) (docs/06 §3), and a different alert is what grouping needs: two
+    rows of one alert would be one message for a reason that has nothing to do with
+    the farm.
+    """
+    rule_id = (
+        await session.execute(select(AlertRuleRow.id).where(AlertRuleRow.code == code))
+    ).scalar_one()
+    alert_id = uuid7()
+    session.add(
+        AlertRow(
+            id=alert_id,
+            org_id=seeded.org_id,
+            rule_id=rule_id,
+            plot_id=seeded.plot_id,
+            state="open",
+            severity="warning",
+            opened_at=_DUE,
+        )
+    )
+    await session.commit()
+    return alert_id
+
+
+async def _pending_push(
+    session: AsyncSession,
+    seeded: Seeded,
+    *,
+    alert_id: UUID | None = None,
+    user_id: UUID | None = None,
+) -> NotificationRow:
     row = NotificationRow(
         id=uuid7(),
-        alert_id=seeded.alert_id,
-        user_id=seeded.user_id,
+        alert_id=alert_id or seeded.alert_id,
+        user_id=user_id or seeded.user_id,
         channel=Channel.PUSH.value,
         status="pending",
         attempts=0,
@@ -345,18 +385,86 @@ async def test_the_payload_is_exactly_what_the_service_worker_parses(
     }
 
 
+async def test_a_grouped_push_is_one_message_that_says_all_of_it(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06 §4 "Agrupación": several non-critical alerts of one farm go out as
+    ONE notification. The payload is still the three keys T9 parses, so a grouped
+    message needs no client change: the sentences join into the `body` and the
+    `tag` is the group's own alert, so the whole message is replaced on a retry
+    rather than stacking a copy of each alert."""
+    seeded = await _seed(db_session)
+    first = await _pending_push(db_session, seeded)
+    await _subscribe(db_session, seeded.user_id, "phone")
+    other_alert = await _second_alert(db_session, seeded)
+    await _pending_push(db_session, seeded, alert_id=other_alert)
+    transport = _RecordingTransport()
+
+    await dispatch_due_notifications(
+        outbox=SqlAlchemyOutboxRepository(db_session),
+        senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
+        now=_DUE,
+    )
+
+    assert len(transport.delivered) == 1
+    _, payload, _, _ = transport.delivered[0]
+    parsed = json.loads(payload)
+    assert set(parsed) == {"title", "body", "tag"}
+    # Due order, oldest first, so the message reads as the alerts happened.
+    assert parsed["body"] == "Tus cultivos necesitan agua. Hace demasiado calor para el cultivo."
+    assert parsed["tag"] == f"alert-{first.alert_id}"
+    assert parsed["title"] == "Alerta"
+
+
+async def test_a_message_never_carries_two_recipients_alerts(
+    db_session: AsyncSession,
+) -> None:
+    """D4 sends a plot alert to the farm's producers and owners, so two rows of
+    ONE farm for two users are the common case. Grouping is keyed on (user, farm)
+    (D6): a message that carried both would be delivered to one recipient's
+    browsers and tell them about the other's farm, which is a farm's business
+    leaking to a neighbour in the same organization."""
+    seeded = await _seed(db_session)
+    await _pending_push(db_session, seeded)
+    other_user = uuid7()
+    db_session.add(AppUserRow(id=other_user, phone=f"+57300{next(_PHONE_SEQ):06d}"))
+    await db_session.commit()
+    await _pending_push(db_session, seeded, user_id=other_user)
+    await _subscribe(db_session, seeded.user_id, "phone")
+    # A different endpoint: `push_subscription.endpoint` is UNIQUE (docs/03).
+    await _subscribe(db_session, other_user, "tablet")
+    transport = _RecordingTransport()
+
+    await dispatch_due_notifications(
+        outbox=SqlAlchemyOutboxRepository(db_session),
+        senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
+        now=_DUE,
+    )
+
+    # Two messages, and the sender only ever sees the rows of one user: the
+    # subscription it read belongs to the first row's user, and the group a second
+    # row of the other user joined would have named both farms in one push.
+    assert len(transport.delivered) == 2
+    for _, payload, _, _ in transport.delivered:
+        assert json.loads(payload)["body"] == "Tus cultivos necesitan agua."
+
+
 async def test_a_retry_of_the_same_row_replaces_its_own_notification(
     db_session: AsyncSession,
 ) -> None:
     """D30: delivery is at least once, so a duplicate is real. The `tag` the client
-    uses for replacement is the alert's and the Web Push `Topic` is the outbox
-    row's, so the second push of one alert replaces the first instead of stacking
-    a second copy of the same news — and two different rows of the same alert
-    still get two different topics, so one alert never eats another."""
+    uses for replacement is the alert's and the Web Push `Topic` is the group's
+    oldest outbox row, so the second push of one message replaces the first
+    instead of stacking a second copy of the same news. Two rows of one farm are
+    ONE message (docs/06 §4 "Agrupación"), so the group and both rows keep their
+    identity across the retry — that is what has to hold for the replacement."""
     seeded = await _seed(db_session)
-    row = await _pending_push(db_session, seeded)
+    first = await _pending_push(db_session, seeded)
     await _subscribe(db_session, seeded.user_id, "phone")
-    second = await _pending_push(db_session, seeded)
+    other_alert = await _second_alert(db_session, seeded)
+    second = await _pending_push(db_session, seeded, alert_id=other_alert)
     transport = _RecordingTransport()
 
     for _ in range(2):
@@ -366,17 +474,18 @@ async def test_a_retry_of_the_same_row_replaces_its_own_notification(
             circuits=InProcessProviderCircuits(),
             now=_DUE,
         )
-        # The row is `sent` now, so re-arm it the way a retry would: same row,
-        # same id, due again.
-        for candidate in (row, second):
+        # The rows are `sent` now, so re-arm them the way a retry would: same
+        # rows, same ids, due again.
+        for candidate in (first, second):
             candidate.status = "pending"
         await db_session.commit()
 
-    assert len(transport.delivered) == 4  # two rows, sent again on the second pass
+    # Two rows, grouped, sent again on the second pass: two messages, not four.
+    assert len(transport.delivered) == 2
     assert {json.loads(payload)["tag"] for _, payload, _, _ in transport.delivered} == {
         f"alert-{seeded.alert_id}"
     }
-    assert {topic for _, _, topic, _ in transport.delivered} == {row.id.hex, second.id.hex}
+    assert {topic for _, _, topic, _ in transport.delivered} == {first.id.hex}
     # 32 characters is the protocol's cap and `hex` fits it exactly, which is why
     # the topic is the undashed uuid.
     assert all(len(topic) <= 32 for _, _, topic, _ in transport.delivered)

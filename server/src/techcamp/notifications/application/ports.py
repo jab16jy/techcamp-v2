@@ -82,11 +82,19 @@ class NotificationSender(Protocol):
     sender never has to check which one it is.
     """
 
-    async def send(self, notification: PendingNotification) -> None:
-        """Hand one due row to the provider. Raise on any failure.
+    async def send(self, notifications: Sequence[PendingNotification]) -> None:
+        """Hand one message to the provider, covering the rows it speaks for.
 
-        The row stays locked by the dispatcher's claim while this runs, which is
-        what keeps a second worker from sending it too.
+        A message, not a row, because docs/06 §4's grouping makes one message more
+        than one row: "Varias alertas no críticas de la misma finca en 15 min se
+        envían en una sola notificación". The dispatcher does the grouping (D6: it
+        is what holds the batch and knows what is in it) and hands the group over,
+        so a single alert is simply a group of one and there is no second code path
+        for the common case.
+
+        Every row in `notifications` belongs to the same user and the same channel,
+        and the caller is the one that has checked they may be grouped. Raise on any
+        failure: the outcome belongs to every row in the group.
         """
         ...
 

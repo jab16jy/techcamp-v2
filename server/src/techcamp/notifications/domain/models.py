@@ -124,6 +124,14 @@ class PendingNotification:
     organization the row belongs to, denormalized on `alert` (docs/03:18).
     `attempts` travels because the next delay depends on how many are already
     spent, and the dispatcher must not have to re-read the row to know it.
+
+    `farm_id` is what docs/06 §4's grouping is keyed on ("Varias alertas no
+    críticas de la misma finca"), and `alert` stores no farm: it is the alert's
+    plot's farm, or for a node alert the farm of the plot the node hangs on
+    (docs/03:284-297). It is `None` when neither resolves, and `None` means "this
+    row's farm is not known", never "this row has no farm": such a row is sent on
+    its own rather than merged with another unknown one, and it is never dropped
+    from a claim because of it.
     """
 
     id: UUID
@@ -134,6 +142,7 @@ class PendingNotification:
     rule_code: str
     severity: str
     attempts: int
+    farm_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

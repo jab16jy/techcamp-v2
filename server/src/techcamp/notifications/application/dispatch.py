@@ -10,7 +10,7 @@ rules are pure bookkeeping over three ports and the SQL is the adapter's problem
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -115,15 +115,57 @@ async def _one_pass(
     makes the batch safe: the claim's locks all end with the first row's commit,
     so without it a second worker could pick up an unprocessed row of this batch
     and the row would be sent twice.
+
+    The batch is also where docs/06 §4's grouping happens, because the batch is
+    the only place that knows what else is due right now. Rows are taken in due
+    order, so a group is the run of consecutive rows of one farm that belong to
+    one user, and each group leaves as one message.
     """
     claimed = await outbox.claim_due(now=now, channels=list(senders), limit=limit)
     sent = retried = failed = skipped = deferred = 0
+    group: list[PendingNotification] = []
+    group_channel: Channel | None = None
+
+    async def flush() -> None:
+        """Send the group built so far, if it has one.
+
+        `group_channel` is the emptiness test rather than `group` alone, because
+        a group carries the channel it goes out on: a critical on an open push
+        circuit leaves as SMS while its row still says `push` (D37), and the
+        channel is the dispatcher's knowledge, not the row's.
+        """
+        nonlocal sent, retried, failed, group_channel
+        if group_channel is None:
+            return
+        outcome = await _deliver(
+            outbox=outbox,
+            senders=senders,
+            circuits=circuits,
+            group=group,
+            channel=group_channel,
+            now=now,
+        )
+        sent += outcome.sent
+        retried += outcome.retried
+        failed += outcome.failed
+        group.clear()
+        group_channel = None
+
     for notification in claimed:
         if not await outbox.hold(notification.id, now=now):
+            await flush()
             skipped += 1
             continue
+        if group and not _joins(group[-1], notification):
+            # Start a new message by sending the one already built, BEFORE this
+            # row's channel is decided. That ordering is the whole reason a pass
+            # stops calling a provider that just failed five times: the decision
+            # then sees the failures this pass caused, so the circuit bites here
+            # instead of on the next sweep a minute later.
+            await flush()
         channel = _where_it_can_go(notification, senders=senders, circuits=circuits)
         if channel is None:
+            await flush()
             # The provider is refusing, and a refused call would cost this row one
             # of its five attempts on a delivery nothing could have fixed. The row
             # is held until the circuit's own cooldown, so it becomes due exactly
@@ -136,17 +178,58 @@ async def _one_pass(
             )
             deferred += 1
             continue
-        try:
-            await senders[channel].send(notification)
-        except Exception as exc:  # noqa: BLE001 — every provider failure is the same to us
-            if not isinstance(exc, RowNotDeliverableError):
-                # docs/06 §4 counts the failures of a PROVIDER, and a row that
-                # cannot be delivered at all is not one of them (D36). The failure
-                # belongs to the channel that was used, which for a critical on an
-                # open push circuit is the alternate.
-                circuits.record_failure(channel)
-            attempts = notification.attempts + 1
-            error = str(exc)[:_MAX_ERROR_CHARS] or type(exc).__name__
+        if group and group_channel != channel:
+            # A row that joins the group but resolves to another channel (nothing
+            # routes a non-critical to an alternate today, D37) still cannot ride
+            # in a message going somewhere else.
+            await flush()
+        group.append(notification)
+        group_channel = channel
+    await flush()
+    return DispatchReport(
+        claimed=len(claimed),
+        sent=sent,
+        retried=retried,
+        failed=failed,
+        skipped=skipped,
+        deferred=deferred,
+    )
+
+
+async def _deliver(
+    *,
+    outbox: OutboxRepository,
+    senders: Mapping[Channel, NotificationSender],
+    circuits: ProviderCircuits,
+    group: Sequence[PendingNotification],
+    channel: Channel,
+    now: datetime,
+) -> DispatchReport:
+    """One message to one provider, and its outcome written to every row it covers.
+
+    A group is the message, so a failed delivery is a failed attempt for each of
+    the alerts in it and a retry re-sends them together: the farmer hears about
+    the farm once, which is the whole point of grouping, and hearing about it late
+    is the same as not hearing.
+
+    Every row in a group belongs to the same user, so the next delay is the same
+    for all of them; the group's `attempts` is read from its first row for that
+    reason, and a group is never built out of rows of different ages because the
+    claim takes them in due order.
+    """
+    sent = retried = failed = 0
+    try:
+        await senders[channel].send(group)
+    except Exception as exc:  # noqa: BLE001 — every provider failure is the same to us
+        if not isinstance(exc, RowNotDeliverableError):
+            # docs/06 §4 counts the failures of a PROVIDER, and a row that cannot
+            # be delivered at all is not one of them (D36). The failure belongs to
+            # the channel that was used, which for a critical on an open push
+            # circuit is the alternate.
+            circuits.record_failure(channel)
+        attempts = group[0].attempts + 1
+        error = str(exc)[:_MAX_ERROR_CHARS] or type(exc).__name__
+        for notification in group:
             if attempts >= MAX_ATTEMPTS:
                 await outbox.mark_failed(notification.id, attempts=attempts, error=error)
                 failed += 1
@@ -158,17 +241,39 @@ async def _one_pass(
                     error=error,
                 )
                 retried += 1
-        else:
-            circuits.record_success(channel)
+    else:
+        circuits.record_success(channel)
+        for notification in group:
             await outbox.mark_sent(notification.id, at=now)
             sent += 1
-    return DispatchReport(
-        claimed=len(claimed),
-        sent=sent,
-        retried=retried,
-        failed=failed,
-        skipped=skipped,
-        deferred=deferred,
+    return DispatchReport(0, sent, retried, failed, 0, 0)
+
+
+def _joins(previous: PendingNotification, candidate: PendingNotification) -> bool:
+    """Whether `candidate` rides out in the same message as `previous`.
+
+    docs/06 §4 "Agrupación": "Varias alertas no críticas de la misma finca en 15
+    min se envían en una sola notificación", and D6 keys it on the (user, farm)
+    pair — one recipient gets one message per farm, and two farms of one
+    organization are two messages because the message cannot name which farm it is
+    about.
+
+    Three rows never join, each for its own reason:
+
+    - a critical, which RNF-05 gives two minutes and which must not wait behind a
+      message it has nothing to do with (D5);
+    - a row whose farm could not be resolved, sent on its own rather than merged
+      with another row of unknown farm — `None` is "not known", never "the same
+      farm" (D38);
+    - a row of a different user, because a message is delivered to one recipient's
+      browsers and nobody else's.
+    """
+    return (
+        previous.severity != CRITICAL_SEVERITY
+        and candidate.severity != CRITICAL_SEVERITY
+        and previous.farm_id is not None
+        and previous.farm_id == candidate.farm_id
+        and previous.user_id == candidate.user_id
     )
 
 

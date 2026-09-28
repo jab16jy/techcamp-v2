@@ -14,14 +14,37 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
+from techcamp.farms.adapters.orm import PlotRow
 from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.domain.models import CLAIM_LIMIT, Channel, PendingNotification
+from techcamp.telemetry.adapters.orm import NodeRow
 
 _RULE_CODE = AlertRuleRow.code.label("rule_code")
+"""The factory rule the alert came from, for the message (docs/04:145)."""
+
+_NODE_PLOT = aliased(PlotRow)
+"""`plot` a second time, reached through the alert's node.
+
+`alert` stores a `plot_id` or a `node_id` and never a farm (docs/03:284-297), and
+docs/06 §4 groups by farm, so a node alert's farm is the farm of the plot its
+node hangs on. Two joins to the same table need two names, which is what the
+alias is for.
+"""
+
+_FARM = func.coalesce(PlotRow.farm_id, _NODE_PLOT.farm_id).label("farm_id")
+"""The alert's farm, from whichever of the two targets it has.
+
+`COALESCE` over LEFT joins, never an inner join: a farm that cannot be resolved is
+`None` on the row and the dispatcher sends that row on its own, where dropping it
+from the claim would lose an alert. Nothing has ever written an alert whose farm
+cannot be resolved, so in practice this is `None` never — but the query is the
+outbox's claim, and a claim that can drop a row is not a place to be clever.
+"""
 
 
 class SqlAlchemyOutboxRepository:
@@ -48,18 +71,23 @@ class SqlAlchemyOutboxRepository:
         wait behind it.
 
         The alert's `rule_code` and `severity` join in because they are the
-        message: a provider handed an id alone cannot render anything. `of=`
-        names the outbox table because the join brings the rule in too, and
-        locking an `alert` or an `alert_rule` row would block the very writes
-        that produce the notices. The join is to the row's own alert, so no row
-        of one organization is reachable through another's.
+        message: a provider handed an id alone cannot render anything, and
+        `farm_id` joins in because docs/06 §4 groups the messages by farm. `of=`
+        names the outbox table because the joins bring the rule, the plot and the
+        node in too, and locking an `alert`, `alert_rule`, `plot` or `node` row
+        would block the very writes that produce the notices. Every join is to the
+        row's own alert, so no row of one organization is reachable through
+        another's.
         """
         if not channels:
             return []
         result = await self._session.execute(
-            select(NotificationRow, AlertRow.org_id, AlertRow.severity, _RULE_CODE)
+            select(NotificationRow, AlertRow.org_id, AlertRow.severity, _RULE_CODE, _FARM)
             .join(AlertRow, AlertRow.id == NotificationRow.alert_id)
             .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
+            .outerjoin(PlotRow, PlotRow.id == AlertRow.plot_id)
+            .outerjoin(NodeRow, NodeRow.id == AlertRow.node_id)
+            .outerjoin(_NODE_PLOT, _NODE_PLOT.id == NodeRow.plot_id)
             .where(
                 NotificationRow.status == "pending",
                 NotificationRow.next_attempt_at <= now,
@@ -79,8 +107,9 @@ class SqlAlchemyOutboxRepository:
                 rule_code=rule_code,
                 severity=severity,
                 attempts=row.attempts,
+                farm_id=farm_id,
             )
-            for row, org_id, severity, rule_code in result
+            for row, org_id, severity, rule_code, farm_id in result
         ]
 
     async def hold(self, notification_id: UUID, *, now: datetime) -> bool:
