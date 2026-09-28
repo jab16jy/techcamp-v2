@@ -33,7 +33,7 @@ from techcamp.logbook.application.push import (
     push_extension_visit,
     push_logbook_entry,
 )
-from techcamp.logbook.domain.models import LogbookEntry, SyncOp
+from techcamp.logbook.domain.models import SyncEntity, SyncOp
 from techcamp.shared.db import SessionDep
 
 router = APIRouter(tags=["logbook"])
@@ -315,7 +315,7 @@ async def pull(
     )
     change_views: list[_PullChange] = []
     for item in page.changes:
-        if isinstance(item.data, LogbookEntry):
+        if item.entity is SyncEntity.LOGBOOK_ENTRY:
             entry = item.data
             change_views.append(
                 LogbookEntryPullChange(
@@ -347,7 +347,7 @@ async def pull(
                     ),
                 )
             )
-        else:
+        elif item.entity is SyncEntity.EXTENSION_VISIT:
             visit = item.data
             change_views.append(
                 ExtensionVisitPullChange(
@@ -371,6 +371,8 @@ async def pull(
                     ),
                 )
             )
+        else:
+            raise ValueError(f"Unknown pull change entity: {item.entity}")
     return PullResponse(
         changes=change_views,
         next_since=page.next_since,
