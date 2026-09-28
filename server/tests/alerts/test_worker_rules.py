@@ -125,14 +125,14 @@ def test_the_worker_evidence_is_the_forecast_rain_or_the_cell_day_humidity() -> 
     assert rain is not None and rain.value == 62.0
     # The forecast rule has no second condition, so its evidence is always mild:
     # the rule-code discrimination stays in the domain, not in the caller.
-    assert rain is not None and rain.is_mild is True
+    assert rain is not None and rain.mildness is True
 
     humidity = worker_rule_evidence(_rule("fungal_risk"), observed=observed, forecast=forecast)
     assert humidity == CellDayHumidityEvidence(
         observed_at=_FETCHED_AT, rh_mean_pct=90.0, mean_temp_c=23.0
     )
     assert humidity is not None and humidity.value == 90.0
-    assert humidity is not None and humidity.is_mild is True
+    assert humidity is not None and humidity.mildness is True
 
     # A cell-day without humidity is not evidence, and a forecast is not an
     # observation of the day that already happened (D19).
@@ -183,38 +183,48 @@ def test_a_humid_cell_day_that_is_too_hot_never_opens_a_fungal_risk_alert() -> N
     so the evidence carries it and the decision reads it."""
     hot = CellDayHumidityEvidence(observed_at=_FETCHED_AT, rh_mean_pct=95.0, mean_temp_c=34.0)
     assert hot.value == 95.0
-    assert hot.is_mild is False
+    assert hot.mildness is False
 
     decision = decide_worker_rule(
         _rule("fungal_risk"),
         [(hot.observed_at, hot.value)],
         _AT,
         max_gap=_AGGREGATE_MAX_GAP,
-        is_mild=hot.is_mild,
+        mildness=hot.mildness,
     )
     assert decision.action is AlertAction.NO_ACTION
     assert decision.alert is None
 
-    # A day with no stored temperature is not a mild day either: `None` means the
-    # provider never said, and an unsaid half cannot open the rule.
-    assert (
-        CellDayHumidityEvidence(observed_at=_FETCHED_AT, rh_mean_pct=95.0, mean_temp_c=None).is_mild
-        is False
+
+def test_a_day_with_no_stored_temperature_never_opens_a_fungal_risk_alert() -> None:
+    """#134: `None` is what the provider DID NOT SAY, which is not the same as a
+    day measured too hot. An unsaid half cannot open the rule."""
+    unsaid = CellDayHumidityEvidence(observed_at=_FETCHED_AT, rh_mean_pct=95.0, mean_temp_c=None)
+    assert unsaid.mildness is None
+
+    decision = decide_worker_rule(
+        _rule("fungal_risk"),
+        [(unsaid.observed_at, unsaid.value)],
+        _AT,
+        max_gap=_AGGREGATE_MAX_GAP,
+        mildness=unsaid.mildness,
     )
+    assert decision.action is AlertAction.NO_ACTION
+    assert decision.alert is None
 
 
 def test_a_humid_mild_cell_day_opens_the_fungal_risk_alert() -> None:
     """D19: RH 90 % with a mean temperature of 23 °C is the day the rule names.
     Both halves of the condition hold, so the humidity alone decides it."""
     mild = CellDayHumidityEvidence(observed_at=_FETCHED_AT, rh_mean_pct=90.0, mean_temp_c=23.0)
-    assert mild.is_mild is True
+    assert mild.mildness is True
 
     decision = decide_worker_rule(
         _rule("fungal_risk"),
         [(mild.observed_at, mild.value)],
         _AT,
         max_gap=_AGGREGATE_MAX_GAP,
-        is_mild=mild.is_mild,
+        mildness=mild.mildness,
     )
     assert decision.action is AlertAction.OPEN
     assert decision.alert is None
@@ -223,7 +233,7 @@ def test_a_humid_mild_cell_day_opens_the_fungal_risk_alert() -> None:
     for temp in (FUNGAL_MIN_TEMP_C, FUNGAL_MAX_TEMP_C):
         assert CellDayHumidityEvidence(
             observed_at=_FETCHED_AT, rh_mean_pct=90.0, mean_temp_c=temp
-        ).is_mild
+        ).mildness
 
 
 def test_an_open_fungal_risk_alert_resolves_on_the_first_day_that_is_not_mild() -> None:
@@ -238,7 +248,7 @@ def test_an_open_fungal_risk_alert_resolves_on_the_first_day_that_is_not_mild() 
         _AT,
         max_gap=_AGGREGATE_MAX_GAP,
         current_alert=alert,
-        is_mild=False,
+        mildness=False,
     )
     assert decision.action is AlertAction.RESOLVE
     assert decision.alert is not None
@@ -253,7 +263,57 @@ def test_an_open_fungal_risk_alert_resolves_on_the_first_day_that_is_not_mild() 
             _AT,
             max_gap=_AGGREGATE_MAX_GAP,
             current_alert=alert,
-            is_mild=True,
+            mildness=True,
+        ).action
+        is AlertAction.NO_ACTION
+    )
+
+
+def test_an_open_fungal_risk_alert_survives_a_day_with_no_stored_temperature() -> None:
+    """#134: absence of evidence is not a measured condition, and the dangerous
+    failure in an alerting system is silence. A cell-day whose humidity still
+    violates the rule and whose temperature the provider never stored leaves the
+    open warning open; the humidity half alone still decides, so a day whose
+    humidity clears the rule (past the hysteresis band) resolves it."""
+    alert = _open_alert("fungal_risk")
+    unsaid = CellDayHumidityEvidence(observed_at=_FETCHED_AT, rh_mean_pct=95.0, mean_temp_c=None)
+
+    still_open = decide_worker_rule(
+        _rule("fungal_risk"),
+        [(unsaid.observed_at, unsaid.value)],
+        _AT,
+        max_gap=_AGGREGATE_MAX_GAP,
+        current_alert=alert,
+        mildness=unsaid.mildness,
+    )
+    assert still_open.action is AlertAction.NO_ACTION
+    assert still_open.alert is alert
+
+    # RH 78 % is under the 85 % rule threshold and 5 % past its hysteresis band:
+    # humidity alone clears the condition, so the alert resolves.
+    cleared = decide_worker_rule(
+        _rule("fungal_risk"),
+        [(_FETCHED_AT, 78.0)],
+        _AT,
+        max_gap=_AGGREGATE_MAX_GAP,
+        current_alert=alert,
+        mildness=unsaid.mildness,
+    )
+    assert cleared.action is AlertAction.RESOLVE
+    assert cleared.alert is not None
+    assert cleared.alert.state is AlertState.RESOLVED
+    assert cleared.alert.resolved_at == _AT
+
+    # A day that clears neither the rule threshold nor the hysteresis band is
+    # not a clear day: 82 % still violates the rule, so the alert waits.
+    assert (
+        decide_worker_rule(
+            _rule("fungal_risk"),
+            [(_FETCHED_AT, 82.0)],
+            _AT,
+            max_gap=_AGGREGATE_MAX_GAP,
+            current_alert=alert,
+            mildness=None,
         ).action
         is AlertAction.NO_ACTION
     )
@@ -620,6 +680,48 @@ async def test_an_open_forecast_alert_resolves_on_the_first_forecast_under_the_t
     resolved = await db_session.get_one(AlertRow, opened)
     assert resolved.state == AlertState.RESOLVED.value
     assert resolved.resolved_at.replace(tzinfo=UTC) == later
+    # Still exactly one alert: a resolved one is not a second one (docs/06 §3).
+    assert len(await _alerts(db_session, plot)) == 1
+
+
+async def test_an_open_fungal_risk_alert_survives_a_cell_day_with_no_stored_temperature(
+    db_session: AsyncSession,
+) -> None:
+    """#134 on the real path: a `weather_daily` row that carries the humidity but
+    not the temperature ends closes nothing. The open warning stays open, and
+    the same row with a dry day closes it — the humidity half decides on its own."""
+    plot = await _make_plot(db_session, soil_moisture=20.0)
+    await _store_weather(
+        db_session,
+        cell_id=1,
+        day=_CELL_DAY,
+        is_forecast=False,
+        rh_mean_pct=92.0,
+        tmin_c=21.0,
+        tmax_c=25.0,
+    )
+    await _evaluate(db_session, org_id=plot.org_id, day=_CELL_DAY)
+    opened = (
+        await db_session.execute(select(AlertRow.id).where(AlertRow.plot_id == plot.plot_id))
+    ).scalar_one()
+    assert await _alerts(db_session, plot) == [("fungal_risk", "open", "warning")]
+
+    # The next observed row has the humidity and NO temperature at all.
+    silent_day = date(2026, 9, 25)
+    await _store_weather(db_session, cell_id=1, day=silent_day, is_forecast=False, rh_mean_pct=92.0)
+    await _evaluate(db_session, org_id=plot.org_id, day=silent_day)
+
+    unchanged = await db_session.get_one(AlertRow, opened)
+    assert unchanged.state == AlertState.OPEN.value
+    assert unchanged.resolved_at is None
+    assert await _alerts(db_session, plot) == [("fungal_risk", "open", "warning")]
+
+    # The same row, dry: humidity alone clears the rule, so the alert resolves.
+    await _store_weather(db_session, cell_id=1, day=silent_day, is_forecast=False, rh_mean_pct=60.0)
+    await _evaluate(db_session, org_id=plot.org_id, day=silent_day)
+
+    resolved = await db_session.get_one(AlertRow, opened)
+    assert resolved.state == AlertState.RESOLVED.value
     # Still exactly one alert: a resolved one is not a second one (docs/06 §3).
     assert len(await _alerts(db_session, plot)) == 1
 

@@ -155,8 +155,8 @@ class ForecastRainEvidence:
     """The forecast day's rain `heavy_rain_forecast` is decided on (D20).
 
     `value` is what `decide_worker_rule` compares against the rule's own
-    threshold and `is_mild` the second half of its condition, so the application
-    carries no branch per rule. This rule has no second half, so `is_mild` is
+    threshold and `mildness` the second half of its condition, so the application
+    carries no branch per rule. This rule has no second half, so `mildness` is
     always true.
     """
 
@@ -168,7 +168,7 @@ class ForecastRainEvidence:
         return self.rain_mm
 
     @property
-    def is_mild(self) -> bool:
+    def mildness(self) -> bool:
         """`heavy_rain_forecast` names no temperature, so it has nothing to gate."""
         return True
 
@@ -180,10 +180,7 @@ class CellDayHumidityEvidence:
     The rule is a humid **and mild** day, and its own columns are only
     `air_rh > 85`, so the temperature half cannot be expressed as a threshold:
     the evidence carries the real humidity as `value` and the day's real
-    temperature as `is_mild`, and the decision reads both. A day whose
-    temperature the provider never stored is not a mild day — the half is
-    unsaid, and an unsaid half neither opens the rule nor clears it silently
-    into a made-up value.
+    temperature as `mildness`, and the decision reads both.
     """
 
     observed_at: datetime
@@ -195,11 +192,19 @@ class CellDayHumidityEvidence:
         return self.rh_mean_pct
 
     @property
-    def is_mild(self) -> bool:
-        return (
-            self.mean_temp_c is not None
-            and FUNGAL_MIN_TEMP_C <= self.mean_temp_c <= FUNGAL_MAX_TEMP_C
-        )
+    def mildness(self) -> bool | None:
+        """Whether the day is mild — `None` when the provider never said.
+
+        A day whose temperature the provider never stored is not a mild day, and
+        it is NOT a measured non-mild day either: the half is UNSAID, which is
+        the one answer the two branches of the condition must not confuse.
+        Unsaid never opens the rule, and it is no evidence that a day went
+        cool on an open alert — so it neither opens nor resolves, and the
+        humidity half of the condition alone decides (#134).
+        """
+        if self.mean_temp_c is None:
+            return None
+        return FUNGAL_MIN_TEMP_C <= self.mean_temp_c <= FUNGAL_MAX_TEMP_C
 
 
 WorkerRuleEvidence = ForecastRainEvidence | CellDayHumidityEvidence
@@ -440,8 +445,8 @@ def mean_daily_temp_c(tmin_c: float | None, tmax_c: float | None) -> float | Non
 
     The only form a stored `weather_daily` row carries temperature in (Open-Meteo
     is called with daily variables, docs/06 §6), and `None` when the provider has
-    no value for one of the two ends: a day without a temperature is not a mild
-    day, and saying so is the honest answer, not a zero.
+    no value for one of the two ends: a day without a temperature says nothing
+    about its mildness, and saying so is the honest answer, not a zero.
     """
     if tmin_c is None or tmax_c is None:
         return None
@@ -500,7 +505,7 @@ def decide_worker_rule(
     *,
     max_gap: timedelta,
     current_alert: Alert | None = None,
-    is_mild: bool = True,
+    mildness: bool | None = True,
 ) -> AlertDecision:
     """Decide a rule of the forecast source of docs/06 §3 on its own aggregate.
 
@@ -513,14 +518,19 @@ def decide_worker_rule(
     minute resolution window fails the same way (D22), so these rules resolve on
     the FIRST false evaluation, the hysteresis band still applying.
 
-    - no alert + the aggregate violates the condition AND `is_mild` -> open
-    - open/acknowledged + the day is not mild, or the aggregate clears the
-      condition beyond the hysteresis band -> resolve
+    - no alert + the aggregate violates the condition AND `mildness` -> open
+    - open/acknowledged + the day is MEASURED not mild, or the aggregate clears
+      the condition beyond the hysteresis band -> resolve
     - otherwise no action
 
-    `is_mild` is the second half of a rule's condition, decided by the evidence
-    that carries it (`WorkerRuleEvidence.is_mild`, D19) and `True` for a rule
+    `mildness` is the second half of a rule's condition, decided by the evidence
+    that carries it (`WorkerRuleEvidence.mildness`, D19) and `True` for a rule
     that names no temperature, so the caller never discriminates on the code.
+    It is tri-state — mild, not mild, or UNSAID — and the two branches read the
+    third one differently on purpose (#134): an unsaid half never opens the
+    rule, and on an open alert it is no evidence of a measured non-mild day, so
+    it resolves nothing. The humidity half of the condition still decides an
+    unsaid day, which is the only way it can close.
 
     `max_gap` is the freshness margin (see `heard_from_run`): an aggregate older
     than it at `at` is not evidence that the condition still holds, so nothing
@@ -538,12 +548,12 @@ def decide_worker_rule(
         return AlertDecision(
             action=(
                 AlertAction.OPEN
-                if is_mild and is_condition_met(rule.operator, value, rule.threshold)
+                if mildness and is_condition_met(rule.operator, value, rule.threshold)
                 else AlertAction.NO_ACTION
             ),
             alert=None,
         )
-    if not is_mild or is_clear_met(rule.operator, value, rule.threshold, rule.hysteresis):
+    if mildness is False or is_clear_met(rule.operator, value, rule.threshold, rule.hysteresis):
         return AlertDecision(
             action=AlertAction.RESOLVE,
             alert=current_alert.resolve_automatically(at),
