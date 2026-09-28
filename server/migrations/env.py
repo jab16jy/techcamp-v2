@@ -12,12 +12,14 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-# `disable_existing_loggers=False` (default is True): fileConfig()'s default
-# silently disables every logger already created by the time it runs, including
-# every application module logger the test suite imported during collection
-# (Alembic upgrades run in an autouse session fixture, tests/conftest.py). Without
-# this, no application `logging.getLogger(__name__).warning(...)` call is ever
-# observable in any test, including via `caplog`.
+#
+# `disable_existing_loggers=False` is not optional. `fileConfig` defaults it to
+# True, which sets `disabled` on every logger that already exists and is not
+# named in `[loggers] keys` — and this file names only `root`, `sqlalchemy` and
+# `alembic`. So the first migration silenced every `techcamp.*` logger for the
+# rest of the process: a test session could not assert anything the application
+# logs, and a management script that migrated before serving would lose its own
+# output. (It is a function argument in Python 3.12, not a key in the `.ini`.)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 

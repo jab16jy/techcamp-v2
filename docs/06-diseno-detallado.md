@@ -35,7 +35,7 @@ sequenceDiagram
   I->>DB: INSERT … ON CONFLICT (sensor_id, time) DO NOTHING
   I->>DB: UPDATE node SET last_seen_at, status='online'
   I->>I: evaluar reglas en caliente para las parcelas afectadas
-  I->>DB: INSERT alert + notification (misma transacción)
+  I->>DB: INSERT alert + notification (una sola transacción, ADR-0016) después del commit del lote; si el proceso cae entre ambos, un lote reencolado o el siguiente reevalúa sobre las lecturas ya guardadas, porque la evaluación es sin estado (D16)
   I->>DB: NOTIFY plot_events
   DB-->>A: evento → SSE a los clientes suscritos
 ```
@@ -51,6 +51,7 @@ sequenceDiagram
 | Duplicados | La restricción `UNIQUE (sensor_id, time)` más `ON CONFLICT DO NOTHING` hace idempotente la entrega "al menos una vez" de QoS 1. Solo las lecturas realmente insertadas emiten un evento `reading`: una redelivery no inserta nada y, por tanto, no vuelve a notificar al fan-out por SSE. |
 | Estado del nodo | `UPDATE node SET last_seen_at, status` solo avanza: se aplica únicamente si el `last_seen_at` guardado es más antiguo. Los lotes de uplink y de status se vacían por separado, así que un uplink recibido antes de un Last Will `offline` puede escribirse después; sin esta guarda el nodo volvería a `online` con una fecha más antigua. |
 | Huecos | Un salto en `seq` incrementa `ingest_gap_total`. La completitud diaria por nodo es un SLI ([11-metricas](11-metricas.md)). |
+| Fallo al evaluar | La evaluación de cada parcela va aislada: si al decidir sus reglas algo lanza (datos malformados, una aserción), el error se registra con su parcela y el lote sigue con las demás, que abren sus alertas con normalidad. Un fallo de base de datos además deja la sesión compartida en estado de transacción fallida, así que antes de la parcela siguiente se revierte: sin esa reversión cada parcela posterior fallaría también y el lote se cerraría sin decidir nada. Esa parcela no se pierde: como la evaluación es sin estado (D16), su siguiente lote vuelve a decidirla. Un fallo del lote anterior a la evaluación sí reencola el lote para reintentarlo. |
 
 > **Límite conocido:** la librería MQTT confirma el mensaje al recibirlo, así que si el ingestor cae entre la confirmación y la inserción se pierde como máximo un lote (≤ 1 s). Se detecta como hueco de `seq`. Si la completitud baja del SLO, se pasa a confirmación manual después del `INSERT`.
 
@@ -113,7 +114,7 @@ stateDiagram-v2
 - **Una sola alerta abierta** por (`rule_id`, `plot_id`/`node_id`). Lo garantiza un índice único parcial en la base, no el código.
 - `Pending` no se persiste como alerta; la condición sostenida se evalúa sin estado sobre las lecturas de la ventana (`min_duration_min` hacia atrás desde la última lectura), iniciando la racha en la primera lectura tras la última que incumplió la condición.
 - **Tolerancia de huecos y frescura:** dos lecturas solo cuentan como consecutivas si no media un hueco mayor que `max_gap`, que es 3 × `interval_s` del nodo que las produjo (el mismo margen que define `node_offline`). Un hueco mayor termina la racha igual que una lectura que incumple: la racha reinicia en la lectura siguiente al hueco. Y si la última lectura es más antigua que `max_gap` en el momento de evaluar, no hay racha: el nodo está caído y lo almacenado no es evidencia de que la condición siga vigente. Aplica igual a la racha que abre una alerta y a la de 60 min que la resuelve.
-- **Ventana de resolución:** la resolución automática exige que la condición de cierre (superando la banda de histéresis) se mantenga sostenida durante 60 minutos (constante de dominio).
+- **Ventana de resolución:** la resolución automática exige que la condición de cierre (superando la banda de histéresis) se mantenga sostenida durante 60 minutos (constante de dominio). Esa ventana pertenece a las reglas **que tienen una serie**: `heavy_rain_forecast` (cada 3 h sobre un agregado diario) y `fungal_risk` (diario sobre el día anterior) no tienen evidencia más fina que su propia cadencia, así que una racha de 60 min no es computable — con una sola muestra por evaluación la racha es 0 y la alerta nunca se resolvería. Esas dos se resuelven en la **primera evaluación falsa**, sigue aplicando la banda de histéresis.
 - **Reloj de escalamiento:** el plazo de 2 h para escalar una alerta crítica no reconocida corre desde `opened_at`; una alerta ascendida a crítica tras 48 h escala en su siguiente revisión.
 - Escalar una alerta crítica notifica por SMS o WhatsApp al técnico asignado a la finca (`farm.technician_id`).
 - Las alertas de nodo van al técnico, no al productor ([01-requisitos](01-requisitos.md), escenario C).
@@ -122,14 +123,24 @@ stateDiagram-v2
 
 | Código | Condición | Severidad |
 |---|---|---|
-| `water_stress` | Con sensor representativo: humedad < θ_estrés de la parcela durante 6 h. Sin él: `Dr > RAW` en el balance diario ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | warning; crítica si dura 48 h |
+| `water_stress` | Con sensor representativo: humedad < θ_estrés de la parcela durante 6 h, y solo sobre ese sensor ([§5](#5-riego-balance-hídrico-fao-56)). Sin él: `Dr > RAW` en el balance diario ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) | warning; crítica si dura 48 h |
 | `waterlogging` | Humedad de suelo > capacidad de campo + 5 durante 24 h | warning |
 | `heat_stress` | Temperatura del aire > 35 °C durante 3 h | warning |
-| `fungal_risk` | Humedad relativa > 85 % durante ≥ 10 h en el día y temperatura media de 20–30 °C | warning |
+| `fungal_risk` | Humedad relativa media del día > 85 % y temperatura media de 20–30 °C, calculada como `(tmin_c + tmax_c) / 2`; sin duración | warning |
 | `heavy_rain_forecast` | Pronóstico > 50 mm en 24 h | warning; crítica si el suelo está saturado |
 | `flood_risk` / `drought_risk` | Severidad del modelo ≥ `alto` | crítica |
 | `node_offline` | Sin lecturas durante 3 intervalos | warning (al técnico) |
-| `node_battery_low` | `battery_v` < 3,4 V | info (al técnico) |
+| `node_battery_low` | `battery_v` < 3,4 V — regla sembrada e **inactiva**: no hay sensor ni columna `battery_v` en el sistema actual, así que queda a la espera de que exista esa fuente | info (al técnico) |
+
+- **Salud del nodo (ausencia de evidencia):** `node_offline` no es un umbral sobre una serie, sino la ausencia de una lectura: se decide en el dominio sobre `at - last_seen_at` del propio nodo contra 3 × su `interval_s`, y se resuelve cuando el nodo lleva 60 min seguidos hablando sin un hueco mayor que ese mismo margen (ventana de resolución, 60 min). Por eso no se busca un operador ni un umbral en la fila de `alert_rule`. Si el nodo nunca reportó, el silencio se mide desde `claimed_at`: un nodo se reclama cuando el técnico lo vincula y no puede haber estado en silencio antes de empezar a hablar, así que medir desde el reclamo es lo que evita avisarle minutos después de instalarlo. Un nodo sin lectura ni reclamo no tiene reloj contra el cual medir y no se juzga.
+- **Reglas de pronóstico (`heavy_rain_forecast`, `fungal_risk`):** se deciden en el `worker` sobre un agregado por celda y día, no sobre una serie, así que no piden duración: `min_duration_min` es 0 y la ventana de 60 min no les aplica (se resuelven en la primera evaluación falsa). `fungal_risk` se evalúa sobre la fila **observada** del día anterior —un pronóstico no es una observación de un día que ya pasó— y su media térmica sale de los dos extremos almacenados; el matiz de "≥ 10 h en el día" que pedía la versión anterior espera al clima horario (tabla, variables y migración propias) y queda pendiente de validación agronómica.
+- **Evidencia ausente (media térmica sin un extremo almacenado):** la mitad de temperatura de `fungal_risk` es de tres estados —templado, no templado o **no dicho**— y "no dicho" no es lo mismo que una medición. Un día-celda con humedad pero sin `tmin_c` o sin `tmax_c` no abre la alerta (una mitad no dicha no cumple la condición) y, sobre una alerta abierta, **tampoco la resuelve**: no hay medición que diga que el día dejó de ser templado, y en un sistema de alertas el fallo peligroso es el silencio. La alerta sigue abierta hasta que la humedad sola supere la banda de histéresis, o hasta que el proveedor guarde una temperatura. [#134](https://github.com/jab16jy/techcamp-v2/issues/134)
+- **Suelo saturado (proxy):** la severidad crítica de `heavy_rain_forecast` se calcula con la última lectura de humedad de suelo de la parcela **igual o por encima de su capacidad de campo** θFC. Es un proxy pendiente de validación agronómica: la saturación real es el suelo *por encima* de la capacidad de campo, y esta versión solo puede afirmar "el suelo llegó a capacidad de campo". La señal es la última muestra válida de la parcela, no el sensor representativo por profundidad que E6 decide para el balance; la versión por profundidad llega con `water_stress` ([ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)).
+- **`water_stress`, las dos ramas y su evidencia:** la regla tiene **una sola** fuente de evidencia por parcela, y cuál de las dos es lo decide el sensor representativo ([§5](#5-riego-balance-hídrico-fao-56), [ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)), no el `K` que quedó asimilado en la fila del balance: un sensor con calibración `lab`, a una profundidad fuera de la zona de raíces, o tres o más sensores dan `K = 0` y la parcela pasa a la rama del balance.
+  - **Con sensor representativo**, la regla se decide sobre las lecturas de **ese** sensor contra el θ_estrés de la parcela (`water_balance_daily.stress_moisture_pct`, recalculado cada día por el job de riego), con su duración de 6 h y su histéresis de 3 puntos. El resto de sensores de humedad de la parcela no son evidencia para esta regla: el `ingestor` los lee para las reglas que no son `water_stress`. Sin fila de balance todavía no hay θ_estrés y la regla no se decide.
+  - **Sin sensor representativo**, la abre el job de las reglas de balance (después del de riego) sobre la fila de `water_balance_daily` del día D−1, con `Dr > RAW` como condición. Su unidad es el día, no la hora: la condición se evalúa sobre el balance diario ya promediado, así que **no pide duración** (una racha de 6 h no es computable con una muestra por día, igual que la ventana de 60 min no lo es para las reglas de pronóstico) y **no pide histéresis** (los 3 puntos son puntos de humedad de la serie de lecturas, no del margen `Dr/RAW`). Cada día aporta su margen `(Dr / RAW) − 1` y la condición es `> 0`, para que `RAW` sea el de ese día: `p` se mueve con la ETc. Dos consecuencias visibles de una evidencia diaria, y ninguna es un defecto escondido: la ventana de resolución de 60 min tampoco es computable,   así que una alerta abierta se resuelve con el **segundo** balance diario sin estrés seguido (un solo día limpio es una racha de longitud cero), y la escalada a crítica a las 48 h llega en el **tercer** balance diario estresado, no exactamente a las 48 h. La evidencia diaria no puede resolver más fino que un día, y la rama de lecturas conserva su racha de 6 h y su escalada de 48 h sin cambios.
+  - La fila de balance se lee en una ventana de los últimos 7 días: es el horizonte de 48 h más la racha de resolución, con margen para un día en que el job de riego no corrió. Un θ_estrés más viejo que eso ya es de una etapa del cultivo que la parcela dejó.
+  - El `Dr` que decide es el asimilado de la fila (`depletion_mm`), con su `K`: sin sensor representativo `K = 0` y el `Dr` es el modelado, que es el que el balance defines. Con `RAW ≤ 0` (suelo degenerado) no hay umbral positivo que comparar y la parcela no se decide, igual que el estado del balance ([§5](#5-riego-balance-hídrico-fao-56)).
 
 ## 4. Notificaciones (outbox)
 
@@ -142,7 +153,7 @@ sequenceDiagram
   participant P as Web Push / SMS
 
   E->>DB: BEGIN, INSERT alert, INSERT notification pending por destinatario y canal, COMMIT
-  loop cada 5 s
+  loop al insertar y cada min
     W->>DB: SELECT … WHERE status='pending' AND next_attempt_at <= now() FOR UPDATE SKIP LOCKED LIMIT 50
     W->>P: enviar
     alt éxito
@@ -158,11 +169,14 @@ sequenceDiagram
 | Regla | Valor |
 |---|---|
 | Garantía | La alerta y su notificación se guardan en la misma transacción: no hay alerta sin aviso ni aviso sin alerta. |
+| Disparo | El `worker` envía al finalizarse la transacción que escribió las filas y además en un barrido cada minuto. El primero cumple la latencia de una crítica (RNF-05, p95 < 2 min); el segundo recoge los reintentos ya vencidos, la liberación de las 05:00 y lo que quedó. El cron de `procrastinate` tiene resolución de minuto, así que no hay un bucle de 5 s. |
+| Reclamo | `FOR UPDATE SKIP LOCKED LIMIT 50` sobre los canales que tienen proveedor: dos workers pueden vaciar la misma tabla a la vez porque el segundo pasa por encima de las filas que el primero tiene tomadas. Cada fila vuelve a tomar su propio cerrojo, todavía `pending` y vencida, justo antes de enviarse: el commit de la anterior cierra la transacción del reclamo y liberaría las que faltan. La entrega es **al menos una vez**: si el worker muere después de que el proveedor aceptó el mensaje y antes de confirmar `sent`, el siguiente barrido la envía otra vez; un duplicado posible es preferible a perder una alerta crítica (RF-08, RNF-05). El resultado de cada fila se confirma por separado, nunca por lotes. Un lote lleno se repite dentro de la misma corrida, así que lo acumulado no espera al siguiente minuto. |
 | Reintentos | Backoff exponencial: 1 min, 5 min, 30 min, 2 h; máximo 5 intentos, luego `failed`. |
 | Circuit breaker | Por proveedor. Con 5 fallos seguidos se abre 5 min; mientras tanto las críticas pasan al canal alterno. |
 | Horas de silencio | 20:00–05:00: solo notificaciones críticas; el resto se agrupa para las 05:00. |
 | Agrupación | Varias alertas no críticas de la misma finca en 15 min se envían en una sola notificación. |
 | Canales por severidad | `info`: solo dentro de la app. `warning`: push. `critical`: push y, si no se reconoce, SMS o WhatsApp. |
+| Canal sin adaptador | Una fila cuyo canal todavía no tiene adaptador registrado ni siquiera se reclama: se queda `pending` tal cual, sin gastar un intento, y no ocupa lugar en un lote mientras espera al adaptador que la enviará. |
 
 ## 5. Riego: balance hídrico FAO-56
 

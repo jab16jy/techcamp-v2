@@ -497,8 +497,8 @@ La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectu
 | `water_stress` | `soil_moisture` | `<` | *null* | 3 | 360 | warning | Umbral dinámico por parcela (θ_estrés); pendiente de validación agronómica |
 | `waterlogging` | `soil_moisture` | `>` | *null* | 3 | 1440 | warning | Umbral dinámico por suelo (capacidad de campo + 5); pendiente de validación agronómica |
 | `heat_stress` | `air_temp` | `>` | 35 | 1 | 180 | warning | Pendiente de validación agronómica |
-| `fungal_risk` | `air_rh` | `>` | 85 | 5 | 600 | warning | Pendiente de validación agronómica |
-| `heavy_rain_forecast` | `rain` | `>` | 50 | 0 | 0 | warning | Pendiente de validación agronómica |
+| `fungal_risk` | `air_rh` | `>` | 85 | 5 | 0 | warning | Sin duración: se decide sobre el agregado del día (docs/06 §3); pendiente de validación agronómica |
+| `heavy_rain_forecast` | `rain` | `>` | 50 | 0 | 0 | warning | Sin duración: se decide sobre el pronóstico del día (docs/06 §3); saturación como proxy, pendiente de validación agronómica |
 | `flood_risk` | *null* | *null* | *null* | 0 | 0 | critical | Evaluado por modelo ML (E10) |
 | `drought_risk` | *null* | *null* | *null* | 0 | 0 | critical | Evaluado por modelo ML (E10) |
 | `node_offline` | *null* | *null* | *null* | 0 | 0 | warning | Salud de nodo (3 × intervalo sin lecturas) |

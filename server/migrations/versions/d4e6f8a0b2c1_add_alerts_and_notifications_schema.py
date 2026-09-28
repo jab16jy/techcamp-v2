@@ -71,7 +71,7 @@ _FACTORY_RULES: list[dict[str, Any]] = [
         "operator": ">",
         "threshold": decimal.Decimal("85"),
         "hysteresis": decimal.Decimal("5"),
-        "min_duration_min": 600,
+        "min_duration_min": 0,
         "severity": "warning",
         "crop_id": None,
     },

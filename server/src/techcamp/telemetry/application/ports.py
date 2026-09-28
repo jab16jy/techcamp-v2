@@ -129,15 +129,28 @@ class ReadingRepository(Protocol):
     ) -> list[ReadingPoint]:
         """`reading` rows in `[start, end)` with a calibrated `value`
         (T5: uncalibrated rows, `value IS NULL`, are excluded), ordered by
-        time (docs/04-api.md:92-93, `resolution=raw`)."""
+        time (docs/04-api.md:92-93, `resolution=raw`).
+
+        Every calibrated row is served, whatever its `quality`: this is the
+        readings API (docs/04), which shows what the node reported. A rule
+        decision asks for `query_valid_raw` instead.
+        """
         ...
 
     async def query_valid_raw(
         self, sensor_id: int, org_id: UUID, *, start: datetime, end: datetime
     ) -> list[ReadingPoint]:
-        """Calibrated `reading` rows in `[start, end)` excluding readings
-        flagged out of range (`quality & 2 != 0`, docs/03 Calibración),
-        scoped to `org_id` through the sensor->node relationship."""
+        """`query_raw` without the readings outside the physical range
+        (docs/06-diseno-detallado.md §1: a calibrated value outside the variable's
+        range "activa la bandera 2 de `quality` y no dispara alertas"), scoped to
+        `org_id` through the sensor->node relationship
+        (docs/09-cuellos-de-botella.md:47).
+
+        Only bit 2 is excluded, because a `ts` corrected by `received_at` (bit 1)
+        is valid evidence for a sustained run; the flags are independent bits
+        (docs/03-modelo-datos.md:174), so bit 1 must not be filtered with bit 2.
+        This is the window a reading-threshold rule is decided on.
+        """
         ...
 
     async def query_hourly(

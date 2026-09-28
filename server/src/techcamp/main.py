@@ -47,11 +47,13 @@ if is_seminar_profile():
     # the versioned REST API, so they get the same /api/v1 prefix.
     from techcamp.identity.adapters.api.dev_auth import router as dev_auth_router
     from techcamp.irrigation.adapters.api.dev_jobs import router as dev_irrigation_jobs_router
+    from techcamp.notifications.adapters.api.dev_outbox import router as dev_outbox_router
     from techcamp.weather.adapters.api.dev_jobs import router as dev_weather_jobs_router
 
     app.include_router(dev_auth_router, prefix="/api/v1")
     app.include_router(dev_weather_jobs_router, prefix="/api/v1")
     app.include_router(dev_irrigation_jobs_router, prefix="/api/v1")
+    app.include_router(dev_outbox_router, prefix="/api/v1")
 
 
 @app.get("/health")

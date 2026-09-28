@@ -4,9 +4,11 @@ split the load without double-processing a message. A thin aiomqtt loop
 around the pure orchestration in `telemetry/application/ingest_uplinks.py`
 (ADR-0002: no SQL or domain logic here, only I/O wiring).
 
-Entrypoint: `python -m techcamp.telemetry.adapters.ingestor` (mirrors how
-`api` starts `uvicorn techcamp.main:app`, docs/05: "misma imagen, distinto
-comando").
+Entrypoint: `python -m techcamp.ingestor` (mirrors how `api` starts
+`uvicorn techcamp.main:app`, docs/05: "misma imagen, distinto comando"). This
+module owns the MQTT loop and nothing else: the reading-rule evaluator is
+composed by the entrypoint and reaches `ingest_uplinks` through the `after_flush`
+hook (D9), so `telemetry` never names an `alerts` symbol.
 """
 
 from __future__ import annotations
@@ -17,9 +19,11 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from functools import partial
 from uuid import UUID
 
 import aiomqtt
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.repositories import SqlAlchemyPlotRepository
 from techcamp.shared.db import async_session_factory
@@ -31,6 +35,7 @@ from techcamp.telemetry.adapters.repositories import (
     SqlAlchemySensorRepository,
 )
 from techcamp.telemetry.application.ingest_uplinks import (
+    AfterFlush,
     RawStatusMessage,
     RawUplink,
     ingest_status_messages,
@@ -43,6 +48,11 @@ UPLINK_TOPIC_FILTER = "$share/ingestors/tc/v1/+/up"
 STATUS_TOPIC_FILTER = "$share/ingestors/tc/v1/+/status"
 RECONNECT_INTERVAL_S = 5.0
 POLL_TIMEOUT_S = 1.0
+
+type AfterFlushFactory = Callable[[AsyncSession], AfterFlush | None]
+"""D9/D14: the entrypoint builds the reading-rule evaluator on the session this
+flush already opened, so the alert write joins the same unit of work as the
+batch (one `AsyncSession`, the `farms` → `weather` precedent)."""
 
 
 def mqtt_host() -> str:
@@ -119,10 +129,13 @@ def node_id_from_topic(topic: str) -> UUID | None:
         return None
 
 
-async def _flush_uplinks(batch: list[RawUplink]) -> None:
+async def _flush_uplinks(
+    batch: list[RawUplink], build_after_flush: AfterFlushFactory | None = None
+) -> None:
     if not batch:
         return
     async with async_session_factory() as session:
+        after_flush = build_after_flush(session) if build_after_flush is not None else None
         stats = await ingest_uplinks(
             batch,
             nodes=SqlAlchemyNodeRepository(session),
@@ -131,6 +144,7 @@ async def _flush_uplinks(batch: list[RawUplink]) -> None:
             readings=SqlAlchemyReadingRepository(session),
             plots=SqlAlchemyPlotRepository(session),
             events=SqlAlchemyPlotEventsNotifier(session),
+            after_flush=after_flush,
         )
     logger.info("ingest: %d uplinks inserted, discarded=%s", stats.inserted, dict(stats.counts))
 
@@ -174,6 +188,7 @@ async def _handle_message(
     *,
     uplink_batcher: Batcher[RawUplink],
     status_batcher: Batcher[RawStatusMessage],
+    flush_uplinks: Callable[[list[RawUplink]], Awaitable[None]],
 ) -> None:
     topic = str(message.topic)
     node_id = node_id_from_topic(topic)
@@ -187,20 +202,26 @@ async def _handle_message(
     if topic.endswith("/up"):
         flushed = uplink_batcher.add(RawUplink(node_id, payload_bytes, received_at))
         if flushed is not None:
-            await _flush_with_retry(flushed, uplink_batcher, _flush_uplinks, "uplink")
+            await _flush_with_retry(flushed, uplink_batcher, flush_uplinks, "uplink")
     elif topic.endswith("/status"):
         flushed_status = status_batcher.add(RawStatusMessage(node_id, payload_bytes, received_at))
         if flushed_status is not None:
             await _flush_with_retry(flushed_status, status_batcher, _flush_status, "status")
 
 
-async def run() -> None:
+async def run(*, build_after_flush: AfterFlushFactory | None = None) -> None:
     """The `ingestor` process entrypoint. Reconnects on `MqttError` (network
     blips, broker restarts), and a flush failure (e.g. Postgres down) never
     crashes the process either: `_flush_with_retry` keeps the batch for the
-    next attempt instead of propagating."""
+    next attempt instead of propagating.
+
+    `build_after_flush` is the D9 reading-rule hook, composed by
+    `techcamp.ingestor`: `None` keeps this module free of any alerts knowledge
+    (the status path and every test call the flush without a hook).
+    """
     uplink_batcher: Batcher[RawUplink] = Batcher()
     status_batcher: Batcher[RawStatusMessage] = Batcher()
+    flush_uplinks = partial(_flush_uplinks, build_after_flush=build_after_flush)
 
     while True:
         try:
@@ -219,13 +240,16 @@ async def run() -> None:
                         pass
                     else:
                         await _handle_message(
-                            message, uplink_batcher=uplink_batcher, status_batcher=status_batcher
+                            message,
+                            uplink_batcher=uplink_batcher,
+                            status_batcher=status_batcher,
+                            flush_uplinks=flush_uplinks,
                         )
 
                     due_uplinks = uplink_batcher.due()
                     if due_uplinks is not None:
                         await _flush_with_retry(
-                            due_uplinks, uplink_batcher, _flush_uplinks, "uplink"
+                            due_uplinks, uplink_batcher, flush_uplinks, "uplink"
                         )
                     due_status = status_batcher.due()
                     if due_status is not None:
@@ -238,5 +262,7 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(run())
+    raise SystemExit(
+        "the ingestor process starts at `python -m techcamp.ingestor`, which composes the "
+        "reading-rule evaluator this module's flush takes (D9)"
+    )

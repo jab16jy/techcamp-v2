@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
@@ -29,7 +30,12 @@ from techcamp.telemetry.application.ingest_uplinks import (
     ingest_status_messages,
     ingest_uplinks,
 )
-from techcamp.telemetry.domain.models import CalibrationKind, CalibrationMethod, NodeStatus
+from techcamp.telemetry.domain.models import (
+    CalibrationKind,
+    CalibrationMethod,
+    NodeStatus,
+    ReadingEvent,
+)
 
 from .test_repositories import _make_node, _make_org_and_plot, _make_sensor
 
@@ -144,6 +150,40 @@ async def test_ingest_uplinks_is_idempotent_across_two_flushes(db_session: Async
     # re-notify the SSE fan-out with a duplicate `reading` event.
     reading_notifications = [p for p in notifications if json.loads(p)["type"] == "reading"]
     assert len(reading_notifications) == 1
+
+
+# -- D9: the after-flush hook sees the readings of the batch it just processed --
+
+
+async def test_ingest_uplinks_awaits_the_after_flush_hook_with_the_batchs_readings(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id, node_id, sensor_id = await _claimed_node_with_sensor(db_session)
+    await _add_calibration(
+        db_session, org_id=org_id, sensor_id=sensor_id, valid_from=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    ports = await _ports(db_session)
+    seen: list[list[ReadingEvent]] = []
+
+    async def _after_flush(events: Sequence[ReadingEvent]) -> None:
+        seen.append(list(events))
+
+    message = RawUplink(node_id=node_id, payload=_uplink_payload(), received_at=_RECEIVED_AT)
+    first = await ingest_uplinks([message], **ports, after_flush=_after_flush)
+    # A QoS-1 redelivery inserts nothing, so the SSE fan-out publishes nothing
+    # (`test_ingest_uplinks_is_idempotent_across_two_flushes` proves that), but
+    # the batch's reading still reaches the hook: a batch re-queued by a failed
+    # flush re-evaluates at once instead of waiting for the next batch (D16),
+    # and deciding the same window twice is idempotent.
+    second = await ingest_uplinks([message], **ports, after_flush=_after_flush)
+
+    assert first.inserted == 1
+    assert second.inserted == 0
+    assert len(seen) == 2
+    assert seen[0] == seen[1]
+    assert [(e.org_id, e.plot_id, e.metric, e.value) for e in seen[0]] == [
+        (org_id, plot_id, "soil_moisture", pytest.approx(46.2))
+    ]
 
 
 # -- GitHub #36: one unusable `ts` is classified, not fatal to the batch --

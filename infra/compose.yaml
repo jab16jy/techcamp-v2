@@ -71,7 +71,7 @@ services:
       context: ../server
     profiles: [seminar]
     restart: unless-stopped
-    command: ["python", "-m", "techcamp.telemetry.adapters.ingestor"]
+    command: ["python", "-m", "techcamp.ingestor"]
     environment:
       TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-techcamp}:${POSTGRES_PASSWORD:-techcamp}@postgres:5432/${POSTGRES_DB:-techcamp}

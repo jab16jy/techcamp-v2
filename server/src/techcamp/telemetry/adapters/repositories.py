@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Row, func, or_, select, text, update
+from sqlalchemy import ColumnElement, CursorResult, Row, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -464,39 +464,62 @@ class SqlAlchemyReadingRepository:
         await self._session.commit()
         return {(row.sensor_id, row.time) for row in result}
 
+    async def _raw(
+        self,
+        sensor_id: int,
+        *,
+        start: datetime,
+        end: datetime,
+        org_id: UUID | None = None,
+        extra: Sequence[ColumnElement[bool]] = (),
+    ) -> list[ReadingPoint]:
+        """`reading` rows in `[start, end)` with a calibrated `value`, ordered by
+        time, narrowed by `extra` (the two public reads below differ only in the
+        quality flags they accept).
+
+        `org_id` adds the `sensor`->`node` join that scopes the read to one org
+        (docs/09-cuellos-de-botella.md:47: every repository filters by `org_id`;
+        neither `reading` nor `sensor` carries the column itself). It is a
+        parameter of `_raw`, not a separate query, so the two reads cannot drift
+        apart on the window or the `value IS NULL` filter."""
+        query = select(ReadingRow.time, ReadingRow.value)
+        conditions: list[ColumnElement[bool]] = [
+            ReadingRow.sensor_id == sensor_id,
+            ReadingRow.time >= start,
+            ReadingRow.time < end,
+            ReadingRow.value.is_not(None),
+            *extra,
+        ]
+        if org_id is not None:
+            query = query.join(SensorRow, SensorRow.id == ReadingRow.sensor_id).join(
+                NodeRow, NodeRow.id == SensorRow.node_id
+            )
+            conditions.append(NodeRow.org_id == org_id)
+        result = await self._session.execute(query.where(*conditions).order_by(ReadingRow.time))
+        return [ReadingPoint(time=row.time, value=row.value) for row in result]
+
     async def query_raw(
         self, sensor_id: int, *, start: datetime, end: datetime
     ) -> list[ReadingPoint]:
-        result = await self._session.execute(
-            select(ReadingRow.time, ReadingRow.value)
-            .where(
-                ReadingRow.sensor_id == sensor_id,
-                ReadingRow.time >= start,
-                ReadingRow.time < end,
-                ReadingRow.value.is_not(None),
-            )
-            .order_by(ReadingRow.time)
-        )
-        return [ReadingPoint(time=row.time, value=row.value) for row in result]
+        return await self._raw(sensor_id, start=start, end=end)
 
     async def query_valid_raw(
         self, sensor_id: int, org_id: UUID, *, start: datetime, end: datetime
     ) -> list[ReadingPoint]:
-        result = await self._session.execute(
-            select(ReadingRow.time, ReadingRow.value)
-            .join(SensorRow, SensorRow.id == ReadingRow.sensor_id)
-            .join(NodeRow, NodeRow.id == SensorRow.node_id)
-            .where(
-                ReadingRow.sensor_id == sensor_id,
-                NodeRow.org_id == org_id,
-                ReadingRow.time >= start,
-                ReadingRow.time < end,
-                ReadingRow.value.is_not(None),
-                ReadingRow.quality.bitwise_and(int(ReadingQuality.OUT_OF_RANGE)) == 0,
-            )
-            .order_by(ReadingRow.time)
+        """`query_raw` without the out-of-range readings (docs/06 §1: a value
+        outside the physical range "no dispara alertas"), scoped to `org_id`.
+
+        Only bit 2 of `quality` is filtered: a `ts` corrected by `received_at`
+        (bit 1) is still evidence a sustained run may build on, so the flags are
+        read one by one as docs/06 §1 keeps them.
+        """
+        return await self._raw(
+            sensor_id,
+            start=start,
+            end=end,
+            org_id=org_id,
+            extra=(ReadingRow.quality.bitwise_and(int(ReadingQuality.OUT_OF_RANGE)) == 0,),
         )
-        return [ReadingPoint(time=row.time, value=row.value) for row in result]
 
     async def _query_aggregate(
         self, view: str, sensor_id: int, *, start: datetime, end: datetime

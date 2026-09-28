@@ -2,9 +2,9 @@
 (docs/06-diseno-detallado.md §4; ADR-0016).
 
 `alerts` builds the outbox writer with the same `AsyncSession` it writes the
-alert on, which is what makes the alert, its rows and the `NOTIFY` one
-transaction (D14). The subscription repository is a plain CRUD: it never shares
-a transaction with an alert.
+alert on, which is what makes the alert, its rows, their dispatch job and the
+`NOTIFY` one transaction (D14, D7). The subscription repository is a plain CRUD:
+it never shares a transaction with an alert.
 """
 
 from __future__ import annotations
@@ -17,13 +17,19 @@ from uuid import UUID
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.notifications.adapters.jobs import enqueue_dispatch
 from techcamp.notifications.adapters.orm import NotificationRow, PushSubscriptionRow
 from techcamp.notifications.domain.models import NotificationDraft
 from techcamp.shared.ids import uuid7
 
 
 class SqlAlchemyNotificationRepository:
-    """Writes the pending rows of an alert. Dispatch is the worker's (T7)."""
+    """Writes the pending rows of an alert and defers their dispatch (docs/06 §4).
+
+    Every method adds to the caller's transaction without committing it, so the
+    alert, its notices and the job that sends them land together or not at all
+    (ADR-0016).
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -31,7 +37,14 @@ class SqlAlchemyNotificationRepository:
     async def insert_drafts(
         self, alert_id: UUID, drafts: Sequence[NotificationDraft]
     ) -> list[NotificationRow]:
-        """Add the rows to the caller's transaction without committing it."""
+        """Add the rows to the caller's transaction without committing it.
+
+        D7: the dispatch is deferred here, in the transaction that wrote the
+        rows, so a committed alert always has a job behind it and a rolled back
+        one leaves no job to pick up a row that does not exist. An alert with no
+        rows (`info`, in-app only — D5) queues nothing, because there is
+        nothing to send.
+        """
         created_at = datetime.now(UTC)
         rows = [
             NotificationRow(
@@ -47,6 +60,8 @@ class SqlAlchemyNotificationRepository:
             for draft in drafts
         ]
         self._session.add_all(rows)
+        if rows:
+            await enqueue_dispatch(self._session)
         return rows
 
 

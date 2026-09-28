@@ -6,6 +6,11 @@ batching timer and JSON/text decoding into the `Raw*` messages below.
 
 Only claimed nodes are ingested (task instruction): a `node_id` from an
 unknown or unclaimed node is discarded and counted, never raised.
+
+D9: `telemetry` never imports `alerts`. The composition root
+(`techcamp/ingestor.py`) injects the reading-rule evaluator through the
+`after_flush` hook below, which is awaited with the readings this batch
+processed, once the batch is committed (D16).
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
@@ -66,6 +71,15 @@ class RawStatusMessage:
     node_id: UUID
     payload: bytes
     received_at: datetime
+
+
+type AfterFlush = Callable[[Sequence[ReadingEvent]], Awaitable[None]]
+"""D9: the reading-rule hook, awaited with the readings of the batch.
+
+Typed here so nothing in `telemetry` names an `alerts` symbol; the caller that
+composes it is the ingestor entrypoint (docs/05: a module only imports another
+module's public `application` package, never its domain).
+"""
 
 
 @dataclass
@@ -131,9 +145,21 @@ async def ingest_uplinks(
     readings: ReadingRepository,
     plots: PlotRepository,
     events: PlotEventsPort,
+    after_flush: AfterFlush | None = None,
 ) -> IngestStats:
     """One ingest flush (docs/06-diseno-detallado.md §1). `messages` is
-    whatever `adapters/ingestor.py`'s batcher accumulated (500 msgs or 1s)."""
+    whatever `adapters/ingestor.py`'s batcher accumulated (500 msgs or 1s).
+
+    `after_flush` (D9) is awaited after the batch and the node updates are
+    committed, in its own transaction (D16). It is awaited with the readings
+    this batch processed, not only the ones `insert_batch` returned: a failure
+    BEFORE the hook (the flush itself) re-queues the batch and re-decides it at
+    once instead of waiting for the node's next batch, and deciding the same
+    window twice is idempotent (`open_alert` returns the alert already open, and
+    a resolved one is no `current_alert`). A failure INSIDE the hook is the
+    evaluator's own business: it isolates the plot that failed, so the batch is
+    not re-queued and the remaining plots of the batch are still decided.
+    """
     stats = IngestStats()
     records: list[ReadingRecord] = []
     reading_events: list[tuple[tuple[int, datetime], ReadingEvent]] = []
@@ -240,8 +266,6 @@ async def ingest_uplinks(
                     )
                 )
 
-        # Hot alert-rule evaluation: no-op until E7 (feature doc decision).
-
         seen[node.id] = NodeSeenUpdate(
             node_id=node.id,
             org_id=node.org_id,
@@ -254,12 +278,16 @@ async def ingest_uplinks(
     stats.inserted = len(inserted)
     # `ON CONFLICT DO NOTHING` skips a redelivered reading, and a QoS-1
     # duplicate must not send a second `reading` event to the SSE fan-out
-    # (GitHub #36): only rows that actually landed are published.
+    # (GitHub #36): only rows that actually landed are published. The hook gets
+    # the batch's own readings instead, so a re-queued batch re-evaluates.
     new_events = [event for key, event in reading_events if key in inserted]
+    batch_events = [event for _, event in reading_events]
 
     await _flush_node_updates(
         seen, new_events, nodes=nodes, plots=plots, events=events, farm_cache=farm_cache
     )
+    if after_flush is not None and batch_events:
+        await after_flush(batch_events)
     return stats
 
 

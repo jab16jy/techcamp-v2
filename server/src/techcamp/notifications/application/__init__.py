@@ -13,18 +13,30 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from uuid import UUID
 
+from techcamp.notifications.application.dispatch import (
+    DispatchReport,
+    dispatch_due_notifications,
+)
 from techcamp.notifications.application.manage_subscriptions import (
     delete_push_subscription,
     register_push_subscription,
 )
-from techcamp.notifications.application.ports import PushSubscriptionRepository
+from techcamp.notifications.application.ports import (
+    NotificationSender,
+    OutboxRepository,
+    PushSubscriptionRepository,
+)
 from techcamp.notifications.domain.models import Channel, NotificationDraft, next_attempt_at
 
 __all__ = [
     "Channel",
+    "DispatchReport",
     "NotificationDraft",
+    "NotificationSender",
+    "OutboxRepository",
     "PushSubscriptionRepository",
     "delete_push_subscription",
+    "dispatch_due_notifications",
     "next_attempt_at",
     "plan_notifications",
     "register_push_subscription",

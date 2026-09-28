@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from techcamp.alerts.domain import (
+    BALANCE_STRESS_MAX_GAP,
     Alert,
     AlertAction,
     AlertDecision,
@@ -14,10 +15,12 @@ from techcamp.alerts.domain import (
     AlertState,
     InvalidAlertTransitionError,
     Severity,
+    balance_rule_for_stress,
     decide_alert,
     is_clear_met,
     is_condition_met,
     is_eligible_for_escalation,
+    plot_rule_metric,
     resolve_threshold,
     sustained_run,
 )
@@ -291,6 +294,45 @@ def test_threshold_per_rule_code():
 
     rule_custom = _rule("custom_temp", operator=">", threshold=40.0)
     assert resolve_threshold(rule_custom) == 40.0
+
+
+def test_the_balance_branch_of_water_stress_is_the_same_rule_in_daily_units():
+    """D27: the balance decides on the per-day margin `(Dr / RAW) - 1`, so the
+    rule it uses is `> 0`, with no hysteresis and no minimum duration.
+
+    The 3 hysteresis points and the 6 h minimum belong to the READING series
+    (moisture percentage, hourly samples); on a dimensionless daily margin the
+    clear condition would sit at `< -3`, an alert that can never resolve, and a
+    6 h run over one sample per day is a run that can never reach its minimum.
+    The code and the severity stay, so the 48 h critical upgrade still applies."""
+    stored = _rule(
+        "water_stress",
+        metric="soil_moisture",
+        operator="<",
+        threshold=None,
+        hysteresis=3.0,
+        min_duration=timedelta(minutes=360),
+    )
+
+    derived = balance_rule_for_stress(stored)
+
+    assert derived.operator == ">"
+    assert derived.threshold == 0.0
+    assert derived.hysteresis == 0.0
+    assert derived.min_duration == timedelta(0)
+    assert derived.code == "water_stress"
+    assert derived.severity is stored.severity
+    # The rule it came from is not mutated: the reading branch still uses it.
+    assert stored.operator == "<"
+    assert stored.hysteresis == 3.0
+    assert stored.min_duration == timedelta(minutes=360)
+
+
+def test_the_daily_balance_series_tolerates_one_missed_day():
+    """D27: `BALANCE_STRESS_MAX_GAP` is 3 × the daily cadence, so a day the 04:30
+    job did not run is not a gap that ends the violating run — the same margin
+    docs/06 §3 sets for every other series."""
+    assert BALANCE_STRESS_MAX_GAP == timedelta(days=3)
 
 
 def test_alert_transitions_and_errors():
@@ -644,3 +686,30 @@ def test_zero_duration_rule_opens_only_on_a_violating_latest_sample():
     assert decide_alert(battery, [], t0, max_gap=_MAX_GAP).action == AlertAction.NO_ACTION
     assert decide_alert(battery, [(t0, 3.9)], t0, max_gap=_MAX_GAP).action == AlertAction.NO_ACTION
     assert decide_alert(battery, [(t0, 3.3)], t0, max_gap=_MAX_GAP).action == AlertAction.OPEN
+
+
+def test_only_the_plot_rules_of_the_ingestor_source_carry_a_metric():
+    # docs/06 §3 has five sources; these six codes belong to the other four
+    # (node health, forecast, model, balance), so a plot reading threshold is
+    # never decided on them even with a metric of their own (D17).
+    other_sources = {
+        "fungal_risk": "air_rh",
+        "heavy_rain_forecast": "rain",
+        "flood_risk": None,
+        "drought_risk": None,
+        "node_offline": None,
+        "node_battery_low": "battery_v",
+    }
+    for code, metric in other_sources.items():
+        assert plot_rule_metric(_rule(code, metric=metric, operator=">")) is None
+
+    # A plot rule keeps its metric, and `water_stress` is one of them: T10 gives
+    # it the plot's `stress_moisture_pct` threshold.
+    assert plot_rule_metric(_rule("heat_stress", metric="air_temp", operator=">")) == "air_temp"
+    assert plot_rule_metric(_rule("waterlogging", metric="soil_moisture", operator=">")) == (
+        "soil_moisture"
+    )
+    assert plot_rule_metric(_rule("water_stress", metric="soil_moisture", operator="<")) == (
+        "soil_moisture"
+    )
+    assert plot_rule_metric(_rule("custom_humidity", metric="air_rh", operator=">")) == "air_rh"
