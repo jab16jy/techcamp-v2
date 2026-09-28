@@ -91,6 +91,48 @@ class NotificationSender(Protocol):
         ...
 
 
+class ProviderCircuits(Protocol):
+    """The circuit breaker of each channel's provider (docs/06 §4; ADR-0016).
+
+    One per provider, which is one per channel: docs/06 §4's "Por proveedor" and
+    its "mientras tanto las críticas pasan al canal alterno" only mean something
+    if the push service being down says nothing about the SMS provider, and if the
+    dispatcher can ask about one channel and about the alternative separately.
+
+    The dispatcher owns every decision that follows from the answer — hold the row
+    without spending an attempt, send the critical somewhere else, let the next
+    delivery through after the cooldown. This port only answers, and
+    `cooldown_remaining` is how it turns "not now" into the instant the row
+    becomes due again.
+    """
+
+    def allows(self, channel: Channel) -> bool:
+        """Whether a delivery on this channel may be attempted right now.
+
+        `True` in CLOSED and for the one trial HALF_OPEN allows; `False` while
+        OPEN, which is a statement about the provider and not about the row.
+        """
+        ...
+
+    def record_success(self, channel: Channel) -> None:
+        """One delivery landed: the provider is answering, so the consecutive
+        count restarts (docs/06 §4 counts "5 fallos seguidos")."""
+        ...
+
+    def record_failure(self, channel: Channel) -> None:
+        """One delivery failed for a reason that is the provider's.
+
+        The caller decides what counts: a row that cannot be delivered at all
+        (D34's gone subscription, D36's `NoPushSubscriptionError`) is not
+        evidence about the provider and must not be recorded here.
+        """
+        ...
+
+    def cooldown_remaining(self, channel: Channel) -> float:
+        """Seconds until this channel is allowed again; `0.0` when it is."""
+        ...
+
+
 class OutboxRepository(Protocol):
     """The `notification` queue the dispatcher drains (docs/06 §4; ADR-0016).
 
@@ -130,4 +172,21 @@ class OutboxRepository(Protocol):
 
     async def mark_failed(self, notification_id: UUID, *, attempts: int, error: str) -> None:
         """Give a row up after `MAX_ATTEMPTS` (docs/06 §4)."""
+        ...
+
+    async def mark_deferred(
+        self, notification_id: UUID, *, next_attempt_at: datetime, reason: str
+    ) -> None:
+        """Hold a row that is due but must not be sent yet, WITHOUT an attempt.
+
+        The third outcome, next to `mark_sent` and `mark_retry`, and it exists
+        because two documented situations are not the provider failing: the
+        circuit for this channel is open (docs/06 §4) and the row is non-critical
+        inside 20:00–05:00 Bogotá. Charging either one an attempt would spend a
+        row's five attempts on something no delivery could have fixed — a whole
+        evening of alerts given up at 23:00 with `failed` on all of them, which is
+        the opposite of the silence the quiet hours are for. `reason` goes to
+        `last_error` because that is the one column that says why a row did not
+        move, and `next_attempt_at` is the instant it will be tried again.
+        """
         ...

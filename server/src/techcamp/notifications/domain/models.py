@@ -35,6 +35,16 @@ RETRY_DELAYS = (
 the first, second, third and fourth failed attempt. The fifth is the last one,
 so there is no delay after it."""
 
+BREAKER_FAILURE_THRESHOLD = 5
+"""Consecutive failures of one provider that open its circuit (docs/06 §4:
+"Con 5 fallos seguidos se abre 5 min"; ADR-0016's "un circuit breaker por
+proveedor"). Not a setting: the doc states the number, and a configurable
+threshold would be a way to ship a breaker that does not match the doc."""
+
+BREAKER_COOLDOWN = timedelta(minutes=5)
+"""How long an open circuit refuses before letting one delivery through to try
+the provider again (docs/06 §4: "se abre 5 min"; D35)."""
+
 
 class Channel(StrEnum):
     """Delivery channel of a notification row (docs/03:301 `push|sms|whatsapp`)."""

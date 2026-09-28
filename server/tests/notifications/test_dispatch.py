@@ -280,6 +280,30 @@ async def test_a_due_sms_row_is_sent_and_marked_sent(
     assert (sent.status, sent.sent_at) == ("sent", _DUE)
 
 
+async def test_a_deferred_row_waits_without_spending_an_attempt(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """A row held for a reason that is not the provider's fault — the circuit is
+    open, the hour is quiet — is not an attempt (D31's rule about a row nobody can
+    deliver yet, applied to a row that can). It stays `pending`, keeps its
+    attempts, and says why it did not move."""
+    row = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    outbox = _outbox(db_session)
+    due_again = _DUE + timedelta(minutes=5)
+
+    await outbox.mark_deferred(row.id, next_attempt_at=due_again, reason="push circuit is open")
+
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == due_again
+    assert held.last_error == "push circuit is open"
+    # The negative half: a deferred row is still claimable the moment it is due
+    # again, which a `failed` row would not be.
+    assert [held.id for held in await outbox.claim_due(now=due_again, channels=[Channel.SMS])] == [
+        row.id
+    ]
+
+
 async def test_a_failing_sender_schedules_the_next_attempt_with_backoff(
     db_session: AsyncSession, seeded: Seeded
 ) -> None:

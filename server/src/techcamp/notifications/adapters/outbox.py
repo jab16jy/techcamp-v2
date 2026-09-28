@@ -132,6 +132,24 @@ class SqlAlchemyOutboxRepository:
         row.last_error = error
         await self._session.commit()
 
+    async def mark_deferred(
+        self, notification_id: UUID, *, next_attempt_at: datetime, reason: str
+    ) -> None:
+        """A due row that is not an attempt: the channel's circuit is open, or a
+        non-critical row has come due inside the quiet hours.
+
+        `attempts` is deliberately left alone. The outbox gives a row five
+        attempts at a PROVIDER, and holding a row for a condition no delivery
+        could have fixed would spend a whole evening's alerts by 23:00 with
+        `failed` on every one of them (D31's rule for a row nobody can deliver,
+        applied to a row that can).
+        """
+        row = await self._locked(notification_id)
+        row.status = "pending"
+        row.next_attempt_at = next_attempt_at
+        row.last_error = reason
+        await self._session.commit()
+
     async def _locked(self, notification_id: UUID) -> NotificationRow:
         """The claimed row, re-read under its own lock.
 
