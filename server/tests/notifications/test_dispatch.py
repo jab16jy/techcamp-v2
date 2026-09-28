@@ -27,7 +27,11 @@ from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.adapters.outbox import SqlAlchemyOutboxRepository
 from techcamp.notifications.adapters.repositories import SqlAlchemyNotificationRepository
 from techcamp.notifications.adapters.senders import SeminarSmsSender, build_senders
-from techcamp.notifications.application import dispatch_due_notifications
+from techcamp.notifications.adapters.subscriptions import SqlAlchemyPushSubscriptionRepository
+from techcamp.notifications.application import (
+    NotificationSender,
+    dispatch_due_notifications,
+)
 from techcamp.notifications.domain.models import (
     MAX_ATTEMPTS,
     Channel,
@@ -162,6 +166,14 @@ def _outbox(session: AsyncSession) -> SqlAlchemyOutboxRepository:
     return SqlAlchemyOutboxRepository(session)
 
 
+def _senders(session: AsyncSession) -> dict[Channel, NotificationSender]:
+    """Whatever this profile registers, which in the test session is the seminar
+    SMS/WhatsApp pair and no `push`: `TECHCAMP_VAPID_PRIVATE_KEY` is unset, and
+    an unset key leaves the channel unregistered rather than failing every send
+    (D31, D32)."""
+    return build_senders(SqlAlchemyPushSubscriptionRepository(session))
+
+
 def _draft(seeded: Seeded) -> NotificationDraft:
     return NotificationDraft(user_id=seeded.user_id, channel=Channel.SMS, next_attempt_at=_DUE)
 
@@ -260,7 +272,7 @@ async def test_a_due_sms_row_is_sent_and_marked_sent(
     row = await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders=build_senders(), now=_DUE
+        outbox=_outbox(db_session), senders=_senders(db_session), now=_DUE
     )
 
     assert (report.claimed, report.sent, report.retried, report.failed) == (1, 1, 0, 0)
@@ -307,9 +319,10 @@ async def test_the_fifth_failed_attempt_gives_the_row_up(
 async def test_a_row_with_no_sender_yet_is_not_even_claimed(
     db_session: AsyncSession, seeded: Seeded
 ) -> None:
-    """`push` has no sender until T7b, and a row nobody can send must not burn
-    its five attempts: the claim does not ask for that channel, so the row keeps
-    its status, its attempts and its due time for the adapter that will send it."""
+    """A row nobody can send must not burn its five attempts: the claim does not
+    ask for a channel with no registered sender, so the row keeps its status, its
+    attempts and its due time for the adapter that will send it. `push` is that
+    case here, because this session configures no VAPID key (D31, D32)."""
     row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
 
     report = await dispatch_due_notifications(
@@ -366,13 +379,16 @@ async def test_the_seminar_sender_logs_the_sms_it_pretends_to_send(
 
 
 async def test_production_registers_no_simulated_sender(
-    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ADR-0016: the real SMS/WhatsApp provider is future work, so the production
-    profile registers nothing rather than pretending a message was delivered."""
+    profile registers nothing rather than pretending a message was delivered.
+    Web Push is the exception and has its own test in `test_push_sender`: it is
+    real in both profiles (ADR-0021:26)."""
     monkeypatch.setattr(senders_module, "is_seminar_profile", lambda: False)
+    monkeypatch.setattr(senders_module, "vapid_private_key", lambda: None)
 
-    assert build_senders() == {}
+    assert _senders(db_session) == {}
 
 
 async def test_writing_outbox_rows_defers_the_dispatch_job_in_the_same_transaction(
@@ -499,7 +515,7 @@ async def test_a_backlog_larger_than_one_batch_is_drained_in_one_run(
         await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders=build_senders(), now=_DUE, limit=2
+        outbox=_outbox(db_session), senders=_senders(db_session), now=_DUE, limit=2
     )
 
     assert report.sent == 3
@@ -508,7 +524,7 @@ async def test_a_backlog_larger_than_one_batch_is_drained_in_one_run(
 async def test_a_backlog_of_undeliverable_rows_cannot_starve_a_deliverable_one(
     db_session: AsyncSession, seeded: Seeded
 ) -> None:
-    """A `push` backlog waits for T7b, and while it waits it must not fill every
+    """A `push` backlog waits for a VAPID key, and while it waits it must not fill every
     claim: the claim only asks for the channels that have a sender."""
     for _ in range(3):
         await _pending_row(db_session, seeded, channel=Channel.PUSH)

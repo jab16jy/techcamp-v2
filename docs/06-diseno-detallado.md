@@ -158,7 +158,7 @@ sequenceDiagram
     W->>P: enviar
     alt éxito
       W->>DB: status = sent
-    else 410 Gone (suscripción vencida)
+    else 404/410 Gone (suscripción vencida)
       W->>DB: borrar push_subscription y probar el siguiente canal
     else error temporal
       W->>DB: attempts++, next_attempt_at = now() + backoff

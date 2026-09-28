@@ -98,6 +98,17 @@ services:
       # time, and every job hour in the orchestration DAG is America/Bogota
       # (docs/10-dag.md:156).
       TZ: America/Bogota
+      # Web Push is real in both profiles (ADR-0021:26), so the worker needs the
+      # private half of the VAPID key pair: the base64 DER of the EC2 private key
+      # (`openssl ecparam -name prime256v1 -genkey`, then base64 the DER, or let
+      # `py_vapid` write it). D32 pairs it with the browser bundle: the PUBLIC
+      # half of this same key must be what the web build gets as
+      # `VITE_VAPID_PUBLIC_KEY` (web/README.md), or the browser subscribes and the
+      # push service rejects every send. Unset is not an error — the `push` channel
+      # stays unregistered, exactly as the web app stays quiet when its variable is
+      # unset (D31: a channel nobody can send is not even claimed).
+      TECHCAMP_VAPID_PRIVATE_KEY: ${TECHCAMP_VAPID_PRIVATE_KEY:-}
+      TECHCAMP_VAPID_SUBJECT: ${TECHCAMP_VAPID_SUBJECT:-mailto:notificaciones@techcamp.local}
     depends_on:
       postgres:
         condition: service_healthy

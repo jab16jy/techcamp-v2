@@ -15,7 +15,12 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.notifications.domain.models import CLAIM_LIMIT, Channel, PendingNotification
+from techcamp.notifications.domain.models import (
+    CLAIM_LIMIT,
+    Channel,
+    PendingNotification,
+    PushSubscription,
+)
 
 
 class PushSubscriptionRepository(Protocol):
@@ -28,9 +33,43 @@ class PushSubscriptionRepository(Protocol):
         """
         ...
 
+    async def list_for_user(self, user_id: UUID) -> Sequence[PushSubscription]:
+        """Every browser `user_id` registered, oldest first.
+
+        What the Web Push sender fans out to: a user with a phone and a laptop has
+        two rows and has to hear about the alert on both. Scoped by `user_id` and
+        not by `org_id` because that is how this table is already isolated — a
+        subscription belongs to a user, so the caller's own rows are the only ones
+        reachable (docs/04 §Alertas y notificaciones, same as `upsert`).
+        """
+        ...
+
     async def delete_owned(self, subscription_id: UUID, user_id: UUID) -> bool:
         """Delete the row only when `user_id` owns it; `False` when it does not
         exist or belongs to someone else (both are 404 for the caller)."""
+        ...
+
+
+class PushTransport(Protocol):
+    """The browser push service itself, reached over HTTP (docs/06 §4; D34).
+
+    External I/O no test may reach, which is the one thing a port in this project
+    is for, so the sender is testable without a live service. `topic` and `ttl`
+    are the Web Push request's own `Topic` and `TTL`, and they exist for D30:
+    delivery is at least once, and both let a duplicate be a replacement instead
+    of a second copy of the same news.
+    """
+
+    async def deliver(
+        self, subscription: PushSubscription, *, payload: str, topic: str, ttl: int
+    ) -> None:
+        """Hand one encrypted push to one browser's push service.
+
+        Raise `PushSubscriptionGoneError` for a `404`/`410` — the subscription is
+        gone for good, which is not a failure. Raise anything else for every
+        other problem, including a `429` or a `5xx`: those say nothing about the
+        subscription, so the outbox row has to hear about them.
+        """
         ...
 
 
