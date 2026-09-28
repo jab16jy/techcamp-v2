@@ -432,6 +432,19 @@ async def test_presign_without_configured_credentials_is_503_and_writes_nothing(
     assert response.json()["title"] == "Object storage is not configured"
     assert await _attachments_for(db_session, "logbook_entry_id", org.entry_id) == []
 
+    # An EMPTY value is how infra/compose.yaml passes "not set", and it must
+    # read as absent rather than as a configured empty credential: in the
+    # seminar profile the MinIO default takes over and the wired real presigner
+    # signs, with no test double anywhere in the request.
+    monkeypatch.setenv("TECHCAMP_PROFILE", "seminar")
+    monkeypatch.setenv("TECHCAMP_S3_ACCESS_KEY", "")
+    monkeypatch.setenv("TECHCAMP_S3_SECRET_KEY", "")
+    signed = _presign(_client(), org.tokens["owner"], entry_id=org.entry_id)
+
+    assert signed.status_code == 201, signed.text
+    assert urlparse(signed.json()["upload_url"]).netloc == "localhost:9000"
+    assert len(await _attachments_for(db_session, "logbook_entry_id", org.entry_id)) == 1
+
 
 async def test_presigned_upload_url_is_a_sigv4_put_for_the_configured_public_host(
     db_session: AsyncSession,
