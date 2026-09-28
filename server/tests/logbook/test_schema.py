@@ -155,6 +155,19 @@ async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
         ("negative yield", {"kind": "harvest", "yield_kg": decimal.Decimal("-10")}),
         ("negative cost", {"kind": "cost", "cost_cop": decimal.Decimal("-500")}),
         ("invalid kind", {"kind": "pruning"}),
+        (
+            "yield_kg on non-harvest fails",
+            {"kind": "task", "labor_days": decimal.Decimal("1"), "yield_kg": decimal.Decimal("50")},
+        ),
+        (
+            "sold_kg and price on non-harvest fails",
+            {
+                "kind": "task",
+                "labor_days": decimal.Decimal("1"),
+                "sold_kg": decimal.Decimal("50"),
+                "sale_price_cop_per_kg": decimal.Decimal("2000"),
+            },
+        ),
     ],
 )
 async def test_logbook_entry_checks_enforce_invariants(

@@ -16,6 +16,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    Sequence,
     String,
     Text,
     text,
@@ -24,6 +25,8 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from techcamp.shared.db import Base
+
+sync_server_version_seq = Sequence("sync_server_version_seq", metadata=Base.metadata)
 
 
 class LogbookEntryRow(Base):
@@ -111,7 +114,7 @@ class LogbookEntryRow(Base):
     )
     client_updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
     server_version: Mapped[int] = mapped_column(
-        BigInteger, server_default=text("nextval('sync_server_version_seq')")
+        BigInteger, server_default=sync_server_version_seq.next_value()
     )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -145,7 +148,7 @@ class ExtensionVisitRow(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     client_updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
     server_version: Mapped[int] = mapped_column(
-        BigInteger, server_default=text("nextval('sync_server_version_seq')")
+        BigInteger, server_default=sync_server_version_seq.next_value()
     )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
 
