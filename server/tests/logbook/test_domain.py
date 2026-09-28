@@ -504,3 +504,32 @@ def test_ensure_can_sync_extension_visit_roles() -> None:
     for role in [Role.OWNER, Role.PRODUCER, Role.VIEWER]:
         with pytest.raises((InsufficientRoleError, ForbiddenRoleError)):
             ensure_can_sync(SyncEntity.EXTENSION_VISIT, role)
+
+
+def test_numeric_amounts_reject_non_finite_values() -> None:
+    """R3 (issue #143): non-finite Decimal values (NaN, Infinity) raise InvalidEntryError."""
+    # NaN rejected
+    nan_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("NaN"))
+    with pytest.raises(InvalidEntryError, match="finite|NaN"):
+        ensure_valid_entry(nan_fields)
+
+    # Infinity rejected
+    inf_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("Infinity"))
+    with pytest.raises(InvalidEntryError, match="finite|Infinity"):
+        ensure_valid_entry(inf_fields)
+
+    # -Infinity rejected
+    neg_inf_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("-Infinity"))
+    with pytest.raises(InvalidEntryError, match="finite|Infinity"):
+        ensure_valid_entry(neg_inf_fields)
+
+    # Negative assertion: finite value is accepted
+    finite_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("100.0"))
+    ensure_valid_entry(finite_fields)
+    assert finite_fields.yield_kg is not None and finite_fields.yield_kg.is_finite()
+
+
+def test_ensure_can_sync_refuses_unknown_entity() -> None:
+    """R3 (issue #143): an entity outside the mapping fails closed via KeyError, never allowed."""
+    with pytest.raises(KeyError):
+        ensure_can_sync("unknown_entity", Role.OWNER)  # type: ignore[arg-type]

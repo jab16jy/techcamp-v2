@@ -77,21 +77,21 @@ class RejectReason(StrEnum):
 MAX_CLOCK_SKEW: timedelta = timedelta(hours=24)
 """D5: client timestamp strictly > 24 h in the future is rejected as clock_skew."""
 
-LOGBOOK_ENTRY_WRITE_ROLES: frozenset[Role] = frozenset(
-    {
-        Role.OWNER,
-        Role.TECHNICIAN,
-        Role.PRODUCER,
-    }
-)
-"""D3: roles permitted to push logbook entries (viewer is forbidden)."""
-
-EXTENSION_VISIT_WRITE_ROLES: frozenset[Role] = frozenset(
-    {
-        Role.TECHNICIAN,
-    }
-)
-"""D3: roles permitted to push extension visits (technician only)."""
+_WRITE_ROLES: dict[SyncEntity, frozenset[Role]] = {
+    SyncEntity.LOGBOOK_ENTRY: frozenset(
+        {
+            Role.OWNER,
+            Role.TECHNICIAN,
+            Role.PRODUCER,
+        }
+    ),
+    SyncEntity.EXTENSION_VISIT: frozenset(
+        {
+            Role.TECHNICIAN,
+        }
+    ),
+}
+"""D3: roles permitted to push per synchronized entity."""
 
 _VALID_TOPICS: frozenset[str] = frozenset(t.value for t in VisitTopic)
 
@@ -141,8 +141,11 @@ def ensure_valid_entry(fields: LogbookEntryFields) -> None:
     # 1. Non-negative amounts
     for name in _NUMERIC_AMOUNT_FIELDS:
         val: Decimal | None = getattr(fields, name)
-        if val is not None and val < 0:
-            raise InvalidEntryError(f"{name} must be non-negative (got {val})")
+        if val is not None:
+            if not val.is_finite():
+                raise InvalidEntryError(f"{name} must be a finite number (got {val})")
+            if val < 0:
+                raise InvalidEntryError(f"{name} must be non-negative (got {val})")
 
     # 2. Exclusive fields
     if fields.kind != LogbookKind.HARVEST:
@@ -243,9 +246,5 @@ def is_clock_skewed(client_updated_at: datetime, now: datetime) -> bool:
 
 def ensure_can_sync(entity: SyncEntity, role: Role) -> None:
     """Validate that the member role is authorized to sync the entity (D3, docs/04 §Bitácora)."""
-    if entity == SyncEntity.LOGBOOK_ENTRY:
-        if role not in LOGBOOK_ENTRY_WRITE_ROLES:
-            raise InsufficientRoleError(role, entity)
-    elif entity == SyncEntity.EXTENSION_VISIT:
-        if role not in EXTENSION_VISIT_WRITE_ROLES:
-            raise InsufficientRoleError(role, entity)
+    if role not in _WRITE_ROLES[entity]:
+        raise InsufficientRoleError(role, entity)
