@@ -10,14 +10,21 @@ export interface SyncStatusInput {
   online: boolean
   pendingCount: number
   lastDataMinutesAgo: number | null
+  syncStopped?: boolean
 }
 
 /**
  * The connection-honesty text line, e.g. "Sin conexión · 3 por subir · dato de hace 12 min".
  * Silence on the offline clause means online; the pending clause only appears with a queue.
  */
-export function formatSyncStatus({ online, pendingCount, lastDataMinutesAgo }: SyncStatusInput): string {
+export function formatSyncStatus({
+  online,
+  pendingCount,
+  lastDataMinutesAgo,
+  syncStopped,
+}: SyncStatusInput): string {
   const clauses: string[] = []
+  if (syncStopped) clauses.push('sincronización detenida')
   if (!online) clauses.push('Sin conexión')
   if (pendingCount > 0) clauses.push(`${pendingCount} por subir`)
   clauses.push(formatFreshness(lastDataMinutesAgo))
