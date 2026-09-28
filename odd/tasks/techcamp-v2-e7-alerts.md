@@ -535,6 +535,45 @@ work unit (`domain-modeling`).
   under the session cwd, so passing the E7 worktree was refused as "different session route".
   Boundary → `577a405`.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
+- T7a (`8cbae7f..f165854`, 20 files, 1,367 changed lines incl. the correction): high risk
+  (`process_boundary` on `server/alembic.ini`), four lenses (risk, resilience, readability,
+  reliability), all captured and admitted. THREE CRITICAL, all real, all fixed in the one bounded
+  correction `f165854` (117 source lines, plan captured against the frozen `fix_finding_ids`):
+  - `R3-per-row-commit-releases-unprocessed-claims` — **the reviewer's best catch, and a defect
+    the parent gate missed.** The claim's per-row commits END the claim's transaction, so the
+    first outcome released the row locks on every not-yet-sent row of the batch: a second worker
+    could claim one of those and send it, i.e. the same alert twice. My original reasoning ("one
+    commit per row so a delivered message is not re-sent after a crash") is right about the
+    outcome and wrong about the claim: the two together need a per-row `hold`
+    (`FOR UPDATE SKIP LOCKED` right before the send), and a refused hold costs no attempt and no
+    send. Pinned by `test_hold_refuses_a_row_another_worker_already_holds` (real second session)
+    plus `test_a_row_the_hold_refuses_is_passed_over_and_not_sent`.
+  - `R4-bounded-batch-throughput` — one run made ONE pass, so more than 50 due rows drained at 50
+    rows/minute, which breaks RNF-05's p95 < 2 min. The run now repeats its pass while the pass
+    comes back full; the loop ends because every pass either moves its rows out of the due set or
+    comes back short. Pinned by `test_a_backlog_larger_than_one_batch_is_drained_in_one_run`.
+  - `R4-deferred-row-starvation` — `push` rows (no sender until T7b) were claimed every minute,
+    held their locks, and because the claim orders by due time they could fill all 50 slots and
+    starve every later SMS/WhatsApp row forever. The claim now takes the channels that have a
+    sender, so an undeliverable row is not even locked. Pinned by
+    `test_a_backlog_of_undeliverable_rows_cannot_starve_a_deliverable_one`. `DispatchReport.deferred`
+    was replaced by `DispatchReport.skipped` (a different thing: a row another worker holds).
+  - Gate on `f165854` (own DB, 5439): `pytest tests/notifications tests/alerts` → 148 passed,
+    1 pre-existing failure (the T6b forecast-day test, identical on the stashed base); ruff,
+    format, mypy, lint-imports green. docs/06 §4's "Reclamo" and "Canal sin adaptador" rows and
+    D24 were updated in the same commit, so the doc states all three rules.
+  - **NOT APPROVED, authority NOT burned.** The targeted validation cannot be captured: the
+    OpenCode host transport refuses the validator's result twice with
+    `opencode_provider_role_result_refused (role_capture_failed)`, and the bound STATUS now answers
+    `replayability: manual_action_required` on the same slot
+    (`targeted_validation_required`, revision `sha256:9011ffba…`). Same class as the tooling
+    blocker in #133 (the reviewer/refuter/validator route worked for T4/T5, so it is flaky, not a
+    usage error). Nothing was retried blindly and nothing else was touched: the delivery boundary
+    for T7a stays `8cbae7f` and the correction is committed but unapproved. The writer could not
+    surface the round's non-blocking (WARNING/SUGGESTION) findings either — `inspect-authority`
+    reports no findings — so NO GitHub issue was filed for the T7 round: filing one from an
+    unread list would be invention, not evidence. Whoever clears the transport should read the
+    four lens artifacts (`reopen-results`) and file that one issue.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
