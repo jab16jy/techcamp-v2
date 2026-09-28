@@ -42,7 +42,7 @@ from techcamp.farms.adapters.repositories import SqlAlchemyPlotRepository
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.domain.models import Role
 from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
-from techcamp.shared.dates import local_today
+from techcamp.shared.dates import BOGOTA_TZ, local_today
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, SensorRow
 from techcamp.telemetry.adapters.repositories import (
@@ -70,7 +70,16 @@ _MOISTURE_FROM, _MOISTURE_TO = 22.0, 13.0
 _STRESS_MOISTURE_PCT = 15.3
 """θ_estrés = 0,23 − 0,55 × (0,23 − 0,09) = 0,153 → 15,3 % (docs/06 §10)."""
 _TEMP_MIN, _TEMP_MAX = 26.0, 37.0
-"""docs/06 §10: `air_temp: { daily_min: 26, daily_max: 37 }`."""
+"""docs/06 §10: `air_temp: { daily_min: 26, daily_max: 37 }`, a LOCAL day."""
+
+_START_LOCAL_HOUR = 10.0
+"""`_START` is 10:00 in Bogotá, so the first local noon is 2 h in and the first
+local midnight 14 h in."""
+_NOON_SAMPLE = int((12 - _START_LOCAL_HOUR) * 3600 // _INTERVAL_S)
+"""Sample 8: the 37 °C peak, 2 h after `_START`."""
+_MIDNIGHT_SAMPLE = int((24 - _START_LOCAL_HOUR) * 3600 // _INTERVAL_S)
+"""Sample 56: the 26 °C trough, 14 h after `_START`."""
+_SAMPLES_PER_DAY = 86400 // _INTERVAL_S
 
 _CROSSING_SAMPLE = 1001
 """First sample under θ_estrés: 900 900 s = day 10,4167 (the doc's ≈ 10,4)."""
@@ -79,10 +88,11 @@ _NO_OPEN_SAMPLE = 1024
 _OPEN_SAMPLE = 1025
 """6 h of run: 922 500 s = day 10,677, the doc's ≈ 10,7."""
 
-_HEAT_NO_OPEN_SAMPLE = 46
-_HEAT_OPEN_SAMPLE = 47
-"""`heat_stress` is 3 h over a 26–37 °C day: the first sample above 35 °C is
-sample 35 (2 h 45 min of run), and 12 samples later the run is 3 h."""
+_HEAT_NO_OPEN_SAMPLE = 11
+_HEAT_OPEN_SAMPLE = 12
+"""`heat_stress` is 3 h over 35 °C. The backfill starts at 10:00 local with
+36,3 °C, so the very first sample is already above the threshold and the run is
+complete 12 samples — 3 h — later, at 13:00 local. Sample 11 holds 2 h 45 min."""
 
 _POINT = "SRID=4326;POINT(-74.1 10.9)"
 _BOUNDARY = (
@@ -109,11 +119,18 @@ def _moisture_pct(sample: int) -> float:
 
 
 def _air_temp_c(sample: int) -> float:
-    """One day of `air_temp`: 26 °C at local midnight, 37 °C at local noon, so
-    the day spends about 6,8 h above the rule's 35 °C — a 3 h sustained run is
-    possible, and the rule has to wait for it."""
-    hour = (sample * _INTERVAL_S) % 86400
-    return _TEMP_MIN + (_TEMP_MAX - _TEMP_MIN) * (1 - math.cos(2 * math.pi * hour / 86400)) / 2
+    """One local day of `air_temp`: 26 °C at local midnight, 37 °C at local noon,
+    so the day spends about 6,8 h above the rule's 35 °C — a 3 h sustained run is
+    possible, and the rule has to wait for it.
+
+    The hour comes from the reading's own clock in America/Bogota, NOT from the
+    sample number: `_START` is 10:00 local, so a wave indexed by sample would put
+    its trough ten hours away from the timestamps the ingest path stores — the
+    day the ingestor would see, not the day the doc describes.
+    """
+    at = (_START + timedelta(seconds=sample * _INTERVAL_S)).astimezone(BOGOTA_TZ)
+    hour = at.hour + at.minute / 60 + at.second / 3600
+    return _TEMP_MIN + (_TEMP_MAX - _TEMP_MIN) * (1 - math.cos(2 * math.pi * hour / 24)) / 2
 
 
 async def _make_scenario_plot(
@@ -305,19 +322,23 @@ def _schedule() -> list[tuple[int, bool]]:
         *range(0, _HEAT_OPEN_SAMPLE + 2),
         *range(_CROSSING_SAMPLE, _OPEN_SAMPLE + 2),
     }
-    days = _SAMPLES // 96
+    days = _SAMPLES // _SAMPLES_PER_DAY
     coarse = {
-        # 12 h apart, on the trajectory's OWN phase: sample 48 of each 96-sample
-        # day is the 37 °C peak, where the 3 h violation run is complete, and
-        # sample 0 is local-midnight-relative night, where the 60 min clear run
-        # is. Both windows of docs/06 §3 are only computable at one of these two
-        # instants, so these are the instants a coarse pass is placed on.
+        # On the trajectory's OWN LOCAL phase: local noon of every day (the
+        # 37 °C peak, where the 3 h violation run is complete) and local
+        # midnight of every night (the 26 °C trough, where the 60 min clear run
+        # is). Those are the only two instants docs/06 §3's two windows are
+        # complete at, so a coarse pass is never the reason a cycle went unseen.
         sample
         for day in range(days + 1)
-        for sample in (day * 96, day * 96 + 48)
+        for sample in (
+            _NOON_SAMPLE + day * _SAMPLES_PER_DAY,
+            _MIDNIGHT_SAMPLE + day * _SAMPLES_PER_DAY,
+        )
         if 0 <= sample <= _SAMPLES - 1
     }
     coarse.add(_CROSSING_SAMPLE - 1)
+    coarse.add(_SAMPLES - 1)
     checkpoints = sorted(per_sample | {s for s in coarse if 0 <= s <= _SAMPLES - 1})
     return [(sample, sample in per_sample) for sample in checkpoints]
 
@@ -401,6 +422,31 @@ async def _severity(db_session: AsyncSession, plot_id: UUID, code: str) -> str |
             .where(AlertRow.plot_id == plot_id, AlertRuleRow.code == code)
         )
     ).scalar_one_or_none()
+
+
+# -- the fixture's own day, in the product's timezone --
+
+
+def test_the_scenario_day_is_local_midnight_to_local_noon() -> None:
+    """docs/06 §10's `air_temp: { daily_min: 26, daily_max: 37 }` is a LOCAL day.
+
+    The regression this pins is the one RDD round 1 caught
+    (`R3-temperature-phase-shift`, lineage `review-b13abff23ad3d0e1`): deriving
+    the wave from the sample number put its trough at 10:00 Bogotá, because
+    `_START` is 10:00 local. The doc's two numbers are then unreachable and the
+    scenario runs a day the calendar does not have.
+    """
+
+    def sample_at(hour: int) -> int:
+        at = datetime(2026, 9, 2, hour, 0, tzinfo=BOGOTA_TZ)
+        return round((at - _START).total_seconds() / _INTERVAL_S)
+
+    assert _air_temp_c(sample_at(0)) == pytest.approx(_TEMP_MIN, abs=0.01)
+    assert _air_temp_c(sample_at(12)) == pytest.approx(_TEMP_MAX, abs=0.01)
+    # And the day's shape is what the rule needs: above 35 °C for long enough to
+    # be a 3 h sustained run, below the 34 °C clear line for the whole night.
+    assert _air_temp_c(sample_at(10)) > 35.0
+    assert _air_temp_c(sample_at(3)) < 34.0
 
 
 # -- the two alerts of the scenario, at the instants docs/06 §10 fixes --
@@ -487,9 +533,10 @@ async def test_scenario_a_ends_critical_with_a_daily_heat_cycle_and_two_organiza
 
     heat = await _cycles(db_session, plot.plot_id, "heat_stress")
     assert len(heat) == _BACKFILL_DAYS, "one heat alert per afternoon of the backfill"
-    # Every one of them resolved: the backfill's last sample is the fourteenth
-    # night (the trajectory's phase puts sample 1344 at the 26 °C trough), and
-    # the night is the instant the 60 min clear run completes on.
+    # Every one of them resolved. The backfill covers the noons of days 0–13 and
+    # the nights of days 0–13: it ends at 10:00 local of day 14, an hour before
+    # the last noon, so nothing is left open by the calendar and every afternoon
+    # was cooled off by its own night.
     assert all(state == "resolved" for _, state in heat), "a day of heat that never cooled off"
     assert await _severity(db_session, plot.plot_id, "water_stress") == "critical"
     assert (await _open_alerts(db_session, plot.plot_id)) == {"water_stress": "open"}
