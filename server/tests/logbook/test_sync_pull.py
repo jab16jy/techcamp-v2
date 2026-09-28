@@ -23,6 +23,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.identity.adapters.orm import MembershipRow, OrganizationRow
+from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.logbook.adapters.repositories import (
     SYNC_LOCK_KEY,
     SqlAlchemyExtensionVisitSyncRepository,
@@ -504,6 +505,46 @@ async def test_d1_pull_returns_push_committed_after_concurrent_lock(
             assert str(blocked_id) in returned_ids2
     finally:
         await holder.close()
+
+
+async def test_pull_caller_with_no_membership(env: SyncEnv) -> None:
+    """A caller with no org membership gets an empty page with next_since == since (D2)."""
+    unaffiliated_user = uuid7()
+    token = issue_token(str(unaffiliated_user))
+    with _client() as client:
+        resp = client.get("/sync/pull?since=42", headers=_auth(token))
+    assert resp.status_code == 200
+    assert resp.json() == {"changes": [], "next_since": 42, "has_more": False}
+
+
+async def test_pull_viewer_in_scope(env: SyncEnv) -> None:
+    """A viewer has read access to their org and receives pull changes (D2)."""
+    producer_token = env.mine.tokens["producer"]
+    technician_token = env.mine.tokens["technician"]
+    viewer_token = env.mine.tokens["viewer"]
+
+    entry_id = uuid7()
+    visit_id = uuid7()
+    _push(producer_token, [_entry_payload(entry_id, env.mine.plot_id, env.now)])
+    _push(
+        technician_token,
+        [
+            _visit_payload(
+                visit_id,
+                env.mine.farm_id,
+                env.mine.users["technician"],
+                env.now,
+            ),
+        ],
+    )
+
+    with _client() as client:
+        resp = client.get("/sync/pull?since=0", headers=_auth(viewer_token))
+    assert resp.status_code == 200
+    page = resp.json()
+    returned_ids = [c["id"] for c in page["changes"]]
+    assert str(entry_id) in returned_ids
+    assert str(visit_id) in returned_ids
 
 
 async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
