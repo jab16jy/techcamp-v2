@@ -322,6 +322,34 @@ describe('syncOnce: pull', () => {
     expect(await getCursor()).toBe(8)
   })
 
+  it('refuses a pull change whose entity it does not know, and does not advance the cursor', async () => {
+    const known = uuidv7()
+    const alien = uuidv7()
+    stubSyncApi({
+      pull: () =>
+        json({
+          changes: [
+            { id: known, entity: 'logbook_entry', op: 'upsert', data: serverEntry(known), server_version: 3 },
+            // An entity this client does not sync. It must never fall through to
+            // the `else` branch and land in `extensionVisits`.
+            { id: alien, entity: 'sensor_reading', op: 'upsert', data: { id: alien }, server_version: 4 },
+          ],
+          next_since: 4,
+          has_more: false,
+        }),
+    })
+
+    const outcome = await syncOnce()
+
+    // Fail closed: the run stops and the cursor stays where it was, because
+    // skipping the change would lose it silently and advancing would never
+    // bring it back. The change before it is rolled back with the transaction.
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unavailable' })
+    expect(await getCursor()).toBe(0)
+    expect(await db.logbookEntries.count()).toBe(0)
+    expect(await db.extensionVisits.count()).toBe(0)
+  })
+
   it('keeps a deleted row tombstoned when the server sends the delete', async () => {
     const gone = uuidv7()
     stubSyncApi({
