@@ -249,13 +249,20 @@ async def test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cel
 ) -> None:
     """Each job decides the day its own rule is about, read from the run's own
     clock: the forecast rule the next forecast day, `fungal_risk` the cell-day
-    the 03:00 consolidation just closed. A row for any other day is ignored."""
+    the 03:00 consolidation just closed. A row for any other day is ignored.
+
+    Both days come from `local_date`, the SAME helper the jobs read the day with
+    (docs/10 §3 fixes every job hour to America/Bogota), so the fixture stores
+    the row the job will look for. Derived from the UTC date instead, this test
+    asked for the wrong day for the five hours a day in which the two disagree —
+    19:00 to 23:59 local — and failed only when it was run inside that window."""
     org = await _make_org(db_session)
     cell_id = await _cell(db_session)
     await _point_plot_at_cell(db_session, org, cell_id)
     now = datetime.now(UTC)
-    forecast_day = now.date() + timedelta(days=1)
-    cell_day = now.date() - timedelta(days=1)
+    today = local_date(now)
+    forecast_day = today + timedelta(days=1)
+    cell_day = today - timedelta(days=1)
     _store_weather(db_session, cell_id, forecast_day, True, rain_mm=62.0, fetched_at=now)
     _store_weather(
         db_session,
