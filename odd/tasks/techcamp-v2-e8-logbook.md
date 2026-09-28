@@ -63,9 +63,11 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
   `uv run ruff format --check`, `uv run mypy`, `uv run lint-imports`.
 - Web checks (in `web/`): `npm run lint`, `npm run typecheck`, targeted `npm test -- --run <paths>`,
   `npm run build`, `npm run size` (≤ 200 KB gzip initial JS, RNF-02).
-- Size (owner, E7): **≤ 700 authored lines per commit** (hard ceiling; split into work-unit
-  commits deps → shape → behavior above it); **~400 authored lines per RDD slice**, reviewed as it
-  lands, never one review at the end.
+- Size (owner 2026-09-28, corrected): **commits follow functionality**, one coherent behavior with
+  its tests per commit (deps → shape → behavior for large units). ~700 authored lines is an
+  estimate, not a cap: 300–400 or ~770 are all fine. **An RDD slice covers whole functional
+  commits** (one or a few), reviewed as they land, never cut at a fixed 400-line count and never
+  one review at the end.
 - Writers (owner 2026-09-28): **AGY** default (fast; no RDD of its own: the parent gates and runs
   RDD on its commits), **OpenCode** for mid-to-high units (runs its own RDD after the parent's
   gate), **Claude Opus 5.5 / `odd-worker`** for highly complex units. One writer session per
@@ -122,6 +124,12 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
   `labor_days` task-only, `irrigation_mm` irrigation-only; `sold_kg` and price together,
   `sold_kg ≤ yield_kg`; non-negative amounts. Derived from docs/03's metric-fields table. Owner doc:
   docs/03 §`logbook_entry`.
+- **D11 Expired token, seminar** (parent, 2026-09-28): there is no refresh endpoint (docs/04
+  §dev auth has only OTP), and `lib/api/client.ts` signs out on `401`. The synchronizer stops on
+  `401` without touching the outbox; after the user signs in again it pushes what is pending;
+  signing out never clears Dexie. `ponytail:` the outbox is per device, so on a shared phone the
+  next user pushes it (the server stamps `created_by` = caller); per-user outbox if shared phones
+  appear. Owner doc: docs/06 §7.
 
 ## Open questions
 - None.
@@ -154,7 +162,8 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   to `odd-worker` if T7b's state handling stalls.
 - [ ] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
   (harvest with `sold_kg` / price, task with `labor_days`, link to a cached alert), "Guardado en el
-  teléfono" state, conflict/rejected notices, `SyncIndicator` wired. `impeccable`, design frozen.
+  teléfono" state, conflict/rejected notices, `SyncIndicator` wired. First commit: regenerate
+  `schema.d.ts` (T3/T4 paths) and swap T7's hand-typed `lib/sync` transport to `apiClient`. `impeccable`, design frozen.
   ~550 → T8a list + sync state, T8b entry sheet, one session. Route: **AGY**.
 - [ ] T9 Visits screen (`features/visits`): new visit sheet from a farm (five Ley 1876 topics),
   offline, plus client photo compression and pending upload queue for entries and visits.
@@ -176,7 +185,7 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   appears once on the server.
 - [ ] An extension visit recorded offline syncs the same way; only technicians can push visits.
 - [ ] Every sync, visit and attachment path is org-isolated (`rejected`/404 across orgs).
-- [ ] All server and web checks green; RDD per ~400-line slice; no commit over 700 authored lines.
+- [ ] All server and web checks green; commits by functionality; RDD per slice of whole commits.
 
 ## Review (RDD)
 - Boundary: branch point `3120dac`.
@@ -193,6 +202,11 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   Evidence: `git diff --stat` 3 docs, +32/−2; anchors `09#seguridad` and `04#bitácora-…` resolve.
   Review: passive documentation only → structural readback, no RDD.
 - 2026-09-28 Owner rule: targeted tests only per task and gate; full suites once at T10.
+- 2026-09-28 Owner: run independent tasks in parallel, sequential ones in order. Lanes now: T1
+  (AGY `e8-t1`, schema) ‖ T2 (AGY `e8-t2`, pure domain, `logbook/domain` only) ‖ T7 (OpenCode
+  `e8-t7`, `web/lib/{db,sync}` only). They share no files; T5 waits for T1, T3 for T1+T2.
+  D11 added (no refresh endpoint in seminar). AGY T1 ignored CodeGraph beyond `status`; the common
+  brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
 T1 (schema) on AGY.

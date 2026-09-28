@@ -315,7 +315,7 @@ sequenceDiagram
 | Dos dispositivos editan la misma entrada | Gana el `client_updated_at` mayor; el perdedor recibe `conflict_overwritten` y la interfaz lo avisa. Se acepta porque las entradas de bitácora casi nunca las editan dos personas a la vez ([ADR-0013](adr/0013-sincronizacion-offline.md)). |
 | Entrada con `alert_id` | El servidor comprueba que la alerta sea de la misma parcela; si no, responde `rejected`. El teléfono toma el `alert_id` de las alertas en caché, así que se puede vincular una acción sin conexión |
 | Reloj del teléfono muy desfasado | El servidor rechaza un `client_updated_at` más de 24 h en el futuro (`rejected`); la interfaz pide corregir la hora. |
-| Token vencido sin conexión | Se sigue escribiendo en local. Al volver la señal se renueva el token antes de sincronizar. |
+| Token vencido sin conexión | Se sigue escribiendo en local. Al volver la señal se renueva el token antes de sincronizar. En el perfil seminario no hay token de refresco (solo el ingreso por OTP, [04](04-api.md)): con un `401` el sincronizador se detiene sin tocar el outbox, la app pide ingresar de nuevo y, al volver, sube lo pendiente. Cerrar sesión nunca borra la bitácora local. |
 | iOS | No hay Background Sync API: la sincronización ocurre con la app en primer plano. |
 | Almacenamiento | Se pide `navigator.storage.persist()` para que el navegador no borre IndexedDB. Las fotos se comprimen en el cliente a ≤ 200 KB. |
 
