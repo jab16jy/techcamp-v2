@@ -34,8 +34,10 @@ from techcamp.telemetry.domain.models import ReadingEvent
 
 def build_evaluator(session: AsyncSession) -> AfterFlush:
     """The `after_flush` hook: decides the org's reading-threshold rules over the
-    readings that landed, and returns nothing because the ingestor owns the loop
-    (`_flush_with_retry` keeps the batch for the next attempt if this raises)."""
+    readings that landed, and returns nothing. One plot's failure never reaches
+    the ingestor: `evaluate_landed_readings` isolates it per plot, and
+    `_flush_with_retry` still keeps the batch for the next attempt if the flush
+    itself fails."""
 
     async def after_flush(events: Sequence[ReadingEvent]) -> None:
         await evaluate_landed_readings(
@@ -47,6 +49,9 @@ def build_evaluator(session: AsyncSession) -> AfterFlush:
             plots=SqlAlchemyPlotRepository(session),
             soils=SqlAlchemySoilProfileRepository(session),
             alerts=SqlAlchemyAlertRepository(session),
+            # D24: the plot loop shares this session, so a database failure has to
+            # leave it usable before the next plot runs.
+            recover=session.rollback,
         )
 
     return after_flush

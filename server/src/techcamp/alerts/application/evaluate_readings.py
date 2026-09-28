@@ -13,16 +13,31 @@ domain owns every decision. The whole window is read back from `reading`
 statelessly (D1), because the batch that lands the last sample is not
 necessarily the batch that crosses `min_duration` (a backfill, a restart, or a
 lost window that D16 makes self-healing on the next batch).
+
+Each plot of the batch is evaluated inside its own `try`: the ingestor awaits
+this hook inside its flush, so one plot that raises would re-queue the whole
+batch, fail the same way on every attempt and silence the alerts of every other
+plot sharing it. The failed plot is decided again by its next batch, because the
+evaluation is stateless (D1, D16).
+
+The loop keeps going on one shared `AsyncSession`, so a failure that came from the
+database leaves that session unusable: `recover` rolls it back before the next
+plot runs, or the per-plot isolation would be cosmetic (D24).
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from techcamp.alerts.application.ports import AlertRepository, AlertRuleRepository
+from techcamp.alerts.application.ports import (
+    AlertRepository,
+    AlertRuleRepository,
+    UnitOfWorkRecovery,
+)
 from techcamp.alerts.application.use_cases import (
     open_alert,
     resolve_automatically,
@@ -37,11 +52,13 @@ from techcamp.alerts.domain import (
 )
 from techcamp.farms.application.ports import PlotRepository, SoilProfileRepository
 from techcamp.telemetry.application.ports import NodeRepository, ReadingRepository, SensorRepository
-from techcamp.telemetry.domain.models import ReadingEvent
+from techcamp.telemetry.domain.models import ReadingEvent, Sensor
 
 if TYPE_CHECKING:
     from techcamp.farms.domain.models import Plot
     from techcamp.telemetry.domain.models import Node
+
+logger = logging.getLogger(__name__)
 
 _MAX_NODES_PER_PLOT = 500
 """ponytail: one `list_for_org` page covers every node on a plot at this
@@ -78,6 +95,7 @@ async def evaluate_landed_readings(
     plots: PlotRepository,
     soils: SoilProfileRepository,
     alerts: AlertRepository,
+    recover: UnitOfWorkRecovery,
 ) -> None:
     """Decide every reading-threshold rule of the plots the batch just landed.
 
@@ -87,6 +105,18 @@ async def evaluate_landed_readings(
     mixes plots whose readings arrive at different times, and judging one of them
     at another's timestamp would drop its series as stale (`sustained_run`) and
     leave it unevaluated until the next batch.
+
+    A plot that raises is logged and skipped, and the loop continues: the hook is
+    awaited inside the ingestor's flush, so an exception here would re-queue the
+    whole batch to fail identically on every attempt, and one bad plot would
+    silence the alerts of every plot sharing it. The failed plot is not lost —
+    the evaluation is stateless over the stored readings, so its next batch
+    decides it again.
+
+    `recover` runs after the log and before the next plot: a failure that came
+    from the database leaves the shared session in a failed-transaction state,
+    and without the rollback every later plot would raise `PendingRollbackError`
+    and be swallowed here, which is the silence this isolation exists to prevent.
     """
     org_by_plot: dict[UUID, UUID] = {}
     at_by_plot: dict[UUID, datetime] = {}
@@ -97,19 +127,27 @@ async def evaluate_landed_readings(
             at_by_plot[event.plot_id] = event.at
 
     for plot_id, org_id in org_by_plot.items():
-        plot = await plots.get_for_orgs(plot_id, [org_id])
-        if plot is None:
-            continue
-        await _evaluate_plot(
-            plot,
-            at=at_by_plot[plot_id],
-            rules=rules,
-            readings=readings,
-            sensors=sensors,
-            nodes=nodes,
-            soils=soils,
-            alerts=alerts,
-        )
+        try:
+            plot = await plots.get_for_orgs(plot_id, [org_id])
+            if plot is None:
+                continue
+            await _evaluate_plot(
+                plot,
+                at=at_by_plot[plot_id],
+                rules=rules,
+                readings=readings,
+                sensors=sensors,
+                nodes=nodes,
+                soils=soils,
+                alerts=alerts,
+            )
+        except Exception:
+            logger.exception(
+                "alerts: plot %s (org %s) not evaluated, its next batch decides it again",
+                plot_id,
+                org_id,
+            )
+            await recover()
 
 
 async def _evaluate_plot(
@@ -134,6 +172,7 @@ async def _evaluate_plot(
     # of its nodes is the margin that keeps the samples consecutive evidence.
     max_gap = timedelta(seconds=3 * max(node.interval_s for node in plot_nodes))
     soil = await soils.get_for_plot(plot.id)
+    sensors_by_metric = await _sensors_by_metric(plot, plot_nodes, sensors=sensors)
 
     for rule, metric in threshold_rules:
         # D2: an open alert also resolves on a 60 min clear run, so the window
@@ -141,9 +180,7 @@ async def _evaluate_plot(
         window = max(rule.min_duration, RESOLUTION_WINDOW)
         samples = await _samples(
             metric,
-            plot=plot,
-            plot_nodes=plot_nodes,
-            sensors=sensors,
+            sensors_by_metric=sensors_by_metric,
             readings=readings,
             start=at - window,
             end=at + _ONE_SECOND,
@@ -188,12 +225,29 @@ async def _evaluate_plot(
                 pass
 
 
+async def _sensors_by_metric(
+    plot: Plot,
+    plot_nodes: Sequence[Node],
+    *,
+    sensors: SensorRepository,
+) -> dict[str, list[Sensor]]:
+    """Every sensor of every node of the plot, grouped by metric.
+
+    Read once per plot evaluation instead of once per rule: every rule of a plot
+    asks the same question of the same nodes. The readings are still read per
+    rule, because each rule has its own window.
+    """
+    by_metric: dict[str, list[Sensor]] = {}
+    for node in plot_nodes:
+        for sensor in await sensors.list_for_node(node.id, plot.org_id):
+            by_metric.setdefault(sensor.metric, []).append(sensor)
+    return by_metric
+
+
 async def _samples(
     metric: str,
     *,
-    plot: Plot,
-    plot_nodes: Sequence[Node],
-    sensors: SensorRepository,
+    sensors_by_metric: Mapping[str, Sequence[Sensor]],
     readings: ReadingRepository,
     start: datetime,
     end: datetime,
@@ -206,12 +260,9 @@ async def _samples(
     what the readings API returns.
     """
     samples: list[tuple[datetime, float]] = []
-    for node in plot_nodes:
-        for sensor in await sensors.list_for_node(node.id, plot.org_id):
-            if sensor.metric != metric:
-                continue
-            samples.extend(
-                (point.time, point.value)
-                for point in await readings.query_valid_raw(sensor.id, start=start, end=end)
-            )
+    for sensor in sensors_by_metric.get(metric, ()):
+        samples.extend(
+            (point.time, point.value)
+            for point in await readings.query_valid_raw(sensor.id, start=start, end=end)
+        )
     return sorted(samples)
