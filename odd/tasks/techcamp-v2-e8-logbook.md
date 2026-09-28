@@ -256,6 +256,18 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 - T3 (owner asked why slow, 2026-09-28): `xhigh`, hardest unit, long debug of the D1 lock-ordering
   test hanging, and no commit yet despite the brief; nudged to land functional commits, drop the
   repro file and DBG prints, and make the ordering test deterministic with a timeout guard.
+- T7b RDD (OpenCode, consent granted by the parent under the standing grant): reviewer found
+  **CRITICAL R3-stale-push-result-settles-newer-write** (a push result settled by `id` alone
+  deleted an edit made while the request was in flight — RNF-01); fixed in the bounded correction
+  `d105968` (+62: settle only if the outbox auto-increment key is the one sent, inside the settling
+  transaction), validator approved, acknowledged. Known gap: no test proves the check is inside the
+  transaction (3/4 correction mutations caught). Parent gate on `d105968`: lint, typecheck, 31
+  passed. Three WARNINGs → [#147](https://github.com/jab16jy/techcamp-v2/issues/147) (invalid JSON
+  escapes as unhandled rejection; single-flight drops the 2 s follow-up; unknown pull entity written
+  into `extensionVisits` — fail-open, same lesson as T2), being fixed now by `e8-t7`, reviewed with
+  T8's first slice. T7 lane then merges into integration.
+- T3 landed `fef63b0` (push apply: D1 lock + savepoint per change) and `030528e` (`POST /sync/push`,
+  batch limit); concurrency tests commit pending.
 - T6 started (owner approved running it in parallel): OpenCode `e8-t6` high, lane `e8-t6`
   (`feat/e8-t6-presign`, DB 5445), new modules only to avoid clashing with T3's ports/repositories.
 
@@ -303,4 +315,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-T1 (schema) on AGY.
+(2026-09-28, session handoff) Integration `feat/e8-logbook` holds T0, T1, T2, T5 (69 logbook tests).
+1. T7 (`e8-t7`): gate the #147 fix commits → merge `feat/e8-t7-sync` into integration.
+2. T3 (`e8-t3`): wait for the concurrency-tests commit → parent gate (DB 5444) → go for OpenCode's
+   own RDD (base `a463a02`; the slice also covers T2's `432c74b`, `a73c1ba`) → merge. Expect an
+   add/add conflict on `logbook/application/ports.py` and `logbook/adapters/repositories.py`
+   (T3 branched before T5): combine both, like the T5 merge (`1783f20`).
+3. T6 (`e8-t6`): gate → go for its RDD → merge.
+4. Then T4 pull (after T3), T8 logbook screen (after T3/T4/T7; first commit regenerates
+   `schema.d.ts` and swaps the T7 transport to `apiClient`, calls `requestPersistentStorage()` on
+   start), T9 visits screen + photos, T10 close with the only full-suite run.
