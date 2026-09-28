@@ -32,10 +32,9 @@ class ForbiddenRoleError(Exception):
         self.role = role
         self.entity = entity
         if entity is not None:
-            entity_str = getattr(entity, "value", str(entity))
-            super().__init__(f"Role '{role.value}' cannot sync '{entity_str}'")
+            super().__init__(f"Role '{role}' cannot sync '{entity}'")
         else:
-            super().__init__(f"Role '{role.value}' cannot sync")
+            super().__init__(f"Role '{role}' cannot sync")
 
 
 class InsufficientRoleError(ForbiddenRoleError):
