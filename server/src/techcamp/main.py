@@ -10,6 +10,7 @@ from techcamp.farms.adapters.api.router import router as farms_router
 from techcamp.identity.adapters.api.router import router as identity_router
 from techcamp.irrigation.adapters.api.router import router as irrigation_router
 from techcamp.logbook.adapters.api.attachments import router as attachments_router
+from techcamp.logbook.adapters.api.sync import router as logbook_sync_router
 from techcamp.logbook.adapters.api.visits import router as visits_router
 from techcamp.notifications.adapters.api.router import router as notifications_router
 from techcamp.shared.config import is_seminar_profile
@@ -42,6 +43,7 @@ app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(weather_router, prefix="/api/v1")
 app.include_router(irrigation_router, prefix="/api/v1")
 app.include_router(alerts_router, prefix="/api/v1")
+app.include_router(logbook_sync_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(visits_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
