@@ -102,6 +102,10 @@ cover irrigation math. Vitest for web units; Playwright for e2e and scenarios ar
   later, not in an immediate fix task: one issue per epic review round, labels
   `review-follow-up`, `epic:eN`, `area:*`, `type:*`, linked from the feature doc's "Review (RDD)"
   section and referenced (`Refs #N`) by the fixing commit.
+- Exception: when a review round has more than 2–3 non-blocking findings, fix the most important
+  ones (the WARNINGs that affect the code the task is building) inside the current task, as their
+  own work-unit commit with `Refs #N`, and leave the rest in the issue, noting there which were
+  fixed.
 - Delivery: stacked-to-main chained PRs of about 400 authored lines, merged in order.
 - Skills: the Agent Teams Lite registry `.atl/skill-registry.md` (local, gitignored; rebuild with
   `gentle-ai skill-registry refresh`) is the skill index. Delegators pick matching skills there
