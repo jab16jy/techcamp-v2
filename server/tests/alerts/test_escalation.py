@@ -38,6 +38,7 @@ from techcamp.identity.adapters.repositories import SqlAlchemyMembershipReposito
 from techcamp.identity.domain.models import Role
 from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.shared.config import database_url
+from techcamp.shared.db import async_session_factory
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow
 
@@ -682,3 +683,44 @@ async def test_the_escalation_reaches_plot_events_as_an_alert_updated(
         "open",
         "critical",
     )
+
+
+# -- two workers racing on one alert (D42) --
+
+
+async def test_two_concurrent_sweeps_escalate_the_alert_once_and_text_the_technician_once() -> None:
+    """The invariant the lock exists for: two workers, two sessions, one alert past
+    its 2 h — it escalates ONCE and its technician gets exactly ONE `sms` row.
+
+    Without the `FOR UPDATE SKIP LOCKED` re-read both workers would see the same
+    un-escalated row, and `save`'s CAS would not stop either: it guards `state`
+    and `severity`, which an escalation does not change, so both would land and
+    write a second SMS. This is the one test that would have caught that, and it
+    is why the sweep takes the row's own lock instead of trusting the read.
+
+    Each sweep runs on its own session, so the two really contend in the database
+    instead of sharing a unit of work that would serialize them by accident.
+    """
+    async with async_session_factory() as setup:
+        org = await _make_org(setup)
+        alert = await _open(setup, SqlAlchemyAlertRepository(setup), org, code="water_stress")
+
+    async def _sweep() -> int:
+        async with async_session_factory() as session:
+            return await escalate_due_alerts(
+                org_id=org.org_id, at=_DUE, alerts=SqlAlchemyAlertRepository(session)
+            )
+
+    async with asyncio.timeout(30), async_session_factory() as check:
+        first, second = await asyncio.gather(_sweep(), _sweep())
+        escalated_at = (
+            await check.execute(select(AlertRow.escalated_at).where(AlertRow.id == alert.id))
+        ).scalar_one()
+        stored = await _rows(check, alert.id, "sms")
+
+    # Exactly one of the two workers did the work. Which one is the database's
+    # answer, not this test's: the other found the row locked and stepped over it.
+    assert sorted([first, second]) == [0, 1]
+    assert escalated_at == _DUE
+    assert len(stored) == 1
+    assert (stored[0].user_id, stored[0].status) == (org.technician, "pending")
