@@ -5,7 +5,7 @@
  * code that can only be exercised inside a `ServiceWorkerGlobalScope`.
  *
  * T7 owns the outbox payload's real shape; until it is written these read
- * defensively and never trust a field's type (D26).
+ * defensively and never trust a field's type (D33).
  */
 
 /** docs/07's screen map puts open alerts on the `Alertas` bottom tab. */
@@ -67,7 +67,7 @@ export async function readPushPayload(data: PushEventData | null): Promise<PushP
 /**
  * The route a tap opens. A payload-supplied route is honored only when it is a
  * same-origin path: a leading `//` is protocol-relative, so without this check
- * a push payload could bounce the user to another site (D26).
+ * a push payload could bounce the user to another site (D33).
  */
 export function routeForNotification(payload: PushPayload | null): string {
   const route = payload?.route

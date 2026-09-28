@@ -33,7 +33,7 @@ self.addEventListener('push', (event: PushEvent) => {
   )
 })
 
-// D26: a tap opens or focuses the alerts tab, which is a tab inside the app
+// D33: a tap opens or focuses the alerts tab, which is a tab inside the app
 // root shell — so "open the app" and "open the alerts" are one navigation.
 self.addEventListener('notificationclick', (event: NotificationEvent) => {
   event.notification.close()
