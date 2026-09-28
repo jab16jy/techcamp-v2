@@ -81,7 +81,7 @@ class PendingNotification:
 
     The alert's own fields come along because they are what a message is *about*:
     `rule_code` and `severity` are the two a provider needs to render an alert
-    (the push body in T7b, the seminar log line today), and `org_id` is the
+    (the Web Push body, the seminar log line), and `org_id` is the
     organization the row belongs to, denormalized on `alert` (docs/03:18).
     `attempts` travels because the next delay depends on how many are already
     spent, and the dispatcher must not have to re-read the row to know it.
@@ -95,6 +95,22 @@ class PendingNotification:
     rule_code: str
     severity: str
     attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class PushSubscription:
+    """One browser's `push_subscription` row, as the sender needs it
+    (docs/03:312-318; docs/06 §4).
+
+    `endpoint` and the VAPID key pair travel together because that is the
+    `PushSubscription` a push service expects (docs/04:145 names `p256dh` and
+    `auth`), and `id` travels because a `404`/`410` deletes THIS row — the sender
+    has no other way to name it.
+    """
+
+    id: UUID
+    endpoint: str
+    keys: dict[str, str]
 
 
 def retry_delay(attempts: int) -> timedelta:

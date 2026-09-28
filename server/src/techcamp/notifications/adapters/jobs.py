@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.notifications.adapters.outbox import SqlAlchemyOutboxRepository
 from techcamp.notifications.adapters.senders import build_senders
+from techcamp.notifications.adapters.subscriptions import SqlAlchemyPushSubscriptionRepository
 from techcamp.notifications.application import dispatch_due_notifications
 from techcamp.shared.db import async_session_factory
 from techcamp.shared.jobs import app
@@ -87,15 +88,25 @@ async def dispatch_outbox(timestamp: int) -> None:
 
     Runs both at the end of the transaction that wrote the rows (D7) and every
     minute (the sweep). Two passes at once are safe and expected: the claim
-    skips the rows the other holds, so each row is still sent exactly once.
+    skips the rows the other holds, so a row is not sent twice by two live
+    workers. Delivery is still AT LEAST ONCE (D30): a worker that dies between
+    the provider accepting a push and `sent` being committed leaves the row
+    `pending` and the next sweep sends it again, which the payload's `tag` and
+    the push service's `Topic` make a replacement rather than a second copy.
+
     The cron is read in the worker's own local time (croniter on a naive local
     clock), so the `worker` service runs in `America/Bogota` (infra/compose.yaml),
     the zone docs/10 §3 fixes every job hour to.
     """
-    async with async_session_factory() as session:
+    async with async_session_factory() as session, async_session_factory() as push_session:
+        # Two sessions, not one: the Web Push sender commits when it deletes a
+        # subscription the push service reported as gone, and a commit on the
+        # dispatcher's own session would end the transaction holding the claim's
+        # `FOR UPDATE SKIP LOCKED` locks, letting a second worker pick up the rest
+        # of this batch and send it too.
         report = await dispatch_due_notifications(
             outbox=SqlAlchemyOutboxRepository(session),
-            senders=build_senders(),
+            senders=build_senders(SqlAlchemyPushSubscriptionRepository(push_session)),
             now=datetime.now(UTC),
         )
         # Each outcome commits on its own, so this only matters when every row

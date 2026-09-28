@@ -1,24 +1,22 @@
-"""Postgres writer for the notification outbox and push subscriptions
-(docs/06-diseno-detallado.md §4; ADR-0016).
+"""The `notification` outbox writer (docs/06-diseno-detallado.md §4; ADR-0016).
 
-`alerts` builds the outbox writer with the same `AsyncSession` it writes the
-alert on, which is what makes the alert, its rows, their dispatch job and the
-`NOTIFY` one transaction (D14, D7). The subscription repository is a plain CRUD:
-it never shares a transaction with an alert.
+`alerts` builds this writer with the same `AsyncSession` it writes the alert on,
+which is what makes the alert, its rows, their dispatch job and the `NOTIFY` one
+transaction (D14, D7). The `push_subscription` writer is a plain CRUD that never
+shares a transaction with an alert, and it lives in `subscriptions.py` because
+the dispatch job needs it too.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.notifications.adapters.jobs import enqueue_dispatch
-from techcamp.notifications.adapters.orm import NotificationRow, PushSubscriptionRow
+from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.domain.models import NotificationDraft
 from techcamp.shared.ids import uuid7
 
@@ -63,44 +61,3 @@ class SqlAlchemyNotificationRepository:
         if rows:
             await enqueue_dispatch(self._session)
         return rows
-
-
-class SqlAlchemyPushSubscriptionRepository:
-    """CRUD of `push_subscription` (docs/03:307-312; D15).
-
-    The upsert is the write path the browser needs: `endpoint` is UNIQUE, so a
-    re-registration (a new key pair, or the same browser under another account)
-    rebinds the existing row instead of hitting the constraint.
-    """
-
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
-
-    async def upsert(self, *, user_id: UUID, endpoint: str, keys: dict[str, str]) -> UUID:
-        result = await self._session.execute(
-            select(PushSubscriptionRow).where(PushSubscriptionRow.endpoint == endpoint)
-        )
-        row = result.scalar_one_or_none()
-        if row is None:
-            row = PushSubscriptionRow(
-                id=uuid7(),
-                user_id=user_id,
-                endpoint=endpoint,
-                keys=keys,
-                created_at=datetime.now(UTC),
-            )
-            self._session.add(row)
-        else:
-            row.user_id = user_id
-            row.keys = keys
-        await self._session.commit()
-        return row.id
-
-    async def delete_owned(self, subscription_id: UUID, user_id: UUID) -> bool:
-        result = await self._session.execute(
-            delete(PushSubscriptionRow).where(
-                PushSubscriptionRow.id == subscription_id, PushSubscriptionRow.user_id == user_id
-            )
-        )
-        await self._session.commit()
-        return cast(CursorResult[Any], result).rowcount > 0

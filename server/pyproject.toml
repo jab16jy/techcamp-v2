@@ -21,6 +21,7 @@ dependencies = [
     "procrastinate==3.10.0",
     "psycopg[binary]>=3.3.6",
     "pyjwt[crypto]>=2.14.0",
+    "pywebpush>=2.0.0",
     "sqlalchemy[asyncio]>=2.0",
     "uvicorn[standard]>=0.53.0",
 ]
@@ -54,6 +55,14 @@ strict = true
 [[tool.mypy.overrides]]
 # asyncpg ships no stubs/py.typed marker (E4 T6: the raw `LISTEN` connection).
 module = "asyncpg.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Neither pywebpush nor its py_vapid dependency ships a py.typed marker (E7 T7b:
+# the Web Push transport). `WebPushException.status_code` is the one value read
+# off them, and the transport re-checks it before acting on it, so an untyped
+# import costs the boundary its annotation, not a runtime assumption.
+module = ["pywebpush.*", "py_vapid.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

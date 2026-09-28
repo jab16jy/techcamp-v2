@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from techcamp.notifications.adapters.repositories import SqlAlchemyPushSubscriptionRepository
+from techcamp.notifications.adapters.subscriptions import SqlAlchemyPushSubscriptionRepository
 from techcamp.shared.db import SessionDep
 
 

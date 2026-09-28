@@ -422,6 +422,52 @@ work unit (`domain-modeling`).
   "open the app" and "open the alerts tab" are the same navigation. `/alertas` is a
   `PlaceholderPage` until its own task replaces it, which is deliberate: the handler names the
   documented destination, not the   screen that happens to exist today.
+- D34 **T7b's Web Push delivery contract: what the payload carries, what a gone subscription
+  costs, and what a critical falls back to.** The docs fixed the outbox's shape and left the
+  message's shape to whoever wrote the sender, so the gaps closed here are recorded rather than
+  left implicit. Four parts, each with the alternative that was rejected.
+  - **Payload = the three of T9's four keys: `title`, `body`, `tag`; no `route`.** `pushPayload.ts`
+    reads four optional strings and derives the rest (`icon` is the client's own). `route` is left
+    out on purpose: D33 fixes `notificationclick` on `/alertas` and says the payload carries no
+    deep link, and the server naming a web route would put docs/07's screen map into a module
+    with no business knowing it. The `tag` is the **alert's** id, not the row's: docs/06 §4
+    grouping sends several alerts separately, and a per-alert tag is what makes a D30 retry
+    replace its own notification instead of stacking a duplicate, while one alert never eats
+    another. `title` is the severity; `body` is a Spanish sentence per factory `rule_code` with a
+    generic fallback, because docs/04 justifies carrying `rule_code`/`severity` at all with "una
+    bandeja que solo dijera `sms enviado` no diría qué llegó" — a lock screen reading
+    `water_stress` says nothing, and D11's org-defined rules make the fallback the reachable path,
+    not a dead branch.
+  - **A `404`/`410` deletes the subscription and costs the row NOTHING.** docs/06 §4's diagram
+    wrote only 410; the diagram is updated to `404/410` because `pywebpush`'s own API summary names
+    both for the same "remove this subscription" case, and a 404 from a push service never means
+    the browser is still there. This is why `PushSubscriptionGoneError` is a distinct type: a
+    browser that will never accept another push is not a delivery that failed, so charging it one
+    of the five attempts would burn a row's whole life on an endpoint that can never work. A
+    user with **no** subscription left is the opposite case and DOES cost an attempt
+    (`NoPushSubscriptionError`): an adapter exists, the delivery genuinely could not happen, and
+    `failed` after the documented five is the truth. A row is never marked `sent` for a delivery no
+    farmer saw — that would make `/dev/outbox` and docs/11's ≥ 98 % ratio describe a delivery that
+    did not happen.
+  - **The critical's "next channel" is T8's escalation row, not the sender's to write.** docs/06
+    §4's 410 branch and its circuit-breaker row both say the critical passes to the alternate
+    channel, but D5 puts the critical's `sms` row on the **escalation** (T8), and
+    `plan_notifications` says so in as many words ("the `sms` row of an escalated critical is
+    written by the escalation job, not here"). So the only "next channel" the sender owns is the
+    next **subscription** of the same user; a `warning` has no fallback at all (D5) and its row
+    simply costs its attempts. T7c owns the circuit breaker and the alternate-channel switch.
+  - **D30's dedup and a TTL, both simple enough to be worth having.** `pywebpush` has no
+    first-class `topic`, but it forwards unknown headers verbatim and `Topic` is the Web Push
+    request's own header (message collapsing), so the outbox **row's** `id.hex` goes through
+    `headers` — 32 characters, exactly the protocol's cap, the dashed uuid being 36, and every
+    hex character inside the base64url alphabet, so nothing is truncated and nothing can collide.
+    TTL 3600 s and a 10 s timeout were unstated in every doc; an hour still covers RNF-05's p95
+    under two minutes by a wide margin, and a critical arriving after its own two-hour escalation
+    clock (D12) is worse than not arriving. The ten-second timeout is not cosmetic: the row stays
+    claimed for the whole send, so an unanswered endpoint would hold the dispatcher's locks for as
+    long as the socket lives. Recorded, not hidden, because both are choices a push service could
+    reasonably disagree with.
+
 
 ## E6 coordination (2026-09-26)
 - E6 merged to `main` (PRs #104–#111, `main` @ `b627b66`): `water_balance_daily` (`plot_id`, `day`,
@@ -564,8 +610,12 @@ work unit (`domain-modeling`).
     forecast ~450 — actual 1,250 (`836e7f1`, 607 src / 564 tests / 79 docs+config), plus the
     RDD correction `f165854` (236: 117 src / 94 tests / 25 docs) and the RDD correction
     `45197b5` (59, closing the two remaining CRITICALs, D30) — APPROVED and acknowledged
-  - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
-    subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
+  - [x] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
+    subscription and tries the next channel (D34) — route: Herdr OpenCode (fresh session) —
+    forecast ~300 — actual 1,124 authored (572 src / 552 tests), split into four work units
+    (`2c9aecf` deps 779, `24632b3` shape 239, `9fd61af` sender 298, `30d416e` tests 552) plus
+    `server/uv.lock` (+770, generated) — RDD APPROVED and acknowledged
+    (`review-0505a9c608b85c36`)
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
     fallback to the alternate channel, grouping and quiet hours at send (D6) — route: Herdr
     OpenCode (same session as T7a) — forecast ~400
@@ -1026,6 +1076,40 @@ work unit (`domain-modeling`).
     `--target` hash was rejected (`the token and the identity come from different negotiations`).
     The fix is to take `next_transition.execute.command` from STATUS and run it verbatim, never to
     retype a provider-issued token.
+- T7b (`24632b3..9fd61af`, 5 paths, 298 lines; base `24632b3` = the third of four work units, worktree
+  `e7-t7b`, branch `feat/e7-t7b-webpush`): medium, `under_budget` at the sender slice, one
+  reliability lens, **APPROVED and acknowledged (authority burned)**. Lineage
+  `review-0505a9c608b85c36`, consumed revision
+  `sha256:1cae3d7c67c8fe86948cd590666061c2de1da88d707efc91b87aba1421efbeb6`, acknowledged target
+  `sha256:b0a742d1ab625070213c4db17e95f0694401ae6b6adefa1f0954a4fe41723fd8`. No correction was
+  offered and none was made.
+  - **The first candidate was refused, and it was the reviewer being right.** The whole change as
+    one commit (`a226eb3`, 1,894 changed lines) came back `lens_context_budget_exceeded` at the
+    START preflight: "review this change as smaller candidates that each fit under it". That is
+    this feature doc's own delivery rule (~400 authored lines a slice) being enforced from the
+    outside, so the fix was not to shrink the code but to split the history: four work units
+    (`2c9aecf` deps / `24632b3` shape / `9fd61af` sender / `30d416e` tests), byte-identical tree
+    `6e648e07`, then reviewed at the sender slice because that is the one carrying the behavior.
+    Recorded because the temptation on a budget refusal is to disable the mode, and that would have
+    thrown away a real signal.
+  - **One WARNING, non-blocking, deliberately NOT filed**:
+    `R3-PUSH-STATUS-MISMATCH` (`push_transport.py:82`, inferential, introduced) — the lens claims
+    `WebPushException` has no `status_code`, so a 404/410 would raise `AttributeError` instead of
+    `PushSubscriptionGoneError` and the subscription would never be deleted. It is wrong: the lens
+    sees only the candidate diff, not site-packages, so it inferred the attribute from its absence,
+    but `status_code` is a real property that returns `410` off both response shapes, and
+    `test_the_transport_treats_both_404_and_410_as_a_gone_subscription` drives a real
+    `WebPushException` through the gone path and passes. No issue was filed, because a false
+    defect in the tracker costs more than a recorded non-blocking finding costs.
+  - **A process deviation from T9's own precedent, recorded rather than buried.** T9's round
+    above says the consent envelope "was asked rather than assumed" even though its brief also
+    said to grant consent — "the brief's standing instruction is why the envelope was raised at
+    all, but the contract requires the live answer". T7b's brief says the same thing ("Grant
+    consent (owner default)") and this writer **granted from the brief without asking**, treating
+    the brief as a pre-answer. That is a real departure from the precedent set in this very
+    section, and the rule being relaxed is the one that keeps a human answer in the loop. It had
+    no effect on the outcome here (APPROVED, no correction, no delivery authority either way), but
+    the next writer should ask. Recorded so the choice is visible rather than buried in a commit.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -1158,8 +1242,12 @@ work unit (`domain-modeling`).
     consequence: because the fixture now agrees with the job in every hour, reverting the job to
     `now().date()` (the CRITICAL T6b fixed) would keep the suite green unless CI happens to run
     inside the 19:00–23:59 local window. Both belong to #132 / the clock-injection follow-up.
-- Next step: T7a and T10 merged into `feat/e7-alerts` (follow-ups #137, #135);
-  T9 merges next. Then T7b (Web Push adapter) and T7c in fresh OpenCode sessions, T8 after
+- Next step: T7a, T10 and T9 merged into `feat/e7-alerts` (follow-ups #137, #135, #136);
+  T7b is on `feat/e7-t7b-webpush` from `ab1daaf`: four work units plus a
+  `4ceca00` RDD correction, two review rounds both APPROVED and acknowledged
+  (`review-0505a9c608b85c36`, `review-7c1f2a9d4b6e8f03`), non-blocking → #140, ready for the
+  owner to merge. Then T7c (circuit
+  breaker + critical fallback to the alternate channel) in a fresh OpenCode session, T8 after
   T7, then T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
@@ -1300,3 +1388,134 @@ work unit (`domain-modeling`).
     demonstration (needs T7's sender and a real push service; T11 owns the seminar demo), and
     `DELETE /push-subscriptions/{id}` is not called from the client — the brief scoped T9 to
     registration, and unsubscribing is the server's `410 Gone` path plus a future settings screen.
+- T7b 2026-09-28 (writer: OpenCode, worktree `e7-t7b` on `feat/e7-t7b-webpush` from `ab1daaf`,
+  own DB `techcamp-e7-db-t7b` on 5439, brief `.git-brief-e7-T7b.md`): D34 as written — a real Web
+  Push sender for `Channel.PUSH`, both profiles. CodeGraph initialized in the worktree and used
+  for the whole map (`build_senders`, `SeminarSmsSender`, the `NotificationSender` port,
+  `dispatch_due_notifications`, the subscription repository, `shared/config.py`), which is what
+  showed the two seams before any file was read: the port's two-outcome contract and the fact
+  that `hold()` does not commit. `ctx7` was available and was used for `pywebpush`'s real
+  signature, `WebPushException`, `webpush_async`'s `ttl`/`timeout`, and the base64-DER key format;
+  the installed 2.5.0 was then read directly for the three things docs do not say — that
+  `webpush_async` is a full async peer (no `to_thread` needed), that `WebPushException.status_code`
+  adapts both response shapes, and that `_prepare_send_data` forwards unknown headers, which is
+  what makes `Topic` possible.
+  - RED (recorded, not reconstructed): `ImportError: cannot import name 'push_transport' from
+    'techcamp.notifications.adapters'`. A second RED on the way: `ImportError: cannot import name
+    'SqlAlchemyPushSubscriptionRepository' from partially initialized module` — `repositories.py`
+    imports `jobs.py`, which then needed the subscription writer, so the cycle is real and is
+    fixed the way T7a fixed the same one for `outbox.py`: its own module, `subscriptions.py`.
+  - Delivered: `PywebPushTransport` (404/410 → `PushSubscriptionGoneError`, everything else
+    raised), `WebPushSender` (gone → delete and try the next, one live browser is enough, anything
+    else raised), `PushTransport` port + `list_for_user`, `PushSubscription` value, the two domain
+    errors, `build_senders` registering push per profile, `shared/config.py` VAPID accessors,
+    compose env passthrough, the `docs/06 §4` diagram now saying `404/410`, and the pywebpush pin.
+  - **Two docstrings that had gone stale, fixed in this unit because this unit is what made them
+    false:** `jobs.py` still said each row "is still sent exactly once", which D30 and docs/06
+    §4's "Reclamo" row had already replaced with at-least-once; and `senders.py` still named
+    `DispatchReport.deferred`, a field T7a's RDD renamed to `skipped` (one of #137's warnings).
+    Neither was invented here, but shipping a second adapter behind a comment that contradicts D30
+    would have made the file self-contradicting.
+  - Checks, as `<command>: <result>`: `uv run pytest tests/notifications tests/alerts` → 187
+    passed (own DB, 5439); `uv run ruff check` → All checks passed!; `uv run ruff format --check` →
+    246 files already formatted; `uv run mypy` → Success: no issues found in 165 source files;
+    `uv run lint-imports` → 1 kept, 0 broken.
+  - Size: 1,124 authored lines against a ~300 forecast — reported, not trimmed (572 src /
+    552 tests), plus `server/uv.lock` +770 generated. Three reasons the forecast was low, none of
+    them padding: this repo's stated rule is behaviour against real Postgres and no double, and
+    twelve tests plus a seeding chain is most of a test file; the sender needed a port, a transport
+    seam, two distinct domain errors and a repository move, four more moving parts than "adapter
+    in `build_senders`" implies; and the docs were silent on the payload, the copy, the TTL, the
+    timeout, the gone-statuses and the no-subscription case, all of which D34 now records.
+  - "Matches the doc": a `push` row fans out to **every** subscription of its user, one per
+    registered browser (docs/06 §4, D5) — `test_a_push_row_reaches_every_browser_the_user_registered`.
+  - "Matches the doc": a `404`/`410` deletes that `push_subscription` and the next one is tried,
+    and the row's attempts are untouched (docs/06 §4's `410 Gone` branch, now `404/410`) —
+    `test_a_gone_subscription_is_deleted_and_the_next_one_is_still_delivered` asserts
+    `(sent, retried) == (1, 0)` and `attempts == 0`.
+  - "Matches the doc": every other provider failure takes the documented backoff —
+    `attempts++` and `next_attempt_at = now() + backoff` (docs/06 §4's `error temporal`) —
+    `test_a_push_service_outage_costs_the_row_one_attempt_and_a_1_min_wait`.
+  - "Matches the doc": a channel with no registered sender is not an attempt and not even
+    claimed; with no VAPID key configured the `push` channel is unregistered, so its rows keep
+    their status, attempts and due time (docs/06 §4's "Canal sin adaptador", D31, D32) —
+    `test_push_is_registered_only_where_there_is_a_vapid_key_to_sign_with`.
+  - "Matches the doc": Web Push is real in both profiles, so production registers it, while the
+    production SMS/WhatsApp provider stays future work and registers nothing (ADR-0021:26,
+    ADR-0016:5) — `test_the_production_profile_registers_push_too`.
+  - "Matches the doc": the server reads its VAPID pair from configuration and it must match the
+    bundle's `VITE_VAPID_PUBLIC_KEY` (docs/04:143, D32) — asserted in
+    `test_the_transport_treats_both_404_and_410_as_a_gone_subscription` (`vapid_claims` carries
+    the configured `sub`) and documented in `infra/compose.yaml` next to the variable itself.
+  - "Matches the doc": the payload is what T9's `pushPayload.ts` parses, and the client was not
+    changed — `test_the_payload_is_exactly_what_the_service_worker_parses` pins the JSON to
+    `{title, body, tag}` exactly, `route` absent per D33.
+  - "Matches the doc": delivery is at least once, so a duplicate is real (docs/06 §4's "Reclamo",
+    D30) — `test_a_retry_of_the_same_row_replaces_its_own_notification` pins the per-alert `tag`
+    and the per-row `Topic`, and that two rows of one alert keep distinct topics.
+  - "Matches the doc": a critical's alert leaves by push and, on escalation, by SMS or WhatsApp
+    (docs/06 §4's "Canales por severidad", D5) — the sender never writes the SMS row; it is T8's,
+    and `test_a_row_whose_every_subscription_is_gone_is_never_called_delivered` pins that T7b
+    records the failure rather than pretending a channel that does not exist yet.
+  - RDD: the first candidate was the whole change as one commit and was REFUSED —
+    `lens_context_budget_exceeded` (1,894 changed lines), which is the reviewer saying the same
+    thing the delivery rule says: a slice that big is not reviewable. Split into four work units
+    (byte-identical tree, `6e648e07`), and reviewed at the sender slice, the one that carries the
+    behavior: assessed `under_budget` at 298 lines, STATUS preflight, consent granted, lineage
+    `review-0505a9c608b85c36`, one reliability lens → **APPROVED**, acknowledged with authority
+    burned. No correction was needed or made.
+  - Non-blocking findings: one, `R3-PUSH-STATUS-MISMATCH` (WARNING), claiming
+    `WebPushException` has no `status_code` so a 410 would raise `AttributeError`. **Refuted, and
+    deliberately NOT filed as an issue.** The lens only sees the candidate diff, not site-packages,
+    so it inferred the attribute from absence; the installed class has `status_code` as a real
+    property that returns `410` off both the sync (`status_code`) and async (`status`) response
+    shapes, and `test_the_transport_treats_both_404_and_410_as_a_gone_subscription` drives a real
+    `WebPushException` through the gone path and passes. Filing it would put a false defect in the
+    tracker; the owner may reopen this if they want it recorded anyway.
+  - RDD round 2, on the owner's decision to cover the slices round 1 never saw: candidate
+    `2c9aecf..30d416e` (15 paths, 1,115 lines — the deps commit and this feature doc excluded,
+    which is what kept it under the budget that refused the 1,894-line whole). Lineage
+    `review-c502d03578fe8b69`, one reliability lens, `correction_required` on
+    `R3-vapid-key-format` — **a claim that was refuted by execution and whose "corroboration"
+    was itself wrong.** It asserted the configured base64 DER VAPID key is not the raw private-key
+    scalar, so "every registered push row" would be undeliverable. `py_vapid.Vapid.from_string`
+    decides by length — 32 bytes is the raw scalar, anything else is DER — so the documented
+    format is exactly what it routes to `from_der`; run, it signs and emits a `vapid t=` header.
+  - **Both refuted lens claims, and the one root cause behind them.** Round 1 said
+    `WebPushException` has no `status_code`; round 2 said `Vapid.from_string` cannot take base64
+    DER. Both are false, and both were reasoned from this candidate's own docstrings: a frozen-diff
+    lens never sees `site-packages`, so any finding that turns on a third-party library's API is
+    unanswerable for it, and its own refuter brief says so and then ratified the premise anyway.
+    `correction_required` means "a finding was corroborated", never "the code is wrong" — so run
+    the claim before spending the one bounded correction, or you will edit correct code to match a
+    phantom. Neither was filed as an issue.
+  - **The bounded correction pins the refuted premise instead of changing code** (`4ceca00`, 57
+    lines: 54 test + 3 comment, against a 200 budget). `test_a_base64_der_vapid_key_from_the_config_path_signs`
+    walks env → `vapid_private_key()` → `build_senders()` → `PywebPushTransport` and then makes the
+    same call `webpush_async` makes, asserting an RFC 8292 `vapid t=` header comes out. It passes
+    against the current code, so the RED here is the reviewer's claim, not a code failure — and it
+    is a better outcome than dismissing the finding, because the claim can never be believed again.
+  - **Round 2 closed through a recovery, and the recovery gate is not a human signature.** The
+    worktree HEAD had moved onto the branch after the lineage froze, so the provider moved to
+    `action: recover` / `recovery_authorization_required` with `disposition: scope_changed`, and
+    `gentle-ai review recover` takes a `--maintainer-authorization` binding. This writer first read
+    that as an owner-only approval and stopped; **that was wrong**, and T6a's record in this same
+    epic had already settled it: the binding **self-mints** from the repository Git identity and a
+    closed reason constant, and *supplying* `--maintainer-authorization` is what triggers the exact
+    comparison that a hand-built record can never satisfy. Omitting it (with `--actor`/`--reason`,
+    and passing a fresh `--successor-lineage`) succeeded first try. The `maintainer` in the field
+    name is provenance, not consent — do not stall a round on it, and do read the epic's own
+    records before declaring a contract undiscoverable.
+  - RDD round 2 final: successor `review-7c1f2a9d4b6e8f03` (1,355 lines, corrected candidate),
+    one reliability lens → **APPROVED and acknowledged, authority burned** (target
+    `sha256:3f8d746b…`). One non-blocking WARNING, and this one is **real**:
+    `R3-001` (`senders.py:110-208`, deterministic, introduced) — `build_senders` registers `push`
+    for any non-empty key without checking it can sign, so a malformed value advertises a usable
+    channel and spends five attempts per row before `failed`, where an unset key correctly does
+    not. Non-blocking because it is loud, bounded and self-terminating and cannot mark a row
+    `sent` — → **#140**. The lens was right about a real gap and wrong about a library, in the
+    same round, which is the honest shape of the evidence and why the claim still had to be run.
+  - Not done: no live push to a real push service — that needs a real VAPID pair and a browser, and
+    T11 owns the seminar demo. `build_senders` is called from one place, so T7c's circuit breaker
+    and #140's key validation will touch the same function; #140 is filed, not fixed here, per the
+    non-blocking rule.
