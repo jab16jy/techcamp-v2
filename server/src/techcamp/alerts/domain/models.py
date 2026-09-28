@@ -57,6 +57,17 @@ def ensure_can_manage_alert(role: Role) -> None:
         raise InsufficientRoleError(role)
 
 
+def ensure_can_manage_rules(role: Role) -> None:
+    """D11, D15: only an `owner` creates or patches an org's alert rules.
+
+    A rule decides when an org's farm is notified, so it is the org owner's
+    call; every other role reads the rules (`GET /alert-rules`) and nothing
+    more.
+    """
+    if role != Role.OWNER:
+        raise InsufficientRoleError(role)
+
+
 RESOLUTION_WINDOW = timedelta(minutes=60)
 """D2: resolution condition sustained for 60 minutes (domain constant)."""
 
@@ -87,6 +98,17 @@ class AlertRule:
     min_duration: timedelta = timedelta(0)
     severity: Severity = Severity.WARNING
     crop_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AlertRuleChanges:
+    """Only the rule fields the caller stated (R3-001): `None` means "not
+    stated", never "clear it", so two PATCHes cannot revert each other."""
+
+    threshold: float | None = None
+    hysteresis: float | None = None
+    min_duration: timedelta | None = None
+    severity: Severity | None = None
 
 
 @dataclass(frozen=True, slots=True)

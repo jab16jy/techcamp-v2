@@ -5,9 +5,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from techcamp.alerts.adapters.api.router import router as alerts_router
 from techcamp.farms.adapters.api.router import router as farms_router
 from techcamp.identity.adapters.api.router import router as identity_router
 from techcamp.irrigation.adapters.api.router import router as irrigation_router
+from techcamp.notifications.adapters.api.router import router as notifications_router
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.errors import register_error_handlers
 from techcamp.telemetry.adapters.api.router import router as telemetry_router
@@ -37,6 +39,8 @@ app.include_router(farms_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(weather_router, prefix="/api/v1")
 app.include_router(irrigation_router, prefix="/api/v1")
+app.include_router(alerts_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
 
 if is_seminar_profile():
     # /dev routes only exist in the seminar profile (ADR-0021); still part of

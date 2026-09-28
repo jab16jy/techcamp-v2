@@ -1,8 +1,10 @@
-"""Repository port the alert use cases depend on (ADR-0002; docs/05).
+"""Repository ports the alert use cases depend on (ADR-0002; docs/05).
 
-Six methods, and the adapter is the only implementation: every read filters by
-`org_id` (docs/09-cuellos-de-botella.md#seguridad) and the two writes own their
-transaction, the outbox rows and the `NOTIFY` (docs/06 §4; ADR-0016).
+Every read filters by `org_id` (docs/09-cuellos-de-botella.md#seguridad) and the
+two writes own their transaction, the outbox rows and the `NOTIFY`
+(docs/06 §4; ADR-0016). The rule repository is the plain CRUD of `alert_rule`:
+the lifecycle repository is the only one that opens a transaction with
+notifications, so this one is separate.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.alerts.domain.models import Alert, AlertState, Severity
+from techcamp.alerts.domain.models import Alert, AlertRule, AlertRuleChanges, AlertState, Severity
 from techcamp.notifications.application import NotificationDraft
 
 
@@ -95,4 +97,27 @@ class AlertRepository(Protocol):
         against, and `farm_id` must be the alert's own farm; a transition that no
         longer holds, or a farm that does not carry the alert, is refused.
         """
+        ...
+
+
+class AlertRuleRepository(Protocol):
+    """CRUD of `alert_rule` (docs/03:272-283; D11).
+
+    `list_for_org` serves the factory rules (`org_id is null`, readable by every
+    member) together with one org's own rules, and `get_for_orgs` only ever
+    returns a rule that belongs to one of the given orgs, so a factory rule is
+    404 for every org (D11).
+    """
+
+    async def list_for_org(self, org_id: UUID) -> list[AlertRule]: ...
+
+    async def get_for_orgs(self, rule_id: UUID, org_ids: Sequence[UUID]) -> AlertRule | None: ...
+
+    async def create(self, rule: AlertRule) -> AlertRule:
+        """Insert one org's threshold rule."""
+        ...
+
+    async def update(self, rule_id: UUID, org_id: UUID, changes: AlertRuleChanges) -> AlertRule:
+        """Persist only the fields `changes` states, so two concurrent PATCHes
+        of different fields cannot revert each other (R3-001)."""
         ...

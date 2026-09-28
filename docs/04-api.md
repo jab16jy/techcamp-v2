@@ -131,6 +131,17 @@ POST   /push-subscriptions                     { endpoint, keys } → 201
 DELETE /push-subscriptions/{id}                → 204
 ```
 
+`GET /alerts` exige `org_id` y lista solo esa organización (la membresía primero: un no miembro recibe `404`, no una lista vacía), con página por cursor y `next_cursor` solo cuando la página vino llena. Un elemento `Alert` tiene la forma:
+`{ id: string, org_id: string, rule_id: string, rule_code: string, plot_id: string | null, node_id: string | null, state: "open|acknowledged|resolved", severity: "info|warning|critical", evidence: object, opened_at: string, acknowledged_at: string | null, resolved_at: string | null, escalated_at: string | null, resolution_note: string | null }`.
+
+`POST /alerts/{alert_id}:acknowledge` y `POST /alerts/{alert_id}:resolve` devuelven el `Alert` actualizado; el cuerpo del `resolve` es opcional (`{ "note": "…" }`). Errores: `404` ("Alert not found") si la alerta no existe o es de otra organización, `403` si quien llama es `viewer`, `409` si la transición no aplica (resolver solo desde `acknowledged`, [docs/06 §3](06-diseno-detallado.md#3-alertas)) o si otra escritura ganó la carrera del estado.
+
+Un elemento `AlertRule` tiene la forma:
+`{ id: string, org_id: string | null, code: string, metric: string | null, operator: "<" | ">" | null, threshold: float | null, hysteresis: float, min_duration_min: int, severity: "info|warning|critical", crop_id: int | null }`.
+`GET /alert-rules?org_id=` devuelve las reglas de fábrica (`org_id = null`, las del sistema) más las de esa organización, a cualquier miembro, incluido `viewer`; un no miembro recibe `404`. `POST /alert-rules` exige rol `owner` de esa organización (`403` en cualquier otro rol, `404` si no es miembro) y `threshold` es obligatorio: solo la regla de fábrica `water_stress` no lo tiene. `PATCH /alert-rules/{rule_id}` cambia `threshold`, `hysteresis`, `min_duration_min` y `severity` de una regla propia (`owner`); una regla de fábrica o de otra organización responde `404` ("Alert rule not found"), y un `null` explícito responde `422` (las reglas de la organización no admiten umbrales nulos).
+
+`POST /push-subscriptions` registra la suscripción del service worker del navegador (`keys` trae `p256dh` y `auth`) y responde `201 { id }`. Como `endpoint` es único ([docs/03](03-modelo-datos.md)), registrar de nuevo el mismo `endpoint` actualiza esa misma fila: la vuelve a ligar a quien la registra y reemplaza sus `keys` (un navegador con claves nuevas no falla ni duplica). `DELETE /push-subscriptions/{id}` elimina solo la fila de quien la creó y responde `204`; una suscripción de otro usuario o inexistente responde `404`.
+
 ### Bitácora (sincronización offline)
 
 ```

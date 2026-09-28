@@ -4,7 +4,8 @@ Each one is the T2 transition plus the outbox planning; the repository owns the
 single transaction, the notification rows and the `NOTIFY`. The evaluator opens,
 upgrades and resolves with what it evaluated (`rule` plus the plot or node it
 read); a user acts on an alert of one of their orgs. `farm_id` is the SSE
-stream the change is published to (ADR-0015), so every caller states it.
+stream the change is published to (ADR-0015), so every evaluator states it; a
+user action takes the alert's own farm instead (D15).
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from techcamp.alerts.domain.models import (
     ensure_can_manage_alert,
 )
 from techcamp.identity.application.ports import MembershipRepository
+from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.notifications.application import NotificationDraft, plan_notifications
 from techcamp.shared.ids import uuid7
 
@@ -132,16 +134,22 @@ async def acknowledge(
     *,
     user_id: UUID,
     alert_id: UUID,
-    farm_id: UUID,
     at: datetime,
     alerts: AlertRepository,
     memberships: MembershipRepository,
 ) -> Alert:
+    """A user claims the work on an alert of one of their orgs.
+
+    The farm the change is published to is the alert's own (D15), resolved on
+    the same session: a caller naming a foreign farm could never publish the
+    transition to the farm whose SSE stream follows it.
+    """
     alert = await _managed_alert(user_id, alert_id, alerts, memberships)
+    target = await alerts.get_target_context(plot_id=alert.plot_id, node_id=alert.node_id)
     return await alerts.save(
         alert.acknowledge(at),
         [],
-        farm_id,
+        target.farm_id,
         expected_state=alert.state,
         expected_severity=alert.severity,
     )
@@ -151,7 +159,6 @@ async def resolve_manually(
     *,
     user_id: UUID,
     alert_id: UUID,
-    farm_id: UUID,
     note: str | None,
     at: datetime,
     alerts: AlertRepository,
@@ -159,10 +166,11 @@ async def resolve_manually(
 ) -> Alert:
     """Close an acknowledged alert, storing the note (D3, D12)."""
     alert = await _managed_alert(user_id, alert_id, alerts, memberships)
+    target = await alerts.get_target_context(plot_id=alert.plot_id, node_id=alert.node_id)
     return await alerts.save(
         alert.resolve_manually(at, note),
         [],
-        farm_id,
+        target.farm_id,
         expected_state=alert.state,
         expected_severity=alert.severity,
     )
@@ -171,6 +179,7 @@ async def resolve_manually(
 async def list_alerts(
     *,
     user_id: UUID,
+    org_id: UUID,
     alerts: AlertRepository,
     memberships: MembershipRepository,
     plot_id: UUID | None = None,
@@ -178,10 +187,15 @@ async def list_alerts(
     limit: int = 50,
     cursor: UUID | None = None,
 ) -> list[Alert]:
-    """A cursor page of the caller's orgs (docs/04 `GET /alerts`)."""
-    org_ids = [membership.org_id for membership in await memberships.list_for_user(user_id)]
+    """A cursor page of one org's alerts (docs/04 `GET /alerts?org_id=`; D15).
+
+    The membership is resolved first, so a caller of another org gets
+    `NotAMemberError` (404 in the adapter) instead of an empty page that would
+    read as "this org has no alerts".
+    """
+    await resolve_org_membership(user_id=user_id, org_id=org_id, memberships=memberships)
     return await alerts.list_for_orgs(
-        org_ids, plot_id=plot_id, state=state, limit=limit, cursor=cursor
+        [org_id], plot_id=plot_id, state=state, limit=limit, cursor=cursor
     )
 
 

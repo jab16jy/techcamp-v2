@@ -1,6 +1,11 @@
 """Alerts domain package."""
 
-from techcamp.alerts.domain.errors import AlertNotFoundError, InsufficientRoleError
+from techcamp.alerts.domain.errors import (
+    AlertNotFoundError,
+    AlertRuleNotFoundError,
+    InsufficientRoleError,
+    InvalidAlertRuleError,
+)
 from techcamp.alerts.domain.models import (
     ESCALATION_DELAY,
     RESOLUTION_WINDOW,
@@ -9,11 +14,13 @@ from techcamp.alerts.domain.models import (
     AlertAction,
     AlertDecision,
     AlertRule,
+    AlertRuleChanges,
     AlertState,
     InvalidAlertTransitionError,
     Severity,
     decide_alert,
     ensure_can_manage_alert,
+    ensure_can_manage_rules,
     is_clear_met,
     is_condition_met,
     is_eligible_for_escalation,
@@ -30,12 +37,16 @@ __all__ = [
     "AlertDecision",
     "AlertNotFoundError",
     "AlertRule",
+    "AlertRuleChanges",
+    "AlertRuleNotFoundError",
     "AlertState",
     "InsufficientRoleError",
+    "InvalidAlertRuleError",
     "InvalidAlertTransitionError",
     "Severity",
     "decide_alert",
     "ensure_can_manage_alert",
+    "ensure_can_manage_rules",
     "is_clear_met",
     "is_condition_met",
     "is_eligible_for_escalation",
