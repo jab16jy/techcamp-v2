@@ -453,6 +453,15 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   stop) and R3-unknown-entity-permanent-stall (SUGGESTION: distinct stop reason). Both are in the
   code T8 wires, so they are queued to `e8-t8` as their own commit `Refs #163`.
 
+- T8 (AGY) five commits after the owner-requested split of the bundled `ffde5a9` (reset --soft,
+  parent-authorized): `bb57e65` chore schema.d.ts (767 generated), `2294889` typed transport
+  (261), `93ce5c9` list + sync state + shell (680), `cb52bfb` new-entry sheet (917: prod 685 /
+  test 232), `29aaf76` #163 fixes (128). Gate: lint, typecheck clean; 16 files / 81 passed; build;
+  170.95 kB. Docs diff sent back (one commit): the form contradicts docs/03 D10 — amounts must be
+  `>= 0` (it required `> 0`), `observation` requires no field (it required notes), an observation
+  linked to an alert carries `quantity`/`unit`/`cost_cop` as losses (dropped today); identical
+  input/cost branches; `todayInBogota` duplicated with `features/visits` → one helper in `lib/`.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
