@@ -188,7 +188,22 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 - [ ] All server and web checks green; commits by functionality; RDD per slice of whole commits.
 
 ## Review (RDD)
-- Boundary: branch point `3120dac`.
+- Boundary: branch point `3120dac`; docs commits through `9d31e90` are passive (structural readback).
+- T1 `f242508`: parent-run RDD, assess medium (`executable_change` migrations/env.py), consent
+  granted (standing new-feature grant), lineage `review-b3312c6f95cbe5ea`, one lens
+  `review-reliability` → **approved**, acknowledged (`gentle-ai.review-acknowledged/v1`).
+  Non-blocking: R3-orm-sequence-not-in-metadata (WARNING), R3-harvest-exclusive-untested
+  (WARNING), R3-assert-fails-unspecific (SUGGESTION) → issue
+  [#142](https://github.com/jab16jy/techcamp-v2/issues/142). The two WARNINGs affect T1's code:
+  fixed now by `e8-t1` in one commit `Refs #142`; the SUGGESTION stays in the issue.
+- T2 `f1cbbaf..9519fb1` (in `e8-t2`): parent-run RDD, assess medium, 805 lines, consent granted,
+  lineage `review-179da1ed2198145c`, lens `review-reliability` → **approved**, acknowledged.
+  Non-blocking → issue [#143](https://github.com/jab16jy/techcamp-v2/issues/143):
+  R3-ensure-can-sync-fail-open (WARNING) — caused by the parent's gate: I had the writer drop the
+  `else` as an "unreachable fallback", which made an authorization guard fail open; lesson:
+  a guard denies by default, so fix it with a per-entity role mapping (KeyError on unknown), not a
+  dead branch. R3-decimal-nan-escapes-domain-error (WARNING): NaN/Infinity amounts. Both fixed now
+  by `e8-t2`, one commit `Refs #143`. R3-weak-exception-assertions (SUGGESTION) stays in the issue.
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
@@ -205,7 +220,32 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 - 2026-09-28 Owner: run independent tasks in parallel, sequential ones in order. Lanes now: T1
   (AGY `e8-t1`, schema) ‖ T2 (AGY `e8-t2`, pure domain, `logbook/domain` only) ‖ T7 (OpenCode
   `e8-t7`, `web/lib/{db,sync}` only). They share no files; T5 waits for T1, T3 for T1+T2.
-  D11 added (no refresh endpoint in seminar). AGY T1 ignored CodeGraph beyond `status`; the common
+  Corrected the same hour (owner: keep lanes separate): the conftest autouse fixture downgrades to
+  `base` at the end of every pytest run, so shared lanes would drop each other's tables. T2 and T7
+  were stopped before writing anything and restarted in their own worktrees: `e8-t2`
+  (`feat/e8-t2-domain`, DB `techcamp-e8-db-t2` on 5442) and `e8-t7` (`feat/e8-t7-sync`, web, no
+  DB), each with its own CodeGraph index; T1 stays in `e8-logbook`. The parent merges each lane
+  branch into `feat/e8-logbook` after its gate and RDD.
+  D11 added (no refresh endpoint in seminar).
+- 2026-09-28 T1 (AGY `e8-t1`, Gemini 3.8 Flash medium) → `f242508` feat(logbook): schema, 693
+  lines (prod 367 / tests 326). Writer evidence: RED `ModuleNotFoundError techcamp.logbook.adapters.orm`,
+  GREEN 17 passed; CodeGraph `explore "AlertRow"`, `explore "uuid7"` (after the parent's nudge).
+  Parent gate on the sha (DB 5441): `pytest tests/logbook` 17 passed; ruff check clean; format 254
+  files; mypy 169 files clean; lint-imports 1 kept 0 broken. Docs diff: migration matches docs/03
+  columns, D1 shared sequence default, D6 nullable cycle, every D10 CHECK, topics CHECK, attachment
+  exactly-one; `sold_kg <= yield_kg` is null-safe because harvest-only + harvest-requires-yield.
+  RDD: assess medium (`executable_change` env.py), due; consent granted (standing new-feature
+  grant); lineage `review-b3312c6f95cbe5ea`, one lens `review-reliability` — running.
+- 2026-09-28 T2 (AGY `e8-t2`) → `f1cbbaf` feat(logbook): pure domain, 808 lines (prod 302 / tests
+  506). Writer evidence: RED `ModuleNotFoundError techcamp.logbook.domain.errors`, GREEN 42 passed;
+  CodeGraph MCP explore ×3 + `node Role`, `query tzinfo`. Parent gate (DB 5442): 42 passed; ruff,
+  format (255), mypy (170), lint-imports clean. Docs diff: D3 roles, D4 branches incl. tie, D5
+  strict > 24 h, D10 rules all match. Quality issues sent back (fix now, new commit):
+  self-paired `_NUMERIC_AMOUNT_FIELDS`, `Sequence[str | VisitTopic]` union, unreachable
+  `ValueError` fallback in `ensure_can_sync`. RDD after the fix commit.
+- 2026-09-28 T7 (OpenCode `e8-t7`, Space Bunny high) → `fe7fb09` chore(deps): dexie ^4.4.6,
+  fake-indexeddb ^6.2.5 (20 lines). Parent gate: lint, typecheck clean; size 163.38 kB / 200 kB
+  (unchanged: Dexie is not in the entry chunk). No RDD on deps alone: its slice is fe7fb09 + T7a. AGY T1 ignored CodeGraph beyond `status`; the common
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
