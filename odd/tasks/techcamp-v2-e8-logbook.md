@@ -361,6 +361,23 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   non-blocking), same session, `Refs #N`; the round's issue is still filed and closed by those
   commits. Applies to T4, T9a and later AGY units.
 
+- T4 (AGY) `1a1fd8c` feat(logbook): GET /sync/pull (871 lines: prod ~366 / test 505). Writer
+  RED `test_pull_validation_and_auth assert 404 == 422`, GREEN 18 passed, CodeGraph ×9. Parent gate
+  (DB 5446): pull + sync_api 18 passed, ruff, format (278), mypy (184), lint-imports clean; wire
+  `data` matches `web/src/lib/sync/types.ts`, amounts as floats, `since`/`limit` bounds 422.
+  Quality sent back (one commit): the router dispatches with `isinstance` + a bare `else` over a
+  loose `LogbookEntry | ExtensionVisit` union (must fail closed on `entity`); `TYPE_CHECKING`
+  port imports unlike the rest of the module.
+- T9a (AGY) `b3e39aa` feat(visits) sheet + offline save, `37f8109` feat(plots) D14 entry point
+  (683 lines). Writer: impeccable read + detector 0 findings, 48 px targets, Bogotá date, sheet
+  lazy-loaded. Parent gate: lint, typecheck clean; visits+plots+app 10 files / 63 passed; build ok;
+  **172.88 kB** (+9.5 kB: sonner `Toaster` now mounted once in `AppShell`, an E1 primitive;
+  accepted). **Bug sent back (TDD):** `/me` is cached in `localStorage` (`techcamp.me`) and the
+  `['me']` query, but `clearSession()` (sign-out and 401) clears neither, so on a shared phone the
+  next user inherits the previous user's role and id (sees "Registrar visita", records visits
+  with the wrong `technician_id` that the server rejects `forbidden` and that stay stuck — D3, D11,
+  RNF-01). Also type the role as the four literals.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
