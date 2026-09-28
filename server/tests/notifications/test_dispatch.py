@@ -10,6 +10,7 @@ claim the real query would refuse.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -22,6 +23,7 @@ from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, OrganizationRow
 from techcamp.notifications.adapters import senders as senders_module
+from techcamp.notifications.adapters.circuits import InProcessProviderCircuits
 from techcamp.notifications.adapters.jobs import dispatch_outbox
 from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.adapters.outbox import SqlAlchemyOutboxRepository
@@ -32,15 +34,21 @@ from techcamp.notifications.application import (
     NotificationSender,
     dispatch_due_notifications,
 )
+from techcamp.notifications.domain.errors import NoPushSubscriptionError
 from techcamp.notifications.domain.models import (
+    BREAKER_COOLDOWN,
+    BREAKER_FAILURE_THRESHOLD,
     MAX_ATTEMPTS,
     Channel,
+    FinalAttempt,
     NotificationDraft,
     PendingNotification,
+    RetrySchedule,
     retry_delay,
 )
 from techcamp.shared.db import async_session_factory
 from techcamp.shared.ids import uuid7
+from techcamp.telemetry.adapters.orm import NodeRow
 
 pytestmark = pytest.mark.anyio
 
@@ -52,15 +60,67 @@ _DUE = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)  # 10:00 Bogotá, outside quiet 
 
 
 class _FailingSender:
-    """A provider that is down, the way Open-Meteo is in `test_open_meteo_adapter`."""
+    """A provider that is down, the way Open-Meteo is in `test_open_meteo_adapter`.
+
+    `messages` counts the CALLS, which is what grouping is about: a batch of
+    grouped rows is one call, and `sent` names every row the call covered so a
+    test can say which rows reached the provider.
+    """
 
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error or RuntimeError("provider unreachable")
         self.sent: list[UUID] = []
+        self.messages = 0
 
-    async def send(self, notification: PendingNotification) -> None:
-        self.sent.append(notification.id)
+    async def send(self, notifications: Sequence[PendingNotification]) -> None:
+        self.sent.extend(notification.id for notification in notifications)
+        self.messages += 1
         raise self.error
+
+
+class _LandingSender:
+    """A provider that answers."""
+
+    def __init__(self) -> None:
+        self.sent: list[UUID] = []
+        self.messages = 0
+
+    async def send(self, notifications: Sequence[PendingNotification]) -> None:
+        self.sent.extend(notification.id for notification in notifications)
+        self.messages += 1
+
+
+class _Clock:
+    """A monotonic clock a test moves by hand: a five-minute cooldown is not a
+    five-minute test."""
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+    def advance(self, seconds: float) -> None:
+        self.seconds += seconds
+
+
+def _circuits(clock: _Clock) -> InProcessProviderCircuits:
+    """Circuits whose cooldown a test can expire without waiting for it."""
+    return InProcessProviderCircuits(clock=clock)
+
+
+def _open(circuits: InProcessProviderCircuits, channel: Channel) -> None:
+    """The state docs/06 §4 reaches after five consecutive failures."""
+    for _ in range(BREAKER_FAILURE_THRESHOLD):
+        circuits.record_failure(channel)
+
+
+@pytest.fixture
+def circuits() -> InProcessProviderCircuits:
+    """Circuits that have never seen a failure, which is what every test that is
+    not about the breaker wants. A fresh one per test so the failures another test
+    invents never open this one's channel."""
+    return InProcessProviderCircuits(clock=_Clock())
 
 
 @pytest.fixture(autouse=True)
@@ -72,24 +132,53 @@ def _seminar(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Seeded:
-    """One organization's recipient and its open plot alert, the two rows every
-    outbox row here hangs off."""
+    """One organization's recipient, its two farms, and one open plot alert on
+    the first of them — the rows every outbox row here hangs off.
+
+    A SECOND farm and a node on it exist so the grouping tests have something to
+    keep apart: docs/06 §4 groups by farm, so "the same farm" and "another farm"
+    are two different messages and a test that only ever has one farm cannot tell
+    a working grouping from a grouping that ignores the farm entirely.
+    """
 
     user_id: UUID
     alert_id: UUID
+    org_id: UUID
+    farm_id: UUID
+    plot_id: UUID
+    other_farm_id: UUID
+    other_plot_id: UUID
+    node_id: UUID
 
 
-async def _seed_alert(session: AsyncSession) -> Seeded:
-    """An organization, its one recipient and one open plot alert to hang rows off."""
-    org_id, user_id, farm_id, plot_id = uuid7(), uuid7(), uuid7(), uuid7()
+async def _seed_alert(session: AsyncSession, *, severity: str = "warning") -> Seeded:
+    """An organization, its one recipient, two farms and one open plot alert.
+
+    The severity is a parameter because docs/06 §4's channels-by-severity rule
+    makes it decide the row's whole future: a critical may move to another channel
+    and a warning may not (D5, D37).
+    """
+    org_id, user_id = uuid7(), uuid7()
     session.add(AppUserRow(id=user_id, phone=f"+57{uuid7().int % 10**13:013d}"))
     session.add(OrganizationRow(id=org_id, name="Test Org", kind="individual"))
     await session.commit()
+    farm_id, plot_id = uuid7(), uuid7()
+    other_farm_id, other_plot_id = uuid7(), uuid7()
+    node_id = uuid7()
     session.add(
         FarmRow(
             id=farm_id,
             org_id=org_id,
             name="Finca Principal",
+            municipality_code="47001",
+            location=_POINT,
+        )
+    )
+    session.add(
+        FarmRow(
+            id=other_farm_id,
+            org_id=org_id,
+            name="Finca Norte",
             municipality_code="47001",
             location=_POINT,
         )
@@ -105,6 +194,33 @@ async def _seed_alert(session: AsyncSession) -> Seeded:
             irrigation_system="drip",
         )
     )
+    session.add(
+        PlotRow(
+            id=other_plot_id,
+            org_id=org_id,
+            farm_id=other_farm_id,
+            name="Lote 2",
+            boundary=_BOUNDARY,
+            irrigation_system="drip",
+        )
+    )
+    await session.commit()
+    # A node on the SECOND farm, so the farm of a node alert is only reachable by
+    # joining `node → plot → farm` (docs/03: `alert` stores a node id, not a farm).
+    session.add(
+        NodeRow(
+            id=node_id,
+            org_id=org_id,
+            plot_id=other_plot_id,
+            transport="cellular",
+            dev_eui=f"eui-{node_id}",
+            claim_code=f"claim-{node_id}",
+            credential_hash="hash",
+            interval_s=300,
+            claimed_at=_DUE,
+            status="online",
+        )
+    )
     await session.commit()
     rule_id = (
         await session.execute(select(AlertRuleRow.id).where(AlertRuleRow.code == "water_stress"))
@@ -117,12 +233,92 @@ async def _seed_alert(session: AsyncSession) -> Seeded:
             rule_id=rule_id,
             plot_id=plot_id,
             state="open",
-            severity="warning",
+            severity=severity,
             opened_at=_DUE,
         )
     )
     await session.commit()
-    return Seeded(user_id=user_id, alert_id=alert_id)
+    return Seeded(
+        user_id=user_id,
+        alert_id=alert_id,
+        org_id=org_id,
+        farm_id=farm_id,
+        plot_id=plot_id,
+        other_farm_id=other_farm_id,
+        other_plot_id=other_plot_id,
+        node_id=node_id,
+    )
+
+
+async def _alert_on(
+    session: AsyncSession,
+    seeded: Seeded,
+    *,
+    code: str,
+    plot_id: UUID | None = None,
+    node_id: UUID | None = None,
+    severity: str = "warning",
+) -> UUID:
+    """A second open alert, on the seeded org's other plot or on a node.
+
+    The rule is a parameter because the partial unique index allows only one
+    non-resolved alert per (rule, target) (docs/06 §3), so two alerts about one
+    plot have to be about two different rules — which is also the realistic case:
+    a farm with a dry spell and a hot week has two alerts at once.
+    """
+    rule_id = (
+        await session.execute(select(AlertRuleRow.id).where(AlertRuleRow.code == code))
+    ).scalar_one()
+    alert_id = uuid7()
+    session.add(
+        AlertRow(
+            id=alert_id,
+            org_id=seeded.org_id,
+            rule_id=rule_id,
+            plot_id=plot_id,
+            node_id=node_id,
+            state="open",
+            severity=severity,
+            opened_at=_DUE,
+        )
+    )
+    await session.commit()
+    return alert_id
+
+
+async def _farms(session: AsyncSession, org_id: UUID, count: int) -> list[UUID]:
+    """`count` more farms of one organization, and the plot of each.
+
+    A row per farm is how a test gets `count` separate MESSAGES out of the
+    dispatcher: docs/06 §4 groups by farm, so same-farm rows are one call and
+    different-farm rows are one call each.
+    """
+    plot_ids: list[UUID] = []
+    for index in range(count):
+        farm_id, plot_id = uuid7(), uuid7()
+        session.add(
+            FarmRow(
+                id=farm_id,
+                org_id=org_id,
+                name=f"Finca {index}",
+                municipality_code="47001",
+                location=_POINT,
+            )
+        )
+        await session.commit()
+        session.add(
+            PlotRow(
+                id=plot_id,
+                org_id=org_id,
+                farm_id=farm_id,
+                name=f"Lote {index}",
+                boundary=_BOUNDARY,
+                irrigation_system="drip",
+            )
+        )
+        await session.commit()
+        plot_ids.append(plot_id)
+    return plot_ids
 
 
 @pytest.fixture
@@ -132,13 +328,24 @@ async def seeded(db_session: AsyncSession) -> Seeded:
     return await _seed_alert(db_session)
 
 
+@pytest.fixture
+async def critical(db_session: AsyncSession) -> Seeded:
+    """The same, at the severity that may change channel (docs/06 §4)."""
+    return await _seed_alert(db_session, severity="critical")
+
+
 async def _pending_row(
-    session: AsyncSession, seeded: Seeded, *, channel: Channel, due_at: datetime = _DUE
+    session: AsyncSession,
+    seeded: Seeded,
+    *,
+    channel: Channel,
+    due_at: datetime = _DUE,
+    alert_id: UUID | None = None,
 ) -> NotificationRow:
-    """One `pending` outbox row on the seeded alert."""
+    """One `pending` outbox row on the seeded alert, or on a second one."""
     row = NotificationRow(
         id=uuid7(),
-        alert_id=seeded.alert_id,
+        alert_id=alert_id or seeded.alert_id,
         user_id=seeded.user_id,
         channel=channel.value,
         status="pending",
@@ -265,14 +472,851 @@ async def test_hold_takes_only_a_row_that_is_still_pending_and_due(
     assert await outbox.hold(due.id, now=_DUE) is True
 
 
-async def test_a_due_sms_row_is_sent_and_marked_sent(
+async def test_a_non_critical_row_waits_while_its_channel_circuit_is_open(
     db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """docs/06 §4's "Por proveedor. Con 5 fallos seguidos se abre 5 min" reaches the
+    outbox: while the circuit is open a due row is not sent and does not cost an
+    attempt. docs/06 §4 answers a critical by moving it to another channel, and
+    says nothing about a warning — there is no other place a warning can go (D5),
+    so the only honest thing left is to wait for the provider."""
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    sender = _FailingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.claimed, report.deferred, report.sent, report.retried) == (1, 1, 0, 0)
+    # The negative half: the provider is not called at all, so the row costs
+    # nothing — a refused call would be an attempt a retry cannot fix.
+    assert sender.sent == []
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == _DUE + BREAKER_COOLDOWN
+    assert held.last_error == "the push circuit is open"
+
+
+async def test_five_failed_deliveries_open_the_circuit_and_the_next_one_is_not_attempted(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The threshold is counted by the dispatcher, not configured into it: the
+    fifth failed DELIVERY is what opens the circuit, and the message behind it
+    waits. That the SIXTH is the one held is the negative half — one failure early
+    would silence a provider that is answering.
+
+    One row per farm, so this is six messages and not one grouped one: the breaker
+    counts what the provider refused to take, and a group is one refusal however
+    many alerts it speaks for.
+    """
+    plot_ids = await _farms(db_session, seeded.org_id, 6)
+    ids = [
+        (
+            await _pending_row(
+                db_session,
+                seeded,
+                channel=Channel.PUSH,
+                alert_id=await _alert_on(db_session, seeded, code="heat_stress", plot_id=plot_id),
+            )
+        ).id
+        for plot_id in plot_ids
+    ]
+    sender = _FailingSender()
+    circuits = _circuits(_Clock())
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.retried, report.deferred) == (5, 1)
+    assert sender.sent == ids[:5]
+    assert (await _row(db_session, ids[4])).attempts == 1
+    sixth = await _row(db_session, ids[5])
+    assert (sixth.status, sixth.attempts) == ("pending", 0)
+
+
+async def test_a_row_with_no_browser_does_not_open_the_push_circuit(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """docs/06 §4 counts a PROVIDER's failures, and a user who never enabled push
+    is not the push service being down (D36). If those rows counted, five farmers
+    without a browser would silence push for every other farmer and start moving
+    criticals to another channel for no reason at all."""
+    ids = [(await _pending_row(db_session, seeded, channel=Channel.PUSH)).id for _ in range(6)]
+    sender = _FailingSender(error=NoPushSubscriptionError(seeded.user_id))
+    circuits = _circuits(_Clock())
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.retried) == (0, 6)
+    assert sender.sent == ids
+    assert circuits.allows(Channel.PUSH) is True
+
+
+async def test_the_delivery_after_the_cooldown_is_attempted_and_a_landing_reopens_the_channel(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """Five minutes later the provider gets one trial: the row is sent, and a
+    delivery that lands closes the circuit so the next row is not held behind a
+    stale outage. The negative half is `deferred == 0` — a circuit that never
+    reopens would strand every later row forever."""
+    clock = _Clock()
+    circuits = _circuits(clock)
+    _open(circuits, Channel.PUSH)
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    sender = _LandingSender()
+    clock.advance(BREAKER_COOLDOWN.total_seconds())
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE + BREAKER_COOLDOWN,
+    )
+
+    assert (report.deferred, report.sent) == (0, 1)
+    assert sender.sent == [row.id]
+    assert circuits.allows(Channel.PUSH) is True
+
+
+async def test_a_circuit_opened_for_one_channel_leaves_the_others_alone(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """ "Por proveedor": a push service that is down is not evidence about the SMS
+    provider, and a fallback that silenced both channels at once would answer an
+    outage with no notifications at all."""
+    push = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    sms = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    landing = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender(), Channel.SMS: landing},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent) == (1, 1)
+    assert landing.sent == [sms.id]
+    assert (await _row(db_session, push.id)).status == "pending"
+
+
+async def test_a_critical_goes_to_the_alternate_channel_while_push_is_down(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """docs/06 §4: "mientras tanto las críticas pasan al canal alterno", and
+    docs/01 RF-08 asks for "SMS o WhatsApp como respaldo para alertas críticas".
+    The push service is down, so a critical that has no other way to be heard
+    waits 5 minutes; a critical that has one goes there now."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    push, sms = _FailingSender(), _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: push, Channel.SMS: sms},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert sms.sent == [row.id]
+    assert push.sent == [], "the push provider was called while its circuit was open"
+    assert (await _row(db_session, row.id)).status == "sent"
+    # The row is not rewritten: it is still the `push` row the alert's transaction
+    # wrote (D34), and it is `sent` because the farmer did hear the alert — over
+    # the channel that was left. The escalation to the technician two hours later
+    # is T8's own row and a different recipient (D4), so nothing is sent twice.
+    assert (await _row(db_session, row.id)).attempts == 0
+
+
+async def test_a_critical_is_not_moved_by_a_channel_that_never_failed(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """No evidence is not evidence of failure. A circuit that has seen nothing is
+    closed, and a closed circuit must be left alone: moving a critical to SMS
+    because nobody has called push yet would spend the escalation channel on the
+    first outage that never comes, and RNF-05's two minutes would be spent on a
+    provider that is answering."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    push, sms = _LandingSender(), _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: push, Channel.SMS: sms},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert push.sent == [row.id]
+    assert sms.sent == []
+
+
+async def test_a_critical_waits_when_no_other_channel_can_send(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """In production the SMS/WhatsApp provider is future work (ADR-0016, D31), so
+    a critical can face an open push circuit with nowhere to go. Holding it is the
+    only answer that is not a lost alert: it stays `pending`, spends no attempt,
+    and the row is there when push comes back. Marking it `failed`, or counting the
+    refusal as an attempt, would turn a provider outage into a dead critical."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent, report.failed) == (1, 0, 0)
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == _DUE + BREAKER_COOLDOWN
+
+
+async def test_a_full_batch_of_criticals_with_no_route_ends_the_run(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """The loop that drains a backlog must also END, and these are the rows that
+    could keep it going: a critical on a `push` nobody configured (D40) whose every
+    configured alternate has an open circuit, filling a whole claim. They are held
+    to the earliest of the circuits that could take them, so they leave the due set
+    and the run finishes.
+
+    It is the `push` cooldown that must NOT be asked, and it is the whole bug: a
+    channel with no sender has no breaker at all, so the question would be answered
+    by a breaker created on the spot, fresh and closed, at zero. Held until zero
+    means held until `now`, which means still due, which means a full batch
+    re-claimed pass after pass — the row is never lost and never delivered, and the
+    job spins (docs/06 §4; D30, D35, D40).
+    """
+    first = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    first_id = first.id
+    second = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    second_id = second.id
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.SMS)
+    sender = _FailingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: sender},
+        circuits=circuits,
+        now=_DUE,
+        limit=2,
+    )
+
+    # A full batch, all of it held, and no third pass: `sent` is 0, so nothing here
+    # was a delivery.
+    assert (report.claimed, report.deferred, report.sent) == (2, 2, 0)
+    assert sender.sent == []
+    for row_id in (first_id, second_id):
+        held = await _row(db_session, row_id)
+        # Still `pending` — an outage is not a death (docs/06 §4; RF-08) — and due
+        # exactly when SMS is allowed its next trial, which is the earliest of the
+        # only circuits that could carry it.
+        assert (held.status, held.attempts) == ("pending", 0)
+        assert held.next_attempt_at == _DUE + BREAKER_COOLDOWN
+
+
+async def test_a_critical_does_not_fall_back_from_the_escalation_channel(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """docs/06 §4's severity order is `warning` by push and `critical` by push
+    then SMS/WhatsApp, and the alternate channel is the one AFTER the channel that
+    is down. An escalated `sms` row is the last resort (D34: T8 writes it, D4:
+    it goes to the technician), so falling back from it to push would turn the
+    escalation back into the notification the farmer already got — the opposite of
+    escalating, and a message to a browser that may not even be registered."""
+    row = await _pending_row(db_session, critical, channel=Channel.SMS)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.SMS)
+    push = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: push, Channel.SMS: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent) == (1, 0)
+    assert push.sent == []
+    assert (await _row(db_session, row.id)).status == "pending"
+
+
+async def test_a_critical_takes_the_first_alternate_whose_circuit_allows_it(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """The alternates are tried in docs/06 §4's order and the first one that can
+    actually send is the one used: an SMS provider that is down does not stop the
+    critical, it moves it to WhatsApp."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    _open(circuits, Channel.SMS)
+    sms, whatsapp = _FailingSender(), _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender(), Channel.SMS: sms, Channel.WHATSAPP: whatsapp},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert whatsapp.sent == [row.id]
+    assert sms.sent == [], "an open circuit did not stop the SMS provider being used"
+
+
+async def test_a_critical_waits_when_every_channel_is_refusing(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """Both providers down is not "send it anyway". The row waits, and no circuit
+    is touched by the refusal: no delivery was attempted through any of them, so
+    there is no evidence about them either way."""
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    for channel in (Channel.PUSH, Channel.SMS, Channel.WHATSAPP):
+        _open(circuits, channel)
+    whatsapp = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={
+            Channel.PUSH: _FailingSender(),
+            Channel.SMS: _FailingSender(),
+            Channel.WHATSAPP: whatsapp,
+        },
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent) == (1, 0)
+    assert whatsapp.sent == []
+    assert (await _row(db_session, row.id)).status == "pending"
+
+
+async def test_the_due_non_critical_rows_of_one_farm_go_out_as_one_message(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """docs/06 §4 "Agrupación": "Varias alertas no críticas de la misma finca en
+    15 min se envían en una sola notificación". The rows of one farm reach the
+    provider as ONE call, and every one of them is closed by it."""
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    ids = [
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH)).id,
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)).id,
+    ]
+    sender = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert (report.claimed, report.sent) == (2, 2)
+    # The negative half, and the one that matters: ONE call, not one per row.
+    assert sender.messages == 1
+    assert (await _row(db_session, ids[0])).status == "sent"
+    assert (await _row(db_session, ids[1])).status == "sent"
+
+
+async def test_two_farms_of_one_user_are_two_notifications(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """ "de la misma finca": the farm is the grouping key, so one recipient's two
+    farms do not become one message about a farm the message cannot name."""
+    other_alert = await _alert_on(
+        db_session, seeded, code="heat_stress", plot_id=seeded.other_plot_id
+    )
+    await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)
+    sender = _LandingSender()
+
+    await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert sender.messages == 2
+
+
+async def test_two_node_alerts_of_one_farm_are_grouped(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """`alert` stores a `node_id`, never a farm (docs/03:284-297), so a node
+    alert's farm is only reachable by joining `node → plot → farm`. Grouping that
+    silently never happens is the failure this pins: the rows would each be their
+    own message, which is the pre-grouping behaviour."""
+    first_alert = await _alert_on(db_session, seeded, code="node_offline", node_id=seeded.node_id)
+    second_alert = await _alert_on(
+        db_session, seeded, code="node_battery_low", node_id=seeded.node_id
+    )
+    await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=first_alert)
+    await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=second_alert)
+    sender = _LandingSender()
+
+    await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert sender.messages == 1
+
+
+async def test_a_critical_is_never_grouped_with_a_warning(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """A critical is the severity RNF-05 gives two minutes, so it goes out on its
+    own and is not made to wait behind a message it has nothing to do with."""
+    other_alert = await _alert_on(
+        db_session, critical, code="heat_stress", plot_id=critical.plot_id
+    )
+    await _pending_row(db_session, critical, channel=Channel.PUSH)
+    await _pending_row(db_session, critical, channel=Channel.PUSH, alert_id=other_alert)
+    sender = _LandingSender()
+
+    await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert sender.messages == 2
+
+
+async def test_one_message_never_mixes_two_channels(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """A message goes out through one provider. Two rows of the same farm on
+    different channels are two deliveries, even though the farm is the same."""
+    await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    await _pending_row(db_session, seeded, channel=Channel.SMS)
+    push, sms = _LandingSender(), _LandingSender()
+
+    await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: push, Channel.SMS: sms},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert (push.messages, sms.messages) == (1, 1)
+
+
+async def test_a_group_is_one_message_whose_failing_costs_every_row_an_attempt(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The group is the message, so its outcome is the outcome of every row it
+    covers: one failed delivery is one failed attempt for each of the alerts the
+    farmer still has to hear about, and a retry re-sends them together."""
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    ids = [
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH)).id,
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)).id,
+    ]
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert report.retried == 2
+    assert (await _row(db_session, ids[0])).attempts == 1
+    assert (await _row(db_session, ids[1])).attempts == 1
+
+
+async def test_a_group_whose_provider_is_down_is_never_attempted(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The circuit is asked before the group is formed, so a held group costs
+    nothing — a refused call per row would spend a farm's evening of alerts on a
+    provider that is not answering."""
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    ids = [
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH)).id,
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)).id,
+    ]
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    sender = _FailingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.retried) == (2, 0)
+    assert sender.sent == []
+    assert (await _row(db_session, ids[0])).attempts == 0
+    assert (await _row(db_session, ids[1])).attempts == 0
+
+
+@pytest.mark.parametrize(
+    ("now", "released"),
+    [
+        pytest.param(
+            datetime(2026, 9, 27, 5, 0, tzinfo=UTC),  # 00:00 Bogotá on the 27th
+            datetime(2026, 9, 27, 10, 0, tzinfo=UTC),
+            id="midnight-in-bogota",
+        ),
+        pytest.param(
+            datetime(2026, 9, 28, 3, 0, tzinfo=UTC),  # 22:00 Bogotá on the 27th
+            datetime(2026, 9, 28, 10, 0, tzinfo=UTC),
+            id="evening-in-bogota-utc-date-has-moved-on",
+        ),
+    ],
+)
+async def test_a_non_critical_row_that_comes_due_at_night_waits_for_0500_bogota(
+    db_session: AsyncSession, seeded: Seeded, now: datetime, released: datetime
+) -> None:
+    """D6 applies the quiet hours when the row is WRITTEN, and that is not enough:
+    a row's `next_attempt_at` is also written by a retry backoff and by the
+    circuit's cooldown, and neither of those knows about 20:00. So the hour is
+    checked again where the row actually leaves.
+
+    One instant for each mistake a UTC implementation makes. 05:00 UTC is 00:00 in
+    Bogotá: quiet in the product's clock, the middle of the afternoon on the UTC
+    date, so a check that read the UTC HOUR would send this at midnight on a
+    farmer's phone. 03:00 UTC on the 28th is 22:00 in Bogotá on the 27th: the UTC
+    hour is quiet too, but the DATE has already rolled over, so a check that read
+    it would hold the row to 28th 05:00 UTC — which is 00:00 in Bogotá, still the
+    middle of the night.
+    """
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=now)
+    sender = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=now,
+    )
+
+    assert (report.claimed, report.deferred, report.sent) == (1, 1, 0)
+    assert sender.messages == 0, "a non-critical row was delivered in the quiet hours"
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == released  # 05:00 Bogotá
+    assert held.last_error == "the farm is in its quiet hours until 05:00"
+
+
+async def test_a_row_that_is_only_quiet_in_utc_is_delivered(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The other direction, because a check can be wrong both ways: 20:00 UTC is
+    15:00 in Bogotá, so the afternoon is the middle of the "night" on the UTC
+    clock. Reading UTC would silence a whole afternoon of alerts for five hours."""
+    afternoon = datetime(2026, 9, 27, 20, 0, tzinfo=UTC)  # 15:00 Bogotá
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=afternoon)
+    sender = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=afternoon,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert (await _row(db_session, row.id)).status == "sent"
+
+
+async def test_a_critical_is_delivered_at_midnight(
+    db_session: AsyncSession, critical: Seeded
+) -> None:
+    """docs/06 §4 "Horas de silencio": "20:00–05:00: solo notificaciones críticas".
+    A critical is the one severity that may break the silence, and it is the one
+    RNF-05 gives two minutes, so the quiet hours never hold it."""
+    at_night = datetime(2026, 9, 27, 5, 0, tzinfo=UTC)  # 00:00 Bogotá
+    row = await _pending_row(db_session, critical, channel=Channel.PUSH, due_at=at_night)
+    sender = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=_circuits(_Clock()),
+        now=at_night,
+    )
+
+    assert (report.sent, report.deferred) == (1, 0)
+    assert sender.messages == 1
+    assert (await _row(db_session, row.id)).status == "sent"
+
+
+async def test_the_quiet_hours_hold_beats_an_open_circuit_and_its_instant(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """Both gates can refuse the same row and they disagree about when it becomes
+    due: the circuit says "in five minutes", the night says "at 05:00". The night
+    wins, because a non-critical row that becomes due at 20:02 must not be sent at
+    20:07 either — the row's whole point is that the farmer hears it in the
+    morning. The reason in `last_error` names the one that decided it."""
+    at_night = datetime(2026, 9, 28, 3, 0, tzinfo=UTC)  # 22:00 Bogotá on the 27th
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=at_night)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+
+    await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=circuits,
+        now=at_night,
+    )
+
+    held = await _row(db_session, row.id)
+    assert held.next_attempt_at == datetime(2026, 9, 28, 10, 0, tzinfo=UTC)
+    assert held.last_error == "the farm is in its quiet hours until 05:00"
+
+
+async def test_a_group_is_not_formed_out_of_rows_the_night_holds(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """Grouping and the quiet hours cannot both apply to a row: a group of
+    non-criticals is the 05:00 message, and a row held until 05:00 is not part of
+    anything that goes out at 02:00. Both rows of one farm are held, each on its
+    own, and the morning sweep groups them."""
+    at_night = datetime(2026, 9, 28, 3, 0, tzinfo=UTC)  # 22:00 Bogotá on the 27th
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    ids = [
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH, due_at=at_night)).id,
+        (
+            await _pending_row(
+                db_session, seeded, channel=Channel.PUSH, due_at=at_night, alert_id=other_alert
+            )
+        ).id,
+    ]
+    sender = _LandingSender()
+    circuits = _circuits(_Clock())
+
+    held = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=at_night,
+    )
+    assert (held.deferred, held.sent) == (2, 0)
+    assert sender.messages == 0
+
+    # The morning sweep: both rows are due again, and now they are one message.
+    morning = datetime(2026, 9, 28, 10, 0, tzinfo=UTC)  # 05:00 Bogotá on the 28th
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=morning,
+    )
+
+    assert (report.sent, report.deferred) == (2, 0)
+    assert sender.messages == 1
+    assert (await _row(db_session, ids[0])).status == "sent"
+    assert (await _row(db_session, ids[1])).status == "sent"
+
+
+async def test_one_message_writes_its_rows_in_one_commit(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """A message's outcome is ONE commit, never one per row (R3-001).
+
+    The per-row commit is why every row takes its own `hold()` lock: the claim's
+    locks all die with the first commit. Two commits for one message would put
+    the group's second row back in the table as `pending` and UNLOCKED between
+    them, and a second worker's claim — which skips locked rows, not pending ones
+    — would take it and send it a second time: the farmer gets the same alert twice
+    from the same message, and the row that first `hold()` refused would be
+    reported as `skipped` after it was already delivered.
+
+    Counted, because a race like that is not observable from the end state: both
+    rows end `sent` either way. The negative half is the row group of one, which
+    must still be a single call, and the two separate `push` rows of two farms,
+    which must still be two.
+    """
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    grouped = [
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH)).id,
+        (await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)).id,
+    ]
+    commits: list[list[UUID]] = []
+
+    class _CountingOutbox(SqlAlchemyOutboxRepository):
+        async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
+            commits.append(list(notification_ids))
+            await super().mark_sent(notification_ids, at=at)
+
+    await dispatch_due_notifications(
+        outbox=_CountingOutbox(db_session),
+        senders={Channel.PUSH: _LandingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert commits == [grouped]
+    assert (await _row(db_session, grouped[0])).status == "sent"
+    assert (await _row(db_session, grouped[1])).status == "sent"
+
+
+async def test_a_lone_row_and_two_messages_are_still_one_commit_each(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The negative half of the pair above, in the two shapes that must NOT be
+    batched: a group of one (almost every message) and two rows of two different
+    farms (two different messages). Grouping is a message, not a claim batch —
+    docs/06 §4's Reclamo row wants the outcome of a message committed, and D31
+    wants a crash in one message not to strand another one's rows."""
+    commits: list[list[UUID]] = []
+
+    class _CountingOutbox(SqlAlchemyOutboxRepository):
+        async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
+            commits.append(list(notification_ids))
+            await super().mark_sent(notification_ids, at=at)
+
+    lone = (await _pending_row(db_session, seeded, channel=Channel.PUSH)).id
+    other_alert = await _alert_on(
+        db_session, seeded, code="heat_stress", plot_id=seeded.other_plot_id
+    )
+    other_farm = (
+        await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)
+    ).id
+
+    await dispatch_due_notifications(
+        outbox=_CountingOutbox(db_session),
+        senders={Channel.PUSH: _LandingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert commits == [[lone], [other_farm]]
+
+
+async def test_a_failed_group_costs_every_row_its_own_attempt(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """One message, one failed DELIVERY, and each row's own count (R3-002).
+
+    `notification.attempts` is a column of the row (docs/03) and docs/06 §4's
+    "máximo 5 intentos, luego `failed`" is a per-notification limit, so a grouped
+    message that fails adds ONE to each row and no more. Reading the count off
+    `group[0]` and writing it to every row meant a row that had never been
+    attempted was marked `failed` on its first real delivery whenever it happened
+    to group with a row that had four — the one way a `warning` dies without ever
+    being tried.
+
+    So the fresh row is `pending` at 1 and the old one is `failed` at 5, and the
+    two negative halves: the fresh row is NOT failed and the old one is NOT
+    backed off, because a row that is never going out is not the same as a row
+    that has to wait.
+    """
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    fresh = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    fresh_id = fresh.id
+    spent = await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)
+    spent_id = spent.id
+    fresh.attempts = 0
+    spent.attempts = MAX_ATTEMPTS - 1
+    await db_session.commit()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert (report.retried, report.failed) == (1, 1)
+    retried = await _row(db_session, fresh_id)
+    assert (retried.status, retried.attempts) == ("pending", 1)
+    assert retried.next_attempt_at == _DUE + retry_delay(1)
+    given_up = await _row(db_session, spent_id)
+    assert (given_up.status, given_up.attempts) == ("failed", MAX_ATTEMPTS)
+
+
+async def test_a_failed_row_is_written_before_the_ones_that_retry(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The two writes of one failed message are ordered, and the order is the
+    safety: the first commit releases the claim's locks, so a row still `pending`
+    and still due at that moment could be claimed and sent by another worker. The
+    row being given up goes first — after the first commit it is `failed` and
+    unclaimable — and the rows that will retry go second, with a `next_attempt_at`
+    in the future, which the claim's `next_attempt_at <= now` refuses.
+
+    Recorded, because the two orders differ only in a window no end state shows.
+    """
+    other_alert = await _alert_on(db_session, seeded, code="heat_stress", plot_id=seeded.plot_id)
+    fresh = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    fresh_id = fresh.id
+    spent = await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=other_alert)
+    spent_id = spent.id
+    spent.attempts = MAX_ATTEMPTS - 1
+    await db_session.commit()
+    order: list[tuple[str, list[UUID]]] = []
+
+    class _OrderedOutbox(SqlAlchemyOutboxRepository):
+        async def mark_failed(self, rows: Sequence[FinalAttempt], *, error: str) -> None:
+            order.append(("failed", [row.notification_id for row in rows]))
+            await super().mark_failed(rows, error=error)
+
+        async def mark_retry(self, rows: Sequence[RetrySchedule], *, error: str) -> None:
+            order.append(("retry", [row.notification_id for row in rows]))
+            await super().mark_retry(rows, error=error)
+
+    await dispatch_due_notifications(
+        outbox=_OrderedOutbox(db_session),
+        senders={Channel.PUSH: _FailingSender()},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    # The negative half, in the only form it matters: the row that leaves the
+    # claimable set is written first, and the row that stays pending is written
+    # after it with a future `next_attempt_at`, never before.
+    assert order == [("failed", [spent_id]), ("retry", [fresh_id])]
+
+
+async def test_a_due_sms_row_is_sent_and_marked_sent(
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """D8: the seminar adapter only logs, and the row is `sent` afterwards."""
     row = await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders=_senders(db_session), now=_DUE
+        outbox=_outbox(db_session),
+        senders=_senders(db_session),
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.claimed, report.sent, report.retried, report.failed) == (1, 1, 0, 0)
@@ -280,14 +1324,41 @@ async def test_a_due_sms_row_is_sent_and_marked_sent(
     assert (sent.status, sent.sent_at) == ("sent", _DUE)
 
 
-async def test_a_failing_sender_schedules_the_next_attempt_with_backoff(
+async def test_a_deferred_row_waits_without_spending_an_attempt(
     db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """A row held for a reason that is not the provider's fault — the circuit is
+    open, the hour is quiet — is not an attempt (D31's rule about a row nobody can
+    deliver yet, applied to a row that can). It stays `pending`, keeps its
+    attempts, and says why it did not move."""
+    row = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    outbox = _outbox(db_session)
+    due_again = _DUE + timedelta(minutes=5)
+
+    await outbox.mark_deferred(row.id, next_attempt_at=due_again, reason="push circuit is open")
+
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == due_again
+    assert held.last_error == "push circuit is open"
+    # The negative half: a deferred row is still claimable the moment it is due
+    # again, which a `failed` row would not be.
+    assert [held.id for held in await outbox.claim_due(now=due_again, channels=[Channel.SMS])] == [
+        row.id
+    ]
+
+
+async def test_a_failing_sender_schedules_the_next_attempt_with_backoff(
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """A transient provider error costs one attempt and a 1 min wait, not the row."""
     row = await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: _FailingSender()}, now=_DUE
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.claimed, report.retried, report.failed) == (1, 1, 0)
@@ -299,7 +1370,7 @@ async def test_a_failing_sender_schedules_the_next_attempt_with_backoff(
 
 
 async def test_the_fifth_failed_attempt_gives_the_row_up(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """docs/06 §4: "máximo 5 intentos, luego `failed`" — the row stops being due,
     so a provider that never recovers cannot keep the sweep busy forever."""
@@ -308,7 +1379,10 @@ async def test_the_fifth_failed_attempt_gives_the_row_up(
     await db_session.commit()
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: _FailingSender()}, now=_DUE
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.retried, report.failed) == (0, 1)
@@ -316,8 +1390,94 @@ async def test_the_fifth_failed_attempt_gives_the_row_up(
     assert (given_up.status, given_up.attempts) == ("failed", MAX_ATTEMPTS)
 
 
-async def test_a_row_with_no_sender_yet_is_not_even_claimed(
+async def test_a_critical_whose_provider_is_unconfigured_goes_out_by_the_alternate(
+    db_session: AsyncSession,
+    seeded: Seeded,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider that is not CONFIGURED is treated as a provider whose circuit is
+    open, but only for a critical (D40).
+
+    With a malformed `TECHCAMP_VAPID_PRIVATE_KEY` there is no `push` sender at all
+    (#140, D31), so before this the claim never even asked for `push` and a
+    critical `push` row sat there forever: it could not be delivered, and it could
+    not take the alternate channel either, because the alternate switch needs the
+    row first. docs/06 §4 answers that exact situation — "mientras tanto las
+    críticas pasan al canal alterno" — and RF-08 asks for SMS or WhatsApp as the
+    backup, so a critical is claimed and sent by SMS inside the same run.
+
+    The negative half is the warning on the same farm, same user, same run: it
+    keeps D31 exactly as it was. A warning has no second channel (D5), so claiming
+    it would only spend a pass on a row nobody can send.
+    """
+    monkeypatch.setattr(senders_module, "is_seminar_profile", lambda: True)
+    monkeypatch.setattr(senders_module, "vapid_private_key", lambda: "a-private-key")
+    monkeypatch.setattr(senders_module, "vapid_subject", lambda: "mailto:soporte@techcamp.local")
+    critical_alert = await _alert_on(
+        db_session, seeded, code="heavy_rain_forecast", plot_id=seeded.plot_id, severity="critical"
+    )
+    critical_row = await _pending_row(
+        db_session, seeded, channel=Channel.PUSH, alert_id=critical_alert
+    )
+    critical_id = critical_row.id
+    warning_row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    warning_id = warning_row.id
+    senders = build_senders(SqlAlchemyPushSubscriptionRepository(db_session))
+    assert set(senders) == {Channel.SMS, Channel.WHATSAPP}
+
+    with caplog.at_level(logging.INFO, logger="techcamp.notifications.adapters.senders"):
+        report = await dispatch_due_notifications(
+            outbox=_outbox(db_session),
+            senders=senders,
+            circuits=_circuits(_Clock()),
+            now=_DUE,
+        )
+
+    # One row claimed, one delivered, and it went out as the seminar's SMS: the
+    # critical's own channel had nothing to send it.
+    assert (report.claimed, report.sent) == (1, 1)
+    assert f"simulated sms to user {seeded.user_id}" in caplog.text
+    assert (await _row(db_session, critical_id)).status == "sent"
+    # The warning is untouched: not claimed, not attempted, still due when it was.
+    assert (await _row(db_session, warning_id)).attempts == 0
+    assert (await _row(db_session, warning_id)).status == "pending"
+    assert (await _row(db_session, warning_id)).next_attempt_at == _DUE
+
+
+async def test_a_critical_with_no_sender_at_all_is_never_claimed(
     db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The other half of D40's condition, and the shape production has today: no
+    VAPID key and no SMS/WhatsApp provider yet (ADR-0016, D31). A critical has
+    nowhere to go — not its own channel and not an alternate — so claiming it
+    would only put a row it cannot leave into a batch, and the row stays exactly
+    as D31 says: `pending`, unclaimed, no attempt spent, waiting for an adapter.
+
+    The pair with the test above is the whole decision: one alternate registered
+    and the same critical goes out through it; none registered and it is not
+    touched at all.
+    """
+    critical_alert = await _alert_on(
+        db_session, seeded, code="heavy_rain_forecast", plot_id=seeded.plot_id, severity="critical"
+    )
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=critical_alert)
+    row_id = row.id
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert (report.claimed, report.sent, report.deferred) == (0, 0, 0)
+    held = await _row(db_session, row_id)
+    assert (held.status, held.attempts) == ("pending", 0)
+
+
+async def test_a_row_with_no_sender_yet_is_not_even_claimed(
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """A row nobody can send must not burn its five attempts: the claim does not
     ask for a channel with no registered sender, so the row keeps its status, its
@@ -326,7 +1486,10 @@ async def test_a_row_with_no_sender_yet_is_not_even_claimed(
     row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: SeminarSmsSender()}, now=_DUE
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: SeminarSmsSender(channel=Channel.SMS)},
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.claimed, report.sent) == (0, 0)
@@ -339,7 +1502,7 @@ async def test_a_row_with_no_sender_yet_is_not_even_claimed(
 
 
 async def test_a_backed_off_row_waits_for_its_next_attempt(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """A row scheduled inside a batch is not sent again in the same pass, and the
     pass after it finds it once its `next_attempt_at` has come."""
@@ -347,14 +1510,15 @@ async def test_a_backed_off_row_waits_for_its_next_attempt(
     sender = _FailingSender()
 
     await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: sender}, now=_DUE
+        outbox=_outbox(db_session), senders={Channel.SMS: sender}, circuits=circuits, now=_DUE
     )
     await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: sender}, now=_DUE
+        outbox=_outbox(db_session), senders={Channel.SMS: sender}, circuits=circuits, now=_DUE
     )
     await dispatch_due_notifications(
         outbox=_outbox(db_session),
         senders={Channel.SMS: sender},
+        circuits=circuits,
         now=_DUE + timedelta(minutes=1),
     )
 
@@ -367,12 +1531,12 @@ async def test_the_seminar_sender_logs_the_sms_it_pretends_to_send(
 ) -> None:
     """ADR-0021: the simulated provider is a log line and the `/dev/outbox` tray."""
     await _pending_row(db_session, seeded, channel=Channel.WHATSAPP)
-    sender = SeminarSmsSender()
+    sender = SeminarSmsSender(channel=Channel.WHATSAPP)
     claimed = await _outbox(db_session).claim_due(now=_DUE, channels=[Channel.WHATSAPP])
 
     with caplog.at_level(logging.INFO, logger="techcamp.notifications.adapters.senders"):
         for notification in claimed:
-            await sender.send(notification)
+            await sender.send([notification])
 
     assert "whatsapp" in caplog.text
     assert "water_stress" in caplog.text
@@ -450,10 +1614,19 @@ async def test_the_dispatch_job_sends_the_due_rows(
     db_session: AsyncSession, seeded: Seeded
 ) -> None:
     """The task the outbox write defers and the minute sweep runs (D7) drains
-    the outbox through the senders the profile registers."""
-    # The job sends what is due *now*, so the row cannot be dated in the past.
+    the outbox through the senders the profile registers.
+
+    The row is a CRITICAL one, and that is the point of this test being able to
+    run at any hour: the job takes the wall clock, so a non-critical row would
+    legitimately be held while Bogotá sleeps and this test would fail for a third
+    of the day. The quiet hours are real, so the test is not what fixes it — a
+    severity the silence does not apply to is (D6, D39)."""
+    critical = await _seed_alert(db_session, severity="critical")
     row = await _pending_row(
-        db_session, seeded, channel=Channel.SMS, due_at=datetime.now(UTC) - timedelta(seconds=1)
+        db_session,
+        critical,
+        channel=Channel.SMS,
+        due_at=datetime.now(UTC) - timedelta(seconds=1),
     )
 
     await dispatch_outbox(timestamp=0)
@@ -481,7 +1654,10 @@ async def test_hold_refuses_a_row_another_worker_already_holds(
 
 
 async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
-    db_session: AsyncSession, seeded: Seeded, monkeypatch: pytest.MonkeyPatch
+    db_session: AsyncSession,
+    seeded: Seeded,
+    circuits: InProcessProviderCircuits,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The other half of the same promise: a refused hold costs no attempt and
     no send, so the row stays for the worker that does hold it."""
@@ -497,7 +1673,7 @@ async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
     monkeypatch.setattr(outbox, "hold", _hold)
 
     report = await dispatch_due_notifications(
-        outbox=outbox, senders={Channel.SMS: sender}, now=_DUE
+        outbox=outbox, senders={Channel.SMS: sender}, circuits=circuits, now=_DUE
     )
 
     assert (report.skipped, report.retried) == (1, 1)
@@ -506,7 +1682,7 @@ async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
 
 
 async def test_a_backlog_larger_than_one_batch_is_drained_in_one_run(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """RNF-05 wants a critical inside p95 2 min. One pass takes 50 rows, so a
     backlog is drained pass after pass instead of waiting for the next minute.
@@ -515,7 +1691,11 @@ async def test_a_backlog_larger_than_one_batch_is_drained_in_one_run(
         await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders=_senders(db_session), now=_DUE, limit=2
+        outbox=_outbox(db_session),
+        senders=_senders(db_session),
+        circuits=circuits,
+        now=_DUE,
+        limit=2,
     )
 
     assert report.sent == 3

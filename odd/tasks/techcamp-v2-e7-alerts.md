@@ -467,6 +467,77 @@ work unit (`domain-modeling`).
     claimed for the whole send, so an unanswered endpoint would hold the dispatcher's locks for as
     long as the socket lives. Recorded, not hidden, because both are choices a push service could
     reasonably disagree with.
+- D35 **T7c's circuit state is per PROCESS, not in Postgres.** The brief asked for the decision and
+  its consequence with two workers. A circuit counts how a PROVIDER has been answering, and the
+  worker is the only place the failures happen: each `worker` process keeps its own count, so during
+  an outage each opens its own circuit after its own five failures and the cost is N × threshold
+  failed calls instead of one worker's — all of them the same at-least-once calls (D30) a single
+  worker would have made anyway, and none of them a lost message. A table would buy one number
+  across processes for a row written on every push, a second thing to fail and a migration, and no
+  doc asks for it: docs/06 §4 says the breaker is "por proveedor" and says nothing about where the
+  number lives, and docs/09:51 asks for the fallback, not a distributed counter.
+  `infra/compose.yaml` runs one `worker`, and the semantics do not depend on it. The count must
+  survive BETWEEN sweeps or the breaker never opens at all, so the registry is a process-wide
+  singleton. The weather breaker's state machine moved to `shared/circuit_breaker.py` rather than
+  being written twice.
+- D36 **A failed delivery only counts against the provider when it IS the provider's.** docs/06 §4
+  counts a PROVIDER's failures, and a row that cannot be delivered at all is not one of them: five
+  users who never enabled push is not a push service that is down, and counting those would open the
+  circuit for every other farmer and start diverting criticals for no reason. So D34's gone
+  subscription and `NoPushSubscriptionError` both sit under a new `RowNotDeliverableError` base and
+  stay out of the count, while still costing the ROW one of its five attempts.
+- D37 **The critical's "canal alterno" is `ALTERNATE_CHANNELS[PUSH] = (sms, whatsapp)`, and only
+  that direction.** Three things the doc does not say, each pinned by a test. Only a CRITICAL moves —
+  a `warning` has no second channel (D5), so it waits, and waiting is not failing. Only an OPEN
+  circuit moves one: a circuit nobody has failed is closed, and "no evidence" is not "evidence of
+  failure", so a fresh push circuit is left alone (the brief's "missing evidence is a third state"
+  landing on the breaker). An `sms`/`whatsapp` row has NO alternate: docs/06 §4's severity order
+  makes them the last resort, D34 leaves the critical's `sms` row to T8, and D4 sends it to the
+  technician — falling back to push would turn the escalation back into the notification the
+  recipient already got. The row is NOT rewritten: it stays the `push` row the alert's transaction
+  wrote, is closed `sent` because the farmer did hear the alert, and T8's escalation is a different
+  recipient (D4), so the fallback adds no second message to anyone.
+- D38 **A group is the rows of ONE (user, farm), a critical is never in one, and an unresolved farm
+  is its own third state.** `alert` stores a `plot_id` or a `node_id` and NEVER a farm (docs/03), so
+  the claim resolves it with `COALESCE(plot.farm_id, node→plot.farm_id)` over LEFT joins and
+  `farm_id` is `UUID | None`: "not known" is a third state, so such a row is sent ON ITS OWN, is
+  never dropped from a claim (a claim that can drop a row is not a place to be clever) and is never
+  merged with another unknown one. Two rows of one farm for two users are the common case (D4), so
+  grouping is keyed on the PAIR: one message would have told each recipient about the other's farm.
+  A critical is alone because RNF-05 gives it two minutes and it must not queue behind an unrelated
+  message. The group's `tag` and Web Push `Topic` come from its OLDEST row, which is the one every
+  retry of the same group starts from.
+- D39 **Quiet hours are checked where the row LEAVES, and the night is asked before the circuit.**
+  D6 applies them when the row is written, and that is not enough: `next_attempt_at` is also
+  written by a retry backoff and by the circuit's cooldown, and neither knows about 20:00, so a
+  `warning` whose two-hour retry landed at 03:00 rang a farmer's phone at three in the morning. The
+  hour and the DATE are both read in **America/Bogota** — 05:00 UTC is 00:00 in Bogotá, and 03:00 UTC
+  on the 28th is 22:00 in Bogotá on the 27th, so an implementation reading the UTC hour delivers at
+  midnight and one reading the UTC date releases the row at a 05:00 that is itself the middle of the
+  night. `in_quiet_hours`/`quiet_hours_until` are now the only two places that know the rule and
+  `next_attempt_at` (the write side) calls them, so the two sides cannot disagree. When the night
+  and the circuit refuse the same row they disagree about when it is due (five minutes vs 05:00) and
+  the NIGHT wins: a row released at 20:07 is exactly the delivery the silence is for.
+- D40 **A channel that was never CONFIGURED behaves like one whose circuit is open — for the
+  criticals only.** #140 leaves `push` unregistered when `TECHCAMP_VAPID_PRIVATE_KEY` cannot sign,
+  and D31 says an unregistered channel is not even claimed. Applied to a `warning` that is the whole
+  point of the rule, and it still holds (R3-003, owner decision 2026-09-28). Applied to a CRITICAL
+  it made the row unreachable forever: it could not be delivered, and it could not take the
+  alternate channel either, because the switch needs the row first. docs/06 §4 answers this exact
+  situation twice — "mientras tanto las críticas pasan al canal alterno" in the circuit-breaker row
+  and RF-08's "SMS o WhatsApp como respaldo para alertas críticas" — and RNF-05 gives a critical two
+  minutes, so waiting on the cooldown of a circuit that does not exist is not an answer. So the
+  claim takes a channel with no sender when an ALTERNATE of it has one, and only its critical rows;
+  the non-criticals of that channel are not claimed at all, because a `warning` has no second
+  channel (D5) and claiming it would spend a pass on a row that cannot leave the batch. With no
+  sender registered anywhere, nothing is claimed and the row is untouched — which is production
+  today (ADR-0016, D31) and is now a test rather than an accident. docs/06 §4's "Canal sin adaptador"
+  row is updated in the same work unit.
+  - One thing this forced into the open: the seminar log line named the ROW's channel, so a critical
+    `push` row delivered through the simulated SMS logged "simulated push" — and in a seminar the
+    log IS the delivery, so it said the opposite of what happened. `SeminarSmsSender` now knows the
+    channel it stands for, which is the honest sentence and is also what makes the fallback
+    visible in the demo.
 
 
 ## E6 coordination (2026-09-26)
@@ -616,9 +687,18 @@ work unit (`domain-modeling`).
     (`2c9aecf` deps 779, `24632b3` shape 239, `9fd61af` sender 298, `30d416e` tests 552) plus
     `server/uv.lock` (+770, generated) — RDD APPROVED and acknowledged
     (`review-0505a9c608b85c36`)
-  - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
+  - [x] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
     fallback to the alternate channel, grouping and quiet hours at send (D6) — route: Herdr
-    OpenCode (same session as T7a) — forecast ~400
+    OpenCode (fresh session, xhigh) — forecast ~400 — actual 2,510 authored, EIGHT work units, plus
+    **#140** (the owner added it mid-task): `45211a6` shared breaker 182, `dddd38b` #140 146,
+    `8c4ff4e` shape 355, `667bd2b` breaker on send 410, `ab81381` critical fallback 249,
+    `25d5e98` grouping at send 790, `9d6e7c4` quiet hours at send 247, then FOUR review fixes:
+    `31629f4` one commit per message 197, `ece560b` per-row attempts (R3-002), `cd22b2f` D40
+    critical alternate (R3-003), `951e5b7` unroutable-critical hold 129 (R3-DEFER-01) — three
+    lineages: two TERMINAL (`review-96319d9a62c364be` escalated, `review-85bf8a32f01a8c7a`
+    `captured_artifacts_unverifiable`) and `review-58ceb05149b6a5c6` **APPROVED and acknowledged
+    (authority burned, zero findings)** over the four fix commits — 317 passed on 5440, static
+    green (see Review)
 - [ ] T8 Escalation job: critical unacknowledged ≥ 2 h → `escalated_at` + SMS to the technician
   (D4), `alert.updated`; severity upgrade notifications (D5) — route: Herdr OpenCode — forecast ~300
 - [x] T9 Web push client: service-worker `push` / `notificationclick` handlers, subscription
@@ -1114,6 +1194,97 @@ work unit (`domain-modeling`).
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
   on a dirty worktree.
+- **T7c (`3d0fa6b..31629f4`, 15 files, 2,510 authored): medium, `slice_budget_reached`.
+  Lineage `review-96319d9a62c364be`, ONE `review-reliability` lens, correction budget 200 —
+  and the outcome is ESCALATED, not approved.** The consent was asked live (this writer did
+  NOT grant from the brief, unlike T7b above) and answered "Review this change".
+  - The lens raised THREE candidate-caused CRITICALs. The refuter batch I was given carried
+    only **R3-001**, and I fixed that one: a group's outcome was written one row at a time, so
+    the commit that closes the first row released the claim's locks and left the second row
+    `pending` and UNLOCKED — a second worker's claim (which skips LOCKED, not PENDING) would
+    send it again. Fixed in `31629f4`: `mark_sent`/`mark_retry`/`mark_failed` now take the rows
+    of ONE message, lock them in one `SELECT … FOR UPDATE` and commit once (197 lines).
+  - The targeted validation was then scoped to **R3-002 and R3-003**, not to R3-001, and
+    rejected the correction on that ground (`targeted_validator_rejected` →
+    `native_stop_required`). Both remain unfixed and both are real; the owner decides.
+    - **R3-002 (deterministic, introduced)**: `attempts = group[0].attempts + 1` is written to
+      EVERY row of a group, and `_joins` does not compare `attempts`, so a fresh row (0) that
+      groups with a row already at 4 is marked `failed` after its FIRST real delivery, and its
+      retry delay comes from an unrelated member's age. The suite cannot catch it: every test
+      that reaches `MAX_ATTEMPTS` or shares group attempts uses a group of ONE. Detecting it
+      needs two rows with deliberately different `attempts` seeded before dispatch. Not a false
+      positive.
+    - **R3-003 (deterministic, introduced)**: with a malformed `TECHCAMP_VAPID_PRIVATE_KEY`,
+      `build_senders` omits `push` (#140's fix, which the owner ordered in this session), so
+      the claim never takes those rows and a critical can never take the alternate-channel
+      switch either. This is D31's documented "canal sin adaptador" rule and #140 asked for
+      exactly this treatment, and the critical's second path is T8's escalation — so it is a
+      real trade rather than a bug in the fix. It is recorded, not dismissed: the fallback
+      protects a provider that is DOWN, not one that was never configured, and the two are now
+      indistinguishable at claim time.
+  - One more VALIDATOR finding was mine: the correction left `SqlAlchemyOutboxRepository`'s
+    class docstring and `hold()`'s docstring asserting the OLD "per row, not per batch"
+    invariant, which the correction inverted. **Fixed in `ece560b`**, together with R3-002.
+  - Not done: no non-blocking findings were filed for this round (the round's findings are all
+    CRITICAL and need the owner's decision, not a tracker issue).
+- **T7c R3-002 / R3-003 (owner-directed, `31629f4..cd22b2f`): both CRITICALs above are REAL and
+  both are now fixed.**
+  - `ece560b` — R3-002 (per-row attempts). Each row's own count and its own next instant
+    (`RetrySchedule` / `FinalAttempt` in `domain/models.py`), derived from that row's count, so a
+    fresh row grouping with a row at 4 ends `pending` at 1 instead of `failed`. `mark_failed` is
+    written BEFORE `mark_retry`, because the first of the two commits already released the claim's
+    locks: a row still `pending` and still due at that moment is claimable by a second worker.
+  - `cd22b2f` — R3-003 (D40's critical-on-unconfigured-channel). A channel with no sender and no
+    registered alternate is still never claimed (D31 kept exactly), but a CRITICAL of an
+    unconfigured channel IS claimable when an alternate has a sender, and goes out through it in
+    the same run — the alternate switch needs the row first, so without this a misconfigured
+    deployment left a critical undeliverable forever with nothing in the logs. The seminar sender
+    now logs the channel it STANDS FOR, not the row's, because in a seminar the log is the
+    delivery.
+- **T7c fresh lineage `review-85bf8a32f01a8c7a` (`3d0fa6b..cd22b2f`, 2,900 lines): medium, budget
+  200, `correction_required` — and the outcome is TERMINAL.** One `review-reliability` lens, no
+  refuter step. Consent was granted from the owner's explicit standing instruction for this
+  candidate.
+  - CRITICAL **R3-DEFER-01** (deterministic, introduced), `dispatch.py:193`: a full batch of
+    criticals on an UNCONFIGURED `push` whose every configured alternate had an open circuit was
+    claimed and then held to the cooldown of its OWN channel — a channel with no sender has no
+    breaker at all, so `cooldown_remaining` lazily created a fresh, closed one and answered
+    **zero**. Held until zero is held until `now`, so the rows stayed due and the T7a full-batch
+    repeat re-claimed them pass after pass: never lost, never delivered, and the job spins.
+  - Fixed in `951e5b7` (129 changed lines, under the 200 budget), in the correction the frozen
+    scope named: (a) a row with no available route is held to the EARLIEST cooldown among the
+    circuits that could take it — its own channel when that has a sender, and for a critical its
+    alternates too; (b) the full-batch repeat also ends when a pass moved nothing, since a pass
+    over a due set it cannot shrink will keep re-claiming the rows it just decided to hold.
+  - TDD, both halves observed: **RED was a hang**, not an assertion — the new test
+    `test_a_full_batch_of_criticals_with_no_route_ends_the_run` never terminated on the base
+    (`EXIT=124` under a hard timeout), which is the defect itself. GREEN: 1 passed in 1.80 s.
+    Scoped suite on **5440**: `tests/notifications tests/alerts tests/weather` → **317 passed**
+    (316 before, +1 for the new test); `ruff format` normalized 1 file and the file was re-verified
+    AFTER normalization, so the tested bytes are the committed bytes; `ruff check` all passed,
+    `ruff format --check` 249 files already formatted, `mypy` 167 source files clean,
+    `lint-imports` 1 kept / 0 broken.
+  - The correction plan was captured with the honest count (129 ≤ 200) and committed, but the
+    TARGETED VALIDATION never ran: STATUS returned `stop` / **`captured_artifacts_unverifiable`**
+    (terminal; `repair.status: unsupported`, every store count 0). Per the stop table that exit
+    belongs to the maintainer — not to the agent, and this writer did not repair, reclaim, abandon
+    or edit anything in the store. The store's own state record confirms the correction was in
+    scope (`fix_finding_ids: ["R3-DEFER-01"]`), so the code fix stands on its own tests and this
+    doc, not on a receipt.
+- **T7c fix-slice lineage `review-58ceb05149b6a5c6` (`9d6e7c4..951e5b7`, 7 files, 746 lines):
+  medium, budget 200, APPROVED and ACKNOWLEDGED (authority burned), zero findings.** The owner
+  directed the scope: the FOUR fix commits only (`31629f4` one commit per message, `ece560b`
+  per-row attempts, `cd22b2f` D40 critical alternate, `951e5b7` unroutable-critical hold), because
+  the rest of T7c was already read by two lineages and every finding they raised is fixed. Consent
+  granted from the owner's explicit standing instruction. One `review-reliability` lens, `lens:
+  review-reliability`, `order 0`, which inspected all 7 changed paths and returned **no findings**
+  — first pass, no correction, no escalation. Acknowledged once with the exact provider-issued
+  invocation: `action: acknowledged`, `authority: burned`, consumed revision
+  `sha256:50177ea0…` (`gentle-ai.review-acknowledged/v1`).
+  - Two earlier T7c lineages are TERMINAL and are recorded as such, not hidden: `review-96319d9a62c364be`
+    (escalated by a `fix_scope_mismatch` against R3-001) and `review-85bf8a32f01a8c7a`
+    (`captured_artifacts_unverifiable`). Neither burned an approval, so this lineage is what
+    actually reviewed the four fix commits.
 
 ## Progress / evidence
 - 2026-09-26: docs read (AGENTS.md, docs/README, 00, 01, 03, 04, 05, 06 §1/§3/§4/§10, 09, 10,
@@ -1519,3 +1690,73 @@ work unit (`domain-modeling`).
     T11 owns the seminar demo. `build_senders` is called from one place, so T7c's circuit breaker
     and #140's key validation will touch the same function; #140 is filed, not fixed here, per the
     non-blocking rule.
+- T7c 2026-09-28 (Herdr OpenCode, FRESH session, xhigh; 8 work units + the owner's mid-task #140).
+  CodeGraph first: `gentle-ai codegraph init` once, then `codegraph_explore` on
+  `dispatch_due_notifications` / `_one_pass` / `claim_due` / `hold` / `_locked`, on
+  `build_senders` / `WebPushSender` / `_payload` / `PywebPushTransport`, on `CircuitBreaker` /
+  `record_failure` / `record_success` / `allow_request` and on the outbox & push ports, before any
+  broad read. No fallback needed.
+  - Docs read: AGENTS.md, docs/06 §4 (the whole rule table), docs/01:31 (RF-08) and :57 (RNF-05),
+    docs/03:284-306, docs/09:15,51, docs/10 §3, ADR-0012, ADR-0016, ADR-0021, and this doc's D5,
+    D6, D7, D12, D30, D31, D34.
+  - REDs recorded: `ModuleNotFoundError: No module named 'techcamp.notifications.adapters.circuits'`
+    + `AttributeError: 'SqlAlchemyOutboxRepository' object has no attribute 'mark_deferred'` (shape);
+    `TypeError: dispatch_due_notifications() got an unexpected keyword argument 'circuits'` (breaker);
+    `assert (0, 1) == (1, 0)` (fallback: the critical was deferred instead of switching);
+    `assert 2 == 1` (grouping: two calls where the doc wants one notification);
+    `assert (0, 2) == (2, 0)` (quiet hours: two rows delivered at 22:00 Bogotá);
+    `TypeError: dispatch_due_notifications() missing 1 required keyword-only argument: 'circuits'`
+    (T7a's own tests, updated for the new port);
+    `assert False` / `where False = all(...)` in the review correction, after re-introducing the
+    hazard by hand.
+  - Checks (own DB `techcamp-e7-db-t7c` on **5440**; `DATABASE_URL=…@localhost:5440/techcamp`):
+    `uv run pytest tests/notifications tests/alerts tests/weather` → 312 passed;
+    `uv run ruff check` → All checks passed!; `uv run ruff format --check` → 249 files already
+    formatted; `uv run mypy` → Success: no issues found in 167 source files; `uv run lint-imports` →
+    1 kept, 0 broken.
+  - Matches the doc, one line per behavior (all asserted by a test that carries its negative half):
+    - **matches the doc** — the breaker opens after 5 consecutive failures of ONE provider and
+      holds 5 min: docs/06 §4 "Por proveedor. Con 5 fallos seguidos se abre 5 min".
+    - **matches the doc** — a row held by an open circuit or by the night costs NO attempt and stays
+      `pending`: docs/06 §4's "Canal sin adaptador" ("sin gastar un intento") applied to a row that
+      can, and D31.
+    - **matches the doc** — a critical whose push circuit is open goes to SMS/WhatsApp now, while a
+      warning waits: docs/06 §4 "mientras tanto las críticas pasan al canal alterno" + RF-08.
+    - **matches the doc** — one message for the due non-critical rows of one farm, keyed on
+      (user, farm), never mixing a critical or two recipients: docs/06 §4 "Agrupación" + D6.
+    - **matches the doc** — a non-critical row that becomes due at night waits for 05:00
+      America/Bogota and a critical is delivered at midnight: docs/06 §4 "Horas de silencio" + D6.
+    - **matches the doc** — a malformed VAPID key leaves `push` unregistered, so its rows are never
+      claimed: docs/06 §4 "Canal sin adaptador" + D31, and #140 (the `sub` is signed with too).
+    - **matches the doc** — one commit per MESSAGE, so a message's rows are never `pending` and
+      unlocked after it was delivered: docs/06 §4 "El resultado de cada fila se confirma por
+      separado, nunca por lotes" (a message is the unit; a claim batch is not) + D30/D31.
+  - RDD: lineage `review-96319d9a62c364be`, one `review-reliability` lens, budget 200, **ESCALATED**
+    (not approved) — R3-001 fixed in `31629f4`, R3-002 and R3-003 fixed later in `ece560b` and
+    `cd22b2f` after the owner's decisions (both real, neither a false positive).
+  - **Continuation, same day (2026-09-28, after compaction):** four fix commits
+    (`31629f4`, `ece560b`, `cd22b2f`, `951e5b7`) and three lineages. Fresh lineage
+    `review-85bf8a32f01a8c7a` (`3d0fa6b..cd22b2f`, 2,900 lines, budget 200) raised CRITICAL
+    R3-DEFER-01, the endless due-set loop on a full batch of unroutable criticals; fixed in
+    `951e5b7` with an observed RED (the test HUNG, `EXIT=124`) and GREEN (1 passed in 1.80 s), but
+    that lineage went TERMINAL at `captured_artifacts_unverifiable` before the targeted validation
+    could run. Nothing in the review store was repaired, reclaimed, abandoned or edited — the stop
+    table makes that the maintainer's exit, not the agent's.
+  - **Fix-slice review, and the round that closed:** lineage `review-58ceb05149b6a5c6`
+    (`9d6e7c4..951e5b7`, 7 files, 746 changed lines, medium, budget 200) — owner-scoped to the
+    four fix commits. One `review-reliability` lens inspected all 7 paths and returned **zero
+    findings**; acknowledged once (`action: acknowledged`, `authority: burned`, consumed revision
+    `sha256:50177ea0…`). Checks on **5440** before it: `tests/notifications tests/alerts
+    tests/weather` → **317 passed**; `ruff check` all passed, `ruff format --check` 249 files
+    already formatted, `mypy` 167 source files clean, `lint-imports` 1 kept / 0 broken. TDD on: the
+    fixes went RED first (R3-002/R3-003 by the owner's directed tests, R3-DEFER-01 by the hang
+    above) and GREEN after.
+  - Two test-infrastructure notes worth keeping: the `db_session` fixture truncates AFTER each
+    test, so a test killed mid-run (a hang, a `timeout`) leaks its rows into the next one and the
+    next run's counts are wrong — the session fixture's migrate/downgrade cycle also leaves the DB
+    at the base schema, so a polluted count is a fixture artifact, not a product bug. And
+    `ruff format` is a source mutation: it ran BEFORE the candidate was frozen and the file was
+    re-verified after it, so the tested bytes are the committed bytes.
+  - Not done: no non-blocking findings to file (every finding in this round was CRITICAL and needed
+    the owner's decision, not a tracker issue); no live push to a real push service (needs a real
+    VAPID pair and a browser — T11 owns the seminar demo); T8 untouched; no push, no merge.

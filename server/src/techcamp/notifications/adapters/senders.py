@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 
 from techcamp.notifications.adapters.push_transport import PywebPushTransport
 from techcamp.notifications.application.ports import (
@@ -67,7 +68,7 @@ default below is the reachable path, not an impossible one.
 _DEFAULT_BODY = "Hay una alerta nueva."
 
 
-def _payload(notification: PendingNotification) -> str:
+def _payload(notifications: Sequence[PendingNotification]) -> str:
     """The JSON T9's `pushPayload.ts` already parses, and nothing else.
 
     Three of the four keys it reads, on purpose. `route` is left out: D33 fixes
@@ -77,12 +78,26 @@ def _payload(notification: PendingNotification) -> str:
     payload at all — the client owns it. The `tag` is the alert's, so the second
     push of the same alert replaces the first instead of stacking a second copy of
     the same news, which is the visible half of D30's at-least-once.
+
+    A group (docs/06 §4 "Agrupación") is one message with one title, one `tag` and
+    a body that says all of it: the sentences joined, in the claim's due order, so
+    the message reads oldest-first. The `tag` and the Web Push `Topic` both come
+    from the group's FIRST row — the oldest — which is the one every retry of the
+    same group starts from. A retry that no longer has that row (because it alone
+    was backed off) sends under a different tag, which is a second copy of one
+    alert: the duplicate D30 already accepts, never two alerts eating each other.
+
+    One row is a group of one and produces byte-for-byte what it produced before
+    grouping existed, so the single-alert case is not a second code path.
     """
+    first = notifications[0]
     return json.dumps(
         {
-            "title": _TITLES.get(notification.severity, "Alerta"),
-            "body": _BODIES.get(notification.rule_code, _DEFAULT_BODY),
-            "tag": f"alert-{notification.alert_id}",
+            "title": _TITLES.get(first.severity, "Alerta"),
+            "body": " ".join(
+                _BODIES.get(notification.rule_code, _DEFAULT_BODY) for notification in notifications
+            ),
+            "tag": f"alert-{first.alert_id}",
         }
     )
 
@@ -93,17 +108,33 @@ class SeminarSmsSender:
     Returning is what marks the row `sent` (D8): in a seminar there is no
     provider to fail, so a simulated message that reached the log has reached
     the room, and `GET /dev/outbox` is the other half of the same delivery.
+
+    `channel` is the one this instance STANDS FOR, not the one the row carries,
+    because they can differ: a critical `push` row whose push provider is down or
+    unconfigured goes out through here (docs/06 §4, D37, D40), and a log that
+    called that message a `push` would say the opposite of what happened in a
+    seminar where the log IS the delivery.
     """
 
-    async def send(self, notification: PendingNotification) -> None:
-        logger.info(
-            "simulated %s to user %s: %s alert %s (%s)",
-            notification.channel.value,
-            notification.user_id,
-            notification.severity,
-            notification.rule_code,
-            notification.alert_id,
-        )
+    def __init__(self, *, channel: Channel) -> None:
+        self._channel = channel
+
+    async def send(self, notifications: Sequence[PendingNotification]) -> None:
+        """One line per alert the message covers.
+
+        A group of non-critical rows would be one message here too, so a seminar
+        run shows the same "one notification for a farm" the real push would: the
+        log is the delivery, and `GET /dev/outbox` is the other half of it (D8).
+        """
+        for notification in notifications:
+            logger.info(
+                "simulated %s to user %s: %s alert %s (%s)",
+                self._channel.value,
+                notification.user_id,
+                notification.severity,
+                notification.rule_code,
+                notification.alert_id,
+            )
 
 
 class WebPushSender:
@@ -132,16 +163,19 @@ class WebPushSender:
         self._subscriptions = subscriptions
         self._transport = transport
 
-    async def send(self, notification: PendingNotification) -> None:
-        subscriptions = await self._subscriptions.list_for_user(notification.user_id)
+    async def send(self, notifications: Sequence[PendingNotification]) -> None:
+        # Every row of a group belongs to one user, which is the caller's
+        # guarantee and the reason this can read the user once.
+        user_id = notifications[0].user_id
+        subscriptions = await self._subscriptions.list_for_user(user_id)
         if not subscriptions:
-            raise NoPushSubscriptionError(notification.user_id)
-        payload = _payload(notification)
-        # The outbox row's own id as the Web Push `Topic`, which is the push
+            raise NoPushSubscriptionError(user_id)
+        payload = _payload(notifications)
+        # The group's oldest outbox row as the Web Push `Topic`, which is the push
         # service's dedup key: `hex` is exactly the protocol's 32-character cap
         # (the dashed uuid is 36) and every hex character is inside the base64url
         # alphabet, so it needs no truncation that could collide.
-        topic = notification.id.hex
+        topic = notifications[0].id.hex
         delivered = False
         failure: Exception | None = None
         for subscription in subscriptions:
@@ -150,7 +184,7 @@ class WebPushSender:
                     subscription, payload=payload, topic=topic, ttl=_TTL_SECONDS
                 )
             except PushSubscriptionGoneError:
-                await self._subscriptions.delete_owned(subscription.id, notification.user_id)
+                await self._subscriptions.delete_owned(subscription.id, user_id)
                 logger.info(
                     "push subscription %s is gone; deleted and trying the next one",
                     subscription.id,
@@ -168,7 +202,7 @@ class WebPushSender:
         # that there was no browser to deliver to.
         if failure is not None:
             raise failure
-        raise NoPushSubscriptionError(notification.user_id)
+        raise NoPushSubscriptionError(user_id)
 
 
 def build_senders(
@@ -176,12 +210,12 @@ def build_senders(
 ) -> dict[Channel, NotificationSender]:
     """The senders this profile has (ADR-0016; ADR-0021; D31, D32, D34).
 
-    `push` is registered wherever there is a VAPID key to sign with, in both
-    profiles (ADR-0021:26), and left out when there is none — the same soft
-    failure the web client has when its `VITE_VAPID_PUBLIC_KEY` is unset, and the
-    same shape as D31's rule: a channel nobody can send is not registered, so its
-    rows are never even claimed and no attempts are spent on a provider that
-    cannot be built.
+    `push` is registered wherever there is a VAPID key that can SIGN with, in
+    both profiles (ADR-0021:26), and left out when there is none — or when the one
+    there is cannot sign (#140). Both are the same soft failure the web client has
+    when its `VITE_VAPID_PUBLIC_KEY` is unset, and the same shape as D31's rule: a
+    channel nobody can send is not registered, so its rows are never even claimed
+    and no attempts are spent on a provider that cannot be built.
 
     The production SMS/WhatsApp provider is future work: the seminar adapter is
     the only simulated one, so production registers nothing rather than pretending
@@ -197,12 +231,29 @@ def build_senders(
     senders: dict[Channel, NotificationSender] = {}
     private_key = vapid_private_key()
     if private_key:
-        senders[Channel.PUSH] = WebPushSender(
-            subscriptions=subscriptions,
-            transport=PywebPushTransport(private_key=private_key, subject=vapid_subject()),
-        )
+        transport = PywebPushTransport(private_key=private_key, subject=vapid_subject())
+        signing_error = transport.signing_error()
+        if signing_error is None:
+            senders[Channel.PUSH] = WebPushSender(
+                subscriptions=subscriptions,
+                transport=transport,
+            )
+        else:
+            # A key that cannot sign is a channel nobody can send, so D31's rule
+            # answers for it exactly as it does for a missing one: the rows are
+            # never claimed and no attempt is spent on a provider that cannot
+            # exist. It is logged rather than raised because a worker that refuses
+            # to start over a configuration mistake also refuses to deliver every
+            # other channel, and the warning repeats until an operator fixes the
+            # key — which is the moment it was asked to be seen (#140).
+            logger.warning(
+                "push is not registered: the configured VAPID key cannot sign (%s). "
+                "Set TECHCAMP_VAPID_PRIVATE_KEY to the base64 DER of an EC2 "
+                "(prime256v1) private key and TECHCAMP_VAPID_SUBJECT to a mailto: "
+                "or https: URI (D32, D31)",
+                signing_error,
+            )
     if is_seminar_profile():
-        sms = SeminarSmsSender()
-        senders[Channel.SMS] = sms
-        senders[Channel.WHATSAPP] = sms
+        senders[Channel.SMS] = SeminarSmsSender(channel=Channel.SMS)
+        senders[Channel.WHATSAPP] = SeminarSmsSender(channel=Channel.WHATSAPP)
     return senders
