@@ -299,7 +299,7 @@ describe('PlotsScreen', () => {
     unmount()
 
     // Negative assertions for other roles: owner, producer, viewer, and default undefined
-    for (const nonTechRole of ['owner', 'producer', 'viewer']) {
+    for (const nonTechRole of ['owner', 'producer', 'viewer'] as const) {
       mockRequests(nonTechRole)
       const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
       const { unmount: unmountOther } = render(

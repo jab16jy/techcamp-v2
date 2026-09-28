@@ -12,6 +12,7 @@ import { useSyncExternalStore } from 'react'
  */
 const TOKEN_KEY = 'techcamp.token'
 const ORG_KEY = 'techcamp.org_id'
+export const ME_KEY = 'techcamp.me'
 
 type Listener = () => void
 const listeners = new Set<Listener>()
@@ -70,6 +71,7 @@ export function setOrgId(orgId: string): void {
 export function clearSession(): void {
   removeStorage(TOKEN_KEY)
   removeStorage(ORG_KEY)
+  removeStorage(ME_KEY)
   emit()
 }
 
@@ -80,4 +82,8 @@ function subscribe(listener: Listener): () => void {
 
 export function useOrgId(): string | null {
   return useSyncExternalStore(subscribe, getOrgId, () => null)
+}
+
+export function useToken(): string | null {
+  return useSyncExternalStore(subscribe, getToken, () => null)
 }

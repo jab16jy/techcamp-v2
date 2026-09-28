@@ -4,6 +4,7 @@ import { MapIcon } from '../../../design-system/ui/icons'
 import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useOrgId } from '../../../lib/api/session'
+import type { Role } from '../../../lib/api/me'
 import { useFarms, usePlotsByFarm, type FarmView, type PlotView } from '../api/plotsApi'
 import { PlotsList } from '../components/PlotsList'
 import { CreateFarmSheet } from './CreateFarmSheet'
@@ -12,7 +13,7 @@ import { PlotDetailSheet } from './PlotDetailSheet'
 
 export interface PlotsScreenProps {
   /** Caller role in the active organization (E8 D14). Technician enables visit registration. */
-  callerRole?: string | null
+  callerRole?: Role | null
   /** Optional extension visit sheet renderer (E8 D14). Keeps features decoupled. */
   renderNewVisitSheet?: (props: {
     farm: FarmView
