@@ -18,8 +18,10 @@ from uuid import UUID
 from techcamp.notifications.domain.models import (
     CLAIM_LIMIT,
     Channel,
+    FinalAttempt,
     PendingNotification,
     PushSubscription,
+    RetrySchedule,
 )
 
 
@@ -82,12 +84,62 @@ class NotificationSender(Protocol):
     sender never has to check which one it is.
     """
 
-    async def send(self, notification: PendingNotification) -> None:
-        """Hand one due row to the provider. Raise on any failure.
+    async def send(self, notifications: Sequence[PendingNotification]) -> None:
+        """Hand one message to the provider, covering the rows it speaks for.
 
-        The row stays locked by the dispatcher's claim while this runs, which is
-        what keeps a second worker from sending it too.
+        A message, not a row, because docs/06 §4's grouping makes one message more
+        than one row: "Varias alertas no críticas de la misma finca en 15 min se
+        envían en una sola notificación". The dispatcher does the grouping (D6: it
+        is what holds the batch and knows what is in it) and hands the group over,
+        so a single alert is simply a group of one and there is no second code path
+        for the common case.
+
+        Every row in `notifications` belongs to the same user and the same channel,
+        and the caller is the one that has checked they may be grouped. Raise on any
+        failure: the outcome belongs to every row in the group.
         """
+        ...
+
+
+class ProviderCircuits(Protocol):
+    """The circuit breaker of each channel's provider (docs/06 §4; ADR-0016).
+
+    One per provider, which is one per channel: docs/06 §4's "Por proveedor" and
+    its "mientras tanto las críticas pasan al canal alterno" only mean something
+    if the push service being down says nothing about the SMS provider, and if the
+    dispatcher can ask about one channel and about the alternative separately.
+
+    The dispatcher owns every decision that follows from the answer — hold the row
+    without spending an attempt, send the critical somewhere else, let the next
+    delivery through after the cooldown. This port only answers, and
+    `cooldown_remaining` is how it turns "not now" into the instant the row
+    becomes due again.
+    """
+
+    def allows(self, channel: Channel) -> bool:
+        """Whether a delivery on this channel may be attempted right now.
+
+        `True` in CLOSED and for the one trial HALF_OPEN allows; `False` while
+        OPEN, which is a statement about the provider and not about the row.
+        """
+        ...
+
+    def record_success(self, channel: Channel) -> None:
+        """One delivery landed: the provider is answering, so the consecutive
+        count restarts (docs/06 §4 counts "5 fallos seguidos")."""
+        ...
+
+    def record_failure(self, channel: Channel) -> None:
+        """One delivery failed for a reason that is the provider's.
+
+        The caller decides what counts: a row that cannot be delivered at all
+        (D34's gone subscription, D36's `NoPushSubscriptionError`) is not
+        evidence about the provider and must not be recorded here.
+        """
+        ...
+
+    def cooldown_remaining(self, channel: Channel) -> float:
+        """Seconds until this channel is allowed again; `0.0` when it is."""
         ...
 
 
@@ -101,14 +153,27 @@ class OutboxRepository(Protocol):
     """
 
     async def claim_due(
-        self, *, now: datetime, channels: Sequence[Channel], limit: int = CLAIM_LIMIT
+        self,
+        *,
+        now: datetime,
+        channels: Sequence[Channel],
+        unconfigured: Sequence[Channel] = (),
+        limit: int = CLAIM_LIMIT,
     ) -> Sequence[PendingNotification]:
         """Take up to `limit` due `pending` rows of those `channels`, oldest first.
 
         "Hold" is the point: the claim is `FOR UPDATE SKIP LOCKED`, so the rows
         stay claimed until the caller's transaction ends and a second worker
         passes over them instead of sending them twice. `channels` keeps a row
-        nobody can deliver yet out of the batch.
+        nobody can deliver yet out of the batch (D31).
+
+        `unconfigured` names channels with NO sender whose CRITICAL rows are still
+        claimable, because an alternate channel does have a sender and the
+        critical can go out through it (docs/06 §4 "las críticas pasan al canal
+        alterno"; D40). Without it a misconfigured deployment would leave a
+        critical row undeliverable forever, since the alternate switch cannot
+        happen to a row the claim never returned. The non-critical rows of those
+        channels are not claimed: a `warning` has no second channel (D5).
         """
         ...
 
@@ -118,16 +183,53 @@ class OutboxRepository(Protocol):
         is not ours to send."""
         ...
 
-    async def mark_sent(self, notification_id: UUID, *, at: datetime) -> None:
-        """Close a delivered row, and release the claim's lock."""
+    async def mark_sent(self, notification_ids: Sequence[UUID], *, at: datetime) -> None:
+        """Close a delivered message, and release the claim's lock.
+
+        The rows of ONE message, written and committed together, because the
+        commit is what releases the claim's `FOR UPDATE SKIP LOCKED` locks: a
+        commit per row would put the message's remaining rows back in the table as
+        `pending` and unlocked, and a second worker's claim — which skips LOCKED
+        rows, not PENDING ones — would take one and deliver it a second time
+        (R3-001). One message is the unit, not one row and not one claim batch:
+        a row group of one is a single row's commit, exactly as before.
+        """
         ...
 
-    async def mark_retry(
-        self, notification_id: UUID, *, attempts: int, next_attempt_at: datetime, error: str
+    async def mark_retry(self, rows: Sequence[RetrySchedule], *, error: str) -> None:
+        """Record a failed attempt per row, each with its OWN count and instant.
+
+        One commit for the whole message, for the same reason as `mark_sent`. The
+        counts travel per row rather than as one number because `attempts` is a
+        column of the notification (docs/03) and "máximo 5 intentos" is per
+        notification (docs/06 §4): a message that covers rows of different ages
+        must not hand the oldest one's count to the newest (R3-002).
+        """
+        ...
+
+    async def mark_failed(self, rows: Sequence[FinalAttempt], *, error: str) -> None:
+        """Give up the rows that reached `MAX_ATTEMPTS` of a failed message.
+
+        A row group of one is a single row, exactly as before. The rows that had
+        attempts left are NOT in this call: they keep retrying (docs/06 §4's
+        "máximo 5 intentos" is per notification, and one delivery that covered
+        several alerts is still one attempt for each of them).
+        """
+        ...
+
+    async def mark_deferred(
+        self, notification_id: UUID, *, next_attempt_at: datetime, reason: str
     ) -> None:
-        """Record a failed attempt and the instant the row becomes due again."""
-        ...
+        """Hold a row that is due but must not be sent yet, WITHOUT an attempt.
 
-    async def mark_failed(self, notification_id: UUID, *, attempts: int, error: str) -> None:
-        """Give a row up after `MAX_ATTEMPTS` (docs/06 §4)."""
+        The third outcome, next to `mark_sent` and `mark_retry`, and it exists
+        because two documented situations are not the provider failing: the
+        circuit for this channel is open (docs/06 §4) and the row is non-critical
+        inside 20:00–05:00 Bogotá. Charging either one an attempt would spend a
+        row's five attempts on something no delivery could have fixed — a whole
+        evening of alerts given up at 23:00 with `failed` on all of them, which is
+        the opposite of the silence the quiet hours are for. `reason` goes to
+        `last_error` because that is the one column that says why a row did not
+        move, and `next_attempt_at` is the instant it will be tried again.
+        """
         ...

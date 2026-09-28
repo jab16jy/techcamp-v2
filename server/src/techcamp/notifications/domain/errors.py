@@ -20,7 +20,19 @@ class PushSubscriptionNotFoundError(Exception):
         super().__init__(f"Push subscription {subscription_id} not found")
 
 
-class PushSubscriptionGoneError(Exception):
+class RowNotDeliverableError(Exception):
+    """A delivery that failed because of THIS row, not because of the provider.
+
+    docs/06 §4's circuit breaker counts the failures of a PROVIDER, and the
+    distinction is the difference between a breaker that protects an outage and
+    one that misreads ordinary traffic: five users who never enabled push is not
+    a push service that is down. Anything under this base is the row's own story
+    — a browser that is gone, a recipient with no browser left — so it costs the
+    row an attempt and leaves every other row's provider alone (D35, D36).
+    """
+
+
+class PushSubscriptionGoneError(RowNotDeliverableError):
     """The push service no longer knows this subscription (404 or 410).
 
     docs/06 §4's `410 Gone (suscripción vencida)` branch: the row is deleted and
@@ -34,7 +46,7 @@ class PushSubscriptionGoneError(Exception):
         super().__init__(f"Push subscription {subscription_id} is gone")
 
 
-class NoPushSubscriptionError(Exception):
+class NoPushSubscriptionError(RowNotDeliverableError):
     """A `push` row whose user has no browser left to receive it on.
 
     The honest outcome of `plan_notifications` writing one `push` row per

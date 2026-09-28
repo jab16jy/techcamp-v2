@@ -13,10 +13,10 @@ from typing import Any
 import httpx
 import pytest
 
+from techcamp.shared.circuit_breaker import CircuitState
 from techcamp.weather.adapters.api.deps import get_weather_forecast_port
 from techcamp.weather.adapters.open_meteo import (
     OPEN_METEO_DAILY_VARS,
-    CircuitState,
     OpenMeteoAdapter,
     OpenMeteoCircuitBreakerOpenError,
     OpenMeteoUnavailableError,
