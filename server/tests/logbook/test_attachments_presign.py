@@ -135,9 +135,16 @@ class FakePresigner:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    async def presign_put(self, *, object_key: str, content_type: str, expires_in: int) -> str:
+    async def presign_put(
+        self, *, object_key: str, content_type: str, size: int, expires_in: int
+    ) -> str:
         self.calls.append(
-            {"object_key": object_key, "content_type": content_type, "expires_in": expires_in}
+            {
+                "object_key": object_key,
+                "content_type": content_type,
+                "size": size,
+                "expires_in": expires_in,
+            }
         )
         return f"https://objects.test/{object_key}?X-Amz-Signature=fake"
 
@@ -193,10 +200,13 @@ async def test_presign_creates_the_attachment_row_and_returns_a_url_for_an_entry
     assert body["object_key"] == f"attachments/{org.org_id}/{org.entry_id}/{photo_id}"
     assert body["object_key"].endswith(".jpg")
     assert body["upload_url"] == f"https://objects.test/{body['object_key']}?X-Amz-Signature=fake"
+    # The declared size travels to the signer, so the length is inside the
+    # signature and not only inside the row.
     assert presigner.calls == [
         {
             "object_key": body["object_key"],
             "content_type": "image/jpeg",
+            "size": 180_000,
             "expires_in": 900,
         }
     ]
@@ -474,7 +484,7 @@ async def test_presigned_upload_url_is_a_sigv4_put_for_the_configured_public_hos
     )
     object_key = f"attachments/{org.org_id}/{org.entry_id}/{uuid7()}.webp"
     url = await presigner.presign_put(
-        object_key=object_key, content_type="image/webp", expires_in=900
+        object_key=object_key, content_type="image/webp", size=180_000, expires_in=900
     )
 
     parsed = urlparse(url)
@@ -487,8 +497,11 @@ async def test_presigned_upload_url_is_a_sigv4_put_for_the_configured_public_hos
     assert query["X-Amz-Expires"] == ["900"]
     assert query["X-Amz-Signature"] != [""]
     # The content type is signed, so the upload cannot be a different type than
-    # the row says (ADR-0018: only images reach the bucket).
-    assert query["X-Amz-SignedHeaders"] == ["content-type;host"]
+    # the row says (ADR-0018: only images reach the bucket), and the length is
+    # signed too, so the store refuses a body of a different size: D8's 200 KB
+    # ceiling is a promise about what actually lands, not only about what the
+    # phone declared.
+    assert query["X-Amz-SignedHeaders"] == ["content-length;content-type;host"]
 
     # The signature belongs to the request and not to a constant: another
     # secret signs the same key differently. (Two signatures inside the same
@@ -502,7 +515,7 @@ async def test_presigned_upload_url_is_a_sigv4_put_for_the_configured_public_hos
         region="us-east-1",
     )
     other_url = await other.presign_put(
-        object_key=object_key, content_type="image/webp", expires_in=900
+        object_key=object_key, content_type="image/webp", size=180_000, expires_in=900
     )
     assert parse_qs(urlparse(other_url).query)["X-Amz-Signature"] != query["X-Amz-Signature"]
 
@@ -510,6 +523,40 @@ async def test_presigned_upload_url_is_a_sigv4_put_for_the_configured_public_hos
     # endpoint and from the use case.
     monkeypatch.undo()
     assert await _attachments_for(db_session, "logbook_entry_id", org.entry_id) == []
+
+
+async def test_presigned_upload_url_signs_the_declared_length(db_session: AsyncSession) -> None:
+    from techcamp.logbook.adapters.attachments import Boto3Presigner
+
+    presigner = Boto3Presigner(
+        endpoint_url="http://localhost:9000",
+        bucket="logbook-photos",
+        access_key="techcamp",
+        secret_key="techcamp123",
+        region="us-east-1",
+    )
+    object_key = f"attachments/{uuid7()}/{uuid7()}/{uuid7()}.jpg"
+
+    declared = await presigner.presign_put(
+        object_key=object_key, content_type="image/jpeg", size=180_000, expires_in=900
+    )
+    bigger = await presigner.presign_put(
+        object_key=object_key, content_type="image/jpeg", size=200_000, expires_in=900
+    )
+    same = await presigner.presign_put(
+        object_key=object_key, content_type="image/jpeg", size=180_000, expires_in=900
+    )
+
+    # Same key, same type, same second: only the declared length differs, and
+    # the signature changes with it. That is what puts the length INSIDE the
+    # signature — `X-Amz-SignedHeaders` only names the headers, so a URL that
+    # listed `content-length` without binding its value would sign the same here.
+    declared_signature = parse_qs(urlparse(declared).query)["X-Amz-Signature"]
+    assert parse_qs(urlparse(bigger).query)["X-Amz-Signature"] != declared_signature
+    # The negative of that: nothing else moved, so an identical request signs
+    # identically. Without this the first assertion could pass for a signature
+    # that simply varies per call.
+    assert parse_qs(urlparse(same).query)["X-Amz-Signature"] == declared_signature
 
 
 async def test_attachment_rows_are_counted_per_org_parent(
