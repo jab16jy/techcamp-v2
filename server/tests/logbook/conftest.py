@@ -227,3 +227,10 @@ async def env(db_session: AsyncSession) -> SyncEnv:
 def pusher(db_session: AsyncSession) -> Pusher:
     """Pushes on the test's own session."""
     return Pusher(db_session)
+
+
+@pytest.fixture
+def pusher_for() -> type[Pusher]:
+    """Builds a `Pusher` for any session, so the concurrency tests can drive
+    two real transactions at once."""
+    return Pusher

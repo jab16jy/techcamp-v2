@@ -7,26 +7,44 @@ negative assertion: what must NOT be written, or what must not change.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import asyncpg
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.logbook.adapters.orm import ExtensionVisitRow, LogbookEntryRow
-from techcamp.logbook.adapters.repositories import SqlAlchemyLogbookEntrySyncRepository
+from techcamp.logbook.adapters.repositories import (
+    SYNC_LOCK_KEY,
+    SqlAlchemyLogbookEntrySyncRepository,
+)
 from techcamp.logbook.application.ports import ExtensionVisitChange, LogbookEntryChange
 from techcamp.logbook.domain.errors import InvalidEntryError
 from techcamp.logbook.domain.models import LogbookKind, RejectReason, SyncOp, SyncStatus
+from techcamp.shared.config import database_url
+from techcamp.shared.db import async_session_factory
 from techcamp.shared.ids import uuid7
 
 if TYPE_CHECKING:  # the fixture types live in the conftest, which pytest owns
     from tests.logbook.conftest import Pusher, SyncEnv
 
 pytestmark = pytest.mark.anyio
+
+_DSN = make_url(database_url()).set(drivername="postgresql").render_as_string(hide_password=False)
+"""`DATABASE_URL` as a plain libpq URI for the raw connection below, so the
+lane's own test database is used instead of a hardcoded port."""
+_NO_HANG = 30.0
+"""Guard, not synchronization: a regression in the lock or the write fails the
+test instead of hanging it."""
+_LOCK_WINDOW = 1.0
+"""How long the blocked push is given to prove it is blocked. It asserts on the
+push still being pending, never on the push having finished."""
 
 
 def _later(env: SyncEnv) -> datetime:
@@ -104,6 +122,15 @@ async def _stored_visit(session: AsyncSession, visit_id: UUID) -> ExtensionVisit
             .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
+
+
+async def _push_and_commit(
+    pusher: Pusher, change: LogbookEntryChange, *, caller_id: UUID
+) -> SyncStatus:
+    """One change in its own transaction, the way a request runs it."""
+    result = await pusher.entry(change, caller_id=caller_id)
+    await pusher.session.commit()
+    return result.status
 
 
 async def _entry_count(session: AsyncSession) -> int:
@@ -465,3 +492,80 @@ async def test_a_check_violation_the_domain_did_not_catch_is_invalid_and_the_bat
     assert applied.status is SyncStatus.APPLIED
     assert await _entry_count(pusher.session) == 1
     assert await _stored_entry(pusher.session, change.id) is None
+
+
+async def test_two_concurrent_pushes_of_the_same_id_leave_the_newer_row(
+    env: SyncEnv, pusher: Pusher, pusher_for: type[Pusher]
+) -> None:
+    """Two devices edit one entry offline (ADR-0013): the D1 lock serializes
+    them, so one row survives, it holds the newer `client_updated_at`, and the
+    loser is told instead of both winning."""
+    producer = env.mine.users["producer"]
+    entry_id = uuid7()
+    older = _entry(env, id=entry_id, client_updated_at=_earlier(env), notes="del teléfono viejo")
+    newer = _entry(env, id=entry_id, client_updated_at=_later(env), notes="del teléfono nuevo")
+
+    async with (
+        async_session_factory() as first,
+        async_session_factory() as second,
+    ):
+        statuses = await asyncio.wait_for(
+            asyncio.gather(
+                _push_and_commit(pusher_for(first), older, caller_id=producer),
+                _push_and_commit(pusher_for(second), newer, caller_id=producer),
+            ),
+            timeout=_NO_HANG,
+        )
+
+    stored = await _stored_entry(pusher.session, entry_id)
+    assert stored is not None
+    assert stored.client_updated_at == _later(env)
+    assert stored.notes == "del teléfono nuevo"
+    # Whoever lost the race is told; nobody is rejected, and nobody is told it
+    # won when it did not.
+    assert set(statuses) <= {SyncStatus.APPLIED, SyncStatus.CONFLICT_OVERWRITTEN}
+    assert SyncStatus.APPLIED in statuses
+    assert await _entry_count(pusher.session) == 1
+
+
+async def test_a_push_that_takes_the_lock_later_gets_a_strictly_greater_server_version(
+    env: SyncEnv, pusher: Pusher, pusher_for: type[Pusher]
+) -> None:
+    """D1: the version is taken under `pg_advisory_xact_lock`, so a push cannot
+    allocate one while another transaction holds the lock, and the push that
+    takes it later gets the greater version. That is what keeps a client that
+    already pulled `since=N` from missing an earlier row (docs/06 §7).
+
+    The lock holder is a plain asyncpg connection in its own transaction, not a
+    second `AsyncSession`: two SQLAlchemy sessions doing concurrent work in one
+    event loop wedge the client side here (the holder's `commit()` never
+    resolves while the other session is blocked), and no request holds two
+    sessions. What this test needs is "some other transaction holds the lock".
+    """
+    producer = env.mine.users["producer"]
+    change = _entry(env)
+    holder = await asyncpg.connect(_DSN)
+    try:
+        held = holder.transaction()
+        await held.start()
+        await holder.execute("SELECT pg_advisory_xact_lock($1)", SYNC_LOCK_KEY)
+        before = await holder.fetchval("SELECT nextval('sync_server_version_seq')")
+
+        async with async_session_factory() as later:
+            task = asyncio.ensure_future(
+                _push_and_commit(pusher_for(later), change, caller_id=producer)
+            )
+            _, pending = await asyncio.wait([task], timeout=_LOCK_WINDOW)
+            # The push is still waiting for the lock, so it has allocated
+            # nothing: that is the guarantee, not a timing coincidence.
+            assert pending, "the push allocated a server_version without holding the D1 lock"
+
+            await asyncio.wait_for(held.commit(), timeout=_NO_HANG)
+            status = await asyncio.wait_for(task, timeout=_NO_HANG)
+    finally:
+        await holder.close()
+
+    assert status is SyncStatus.APPLIED
+    stored = await _stored_entry(pusher.session, change.id)
+    assert stored is not None
+    assert stored.server_version > before
