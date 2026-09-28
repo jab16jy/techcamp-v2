@@ -5,14 +5,14 @@ ADR-0021: Seminar profile calls the free Open-Meteo API; production uses
 the commercial customer-api endpoint with an API key.
 
 Includes 10 s timeout, 3 retries with exponential backoff and jitter on
-transport errors, 5xx responses, and 429 rate limits, and an in-adapter
-circuit breaker.
+transport errors, 5xx responses, and 429 rate limits, behind a circuit breaker whose
+state machine is `shared/circuit_breaker.py` — the same one the notification outbox
+puts in front of every provider (docs/06 §4), so the rule is written once.
 """
 
 from __future__ import annotations
 
 import asyncio
-import enum
 import logging
 import random
 import time
@@ -22,6 +22,12 @@ from typing import Any
 
 import httpx
 
+from techcamp.shared.circuit_breaker import (
+    DEFAULT_COOLDOWN_SECONDS,
+    DEFAULT_FAILURE_THRESHOLD,
+    CircuitBreaker,
+    CircuitState,
+)
 from techcamp.shared.config import is_seminar_profile, open_meteo_api_key
 from techcamp.weather.application.ports import (
     DailyWeatherRow,
@@ -45,16 +51,6 @@ _DEFAULT_TIMEZONE = "auto"
 _MAX_FORECAST_DAYS = 16
 _DEFAULT_MAX_RETRIES = 3
 _DEFAULT_RETRY_BASE_DELAY = 0.5
-_DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 5
-_DEFAULT_CIRCUIT_COOLDOWN_SECONDS = 60.0
-
-
-class CircuitState(enum.StrEnum):
-    """Lifecycle states of the in-adapter circuit breaker."""
-
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half_open"
 
 
 class OpenMeteoUnavailableError(WeatherUnavailableError):
@@ -64,56 +60,6 @@ class OpenMeteoUnavailableError(WeatherUnavailableError):
 
 class OpenMeteoCircuitBreakerOpenError(OpenMeteoUnavailableError):
     """Raised when the Open-Meteo circuit breaker is OPEN, failing fast."""
-
-
-class CircuitBreaker:
-    """In-adapter circuit breaker.
-
-    - CLOSED: normal operation. Transitions to OPEN after N consecutive failures.
-    - OPEN: fails fast without making network calls. Transitions to HALF_OPEN
-      after cooldown_seconds.
-    - HALF_OPEN: allows one trial call. Transitions to CLOSED on success, or
-      back to OPEN on failure.
-    """
-
-    def __init__(
-        self,
-        *,
-        failure_threshold: int = _DEFAULT_CIRCUIT_FAILURE_THRESHOLD,
-        cooldown_seconds: float = _DEFAULT_CIRCUIT_COOLDOWN_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self.failure_threshold = failure_threshold
-        self.cooldown_seconds = cooldown_seconds
-        self._clock = clock
-        self.state = CircuitState.CLOSED
-        self.consecutive_failures = 0
-        self.last_failure_time: float = 0.0
-
-    def allow_request(self) -> bool:
-        now = self._clock()
-        if self.state == CircuitState.CLOSED:
-            return True
-        if self.state == CircuitState.OPEN:
-            if now - self.last_failure_time >= self.cooldown_seconds:
-                self.state = CircuitState.HALF_OPEN
-                return True
-            return False
-        # HALF_OPEN allows a single trial request
-        return True
-
-    def record_success(self) -> None:
-        self.consecutive_failures = 0
-        self.state = CircuitState.CLOSED
-
-    def record_failure(self) -> None:
-        self.consecutive_failures += 1
-        self.last_failure_time = self._clock()
-        if (
-            self.state == CircuitState.HALF_OPEN
-            or self.consecutive_failures >= self.failure_threshold
-        ):
-            self.state = CircuitState.OPEN
 
 
 def _extract_float(lst: Any, idx: int) -> float | None:
@@ -180,7 +126,7 @@ class OpenMeteoAdapter:
     omit for real network calls.
 
     Provides retry with exponential backoff and jitter on transport errors,
-    5xx responses, and 429 status codes, backed by an in-adapter circuit breaker.
+    5xx responses, and 429 status codes, backed by the shared circuit breaker.
     """
 
     def __init__(
@@ -193,8 +139,8 @@ class OpenMeteoAdapter:
         timezone: str = _DEFAULT_TIMEZONE,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         retry_base_delay: float = _DEFAULT_RETRY_BASE_DELAY,
-        circuit_failure_threshold: int = _DEFAULT_CIRCUIT_FAILURE_THRESHOLD,
-        circuit_cooldown_seconds: float = _DEFAULT_CIRCUIT_COOLDOWN_SECONDS,
+        circuit_failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+        circuit_cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
