@@ -28,6 +28,7 @@ from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.logbook.adapters.repositories import (
     SYNC_LOCK_KEY,
     SqlAlchemyExtensionVisitSyncRepository,
+    SqlAlchemyLogbookEntrySyncRepository,
 )
 from techcamp.logbook.application.ports import ExtensionVisitChange, LogbookEntryChange
 from techcamp.logbook.domain.models import SyncOp, SyncStatus
@@ -556,8 +557,8 @@ async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
     If an entry commits at version N and a visit at version N+1 between the two
     reads, the page must not return the visit at N+1 while missing the entry at N
     and advancing next_since to N+1 (which would permanently skip version N).
-    Both reads must see ONE snapshot: either version N is returned, or next_since
-    stays below version N.
+    Under REPEATABLE READ, both reads see ONE snapshot: page 1 excludes both
+    concurrent rows, and the subsequent pull from next_since returns BOTH rows.
     """
     producer = env.mine.users["producer"]
     token = env.mine.tokens["producer"]
@@ -602,13 +603,26 @@ async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
         notes="concurrent visit",
     )
 
-    orig_list_for_pull = SqlAlchemyExtensionVisitSyncRepository.list_for_pull
-    interleaved = False
+    orig_entries_list_for_pull = SqlAlchemyLogbookEntrySyncRepository.list_for_pull
+    orig_visits_list_for_pull = SqlAlchemyExtensionVisitSyncRepository.list_for_pull
+    entries_read = False
+    hook_fired_after_entries = False
 
-    async def hooked_list_for_pull(self: Any, org_ids: Any, *, since: int, limit: int) -> Any:
-        nonlocal interleaved
-        if not interleaved:
-            interleaved = True
+    async def hooked_entries_list_for_pull(
+        self: Any, org_ids: Any, *, since: int, limit: int
+    ) -> Any:
+        nonlocal entries_read
+        res = await orig_entries_list_for_pull(self, org_ids, since=since, limit=limit)
+        entries_read = True
+        return res
+
+    async def hooked_visits_list_for_pull(
+        self: Any, org_ids: Any, *, since: int, limit: int
+    ) -> Any:
+        nonlocal hook_fired_after_entries
+        if not hook_fired_after_entries:
+            assert entries_read, "Interleaving hook must fire AFTER entries read"
+            hook_fired_after_entries = True
             async with async_session_factory() as second_session:
                 pusher = pusher_for(second_session)
                 res_e = await pusher.entry(entry_change, caller_id=producer)
@@ -616,10 +630,13 @@ async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
                 res_v = await pusher.visit(visit_change, caller_id=env.mine.users["technician"])
                 assert res_v.status is SyncStatus.APPLIED
                 await second_session.commit()
-        return await orig_list_for_pull(self, org_ids, since=since, limit=limit)
+        return await orig_visits_list_for_pull(self, org_ids, since=since, limit=limit)
 
     monkeypatch.setattr(
-        SqlAlchemyExtensionVisitSyncRepository, "list_for_pull", hooked_list_for_pull
+        SqlAlchemyLogbookEntrySyncRepository, "list_for_pull", hooked_entries_list_for_pull
+    )
+    monkeypatch.setattr(
+        SqlAlchemyExtensionVisitSyncRepository, "list_for_pull", hooked_visits_list_for_pull
     )
 
     with _client() as client:
@@ -628,26 +645,21 @@ async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
     page = resp.json()
     change_ids = [c["id"] for c in page["changes"]]
 
-    # Under READ COMMITTED bug: concurrent_visit is in page, but concurrent_entry is not,
-    # and next_since jumped past concurrent_entry!
-    # Assert that if concurrent_entry was not returned, next_since stays below it so that
-    # the subsequent pull from next_since retrieves concurrent_entry.
-    assert not (
-        str(concurrent_visit_id) in change_ids and str(concurrent_entry_id) not in change_ids
-    ), (
-        f"Cursor gap / silent loss: visit {concurrent_visit_id} was returned but concurrent "
-        f"entry {concurrent_entry_id} was skipped, next_since jumped to {page['next_since']}"
-    )
+    # Assert that the hook indeed fired after the entries read
+    assert hook_fired_after_entries is True, "Interleaving hook did not fire after entries read"
 
-    if str(concurrent_entry_id) not in change_ids:
-        # Verify subsequent pull recovers concurrent_entry
-        with _client() as client:
-            resp2 = client.get(f"/sync/pull?since={page['next_since']}", headers=_auth(token))
-        assert resp2.status_code == 200
-        page2 = resp2.json()
-        change_ids2 = [c["id"] for c in page2["changes"]]
-        assert str(concurrent_entry_id) in change_ids2
-        assert str(concurrent_visit_id) in change_ids2
+    # Under REPEATABLE READ, page 1 MUST exclude both concurrent rows
+    assert str(concurrent_entry_id) not in change_ids
+    assert str(concurrent_visit_id) not in change_ids
+
+    # Unconditionally pull from next_since and assert BOTH concurrent rows are returned
+    with _client() as client:
+        resp2 = client.get(f"/sync/pull?since={page['next_since']}", headers=_auth(token))
+    assert resp2.status_code == 200
+    page2 = resp2.json()
+    change_ids2 = [c["id"] for c in page2["changes"]]
+    assert str(concurrent_entry_id) in change_ids2
+    assert str(concurrent_visit_id) in change_ids2
 
 
 async def test_pull_fails_when_session_already_in_transaction(env: SyncEnv) -> None:
