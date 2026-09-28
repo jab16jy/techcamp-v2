@@ -357,6 +357,10 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   CodeGraph index), AGY `e8-t9a` medium, brief `.git-brief-e8-T9a.md`; `impeccable` mandatory
   (owner), design frozen, entry point D14.
 
+- Owner rule (2026-09-28): AGY lanes fix EVERY RDD finding right away (blocking and
+  non-blocking), same session, `Refs #N`; the round's issue is still filed and closed by those
+  commits. Applies to T4, T9a and later AGY units.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
