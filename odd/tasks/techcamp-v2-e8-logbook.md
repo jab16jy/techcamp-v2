@@ -378,6 +378,20 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   with the wrong `technician_id` that the server rejects `forbidden` and that stay stuck — D3, D11,
   RNF-01). Also type the role as the four literals.
 
+- T4 fix `6424881` (dispatch on `entity`, raise on anything else; plain port imports) and T9a
+  fix `616a0a0` (`clearSession()` removes the cached `/me`, query keyed by session token, role typed
+  as four literals; 15 files / 110 passed, 172.93 kB) both gated green.
+- T4 RDD (parent-run for AGY, consent granted under the standing grant): lineage
+  `review-385c26a740fec0d2`, base `f3677ad`, medium, lens `review-reliability` → **approved**,
+  acknowledged. Findings → [#161](https://github.com/jab16jy/techcamp-v2/issues/161):
+  **R3-pull-two-query-cursor-gap (WARNING, real)** — the two per-table reads use two READ COMMITTED
+  snapshots, so a version committed between them can be skipped by `next_since` (the D1 gap on
+  the read side); R3-missing-membership-coverage (SUGGESTION). Both sent to `e8-t4` now (AGY rule).
+- T9a RDD (parent-run, consent granted): lineage `review-305a9f040645709b`, **high** (auth path in
+  `authApi.ts`), four lenses. First launch failed at preflight with no mutation (my zsh
+  word-splitting of a shared-argument variable); bound STATUS re-offered the same four slots,
+  relaunched with literal tokens.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
