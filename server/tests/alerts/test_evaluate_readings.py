@@ -33,6 +33,7 @@ from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, Organizati
 from techcamp.identity.domain.models import Role
 from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
 from techcamp.irrigation.adapters.repositories import SqlAlchemyWaterBalanceRepository
+from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, SensorRow
 from techcamp.telemetry.adapters.repositories import (
@@ -302,6 +303,27 @@ class _SensorsFailingAtTheDatabaseForOneNode(SqlAlchemySensorRepository):
         if node_id == self._failing_node_id:
             await self._session.execute(text("SELECT * FROM a_relation_that_does_not_exist"))
         return await super().list_for_node(node_id, org_id)
+
+
+async def _push_rows(db_session: AsyncSession, plot: Plot) -> list[NotificationRow]:
+    """Every `push` row of the plot's alerts, in the order the database returns."""
+    result = await db_session.execute(
+        select(NotificationRow)
+        .join(AlertRow, AlertRow.id == NotificationRow.alert_id)
+        .where(AlertRow.plot_id == plot.plot_id, NotificationRow.channel == "push")
+        .order_by(NotificationRow.created_at, NotificationRow.id)
+    )
+    return list(result.scalars())
+
+
+async def _severities(db_session: AsyncSession, plot: Plot) -> dict[str, Severity]:
+    """`rule_code -> severity` of the plot's alerts."""
+    result = await db_session.execute(
+        select(AlertRuleRow.code, AlertRow.severity)
+        .join(AlertRow, AlertRow.rule_id == AlertRuleRow.id)
+        .where(AlertRow.plot_id == plot.plot_id)
+    )
+    return {code: Severity(severity) for code, severity in result}
 
 
 # -- heat_stress: air_temp > 35 °C sustained 3 h (docs/06 §3) --
@@ -751,3 +773,45 @@ async def test_a_clear_run_beyond_the_hysteresis_band_resolves_the_open_alert(
     alerts = await _alerts(db_session, plot)
     assert [(code, state) for code, state, _ in alerts] == [("heat_stress", AlertState.RESOLVED)]
     assert alerts[0][2] == end
+
+
+async def test_a_water_stress_still_dry_at_48h_upgrades_and_notifies_again_as_critical(
+    db_session: AsyncSession,
+) -> None:
+    """D5's second half through the evaluator, which is the only path docs/06 §3
+    names for it: "crítica si dura 48 h" is decided by `decide_alert` on the
+    reading branch, and the UPGRADE notifies again as critical.
+
+    The use case behind it was already tested on its own
+    (`test_upgrade_to_critical_notifies_again_as_critical`), but nothing drove it
+    through the ingestor hook, so the wiring that reaches it was unverified.
+    """
+    plot = await _make_plot(
+        db_session,
+        metric="soil_moisture",
+        depth_cm=50,
+        root_depth_cm=100.0,
+        calibration_kind="field",
+    )
+    await _store_balance(db_session, plot, day=date(2026, 9, 25), stress_moisture_pct=15.3)
+    at = await _store_series(db_session, plot, end=_START, values=[14.0] * 25)
+    await _landed(db_session, plot, at=at, metric="soil_moisture")
+    warning_rows = await _push_rows(db_session, plot)
+    assert len(warning_rows) == 1  # the single producer of this fixture
+
+    # 48 h later the plot is still below θ_estrés: another dry run, on its own
+    # series, evaluated at its own `at`.
+    later = at + timedelta(hours=48)
+    await _store_series(db_session, plot, end=later, values=[14.0] * 25)
+    await _landed(db_session, plot, at=later, metric="soil_moisture")
+
+    assert await _severities(db_session, plot) == {"water_stress": Severity.CRITICAL}
+    critical_rows = await _push_rows(db_session, plot)
+    # One more push, for the same recipient, due at the upgrade: the alert is
+    # notified AGAIN as critical (D5) and the warning rows are untouched.
+    assert len(critical_rows) == 2
+    assert {row.next_attempt_at for row in critical_rows} == {at, later}
+    # The negative half: the upgrade happens once. A third evaluation of the same
+    # violating run adds no third notice.
+    await _landed(db_session, plot, at=later + timedelta(minutes=15), metric="soil_moisture")
+    assert len(await _push_rows(db_session, plot)) == 2

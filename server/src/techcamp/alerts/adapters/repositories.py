@@ -23,9 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
-from techcamp.alerts.application.ports import AlertTarget
+from techcamp.alerts.application.ports import AlertTarget, EscalationTarget
 from techcamp.alerts.domain.errors import InvalidAlertRuleError
 from techcamp.alerts.domain.models import (
+    ESCALATION_DELAY,
     Alert,
     AlertRule,
     AlertRuleChanges,
@@ -193,6 +194,82 @@ class SqlAlchemyAlertRepository:
             recipients=recipients,
             group_times=await self._group_times(farm_id),
         )
+
+    async def get_escalation_target(
+        self, *, org_id: UUID, plot_id: UUID | None, node_id: UUID | None
+    ) -> EscalationTarget:
+        """The farm of the target and the technician to text (docs/06 §3; D4).
+
+        The recipient rule does not care which of the two target kinds the alert
+        is about — an escalation is about a FARM — but the two statements are the
+        ones `get_target_context` and `_assert_alert_farm` already write, and the
+        `org_id` in each `where` is the isolation (docs/09): a target of another
+        organization resolves to nothing, so its technician can never be reached.
+        """
+        if plot_id is not None:
+            stmt = (
+                select(PlotRow.farm_id, FarmRow.technician_id)
+                .join(FarmRow, PlotRow.farm_id == FarmRow.id)
+                .where(PlotRow.id == plot_id, PlotRow.org_id == org_id)
+            )
+        elif node_id is not None:
+            stmt = (
+                select(PlotRow.farm_id, FarmRow.technician_id)
+                .join(NodeRow, NodeRow.plot_id == PlotRow.id)
+                .join(FarmRow, PlotRow.farm_id == FarmRow.id)
+                .where(NodeRow.id == node_id, PlotRow.org_id == org_id)
+            )
+        else:
+            raise ValueError("An alert target is a plot or a node, never neither or both")
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None:
+            raise ValueError(f"Target is not a plot or node of org {org_id}")
+        farm_id, technician_id = row
+        # docs/06 §3: an escalation goes to the technician; with none assigned,
+        # the org's owners are who can act on it. `viewer` is not among them.
+        recipients = (
+            (technician_id,)
+            if technician_id is not None
+            else await self._members(org_id, (Role.OWNER.value,))
+        )
+        return EscalationTarget(farm_id=farm_id, recipients=recipients)
+
+    async def lock_escalation_candidate(
+        self, *, org_id: UUID, at: datetime, skip: frozenset[UUID] = frozenset()
+    ) -> Alert | None:
+        """One due critical of this org, oldest first, held for the decision.
+
+        ONE row and not a page: `save` commits per alert, and that commit is what
+        releases the lock, so a claimed page would leave its later rows unlocked
+        again for a second worker to escalate a second time. One alert per
+        transaction is the unit `save` already is, and the sweep simply calls
+        this until it returns nothing.
+
+        The narrowing here (critical, open, unescalated, 2 h from `opened_at`) is
+        the sweep's page filter, not the decision: `is_eligible_for_escalation`
+        decides on the value read under this lock, and an alert that fails it
+        escalates nothing. `skip` is how a row that failed it stops coming back
+        (D42); the set holds the round's own un-actionable rows, which is what
+        makes the sweep terminate.
+        """
+        stmt = (
+            select(*_ALERT_COLUMNS, _RULE_CODE)
+            .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
+            .where(
+                AlertRow.org_id == org_id,
+                AlertRow.state == AlertState.OPEN.value,
+                AlertRow.severity == Severity.CRITICAL.value,
+                AlertRow.escalated_at.is_(None),
+                AlertRow.opened_at <= at - ESCALATION_DELAY,
+            )
+            .order_by(AlertRow.opened_at, AlertRow.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        if skip:
+            stmt = stmt.where(AlertRow.id.not_in(skip))
+        row = (await self._session.execute(stmt)).one_or_none()
+        return _alert_from_row(row) if row is not None else None
 
     async def insert(
         self, alert: Alert, drafts: Sequence[NotificationDraft], target: AlertTarget
