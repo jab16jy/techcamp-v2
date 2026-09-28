@@ -213,6 +213,52 @@ describe('syncOnce: push results', () => {
     expect(await db.outbox.count()).toBe(0)
   })
 
+  it('does not settle a newer edit made while the push was in flight', async () => {
+    const entry = draft({ yield_kg: 120 })
+    await saveLogbookEntry(entry)
+    stubSyncApi({
+      push: async (request) => {
+        // The user edits again while this request is open: the answer is now
+        // about a version no longer queued.
+        await saveLogbookEntry({ ...entry, yield_kg: 150 })
+        return json({
+          results: request.changes.map((change) => ({ id: change.id, status: 'applied', server_version: 7 })),
+        })
+      },
+    })
+
+    await syncOnce()
+
+    // The newer edit survives: still queued, and the row does not claim it.
+    const items = await db.outbox.toArray()
+    expect(items).toHaveLength(1)
+    expect(items[0].data).toMatchObject({ yield_kg: 150 })
+    expect(items[0].status).toBe('pending')
+    const row = await db.logbookEntries.get(entry.id)
+    expect(row?.syncState).toBe('pending')
+    expect(row?.yield_kg).toBe(150)
+  })
+
+  it('does not flag a newer edit with a rejection either', async () => {
+    const entry = draft()
+    await saveLogbookEntry(entry)
+    stubSyncApi({
+      push: async (request) => {
+        await saveLogbookEntry({ ...entry, yield_kg: 150 })
+        return json({ results: request.changes.map((c) => ({ id: c.id, status: 'rejected', server_version: null, error: 'clock_skew' })) })
+      },
+    })
+
+    await syncOnce()
+
+    // A rejection the server never saw must not stall the newer edit, which a
+    // `rejected` item never re-pushes.
+    const [item] = await db.outbox.toArray()
+    expect(item.status).toBe('pending')
+    expect(item.error).toBeNull()
+    expect((await db.logbookEntries.get(entry.id))?.syncState).toBe('pending')
+  })
+
   it('ignores a result for a change the run never sent', async () => {
     const entry = draft()
     await saveLogbookEntry(entry)
