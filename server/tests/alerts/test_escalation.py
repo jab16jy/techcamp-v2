@@ -10,23 +10,33 @@ repository is the only implementation of its own port here — the same reason
 
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import asyncpg
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from techcamp.alerts.adapters.orm import AlertRuleRow
+from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.alerts.adapters.repositories import SqlAlchemyAlertRepository
-from techcamp.alerts.application import acknowledge, open_alert, resolve_automatically
+from techcamp.alerts.application import (
+    acknowledge,
+    escalate_due_alerts,
+    open_alert,
+    resolve_automatically,
+    upgrade_to_critical,
+)
 from techcamp.alerts.domain import ESCALATION_DELAY, Alert, AlertRule, Severity
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.adapters.repositories import SqlAlchemyMembershipRepository
 from techcamp.identity.domain.models import Role
 from techcamp.notifications.adapters.orm import NotificationRow
+from techcamp.shared.config import database_url
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow
 
@@ -40,6 +50,10 @@ _OPENED = datetime(2026, 9, 26, 15, 0, tzinfo=UTC)  # 10:00 Bogotá, outside qui
 _DUE = _OPENED + ESCALATION_DELAY
 """Exactly the 2 h of docs/06 §3's clock, which `is_eligible_for_escalation`
 includes: the deadline is reached, not passed."""
+
+
+def _dsn() -> str:
+    return database_url().replace("postgresql+asyncpg://", "postgresql://")
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,3 +275,201 @@ async def test_the_lock_of_one_org_never_reaches_another_orgs_alert(
     await _open(db_session, alerts, org, code="water_stress")
 
     assert await alerts.lock_escalation_candidate(org_id=other.org_id, at=_DUE) is None
+
+
+# -- what the escalation writes (docs/06 §3, §4; D4, D5) --
+
+
+async def test_a_due_critical_alert_escalates_and_texts_the_farms_technician(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06 §3: "Escalar una alerta crítica notifica por SMS o WhatsApp al
+    técnico asignado a la finca (`farm.technician_id`)"; docs/06 §4's row goes
+    through the outbox, never inline (ADR-0016)."""
+    org = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    alert = await _open(db_session, alerts, org, code="water_stress")
+
+    escalated = await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+
+    assert escalated == 1
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert (row.state, row.severity, row.escalated_at) == ("open", "critical", _DUE)
+    # The alert itself does not become a new state (D3): `escalated_at` is the
+    # whole of the escalation.
+    sms = await _rows(db_session, alert.id, "sms")
+    assert len(sms) == 1
+    assert (sms[0].user_id, sms[0].status) == (org.technician, "pending")
+    # A critical is due now even at night (docs/06 §4 "Horas de silencio": only
+    # criticals break the silence), and the row is the technician's alone: the
+    # producer, the owner and the viewer are not texted.
+    assert sms[0].next_attempt_at == _DUE
+    assert {row.user_id for row in sms} == {org.technician}
+    assert {row.user_id for row in await _rows(db_session, alert.id, "push")} == {
+        org.owner,
+        org.producer,
+    }
+
+
+async def test_the_escalation_falls_back_to_the_owners_when_the_farm_has_no_technician(
+    db_session: AsyncSession,
+) -> None:
+    """D4: "with no technician assigned they fall back to the org owners". A member
+    who merely holds the `technician` ROLE is not the farm's technician, and a
+    `viewer` never receives a notification."""
+    org = await _make_org(db_session, with_technician=False)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    alert = await _open(db_session, alerts, org, code="water_stress")
+
+    await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+
+    assert {row.user_id for row in await _rows(db_session, alert.id, "sms")} == {org.owner}
+
+
+async def test_a_critical_with_nobody_to_text_still_escalates(
+    db_session: AsyncSession,
+) -> None:
+    """The third state the brief's checklist names: no technician AND no owner to
+    fall back to is not "nobody is notified because nothing happened". The alert
+    escalates — the clock is the alert's own — and the gap is left visible in the
+    log instead of a silent row nobody can see."""
+    org = await _make_org(db_session, with_technician=False, with_owner=False)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    alert = await _open(db_session, alerts, org, code="water_stress")
+
+    escalated = await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+
+    assert escalated == 1
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert row.escalated_at == _DUE
+    assert await _rows(db_session, alert.id, "sms") == []
+
+
+async def test_a_late_critical_upgrade_escalates_at_the_next_check(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06 §3 "Reloj de escalamiento": "una alerta ascendida a crítica tras 48 h
+    escala en su siguiente revisión" (D12). The clock runs from `opened_at`, not
+    from the upgrade, so a critical that was a warning for two days is due at once
+    — and it escalates on the next sweep, without a second evaluation of the rule.
+    """
+    org = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    alert = await _open(db_session, alerts, org, code="water_stress", severity=Severity.WARNING)
+    upgraded_at = _OPENED + timedelta(hours=48)
+    # The negative half first: a warning is not an escalation candidate at any age,
+    # so two days of sweeps leave it alone.
+    assert await escalate_due_alerts(org_id=org.org_id, at=upgraded_at, alerts=alerts) == 0
+    assert await _rows(db_session, alert.id, "sms") == []
+
+    await upgrade_to_critical(alert_id=alert.id, org_id=org.org_id, at=upgraded_at, alerts=alerts)
+    # The clock runs from `opened_at`, not from the upgrade: the very next sweep
+    # finds it already 2 h old, with no second evaluation of the rule in between.
+    escalated = await escalate_due_alerts(
+        org_id=org.org_id, at=upgraded_at + timedelta(minutes=1), alerts=alerts
+    )
+
+    assert escalated == 1
+    row = (await db_session.execute(select(AlertRow).where(AlertRow.id == alert.id))).scalar_one()
+    assert row.escalated_at == upgraded_at + timedelta(minutes=1)
+    assert [row.user_id for row in await _rows(db_session, alert.id, "sms")] == [org.technician]
+
+
+async def test_a_sweep_escalates_each_alert_once_and_nothing_else(
+    db_session: AsyncSession,
+) -> None:
+    """The negative half of the whole job, and the idempotency of one worker: a
+    warning, an acknowledged, a resolved and a too-young critical are left exactly
+    as they were, and a second sweep writes no second `sms` row."""
+    org = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    memberships = SqlAlchemyMembershipRepository(db_session)
+    due = await _open(db_session, alerts, org, code="water_stress")
+    warning = await _open(db_session, alerts, org, code="heat_stress", severity=Severity.WARNING)
+    young = await _open(
+        db_session, alerts, org, code="waterlogging", at=_DUE - timedelta(minutes=1)
+    )
+    acknowledged = await _open(db_session, alerts, org, code="fungal_risk")
+    await acknowledge(
+        user_id=org.owner,
+        alert_id=acknowledged.id,
+        at=_OPENED + timedelta(minutes=1),
+        alerts=alerts,
+        memberships=memberships,
+    )
+    resolved = await _open(db_session, alerts, org, code="node_offline")
+    await resolve_automatically(
+        alert_id=resolved.id,
+        org_id=org.org_id,
+        farm_id=org.farm_id,
+        at=_OPENED + timedelta(minutes=2),
+        alerts=alerts,
+    )
+    untouched = {warning.id, young.id, acknowledged.id, resolved.id}
+
+    assert await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts) == 1
+    # A second run of the same sweep: the escalated alert is no longer a candidate
+    # (`escalated_at` is set), so nothing happens and nobody is texted twice.
+    assert await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts) == 0
+
+    rows = {
+        row.id: row.escalated_at for row in (await db_session.execute(select(AlertRow))).scalars()
+    }
+    assert rows[due.id] == _DUE
+    assert {alert_id for alert_id, at in rows.items() if alert_id in untouched and at is None} == (
+        untouched
+    )
+    assert len(await _rows(db_session, due.id, "sms")) == 1
+    for alert_id in untouched:
+        assert await _rows(db_session, alert_id, "sms") == []
+
+
+async def test_the_escalation_of_one_org_never_texts_another_orgs_technician(
+    db_session: AsyncSession,
+) -> None:
+    """docs/09, the other half of org isolation: the alert is org A's, and the SMS
+    must not reach org B's technician even while org B's own sweep runs."""
+    org = await _make_org(db_session)
+    other = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    mine = await _open(db_session, alerts, org, code="water_stress")
+    theirs = await _open(db_session, alerts, other, code="water_stress")
+
+    await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+    await escalate_due_alerts(org_id=other.org_id, at=_DUE, alerts=alerts)
+
+    assert [row.user_id for row in await _rows(db_session, mine.id, "sms")] == [org.technician]
+    assert [row.user_id for row in await _rows(db_session, theirs.id, "sms")] == [other.technician]
+
+
+async def test_the_escalation_reaches_plot_events_as_an_alert_updated(
+    db_session: AsyncSession,
+) -> None:
+    """ADR-0015: the escalation is a change of the alert, so the SSE stream of the
+    farm sees `alert.updated` — the tray of docs/06 §3 is not stale for two hours."""
+    org = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+    payloads: list[str] = []
+
+    def _on_notify(_conn: object, _pid: int, _channel: str, payload: str) -> None:
+        payloads.append(payload)
+
+    listener = await asyncpg.connect(dsn=_dsn())
+    await listener.add_listener("plot_events", _on_notify)
+    try:
+        await _open(db_session, alerts, org, code="water_stress")
+        await asyncio.sleep(0.2)
+        payloads.clear()
+        await escalate_due_alerts(org_id=org.org_id, at=_DUE, alerts=alerts)
+        await asyncio.sleep(0.2)  # let the listener connection process the NOTIFY
+    finally:
+        await listener.close()
+
+    assert len(payloads) == 1
+    event = json.loads(payloads[0])
+    assert (event["type"], event["farm_id"], event["state"], event["severity"]) == (
+        "alert.updated",
+        str(org.farm_id),
+        "open",
+        "critical",
+    )

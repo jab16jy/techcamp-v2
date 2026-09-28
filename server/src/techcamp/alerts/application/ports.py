@@ -47,6 +47,21 @@ class AlertTarget:
     group_times: dict[UUID, datetime]
 
 
+@dataclass(frozen=True, slots=True)
+class EscalationTarget:
+    """Who an escalation is for, and the farm whose stream carries it (D4).
+
+    Separate from `AlertTarget` because the escalation has the OPPOSITE rule of a
+    plot alert: docs/06 §3 sends an escalation to the farm's technician
+    (`farm.technician_id`), falling back to the org's owners, while a plot alert
+    goes to the org's owners and producers. It also has no grouping (D38: a
+    critical is never in a group), so there are no group times to resolve.
+    """
+
+    farm_id: UUID
+    recipients: tuple[UUID, ...]
+
+
 class AlertRepository(Protocol):
     async def get_non_resolved_for_target(
         self, *, rule_id: UUID, org_id: UUID, plot_id: UUID | None, node_id: UUID | None
@@ -82,6 +97,18 @@ class AlertRepository(Protocol):
     ) -> AlertTarget:
         """The org, farm, recipients (D4) and pending group times (D6) of a
         target, resolved on the session the alert is written on."""
+        ...
+
+    async def get_escalation_target(
+        self, *, org_id: UUID, plot_id: UUID | None, node_id: UUID | None
+    ) -> EscalationTarget:
+        """The farm the alert's `alert.updated` belongs to and who to text about
+        it (docs/06 §3; D4), resolved on the session the escalation is written on.
+
+        The target's own org is the one that must come back: an escalation reads
+        the farm through the alert's target, so a farm of another organization
+        would hand one org's alert to another's technician (docs/09).
+        """
         ...
 
     async def lock_escalation_candidate(self, *, org_id: UUID, at: datetime) -> Alert | None:
