@@ -530,6 +530,6 @@ def test_numeric_amounts_reject_non_finite_values() -> None:
 
 
 def test_ensure_can_sync_refuses_unknown_entity() -> None:
-    """R3 (issue #143): an entity outside the mapping fails closed via KeyError, never allowed."""
-    with pytest.raises(KeyError):
+    """R3 (issue #143): an entity outside the mapping fails closed via InsufficientRoleError."""
+    with pytest.raises(InsufficientRoleError):
         ensure_can_sync("unknown_entity", Role.OWNER)  # type: ignore[arg-type]

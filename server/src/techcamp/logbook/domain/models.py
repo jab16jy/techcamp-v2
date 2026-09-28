@@ -246,5 +246,5 @@ def is_clock_skewed(client_updated_at: datetime, now: datetime) -> bool:
 
 def ensure_can_sync(entity: SyncEntity, role: Role) -> None:
     """Validate that the member role is authorized to sync the entity (D3, docs/04 §Bitácora)."""
-    if role not in _WRITE_ROLES[entity]:
+    if role not in _WRITE_ROLES.get(entity, frozenset()):
         raise InsufficientRoleError(role, entity)
