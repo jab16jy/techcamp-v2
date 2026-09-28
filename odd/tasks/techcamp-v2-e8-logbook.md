@@ -321,6 +321,15 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   **T6 merged** into integration: tests/logbook 85 passed, ruff, format (270), mypy (181),
   lint-imports clean. `e8-t6` session closed.
 
+- T3 RDD (OpenCode, consent granted by the parent under the standing grant): lineage
+  `review-7f77739c188c70fd`, slice `fef63b0..b28adf4` (base `a463a02`; T2's `432c74b`, `a73c1ba`
+  sit under the base), medium, 2,369 lines, lens `review-reliability` → **approved**, acknowledged,
+  no blocking findings, no correction. Three test WARNINGs →
+  [#160](https://github.com/jab16jy/techcamp-v2/issues/160): R3-lock-test-does-not-prove-allocation-order
+  and R3-newer-update-content-unproved are fixed now by `e8-t3` (test-only, `Refs #160`, no new
+  review); R3-db-backstop-bypasses-push-contract stays in the issue. Then T3 merges (expect
+  `main.py` and `logbook/adapters/api/deps.py`, `ports.py`, `repositories.py` conflicts with T5/T6).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
