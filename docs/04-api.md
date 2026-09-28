@@ -205,6 +205,10 @@ POST /dev/scenarios/{name}:load → 202             # lo usa el simulador para c
 
 `weather` es el único nombre que encola los dos jobs de su agenda diaria —el refresco del pronóstico y la consolidación de `day` (por defecto, ayer)— y por eso responde `{ job_id, consolidate_job_id }` ([06-diseno-detallado.md §6](06-diseno-detallado.md#6-clima)); los demás nombres encolan un solo job. En `weather`, `day` debe ser un día ya transcurrido: hoy todavía es pronóstico y un día futuro no tiene clima observado, así que ambos se responden `422`. En `irrigation`, un solo job calcula el balance (D−1) y la recomendación (D); `day` toma por defecto el día de hoy (local) y un día posterior a hoy responde `422` porque el día de balance (D−1) debe haber terminado.
 
+`GET /dev/outbox` lista las filas `notification` de canal `sms` o `whatsapp` —las que el adaptador del perfil `seminar` simula ([06 §4](06-diseno-detallado.md#4-notificaciones-outbox))— de la más reciente a la más antigua, como máximo 50. No pide sesión ni `org_id` (es una bandeja de una sola sala con un solo stack detrás) y no incluye las filas `push`, que las muestra el service worker del navegador. Cada elemento tiene la forma:
+`{ id: string, alert_id: string, user_id: string, org_id: string, channel: "sms"|"whatsapp", status: "pending|sent|failed", attempts: int, rule_code: string, severity: "info|warning|critical", created_at: string, sent_at: string | null, last_error: string | null }`.
+`rule_code` y `severity` vienen de la alerta porque una bandeja que solo dijera "sms enviado" no diría qué llegó, y `last_error` está porque el mensaje que el despachador dio por perdido es justo el que la sala necesita ver.
+
 ## Stream (SSE)
 
 ```

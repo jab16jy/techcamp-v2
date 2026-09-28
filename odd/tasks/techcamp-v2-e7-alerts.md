@@ -291,6 +291,34 @@ work unit (`domain-modeling`).
   nodes, so N × R sensor reads become N, with the readings still read per rule because each rule
   has its own window. Same behavior, and the sample semantics are deliberately untouched — what a
   plot rule MEANS over several sensors is still undecided (#131).
+- D28 T7a's dispatcher (numbered D24 on its branch; renumbered at merge, T5c owns D24) treats a channel with no registered sender as NOT an attempt, and does
+  not even claim it. `push` has no adapter until T7b, and ADR-0016 puts the real SMS/WhatsApp
+  provider in future work, so a naive dispatcher would count a missing adapter as a failure and
+  burn all five retries: a row would go `failed` before any provider existed, and the escalation
+  SMS the room needs would never be simulated either (production registers nothing at all). The
+  claim asks only for the channels that have a sender, so a `push` backlog also cannot fill every
+  batch and starve the rows that CAN go out. Also T7a: the claim's outcome is committed PER ROW,
+  not per batch — the message reached the provider, so a crash later in the batch must not leave
+  it `pending` and send it again; `FOR UPDATE OF notification` names the outbox table because the
+  join brings `alert` and `alert_rule` in, whose rows must stay writable while the dispatcher
+  holds its claim; and because that per-row commit ends the claim's transaction, every row takes
+  its OWN lock (`hold`) right before it is sent, or a second worker could pick up an unprocessed
+  row of the same batch (correction, below).
+- D27 T7a's outbox delivery is **AT LEAST ONCE**, and docs/06 §4 says so. The table row promised
+  "cada fila se envía una sola vez" — exactly once, which no external provider can give: a worker
+  that dies after the provider accepted the message but before `sent` is committed leaves the row
+  `pending`, and the next sweep sends it again. The obvious alternative, marking the row `sending`
+  before the send, converts that crash into a LOST critical alert, and a lost critical alert is worse
+  than a duplicate — docs/06 §4's own header says notifications "tienen que llegar aunque falle el
+  proveedor", RF-08 demands a fallback for criticals, and RNF-05's p95 < 2 min forbids an operator
+  step to notice a stuck row. So the guarantee is: while no process dies, a row's own lock stops
+  two workers from sending it; if a worker dies in that window the row is sent again, and a
+  possible duplicate is the accepted price. `hold` re-checks `status = 'pending'` and
+  `next_attempt_at <= now` under the lock precisely so the "no process died" half is enforced by
+  the database rather than by hope (the correction's `R4-completed-worker-race`). The alternative
+  worth revisiting only with a provider that supports a deduplication key: then exactly once
+  becomes reachable without holding a `sending` state. Numbered D27, not D25: D25 (T10) and D26
+  (T9) were taken on sibling branches, so do not renumber this down when merging.
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
@@ -414,10 +442,12 @@ work unit (`domain-modeling`).
     through `local_date` — route: Herdr OpenCode (branch `review/e7-rdd`) — forecast ~30 — actual 13
     (`c9132d8`, 10 insertions / 3 deletions, one file)
 - [ ] T7 Notifications outbox
-  - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
+  - [x] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
-    forecast ~450
+    forecast ~450 — actual 1,250 (`836e7f1`, 607 src / 564 tests / 79 docs+config), plus the
+    RDD correction `f165854` (236: 117 src / 94 tests / 25 docs) and the RDD correction
+    `45197b5` (59, closing the two remaining CRITICALs, D27) — APPROVED and acknowledged
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
     subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
@@ -734,6 +764,50 @@ work unit (`domain-modeling`).
     rather than as closed by this test-only change — the same limit T6d recorded by hand.
   - Nothing to append to #134: zero findings, blocking and non-blocking alike.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
+- T7a (`8cbae7f..f165854`, 19 files, 1,398 changed lines incl. the correction; 724 src /
+  658 tests / 82 docs+config): high risk
+  (`process_boundary` on `server/alembic.ini`), four lenses (risk, resilience, readability,
+  reliability), all captured and admitted. THREE CRITICAL, all real, all fixed in the one bounded
+  correction `f165854` (117 source lines, plan captured against the frozen `fix_finding_ids`):
+  - `R3-per-row-commit-releases-unprocessed-claims` — **the reviewer's best catch, and a defect
+    the parent gate missed.** The claim's per-row commits END the claim's transaction, so the
+    first outcome released the row locks on every not-yet-sent row of the batch: a second worker
+    could claim one of those and send it, i.e. the same alert twice. My original reasoning ("one
+    commit per row so a delivered message is not re-sent after a crash") is right about the
+    outcome and wrong about the claim: the two together need a per-row `hold`
+    (`FOR UPDATE SKIP LOCKED` right before the send), and a refused hold costs no attempt and no
+    send. Pinned by `test_hold_refuses_a_row_another_worker_already_holds` (real second session)
+    plus `test_a_row_the_hold_refuses_is_passed_over_and_not_sent`.
+  - `R4-bounded-batch-throughput` — one run made ONE pass, so more than 50 due rows drained at 50
+    rows/minute, which breaks RNF-05's p95 < 2 min. The run now repeats its pass while the pass
+    comes back full; the loop ends because every pass either moves its rows out of the due set or
+    comes back short. Pinned by `test_a_backlog_larger_than_one_batch_is_drained_in_one_run`.
+  - `R4-deferred-row-starvation` — `push` rows (no sender until T7b) were claimed every minute,
+    held their locks, and because the claim orders by due time they could fill all 50 slots and
+    starve every later SMS/WhatsApp row forever. The claim now takes the channels that have a
+    sender, so an undeliverable row is not even locked. Pinned by
+    `test_a_backlog_of_undeliverable_rows_cannot_starve_a_deliverable_one`. `DispatchReport.deferred`
+    was replaced by `DispatchReport.skipped` (a different thing: a row another worker holds).
+  - Gate on `f165854` (own DB, 5439): `pytest tests/notifications tests/alerts` → 148 passed,
+    1 pre-existing failure (the T6b forecast-day test, identical on the stashed base); ruff,
+    format, mypy, lint-imports green. docs/06 §4's "Reclamo" and "Canal sin adaptador" rows and
+    D28 (then D24) were updated in the same commit, so the doc states all three rules.
+  - The first correction was refused: the actual correction was 288 changed lines against a frozen
+    budget of 200 (the plan had counted source lines only). Rewritten to **59** lines
+    (47 additions, 12 deletions) across five files, then accepted.
+  - **APPROVED, authority burned.** Correction `45197b5` (59 lines) closed both remaining CRITICALs:
+    `R4-completed-worker-race` — `hold` re-checks `status = 'pending'` and `next_attempt_at <= now`
+    under the same `FOR UPDATE SKIP LOCKED`, so a row another worker finished in the window where
+    the claim's locks were released is neither held nor sent (pinned by
+    `test_hold_takes_only_a_row_that_is_still_pending_and_due`, negative assertions included); and
+    `R3-001`, answered by D27 (delivery is at least once) rather than by machinery — docs/06 §4's
+    "Reclamo" row and `dispatch_due_notifications`' docstring now state it. Targeted validation ran
+    on the OpenCode host with no refusal, APPROVED and acknowledged (target
+    `sha256:4494bec6…`, `review-acknowledged/v1`, authority `burned`). Boundary → `45197b5`.
+  - The round's 6 non-blocking WARNING → #137 (seminar outbox endpoint has no auth, authz or
+    caller-org filter; a full all-refused pass can loop; `limit=0` never terminates the dispatch
+    loop; `SeminarSmsSender` registered for two channels; a stale `DispatchReport.deferred` name;
+    retry backoff measured from the run's start instead of the failure).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -866,12 +940,64 @@ work unit (`domain-modeling`).
     consequence: because the fixture now agrees with the job in every hour, reverting the job to
     `now().date()` (the CRITICAL T6b fixed) would keep the suite green unless CI happens to run
     inside the 19:00–23:59 local window. Both belong to #132 / the clock-injection follow-up.
-- Next step: T5c and `review/e7-rdd` (T6c, #134) merged into `feat/e7-alerts` by the parent
-  (2026-09-27); the `tests/alerts` rubric runs on the merge. T6c and T6d are REVIEWED and
-  ACKNOWLEDGED together (`review-78f380638683004d`, zero findings) and T6d takes the `tests/alerts`
-  rubric to **114 passed, 0 failed** — the T6b job test that failed on the base is fixed. T7a/b/c
-  run on `feat/e7-t7-outbox`, then T8, T9, T10, T11.
+- Next step: T7a merged into `feat/e7-alerts` (RDD approved at `45197b5`, follow-ups #137);
+  T10 and T9 merge next. Then T7b (Web Push adapter) and T7c in fresh OpenCode sessions, T8 after
+  T7, then T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
   failure is silence, not an exception — which is why the whole suite was green through both.
+- T7a 2026-09-27 (writer: OpenCode, worktree `e7-t7-outbox` on `feat/e7-t7-outbox` from
+  `8cbae7f`, own DB `techcamp-e7-db-t7` on 5439, brief `.git-brief-e7-T7.md`): D7 and D8 as
+  written. CodeGraph initialized in the worktree and used for the map (outbox write, notification
+  domain, weather breaker, `shared/jobs.py`, the alerts fan-out). `ctx7` was NOT available in this
+  runtime (no ctx7 tool exposed), so procrastinate / `SKIP LOCKED` / `pywebpush` were verified
+  against the installed package and by compiling the statements with the postgresql dialect
+  instead of the docs; that limitation is disclosed here rather than papered over.
+  - RED (recorded, not reconstructed): `ImportError: cannot import name 'senders' from
+    'techcamp.notifications.adapters'` and
+    `AttributeError: SqlAlchemyOutboxRepository.claim_due() missing 1 required keyword-only
+    argument: 'limit'` while the modules did not exist yet.
+  - Delivered: `NotificationSender` + `OutboxRepository` ports, `dispatch_due_notifications`
+    (sent / retried / failed / deferred, backoff, 5 attempts), `SqlAlchemyOutboxRepository` (the
+    claim, per-row commits), `SeminarSmsSender` + `build_senders`, `notifications/adapters/jobs.py`
+    (insert-time defer in a savepoint + `* * * * *` sweep on the `notifications` queue, worker
+    listens to it), `GET /dev/outbox` in the seminar profile, D7's "at insert + every minute" in
+    docs/06 §4 and docs/10 §3, the tray's shape in docs/04.
+  - `notifications/adapters/outbox.py` is a new module rather than a class in `repositories.py`
+    because the dispatch job needs the repository and the job must not import the module that
+    enqueues it; the dependency runs one way (`repositories.py` → `jobs.py` → `outbox.py`), the
+    same direction `telemetry` and `farms` use to enqueue a neighbour's job.
+  - **Defect found and fixed in this unit:** `migrations/env.py` calls
+    `logging.config.fileConfig(alembic.ini)`, and `fileConfig` defaults
+    `disable_existing_loggers=True`, which sets `disabled` on every logger not named in
+    `[loggers] keys` (only `root`, `sqlalchemy`, `alembic`). The first migration therefore
+    silenced every `techcamp.*` logger for the rest of the process — which is why no test in this
+    repo had ever been able to assert anything the application logs. Fixed by passing
+    `disable_existing_loggers=False` (it is a function argument in Python 3.12, NOT a key in
+    `alembic.ini` — the first attempt put it in the ini and changed nothing), with the reason
+    written in both files. Found because ADR-0021's "writes to the log" had to be testable.
+  - Checks (own DB, 5439): `uv run pytest tests/notifications tests/alerts` → 144 passed, 1 failed;
+    the failure is `tests/alerts/test_jobs.py::test_the_forecast_job_reads_the_forecast_day_and_
+    the_daily_job_the_cell_day`, and it fails identically on the stashed base (`8cbae7f`), so it
+    is a pre-existing environmental failure, not T7a's. `uv run ruff check` → All checks passed!
+    `uv run ruff format --check` → 237 files already formatted. `uv run mypy` → Success: no issues
+    found in 160 source files. `uv run lint-imports` → 1 kept, 0 broken.
+  - Size: 1,250 changed lines against a ~450 forecast — reported, not trimmed (607 src /
+    564 tests / 79 docs+config). The overage is behaviour tests against real Postgres (this
+    repo's stated rule, conftest: "no SQLite double"), because the claim's `SKIP LOCKED` promise
+    and the same-transaction defer are only provable against the database,     and the RDD correction
+    added 236 more lines (117 src / 94 tests / 25 docs).
+- T7a correction `45197b5` (fresh writer, 2026-09-27): TDD RED `TypeError:
+  SqlAlchemyOutboxRepository.hold() got an unexpected keyword argument 'now'`, then GREEN. Fixed
+  `R4-completed-worker-race` in `outbox.py::hold` (re-check `status`/`next_attempt_at` under the
+  lock) with the port and the dispatcher call site updated, and answered `R3-001` with D27 plus
+  docs/06 §4's "Reclamo" row and the `dispatch_due_notifications` docstring — no code path.
+  59 changed lines (47/12) against a 200 frozen budget; the first attempt at 288 had been refused.
+  Checks (own DB, 5439): `uv run pytest tests/notifications tests/alerts` → 149 passed, 1 failed —
+  the same pre-existing `tests/alerts/test_jobs.py::test_the_forecast_job_reads_the_forecast_day_
+  and_the_daily_job_the_cell_day`, confirmed identical on the stashed base; `uv run ruff check` →
+  All checks passed!; `uv run ruff format --check` → 237 files already formatted; `uv run mypy` →
+  Success: no issues found in 160 source files; `uv run lint-imports` → 1 kept, 0 broken.
+  Lineage `review-3c56ad3aef34dbf2` APPROVED and acknowledged (authority burned, target
+  `sha256:4494bec6…`); the 6 non-blocking WARNING → #137. T7b not started.

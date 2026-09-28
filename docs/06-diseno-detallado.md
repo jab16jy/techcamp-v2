@@ -148,7 +148,7 @@ sequenceDiagram
   participant P as Web Push / SMS
 
   E->>DB: BEGIN, INSERT alert, INSERT notification pending por destinatario y canal, COMMIT
-  loop cada 5 s
+  loop al insertar y cada min
     W->>DB: SELECT … WHERE status='pending' AND next_attempt_at <= now() FOR UPDATE SKIP LOCKED LIMIT 50
     W->>P: enviar
     alt éxito
@@ -164,11 +164,14 @@ sequenceDiagram
 | Regla | Valor |
 |---|---|
 | Garantía | La alerta y su notificación se guardan en la misma transacción: no hay alerta sin aviso ni aviso sin alerta. |
+| Disparo | El `worker` envía al finalizarse la transacción que escribió las filas y además en un barrido cada minuto. El primero cumple la latencia de una crítica (RNF-05, p95 < 2 min); el segundo recoge los reintentos ya vencidos, la liberación de las 05:00 y lo que quedó. El cron de `procrastinate` tiene resolución de minuto, así que no hay un bucle de 5 s. |
+| Reclamo | `FOR UPDATE SKIP LOCKED LIMIT 50` sobre los canales que tienen proveedor: dos workers pueden vaciar la misma tabla a la vez porque el segundo pasa por encima de las filas que el primero tiene tomadas. Cada fila vuelve a tomar su propio cerrojo, todavía `pending` y vencida, justo antes de enviarse: el commit de la anterior cierra la transacción del reclamo y liberaría las que faltan. La entrega es **al menos una vez**: si el worker muere después de que el proveedor aceptó el mensaje y antes de confirmar `sent`, el siguiente barrido la envía otra vez; un duplicado posible es preferible a perder una alerta crítica (RF-08, RNF-05). El resultado de cada fila se confirma por separado, nunca por lotes. Un lote lleno se repite dentro de la misma corrida, así que lo acumulado no espera al siguiente minuto. |
 | Reintentos | Backoff exponencial: 1 min, 5 min, 30 min, 2 h; máximo 5 intentos, luego `failed`. |
 | Circuit breaker | Por proveedor. Con 5 fallos seguidos se abre 5 min; mientras tanto las críticas pasan al canal alterno. |
 | Horas de silencio | 20:00–05:00: solo notificaciones críticas; el resto se agrupa para las 05:00. |
 | Agrupación | Varias alertas no críticas de la misma finca en 15 min se envían en una sola notificación. |
 | Canales por severidad | `info`: solo dentro de la app. `warning`: push. `critical`: push y, si no se reconoce, SMS o WhatsApp. |
+| Canal sin adaptador | Una fila cuyo canal todavía no tiene adaptador registrado ni siquiera se reclama: se queda `pending` tal cual, sin gastar un intento, y no ocupa lugar en un lote mientras espera al adaptador que la enviará. |
 
 ## 5. Riego: balance hídrico FAO-56
 

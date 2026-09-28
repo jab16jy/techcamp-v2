@@ -12,8 +12,16 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+#
+# `disable_existing_loggers=False` is not optional. `fileConfig` defaults it to
+# True, which sets `disabled` on every logger that already exists and is not
+# named in `[loggers] keys` — and this file names only `root`, `sqlalchemy` and
+# `alembic`. So the first migration silenced every `techcamp.*` logger for the
+# rest of the process: a test session could not assert anything the application
+# logs, and a management script that migrated before serving would lose its own
+# output. (It is a function argument in Python 3.12, not a key in the `.ini`.)
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Import every module's ORM mappings so they register on Base.metadata.
 from techcamp.alerts.adapters import orm as alerts_orm  # noqa: E402,F401
