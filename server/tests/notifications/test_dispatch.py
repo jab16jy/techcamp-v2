@@ -22,6 +22,7 @@ from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, OrganizationRow
 from techcamp.notifications.adapters import senders as senders_module
+from techcamp.notifications.adapters.circuits import InProcessProviderCircuits
 from techcamp.notifications.adapters.jobs import dispatch_outbox
 from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.adapters.outbox import SqlAlchemyOutboxRepository
@@ -32,7 +33,10 @@ from techcamp.notifications.application import (
     NotificationSender,
     dispatch_due_notifications,
 )
+from techcamp.notifications.domain.errors import NoPushSubscriptionError
 from techcamp.notifications.domain.models import (
+    BREAKER_COOLDOWN,
+    BREAKER_FAILURE_THRESHOLD,
     MAX_ATTEMPTS,
     Channel,
     NotificationDraft,
@@ -61,6 +65,49 @@ class _FailingSender:
     async def send(self, notification: PendingNotification) -> None:
         self.sent.append(notification.id)
         raise self.error
+
+
+class _LandingSender:
+    """A provider that answers."""
+
+    def __init__(self) -> None:
+        self.sent: list[UUID] = []
+
+    async def send(self, notification: PendingNotification) -> None:
+        self.sent.append(notification.id)
+
+
+class _Clock:
+    """A monotonic clock a test moves by hand: a five-minute cooldown is not a
+    five-minute test."""
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+    def advance(self, seconds: float) -> None:
+        self.seconds += seconds
+
+
+def _circuits(clock: _Clock) -> InProcessProviderCircuits:
+    """Circuits whose cooldown a test can expire without waiting for it."""
+    return InProcessProviderCircuits(clock=clock)
+
+
+def _open(circuits: InProcessProviderCircuits, channel: Channel) -> None:
+    """The state docs/06 §4 reaches after five consecutive failures."""
+    for _ in range(BREAKER_FAILURE_THRESHOLD):
+        circuits.record_failure(channel)
+
+
+@pytest.fixture
+def circuits() -> InProcessProviderCircuits:
+    """Circuits that have never seen a failure, which is what every test that is
+    not about the breaker wants. A fresh one per test so the failures another test
+    invents never open this one's channel."""
+    return InProcessProviderCircuits(clock=_Clock())
 
 
 @pytest.fixture(autouse=True)
@@ -265,14 +312,145 @@ async def test_hold_takes_only_a_row_that_is_still_pending_and_due(
     assert await outbox.hold(due.id, now=_DUE) is True
 
 
-async def test_a_due_sms_row_is_sent_and_marked_sent(
+async def test_a_non_critical_row_waits_while_its_channel_circuit_is_open(
     db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """docs/06 §4's "Por proveedor. Con 5 fallos seguidos se abre 5 min" reaches the
+    outbox: while the circuit is open a due row is not sent and does not cost an
+    attempt. docs/06 §4 answers a critical by moving it to another channel, and
+    says nothing about a warning — there is no other place a warning can go (D5),
+    so the only honest thing left is to wait for the provider."""
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    sender = _FailingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.claimed, report.deferred, report.sent, report.retried) == (1, 1, 0, 0)
+    # The negative half: the provider is not called at all, so the row costs
+    # nothing — a refused call would be an attempt a retry cannot fix.
+    assert sender.sent == []
+    held = await _row(db_session, row.id)
+    assert (held.status, held.attempts) == ("pending", 0)
+    assert held.next_attempt_at == _DUE + BREAKER_COOLDOWN
+    assert held.last_error == "the push circuit is open"
+
+
+async def test_five_failed_deliveries_open_the_circuit_and_the_next_one_is_not_attempted(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The threshold is counted by the dispatcher, not configured into it: the
+    fifth failed delivery is what opens the circuit, and the row behind it waits.
+    That the SIXTH is the one held is the negative half — one failure early would
+    silence a provider that is answering."""
+    ids = [(await _pending_row(db_session, seeded, channel=Channel.PUSH)).id for _ in range(6)]
+    sender = _FailingSender()
+    circuits = _circuits(_Clock())
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.retried, report.deferred) == (5, 1)
+    assert sender.sent == ids[:5]
+    assert (await _row(db_session, ids[4])).attempts == 1
+    sixth = await _row(db_session, ids[5])
+    assert (sixth.status, sixth.attempts) == ("pending", 0)
+
+
+async def test_a_row_with_no_browser_does_not_open_the_push_circuit(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """docs/06 §4 counts a PROVIDER's failures, and a user who never enabled push
+    is not the push service being down (D36). If those rows counted, five farmers
+    without a browser would silence push for every other farmer and start moving
+    criticals to another channel for no reason at all."""
+    ids = [(await _pending_row(db_session, seeded, channel=Channel.PUSH)).id for _ in range(6)]
+    sender = _FailingSender(error=NoPushSubscriptionError(seeded.user_id))
+    circuits = _circuits(_Clock())
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.retried) == (0, 6)
+    assert sender.sent == ids
+    assert circuits.allows(Channel.PUSH) is True
+
+
+async def test_the_delivery_after_the_cooldown_is_attempted_and_a_landing_reopens_the_channel(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """Five minutes later the provider gets one trial: the row is sent, and a
+    delivery that lands closes the circuit so the next row is not held behind a
+    stale outage. The negative half is `deferred == 0` — a circuit that never
+    reopens would strand every later row forever."""
+    clock = _Clock()
+    circuits = _circuits(clock)
+    _open(circuits, Channel.PUSH)
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    sender = _LandingSender()
+    clock.advance(BREAKER_COOLDOWN.total_seconds())
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=circuits,
+        now=_DUE + BREAKER_COOLDOWN,
+    )
+
+    assert (report.deferred, report.sent) == (0, 1)
+    assert sender.sent == [row.id]
+    assert circuits.allows(Channel.PUSH) is True
+
+
+async def test_a_circuit_opened_for_one_channel_leaves_the_others_alone(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """ "Por proveedor": a push service that is down is not evidence about the SMS
+    provider, and a fallback that silenced both channels at once would answer an
+    outage with no notifications at all."""
+    push = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    sms = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    circuits = _circuits(_Clock())
+    _open(circuits, Channel.PUSH)
+    landing = _LandingSender()
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={Channel.PUSH: _FailingSender(), Channel.SMS: landing},
+        circuits=circuits,
+        now=_DUE,
+    )
+
+    assert (report.deferred, report.sent) == (1, 1)
+    assert landing.sent == [sms.id]
+    assert (await _row(db_session, push.id)).status == "pending"
+
+
+async def test_a_due_sms_row_is_sent_and_marked_sent(
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """D8: the seminar adapter only logs, and the row is `sent` afterwards."""
     row = await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders=_senders(db_session), now=_DUE
+        outbox=_outbox(db_session),
+        senders=_senders(db_session),
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.claimed, report.sent, report.retried, report.failed) == (1, 1, 0, 0)
@@ -305,13 +483,16 @@ async def test_a_deferred_row_waits_without_spending_an_attempt(
 
 
 async def test_a_failing_sender_schedules_the_next_attempt_with_backoff(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """A transient provider error costs one attempt and a 1 min wait, not the row."""
     row = await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: _FailingSender()}, now=_DUE
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.claimed, report.retried, report.failed) == (1, 1, 0)
@@ -323,7 +504,7 @@ async def test_a_failing_sender_schedules_the_next_attempt_with_backoff(
 
 
 async def test_the_fifth_failed_attempt_gives_the_row_up(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """docs/06 §4: "máximo 5 intentos, luego `failed`" — the row stops being due,
     so a provider that never recovers cannot keep the sweep busy forever."""
@@ -332,7 +513,10 @@ async def test_the_fifth_failed_attempt_gives_the_row_up(
     await db_session.commit()
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: _FailingSender()}, now=_DUE
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: _FailingSender()},
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.retried, report.failed) == (0, 1)
@@ -341,7 +525,7 @@ async def test_the_fifth_failed_attempt_gives_the_row_up(
 
 
 async def test_a_row_with_no_sender_yet_is_not_even_claimed(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """A row nobody can send must not burn its five attempts: the claim does not
     ask for a channel with no registered sender, so the row keeps its status, its
@@ -350,7 +534,10 @@ async def test_a_row_with_no_sender_yet_is_not_even_claimed(
     row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: SeminarSmsSender()}, now=_DUE
+        outbox=_outbox(db_session),
+        senders={Channel.SMS: SeminarSmsSender()},
+        circuits=circuits,
+        now=_DUE,
     )
 
     assert (report.claimed, report.sent) == (0, 0)
@@ -363,7 +550,7 @@ async def test_a_row_with_no_sender_yet_is_not_even_claimed(
 
 
 async def test_a_backed_off_row_waits_for_its_next_attempt(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """A row scheduled inside a batch is not sent again in the same pass, and the
     pass after it finds it once its `next_attempt_at` has come."""
@@ -371,14 +558,15 @@ async def test_a_backed_off_row_waits_for_its_next_attempt(
     sender = _FailingSender()
 
     await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: sender}, now=_DUE
+        outbox=_outbox(db_session), senders={Channel.SMS: sender}, circuits=circuits, now=_DUE
     )
     await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders={Channel.SMS: sender}, now=_DUE
+        outbox=_outbox(db_session), senders={Channel.SMS: sender}, circuits=circuits, now=_DUE
     )
     await dispatch_due_notifications(
         outbox=_outbox(db_session),
         senders={Channel.SMS: sender},
+        circuits=circuits,
         now=_DUE + timedelta(minutes=1),
     )
 
@@ -505,7 +693,10 @@ async def test_hold_refuses_a_row_another_worker_already_holds(
 
 
 async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
-    db_session: AsyncSession, seeded: Seeded, monkeypatch: pytest.MonkeyPatch
+    db_session: AsyncSession,
+    seeded: Seeded,
+    circuits: InProcessProviderCircuits,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The other half of the same promise: a refused hold costs no attempt and
     no send, so the row stays for the worker that does hold it."""
@@ -521,7 +712,7 @@ async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
     monkeypatch.setattr(outbox, "hold", _hold)
 
     report = await dispatch_due_notifications(
-        outbox=outbox, senders={Channel.SMS: sender}, now=_DUE
+        outbox=outbox, senders={Channel.SMS: sender}, circuits=circuits, now=_DUE
     )
 
     assert (report.skipped, report.retried) == (1, 1)
@@ -530,7 +721,7 @@ async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
 
 
 async def test_a_backlog_larger_than_one_batch_is_drained_in_one_run(
-    db_session: AsyncSession, seeded: Seeded
+    db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
     """RNF-05 wants a critical inside p95 2 min. One pass takes 50 rows, so a
     backlog is drained pass after pass instead of waiting for the next minute.
@@ -539,7 +730,11 @@ async def test_a_backlog_larger_than_one_batch_is_drained_in_one_run(
         await _pending_row(db_session, seeded, channel=Channel.SMS)
 
     report = await dispatch_due_notifications(
-        outbox=_outbox(db_session), senders=_senders(db_session), now=_DUE, limit=2
+        outbox=_outbox(db_session),
+        senders=_senders(db_session),
+        circuits=circuits,
+        now=_DUE,
+        limit=2,
     )
 
     assert report.sent == 3

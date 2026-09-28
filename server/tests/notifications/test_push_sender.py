@@ -17,7 +17,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
@@ -27,12 +27,14 @@ from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid
 from py_vapid.utils import b64urlencode
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, OrganizationRow
 from techcamp.notifications.adapters import push_transport as push_transport_module
+from techcamp.notifications.adapters.circuits import InProcessProviderCircuits
 from techcamp.notifications.adapters.orm import NotificationRow, PushSubscriptionRow
 from techcamp.notifications.adapters.outbox import SqlAlchemyOutboxRepository
 from techcamp.notifications.adapters.push_transport import PywebPushTransport
@@ -43,6 +45,7 @@ from techcamp.notifications.domain.errors import (
     PushSubscriptionGoneError,
 )
 from techcamp.notifications.domain.models import Channel, PushSubscription
+from techcamp.shared.db import async_session_factory
 from techcamp.shared.ids import uuid7
 
 pytestmark = pytest.mark.anyio
@@ -188,6 +191,107 @@ async def _row(session: AsyncSession, notification_id: UUID) -> NotificationRow:
     ).scalar_one()
 
 
+class _LockProbingTransport(_RecordingTransport):
+    """The push service, plus a look at who holds the outbox row behind it.
+
+    The probe runs on the SECOND delivery of a batch — which is after the first
+    row's gone subscription has been deleted and that delete has committed. If
+    the subscription repository had been bound to the dispatcher's own session,
+    that commit would have ended the transaction holding the claim's
+    `FOR UPDATE SKIP LOCKED` locks, and the row this batch has not sent yet would
+    be up for grabs by a second worker.
+    """
+
+    def __init__(self, *, probe: UUID, control: UUID) -> None:
+        super().__init__(gone_for={"https://push.example.com/sub/phone"})
+        self._probe = probe
+        self._control = control
+        # Every delivery of the batch is recorded, not just the last one: the
+        # first is the one taken while the delete commits, which is the only moment
+        # the claim's locks are in question, and a later delivery would take the
+        # row's own `hold()` lock and read as fine whatever happened before it.
+        self.observations: list[tuple[bool, bool]] = []
+
+    async def deliver(
+        self, subscription: PushSubscription, *, payload: str, topic: str, ttl: int
+    ) -> None:
+        if subscription.endpoint.endswith("laptop"):
+            # `control` is the negative half: a row this claim never took has to be
+            # lockable, so a refused lock above means the row is held rather than
+            # the probe failing for some other reason.
+            self.observations.append(
+                (await _is_locked(self._probe), not await _is_locked(self._control))
+            )
+        await super().deliver(subscription, payload=payload, topic=topic, ttl=ttl)
+
+
+async def _is_locked(notification_id: UUID) -> bool:
+    """Whether some other transaction still holds this row's lock.
+
+    `NOWAIT` instead of a wait, so the answer is the database's and not a timeout: a
+    row the claim holds cannot be locked at all. asyncpg refuses with
+    `LockNotAvailableError` and SQLAlchemy's asyncpg adapter translates it into
+    `DBAPIError` — read out of the driver, not from its docs, which is the only
+    reason this catches a public class instead of the adapter's private `Error`.
+    """
+    async with async_session_factory() as other:
+        try:
+            await other.execute(
+                select(NotificationRow.id)
+                .where(NotificationRow.id == notification_id)
+                .with_for_update(nowait=True)
+            )
+        except DBAPIError:
+            return True
+    return False
+
+
+async def test_deleting_a_gone_subscription_never_releases_the_claims_own_locks(
+    db_session: AsyncSession,
+) -> None:
+    """The sharpest hazard in the outbox, pinned at last.
+
+    `WebPushSender` deletes a subscription the push service reported as gone, and
+    a delete is a commit. Bound to the dispatcher's session, that commit would
+    end the transaction holding the whole batch's `FOR UPDATE SKIP LOCKED` locks
+    and let a second worker claim and send the rows this batch has not reached
+    yet — a `push` row sent twice, which is the one duplicate D30 does not buy.
+    `dispatch_outbox` therefore opens a SECOND session for the subscription
+    repository, and this is the test that says so: the batch's second row is
+    still locked while the first row's delete commits, and a row outside the
+    batch is free.
+
+    Checked by putting the hazard back: binding the subscription repository to the
+    dispatcher's session makes this fail on the first observation, which is the
+    whole reason it records every observation instead of the last.
+    """
+    seeded = await _seed(db_session)
+    first = await _pending_push(db_session, seeded)
+    second = await _pending_push(db_session, seeded)
+    not_claimed = await _pending_push(db_session, seeded)
+    not_claimed.next_attempt_at = _DUE + timedelta(hours=1)
+    await db_session.commit()
+    await _subscribe(db_session, seeded.user_id, "phone")
+    await _subscribe(db_session, seeded.user_id, "laptop")
+    transport = _LockProbingTransport(probe=second.id, control=not_claimed.id)
+
+    async with async_session_factory() as push_session:
+        report = await dispatch_due_notifications(
+            outbox=SqlAlchemyOutboxRepository(db_session),
+            senders={Channel.PUSH: WebPushSender(_subs(push_session), transport)},
+            circuits=InProcessProviderCircuits(),
+            now=_DUE,
+        )
+
+    # Both rows go: the first has the laptop to fall back on after the phone is
+    # deleted, and the second only ever had the laptop. What matters is that the
+    # batch's locks survived the delete in between.
+    assert (report.claimed, report.sent) == (2, 2)
+    assert transport.observations, "the probe never ran"
+    assert all(locked and control_free for locked, control_free in transport.observations)
+    assert (await _row(db_session, first.id)).status == "sent"
+
+
 async def test_a_push_row_reaches_every_browser_the_user_registered(
     db_session: AsyncSession,
 ) -> None:
@@ -202,6 +306,7 @@ async def test_a_push_row_reaches_every_browser_the_user_registered(
     report = await dispatch_due_notifications(
         outbox=SqlAlchemyOutboxRepository(db_session),
         senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
         now=_DUE,
     )
 
@@ -228,6 +333,7 @@ async def test_the_payload_is_exactly_what_the_service_worker_parses(
     await dispatch_due_notifications(
         outbox=SqlAlchemyOutboxRepository(db_session),
         senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
         now=_DUE,
     )
 
@@ -257,6 +363,7 @@ async def test_a_retry_of_the_same_row_replaces_its_own_notification(
         await dispatch_due_notifications(
             outbox=SqlAlchemyOutboxRepository(db_session),
             senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+            circuits=InProcessProviderCircuits(),
             now=_DUE,
         )
         # The row is `sent` now, so re-arm it the way a retry would: same row,
@@ -290,6 +397,7 @@ async def test_a_gone_subscription_is_deleted_and_the_next_one_is_still_delivere
     report = await dispatch_due_notifications(
         outbox=SqlAlchemyOutboxRepository(db_session),
         senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
         now=_DUE,
     )
 
@@ -314,6 +422,7 @@ async def test_a_row_whose_every_subscription_is_gone_is_never_called_delivered(
     report = await dispatch_due_notifications(
         outbox=SqlAlchemyOutboxRepository(db_session),
         senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
         now=_DUE,
     )
 
@@ -339,6 +448,7 @@ async def test_a_user_who_never_subscribed_costs_one_attempt_and_no_more(
     report = await dispatch_due_notifications(
         outbox=SqlAlchemyOutboxRepository(db_session),
         senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
         now=_DUE,
     )
 
@@ -362,6 +472,7 @@ async def test_a_push_service_outage_costs_the_row_one_attempt_and_a_1_min_wait(
     report = await dispatch_due_notifications(
         outbox=SqlAlchemyOutboxRepository(db_session),
         senders={Channel.PUSH: WebPushSender(_subs(db_session), transport)},
+        circuits=InProcessProviderCircuits(),
         now=_DUE,
     )
 
@@ -401,6 +512,7 @@ async def test_one_live_browser_is_enough_even_while_another_one_is_down(
     report = await dispatch_due_notifications(
         outbox=SqlAlchemyOutboxRepository(db_session),
         senders={Channel.PUSH: WebPushSender(_subs(db_session), _OnlyAlive())},
+        circuits=InProcessProviderCircuits(),
         now=_DUE,
     )
 

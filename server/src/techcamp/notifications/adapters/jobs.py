@@ -25,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.notifications.adapters.circuits import provider_circuits
 from techcamp.notifications.adapters.outbox import SqlAlchemyOutboxRepository
 from techcamp.notifications.adapters.senders import build_senders
 from techcamp.notifications.adapters.subscriptions import SqlAlchemyPushSubscriptionRepository
@@ -107,6 +108,10 @@ async def dispatch_outbox(timestamp: int) -> None:
         report = await dispatch_due_notifications(
             outbox=SqlAlchemyOutboxRepository(session),
             senders=build_senders(SqlAlchemyPushSubscriptionRepository(push_session)),
+            # The process-wide registry, not a fresh one: "5 fallos seguidos"
+            # (docs/06 §4) has to count across sweeps, or every minute would
+            # restart the count and no circuit would ever open (D35).
+            circuits=provider_circuits(),
             now=datetime.now(UTC),
         )
         # Each outcome commits on its own, so this only matters when every row
@@ -114,10 +119,11 @@ async def dispatch_outbox(timestamp: int) -> None:
         # claim locks are only released by a commit.
         await session.commit()
     logger.info(
-        "notifications: claimed %d, sent %d, retried %d, failed %d, passed over %d",
+        "notifications: claimed %d, sent %d, retried %d, failed %d, held %d, passed over %d",
         report.claimed,
         report.sent,
         report.retried,
         report.failed,
+        report.deferred,
         report.skipped,
     )
