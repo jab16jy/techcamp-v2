@@ -47,6 +47,6 @@ export function useMe() {
 export function useActiveOrgRole(): string | null {
   const orgId = useOrgId()
   const { data: me } = useMe()
-  if (!orgId || !me) return null
+  if (!orgId || !me || !me.memberships) return null
   return me.memberships.find((m) => m.org_id === orgId)?.role ?? null
 }

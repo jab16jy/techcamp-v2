@@ -21,6 +21,8 @@ export interface PlotsListProps {
   /** Opens the plot-creation sheet for a farm (T8). Omitted, no button renders — keeps
    * this component usable without the feature (e.g. a future read-only context). */
   onAddPlot?: (farmId: string) => void
+  /** Opens the new visit sheet for a farm (E8 D14). Rendered only when technician role permits. */
+  onAddVisit?: (farm: FarmView) => void
   /** Opens the plot-detail sheet — soil and crop cycle (T9). Omitted, plot rows render
    * as inert text, same reasoning as `onAddPlot`. */
   onSelectPlot?: (plot: PlotView) => void
@@ -31,18 +33,25 @@ export interface PlotsListProps {
  * design system's status vocabulary is reserved for water balance, not this field).
  * Each farm's plots load independently (#21 round 10): one farm's plot query failing
  * shows an inline message for that farm only, the rest of the list still renders. */
-export function PlotsList({ rows, onAddPlot, onSelectPlot }: PlotsListProps) {
+export function PlotsList({ rows, onAddPlot, onAddVisit, onSelectPlot }: PlotsListProps) {
   return (
     <div className="flex flex-col gap-6 px-4 pb-6">
       {rows.map(({ farm, plotsQuery }) => (
         <section key={farm.id}>
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-lg font-semibold">{farm.name}</h2>
-            {onAddPlot && (
-              <Button variant="secondary" onClick={() => onAddPlot(farm.id)}>
-                Agregar parcela
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {onAddVisit && (
+                <Button variant="secondary" onClick={() => onAddVisit(farm)}>
+                  Registrar visita
+                </Button>
+              )}
+              {onAddPlot && (
+                <Button variant="secondary" onClick={() => onAddPlot(farm.id)}>
+                  Agregar parcela
+                </Button>
+              )}
+            </div>
           </div>
           {plotsQuery.isPending && (
             <p className="mt-2 text-base text-text-muted">Cargando parcelas…</p>

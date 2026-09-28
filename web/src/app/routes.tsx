@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import type { RouteObject } from 'react-router'
 import { AppShell } from '../design-system/patterns/AppShell'
 import { SignInScreen } from '../features/auth/containers/SignInScreen'
@@ -5,13 +6,43 @@ import { SignOutButton } from '../features/auth/components/SignOutButton'
 import { requireAuthLoader } from '../features/auth/guard'
 import { PlotsScreen } from '../features/plots/containers/PlotsScreen'
 import { NotificationsCard } from '../features/push/components/NotificationsCard'
+import { useActiveOrgRole } from '../lib/api/me'
 import { PlaceholderPage } from './PlaceholderPage'
+
+// React.lazy keeps Dexie and visits out of the initial bundle (RNF-02 ≤ 200 kB).
+// eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
+const NewVisitSheet = lazy(() =>
+  import('../features/visits/containers/NewVisitSheet').then((module) => ({
+    default: module.NewVisitSheet,
+  })),
+)
+
+/** Parcelas tab wrapper: composes PlotsScreen with the extension visit sheet (E8 D14). */
+// eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
+function PlotsTab() {
+  const role = useActiveOrgRole()
+  return (
+    <PlotsScreen
+      callerRole={role}
+      renderNewVisitSheet={({ farm, plots, open, onOpenChange }) => (
+        <Suspense fallback={null}>
+          <NewVisitSheet
+            open={open}
+            onOpenChange={onOpenChange}
+            farm={farm}
+            plots={plots}
+          />
+        </Suspense>
+      )}
+    />
+  )
+}
 
 const tabRoutes: RouteObject[] = [
   { index: true, element: <PlaceholderPage title="Inicio" /> },
   { path: 'alertas', element: <PlaceholderPage title="Alertas" /> },
   { path: 'bitacora', element: <PlaceholderPage title="Bitácora" /> },
-  { path: 'parcelas', element: <PlotsScreen /> },
+  { path: 'parcelas', element: <PlotsTab /> },
   {
     path: 'mas',
     element: (
