@@ -1568,10 +1568,24 @@ async def test_writing_outbox_rows_defers_the_dispatch_job_in_the_same_transacti
     await notifications.insert_drafts(seeded.alert_id, [_draft(seeded)])
     await db_session.commit()
 
-    jobs = await db_session.execute(
-        text("SELECT task_name, queue_name FROM procrastinate_jobs ORDER BY id")
-    )
-    assert [tuple(row) for row in jobs] == [("notifications.dispatch_outbox", "notifications")]
+    jobs = (
+        await db_session.execute(
+            text("SELECT task_name, queue_name, args FROM procrastinate_jobs ORDER BY id")
+        )
+    ).all()
+    assert [(row[0], row[1]) for row in jobs] == [
+        ("notifications.dispatch_outbox", "notifications")
+    ]
+    # The job has to be one the worker can actually CALL. The task takes
+    # `timestamp` (procrastinate hands it to the periodic), so a job deferred
+    # with empty args dies in the worker with
+    # `TypeError: dispatch_outbox() missing 1 required positional argument`, and
+    # D7's "at insert" half is dead while every test that only counts the job row
+    # stays green. Found in the T11 seminar demo, on a live stack: both deferred
+    # jobs `failed` while every cron job `succeeded`.
+    args = jobs[0][2]
+    assert args == {"timestamp": 0}, "the deferred job must carry what its task requires"
+    await dispatch_outbox(**args)
 
 
 async def test_a_rolled_back_outbox_write_leaves_no_dispatch_job(
