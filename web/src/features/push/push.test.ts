@@ -11,7 +11,19 @@ const register = vi.mocked(registerPushSubscription)
 
 function fakeSubscription(endpoint = ENDPOINT) {
   const json = { endpoint, expirationTime: null, keys: { p256dh: 'p256dh-value', auth: 'auth-value' } }
-  return { endpoint, keys: json.keys, toJSON: () => json } as unknown as PushSubscription
+  const unsubscribe = vi.fn().mockResolvedValue(true)
+  return {
+    endpoint,
+    keys: json.keys,
+    unsubscribe,
+    toJSON: () => json,
+  } as unknown as PushSubscription & { unsubscribe: ReturnType<typeof vi.fn> }
+}
+
+const VAPID_STORAGE_KEY = 'techcamp.push.vapid-key'
+
+function rememberVapidKey(value: string) {
+  window.localStorage.setItem(VAPID_STORAGE_KEY, value)
 }
 
 interface BrowserOptions {
@@ -68,6 +80,8 @@ describe('enableNotifications', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    window.localStorage.clear()
     Reflect.deleteProperty(navigator, 'serviceWorker')
   })
 
@@ -87,6 +101,7 @@ describe('enableNotifications', () => {
 
   it('reuses an existing subscription instead of subscribing again, and re-registers it', async () => {
     const existing = fakeSubscription()
+    rememberVapidKey(VAPID)
     const { pushManager } = stubBrowser({ existing })
 
     const result = await enableNotifications()
@@ -97,9 +112,84 @@ describe('enableNotifications', () => {
   })
 
   it('never prompts for permission when a subscription already exists', async () => {
+    rememberVapidKey(VAPID)
     stubBrowser({ existing: fakeSubscription() })
     await enableNotifications()
     expect(Notification.requestPermission).not.toHaveBeenCalled()
+  })
+
+  it('replaces a subscription this build cannot prove was created with its VAPID key', async () => {
+    // The platform never exposes a subscription's applicationServerKey, so a
+    // key that was rotated after the subscription was made is undetectable from
+    // the subscription alone. Without a remembered key, the only safe reading is
+    // that the subscription may be stale.
+    const existing = fakeSubscription()
+    const { pushManager } = stubBrowser({ existing })
+
+    const result = await enableNotifications()
+
+    expect(result).toEqual({ status: 'subscribed' })
+    expect(existing.unsubscribe).toHaveBeenCalledOnce()
+    expect(pushManager.subscribe).toHaveBeenCalledOnce()
+    expect(register).toHaveBeenCalledTimes(1)
+  })
+
+  it('replaces a subscription whose remembered key is not this build’s key', async () => {
+    rememberVapidKey('a-previous-rotation-of-the-key')
+    const existing = fakeSubscription()
+    const { pushManager } = stubBrowser({ existing })
+
+    const result = await enableNotifications()
+
+    expect(result).toEqual({ status: 'subscribed' })
+    expect(existing.unsubscribe).toHaveBeenCalledOnce()
+    expect(pushManager.subscribe).toHaveBeenCalledOnce()
+  })
+
+  it('remembers the key it subscribed with, so the next tap is the fast path', async () => {
+    stubBrowser({})
+    await enableNotifications()
+    expect(window.localStorage.getItem(VAPID_STORAGE_KEY)).toBe(VAPID)
+  })
+
+  it('still replaces a stale subscription when permission must not be re-asked', async () => {
+    rememberVapidKey('rotated-away')
+    stubBrowser({ existing: fakeSubscription() })
+    await enableNotifications()
+    expect(Notification.requestPermission).not.toHaveBeenCalled()
+  })
+
+  it('re-registers without churning when storage is unavailable', async () => {
+    // Private browsing can make localStorage throw. Resubscribing on every tap
+    // would be worse than trusting the subscription, so storage failure falls
+    // back to the old behavior. jsdom's Storage is a Proxy, so the property
+    // itself is replaced rather than a method on its prototype.
+    const original = Object.getOwnPropertyDescriptor(window, 'localStorage')
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => {
+          throw new Error('storage disabled')
+        },
+        setItem: () => {
+          throw new Error('storage disabled')
+        },
+        clear: () => undefined,
+      },
+    })
+    try {
+      const existing = fakeSubscription()
+      const { pushManager } = stubBrowser({ existing })
+
+      const result = await enableNotifications()
+
+      expect(result).toEqual({ status: 'already-active' })
+      expect(existing.unsubscribe).not.toHaveBeenCalled()
+      expect(pushManager.subscribe).not.toHaveBeenCalled()
+      expect(register).toHaveBeenCalledWith(existing)
+    } finally {
+      if (original) Object.defineProperty(window, 'localStorage', original)
+    }
   })
 
   it('reports a denied permission and never subscribes', async () => {

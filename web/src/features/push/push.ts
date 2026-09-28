@@ -60,12 +60,47 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuf
 }
 
 /**
+ * A push subscription is bound to the `applicationServerKey` it was created
+ * with, and the platform never exposes that key on a `PushSubscription`. So
+ * after the build-time VAPID key is rotated (D25), nothing in the browser can
+ * tell a live subscription from one the server can no longer reach — and the
+ * server would only find out as a `410 Gone` per push. This is the one place
+ * that knowledge exists, so it is recorded here. The key is public by design,
+ * so plain storage is fine.
+ */
+const VAPID_KEY_STORAGE = 'techcamp.push.vapid-key'
+
+/**
+ * `undefined` when storage cannot be read (private browsing), which the caller
+ * treats as "cannot tell" and keeps the existing subscription rather than
+ * resubscribing on every tap. `null` means storage answered and holds nothing,
+ * which is a real "this build has not subscribed yet".
+ */
+function rememberedApplicationServerKey(): string | null | undefined {
+  try {
+    return window.localStorage.getItem(VAPID_KEY_STORAGE)
+  } catch {
+    return undefined
+  }
+}
+
+function rememberApplicationServerKey(applicationServerKey: string): void {
+  try {
+    window.localStorage.setItem(VAPID_KEY_STORAGE, applicationServerKey)
+  } catch {
+    // Nothing to do: the next tap cannot tell and keeps the subscription.
+  }
+}
+
+/**
  * Requests notification permission, subscribes the service worker and
  * registers the subscription against the API.
  *
  * Order matters: an existing subscription is looked up FIRST, because a
  * subscription can only exist with permission already granted, and re-asking
- * would show a prompt the farmer has already answered.
+ * would show a prompt the farmer has already answered. It is reused only when
+ * this build's key is the one it was created with; otherwise it is replaced,
+ * which is the only repair for a rotated key.
  */
 export async function enableNotifications(): Promise<EnableNotificationsResult> {
   if (!isPushSupported()) return { status: 'unsupported' }
@@ -75,18 +110,28 @@ export async function enableNotifications(): Promise<EnableNotificationsResult> 
 
   const registration = await navigator.serviceWorker.ready
   const existing = await registration.pushManager.getSubscription()
-  if (existing) {
+  const remembered = rememberedApplicationServerKey()
+  if (existing && (remembered === undefined || remembered === applicationServerKey)) {
+    // `undefined` is "cannot tell" (storage unavailable), and churning a fresh
+    // subscription on every tap would be worse than trusting this one.
     await registerPushSubscription(existing)
     return { status: 'already-active' }
   }
 
-  const permission = await Notification.requestPermission()
+  // A subscription can only exist with permission already granted, so a
+  // replacement never re-asks.
+  const permission = existing ? 'granted' : await Notification.requestPermission()
   if (permission !== 'granted') return { status: 'denied' }
 
+  // Either there was none, or the one we found may be bound to a rotated key.
+  // Replacing it leaves the old row to be dropped by the server's own `410
+  // Gone` path (docs/06 §4), so nothing is orphaned.
+  if (existing) await existing.unsubscribe()
   const subscription = await registration.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(applicationServerKey),
   })
   await registerPushSubscription(subscription)
+  rememberApplicationServerKey(applicationServerKey)
   return { status: 'subscribed' }
 }
