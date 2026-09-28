@@ -524,7 +524,7 @@ work unit (`domain-modeling`).
   without one (ADR-0022, Q2) — route: Herdr OpenCode (worktree `e7-t10`, branch
   `feat/e7-t10-water-stress`) — forecast ~450 — actual 764 authored (500 production / 264 tests),
   over the ~400 delivery budget: the owner cuts the PR slice, not the unit. step 0 merge
-  `4ec4d0d`, T10 in `fdb1cc1`.
+  `4ec4d0d`, T10 in `2ae494e`.
   - Trigger a: `evaluate_readings` reads the plot's θ_estrés and its representative sensor once
     per plot and passes the narrowed series to `decide_alert` (`stress_moisture_pct`); the
     ingestor hook composes `SqlAlchemyCalibrationRepository` + `SqlAlchemyWaterBalanceRepository`.
@@ -854,6 +854,25 @@ work unit (`domain-modeling`).
     rather than as closed by this test-only change — the same limit T6d recorded by hand.
   - Nothing to append to #134: zero findings, blocking and non-blocking alike.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
+- T10 step 0, on `feat/e7-t10-water-stress` (`84dc963..4ec4d0d`, 30 files / 2,292 lines
+  incl. main's E6 follow-ups): `assess --agent opencode --base-ref 84dc963 --committed-only` →
+  `medium`, `slice_budget_reached`; standing grant applied per the brief; lineage
+  `review-df6d86e988c0e106`, one `review-reliability` lens, **APPROVED, zero findings**,
+  acknowledged (authority burned). Boundary → `4ec4d0d`.
+- T10 (`4ec4d0d..2ae494e`, 19 files / 1,937 lines): `assess --agent opencode --base-ref
+  4ec4d0d --committed-only` → `medium`, `slice_budget_reached`; grant applied; lineage
+  `review-fbe89638809515c9`, one `review-reliability` lens, **APPROVED**, acknowledged
+  (authority burned). Zero BLOCKER/CRITICAL; 2 WARNING, non-blocking → **#135**
+  (R3-raw-gate: the reading branch still takes a θ_estrés from a newest balance with
+  `RAW <= 0`, which the doc bullet reads as plot-wide; R3-org-failure-isolation:
+  `evaluate_balance_rules` has no D24 per-plot isolation, so one plot's failure ends the
+  whole organization's round). Neither is fixed here, per AGENTS.md Workflow. Boundary →
+  `2ae494e`.
+  - Lesson to carry into T11: the third job-side evaluator (T10's) was written WITHOUT D24's
+    per-plot `try` + `recover`, and no test caught it, because a failure there is a
+    repository failure and the tests are all happy paths. When T11 proves the whole
+    `water_stress` path end to end, add the per-plot isolation (or file it as #135 does) in
+    the same spirit as D24.
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -1023,3 +1042,6 @@ work unit (`domain-modeling`).
   decides at or after local midnight of D, because the sample is anchored at the instant the local
   day ENDED (D27/E6's D2 anchor) — the upgrade test failed until each round decided a day later
   than the row it reads.
+- T10 review (2026-09-27, same writer): lineage `review-fbe89638809515c9` APPROVED and
+  acknowledged with 2 non-blocking WARNINGs → #135, as recorded under Review (RDD). No
+  correction was spent, so the delivered behaviour is exactly what the tests above pin.
