@@ -54,11 +54,25 @@ services:
     profiles: [seminar]
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
+    # `depends_on` below only waits for MinIO's container to START, not to be
+    # ready to serve, so `mc` can reach a server that is not listening yet and
+    # fail. A failure here is not a warning: `api` waits for
+    # `service_completed_successfully`, so the whole stack would stay down. The
+    # retry is what covers readiness; it is bounded so a genuinely broken MinIO
+    # still fails loudly instead of hanging the stack forever.
     command:
-      - >-
-        mc alias set seminar http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
-        && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_BUCKET}"
-        && echo "bucket $${TECHCAMP_S3_BUCKET} is ready"
+      - |
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          if mc alias set seminar http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" \
+            && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_BUCKET}"; then
+            echo "bucket $${TECHCAMP_S3_BUCKET} is ready"
+            exit 0
+          fi
+          echo "minio not ready yet (attempt $${attempt}/10)"
+          sleep 2
+        done
+        echo "minio never became ready; the photo bucket was not created" >&2
+        exit 1
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-techcamp}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-techcamp123}
