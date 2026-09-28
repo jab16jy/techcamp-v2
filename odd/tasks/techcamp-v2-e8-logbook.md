@@ -246,6 +246,18 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   integration 69 passed, static clean. **Order slip:** merged before its RDD; the lane RDD
   (`review-20cf11a1d3fa8cf3`, base `f242508`, covers `08dd5ef` + `bfd8209`, consent granted) runs
   now and any finding is fixed on integration.
+- T5 RDD `review-20cf11a1d3fa8cf3` → **approved**, acknowledged; #145 (export paging test WARNING
+  fixed by `10d0fff`, test-only, merged `84ac62d`; trailing-empty-page is a pre-existing
+  codebase convention in farms/alerts routers; inverted date range SUGGESTION stays).
+- T7b (`61f0d48` #144 fix, `e99e641` D13 guard, `92f439b` synchronizer run, `3f25562` triggers +
+  pendingCount; 1,212 lines): writer ran 10 mutations, all caught (found two false-green tests).
+  Parent gate: lint, typecheck clean; db+sync 5 files / 29 passed; build ok; 163.37 kB. OpenCode RDD
+  running (base `182420b`, consent granted in the pane by the parent under the standing grant).
+- T3 (owner asked why slow, 2026-09-28): `xhigh`, hardest unit, long debug of the D1 lock-ordering
+  test hanging, and no commit yet despite the brief; nudged to land functional commits, drop the
+  repro file and DBG prints, and make the ordering test deterministic with a timeout guard.
+- T6 started (owner approved running it in parallel): OpenCode `e8-t6` high, lane `e8-t6`
+  (`feat/e8-t6-presign`, DB 5445), new modules only to avoid clashing with T3's ports/repositories.
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
