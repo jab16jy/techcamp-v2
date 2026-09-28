@@ -277,7 +277,7 @@ work unit (`domain-modeling`).
   holds its claim; and because that per-row commit ends the claim's transaction, every row takes
   its OWN lock (`hold`) right before it is sent, or a second worker could pick up an unprocessed
   row of the same batch (correction, below).
-- D25 T7a's outbox delivery is **AT LEAST ONCE**, and docs/06 §4 says so. The table row promised
+- D27 T7a's outbox delivery is **AT LEAST ONCE**, and docs/06 §4 says so. The table row promised
   "cada fila se envía una sola vez" — exactly once, which no external provider can give: a worker
   that dies after the provider accepted the message but before `sent` is committed leaves the row
   `pending`, and the next sweep sends it again. The obvious alternative, marking the row `sending`
@@ -290,7 +290,8 @@ work unit (`domain-modeling`).
   `next_attempt_at <= now` under the lock precisely so the "no process died" half is enforced by
   the database rather than by hope (the correction's `R4-completed-worker-race`). The alternative
   worth revisiting only with a provider that supports a deduplication key: then exactly once
-  becomes reachable without holding a `sending` state.
+  becomes reachable without holding a `sending` state. Numbered D27, not D25: D25 (T10) and D26
+  (T9) were taken on sibling branches, so do not renumber this down when merging.
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
@@ -376,7 +377,7 @@ work unit (`domain-modeling`).
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
     forecast ~450 — actual 1,250 (`836e7f1`, 607 src / 564 tests / 79 docs+config), plus the
     RDD correction `f165854` (236: 117 src / 94 tests / 25 docs) and the RDD correction
-    `45197b5` (59, closing the two remaining CRITICALs, D25) — APPROVED and acknowledged
+    `45197b5` (59, closing the two remaining CRITICALs, D27) — APPROVED and acknowledged
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
     subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
@@ -587,7 +588,7 @@ work unit (`domain-modeling`).
     under the same `FOR UPDATE SKIP LOCKED`, so a row another worker finished in the window where
     the claim's locks were released is neither held nor sent (pinned by
     `test_hold_takes_only_a_row_that_is_still_pending_and_due`, negative assertions included); and
-    `R3-001`, answered by D25 (delivery is at least once) rather than by machinery — docs/06 §4's
+    `R3-001`, answered by D27 (delivery is at least once) rather than by machinery — docs/06 §4's
     "Reclamo" row and `dispatch_due_notifications`' docstring now state it. Targeted validation ran
     on the OpenCode host with no refusal, APPROVED and acknowledged (target
     `sha256:4494bec6…`, `review-acknowledged/v1`, authority `burned`). Boundary → `45197b5`.
@@ -696,7 +697,7 @@ work unit (`domain-modeling`).
 - T7a correction `45197b5` (fresh writer, 2026-09-27): TDD RED `TypeError:
   SqlAlchemyOutboxRepository.hold() got an unexpected keyword argument 'now'`, then GREEN. Fixed
   `R4-completed-worker-race` in `outbox.py::hold` (re-check `status`/`next_attempt_at` under the
-  lock) with the port and the dispatcher call site updated, and answered `R3-001` with D25 plus
+  lock) with the port and the dispatcher call site updated, and answered `R3-001` with D27 plus
   docs/06 §4's "Reclamo" row and the `dispatch_due_notifications` docstring — no code path.
   59 changed lines (47/12) against a 200 frozen budget; the first attempt at 288 had been refused.
   Checks (own DB, 5439): `uv run pytest tests/notifications tests/alerts` → 149 passed, 1 failed —
