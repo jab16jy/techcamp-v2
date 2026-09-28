@@ -413,6 +413,12 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   WARNINGs added to #161 (isolation silently lost if the session was used first; conditional
   snapshot test) → fixed now by `e8-t4`, last round on these tests (no further review).
 
+- #161 round 2 fixed by `e8-t4`: `dd35632` (pull raises if the session is already in a
+  transaction, so the snapshot guarantee can never be lost silently), `169eaef` (snapshot test
+  unconditional; RED `assert ... not in [...]` with REPEATABLE READ removed). Gate: 22 passed ×2,
+  static clean. **T4 merged** into integration: tests/logbook 129 passed, ruff, format (278), mypy
+  (184), lint-imports clean. #161 closed, `e8-t4` session closed. T8 unblocked (T3, T4, T7 in).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
