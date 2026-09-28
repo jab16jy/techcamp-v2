@@ -108,7 +108,16 @@ class SeminarSmsSender:
     Returning is what marks the row `sent` (D8): in a seminar there is no
     provider to fail, so a simulated message that reached the log has reached
     the room, and `GET /dev/outbox` is the other half of the same delivery.
+
+    `channel` is the one this instance STANDS FOR, not the one the row carries,
+    because they can differ: a critical `push` row whose push provider is down or
+    unconfigured goes out through here (docs/06 §4, D37, D40), and a log that
+    called that message a `push` would say the opposite of what happened in a
+    seminar where the log IS the delivery.
     """
+
+    def __init__(self, *, channel: Channel) -> None:
+        self._channel = channel
 
     async def send(self, notifications: Sequence[PendingNotification]) -> None:
         """One line per alert the message covers.
@@ -120,7 +129,7 @@ class SeminarSmsSender:
         for notification in notifications:
             logger.info(
                 "simulated %s to user %s: %s alert %s (%s)",
-                notification.channel.value,
+                self._channel.value,
                 notification.user_id,
                 notification.severity,
                 notification.rule_code,
@@ -245,7 +254,6 @@ def build_senders(
                 signing_error,
             )
     if is_seminar_profile():
-        sms = SeminarSmsSender()
-        senders[Channel.SMS] = sms
-        senders[Channel.WHATSAPP] = sms
+        senders[Channel.SMS] = SeminarSmsSender(channel=Channel.SMS)
+        senders[Channel.WHATSAPP] = SeminarSmsSender(channel=Channel.WHATSAPP)
     return senders

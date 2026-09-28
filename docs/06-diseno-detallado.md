@@ -176,7 +176,7 @@ sequenceDiagram
 | Horas de silencio | 20:00–05:00: solo notificaciones críticas; el resto se agrupa para las 05:00. |
 | Agrupación | Varias alertas no críticas de la misma finca en 15 min se envían en una sola notificación. |
 | Canales por severidad | `info`: solo dentro de la app. `warning`: push. `critical`: push y, si no se reconoce, SMS o WhatsApp. |
-| Canal sin adaptador | Una fila cuyo canal todavía no tiene adaptador registrado ni siquiera se reclama: se queda `pending` tal cual, sin gastar un intento, y no ocupa lugar en un lote mientras espera al adaptador que la enviará. |
+| Canal sin adaptador | Una fila cuyo canal todavía no tiene adaptador registrado ni siquiera se reclama: se queda `pending` tal cual, sin gastar un intento, y no ocupa lugar en un lote mientras espera al adaptador que la enviará. **Excepción: una fila crítica cuyo canal alterno sí tiene adaptador sí se reclama y sale por ese canal**, porque un canal sin configurar se comporta como uno con el circuito abierto y la fila crítica necesita salir en el mismo ciclo (RNF-05). La excepción no aplica si no hay ningún alterno registrado, ni a las no críticas, que no tienen segundo canal. |
 
 ## 5. Riego: balance hídrico FAO-56
 

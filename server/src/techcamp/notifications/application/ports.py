@@ -153,14 +153,27 @@ class OutboxRepository(Protocol):
     """
 
     async def claim_due(
-        self, *, now: datetime, channels: Sequence[Channel], limit: int = CLAIM_LIMIT
+        self,
+        *,
+        now: datetime,
+        channels: Sequence[Channel],
+        unconfigured: Sequence[Channel] = (),
+        limit: int = CLAIM_LIMIT,
     ) -> Sequence[PendingNotification]:
         """Take up to `limit` due `pending` rows of those `channels`, oldest first.
 
         "Hold" is the point: the claim is `FOR UPDATE SKIP LOCKED`, so the rows
         stay claimed until the caller's transaction ends and a second worker
         passes over them instead of sending them twice. `channels` keeps a row
-        nobody can deliver yet out of the batch.
+        nobody can deliver yet out of the batch (D31).
+
+        `unconfigured` names channels with NO sender whose CRITICAL rows are still
+        claimable, because an alternate channel does have a sender and the
+        critical can go out through it (docs/06 §4 "las críticas pasan al canal
+        alterno"; D40). Without it a misconfigured deployment would leave a
+        critical row undeliverable forever, since the alternate switch cannot
+        happen to a row the claim never returned. The non-critical rows of those
+        channels are not claimed: a `warning` has no second channel (D5).
         """
         ...
 

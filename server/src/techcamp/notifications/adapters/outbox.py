@@ -14,15 +14,17 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import ColumnElement
 
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.farms.adapters.orm import PlotRow
 from techcamp.notifications.adapters.orm import NotificationRow
 from techcamp.notifications.domain.models import (
     CLAIM_LIMIT,
+    CRITICAL_SEVERITY,
     Channel,
     FinalAttempt,
     PendingNotification,
@@ -41,6 +43,20 @@ docs/06 §4 groups by farm, so a node alert's farm is the farm of the plot its
 node hangs on. Two joins to the same table need two names, which is what the
 alias is for.
 """
+
+
+def _critical_of(channels: Sequence[Channel]) -> ColumnElement[bool]:
+    """The critical rows of channels that have no sender but DO have an alternate.
+
+    The severity comes off the joined `alert`, which is why this is a clause and
+    not a channel list: "critical" is the alert's own fact, not the row's
+    (docs/06 §4 "Canales por severidad"; D40).
+    """
+    return and_(
+        AlertRow.severity == CRITICAL_SEVERITY,
+        NotificationRow.channel.in_(tuple(channel.value for channel in channels)),
+    )
+
 
 _FARM = func.coalesce(PlotRow.farm_id, _NODE_PLOT.farm_id).label("farm_id")
 """The alert's farm, from whichever of the two targets it has.
@@ -71,7 +87,12 @@ class SqlAlchemyOutboxRepository:
         self._session = session
 
     async def claim_due(
-        self, *, now: datetime, channels: Sequence[Channel], limit: int = CLAIM_LIMIT
+        self,
+        *,
+        now: datetime,
+        channels: Sequence[Channel],
+        unconfigured: Sequence[Channel] = (),
+        limit: int = CLAIM_LIMIT,
     ) -> Sequence[PendingNotification]:
         """docs/06 §4: `SELECT … WHERE status='pending' AND next_attempt_at <=
         now() FOR UPDATE SKIP LOCKED LIMIT 50`.
@@ -79,7 +100,18 @@ class SqlAlchemyOutboxRepository:
         `channels` is what keeps a backlog from starving: a row whose channel has
         no sender yet (a `push` with no VAPID key configured) is not even asked
         for, so it cannot fill every claim while the rows that CAN be delivered
-        wait behind it.
+        wait behind it (D31).
+
+        `unconfigured` is the one exception, and it is CRITICAL rows only: a
+        channel in it has no sender but has an alternate channel that does, so its
+        criticals are claimed and go out through that alternate — "mientras tanto
+        las críticas pasan al canal alterno" (docs/06 §4; RF-08, RNF-05; D40).
+        Without this the critical could not take the alternate switch at all, since
+        the switch needs the row first: a misconfigured deployment would leave a
+        critical alert undeliverable forever with nothing in the logs about a
+        channel nobody configured. The non-criticals of the same channel are NOT
+        claimed, exactly as D31 says, because a `warning` has no second channel
+        (D5) and would only spend a pass on a row that cannot leave it.
 
         The alert's `rule_code` and `severity` join in because they are the
         message: a provider handed an id alone cannot render anything, and
@@ -92,6 +124,8 @@ class SqlAlchemyOutboxRepository:
         """
         if not channels:
             return []
+        deliverable = NotificationRow.channel.in_(tuple(channel.value for channel in channels))
+        where = deliverable if not unconfigured else deliverable | _critical_of(unconfigured)
         result = await self._session.execute(
             select(NotificationRow, AlertRow.org_id, AlertRow.severity, _RULE_CODE, _FARM)
             .join(AlertRow, AlertRow.id == NotificationRow.alert_id)
@@ -102,7 +136,7 @@ class SqlAlchemyOutboxRepository:
             .where(
                 NotificationRow.status == "pending",
                 NotificationRow.next_attempt_at <= now,
-                NotificationRow.channel.in_(tuple(channel.value for channel in channels)),
+                where,
             )
             .order_by(NotificationRow.next_attempt_at, NotificationRow.id)
             .limit(limit)

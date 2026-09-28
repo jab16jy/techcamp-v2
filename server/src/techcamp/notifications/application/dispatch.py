@@ -125,7 +125,12 @@ async def _one_pass(
     order, so a group is the run of consecutive rows of one farm that belong to
     one user, and each group leaves as one message.
     """
-    claimed = await outbox.claim_due(now=now, channels=list(senders), limit=limit)
+    claimed = await outbox.claim_due(
+        now=now,
+        channels=list(senders),
+        unconfigured=_unconfigured(senders),
+        limit=limit,
+    )
     sent = retried = failed = skipped = deferred = 0
     group: list[PendingNotification] = []
     group_channel: Channel | None = None
@@ -281,6 +286,27 @@ async def _deliver(
     return DispatchReport(0, sent, retried, failed, 0, 0)
 
 
+def _unconfigured(senders: Mapping[Channel, NotificationSender]) -> list[Channel]:
+    """Channels with no sender whose CRITICAL rows can still go somewhere.
+
+    docs/06 §4's "mientras tanto las críticas pasan al canal alterno" and D40: a
+    channel that was never configured behaves like a channel whose circuit is
+    open — for a critical, which has somewhere else to go, and only for a critical,
+    because a `warning` does not (D5) and claiming it would spend a pass on a row
+    that cannot leave the batch.
+
+    "Somewhere else to go" is checked here and not in the claim, so the claim never
+    has to know what is registered: a channel with no sender AND no alternate with
+    one is not in this list, and its rows are not claimed at all, exactly as D31
+    says for a channel nobody can send.
+    """
+    return [
+        channel
+        for channel, alternates in ALTERNATE_CHANNELS.items()
+        if channel not in senders and any(candidate in senders for candidate in alternates)
+    ]
+
+
 def _outcomes(
     group: Sequence[PendingNotification], *, now: datetime
 ) -> tuple[list[FinalAttempt], list[RetrySchedule]]:
@@ -355,19 +381,20 @@ def _where_it_can_go(
 ) -> Channel | None:
     """The channel this row's message goes out on now, or `None` while it waits.
 
-    Its own channel whenever that channel's circuit allows a call. When it does
-    not, only a critical has anywhere else to go (docs/06 §4: "mientras tanto las
-    críticas pasan al canal alterno"; D5, D37), and the alternates are the ones
-    `ALTERNATE_CHANNELS` names that have a sender of their own and a circuit that
-    is not refusing — so one provider being down never means the row is sent to a
-    second one that is down too, and never means it is sent through a channel with
-    no adapter (D31).
+    Its own channel whenever there is a sender for it and that channel's circuit
+    allows a call. When there is not — the circuit is open, or the channel was
+    never configured (D40) — only a critical has anywhere else to go (docs/06 §4:
+    "mientras tanto las críticas pasan al canal alterno"; D5, D37), and the
+    alternates are the ones `ALTERNATE_CHANNELS` names that have a sender of their
+    own and a circuit that is not refusing — so one provider being down never means
+    the row is sent to a second one that is down too, and never means it is sent
+    through a channel with no adapter (D31).
 
     `None` is a real answer, not a failure: the caller holds the row without
     spending an attempt, and `pending` is what keeps a critical from being lost
     while every provider is down.
     """
-    if circuits.allows(notification.channel):
+    if notification.channel in senders and circuits.allows(notification.channel):
         return notification.channel
     if notification.severity != CRITICAL_SEVERITY:
         return None

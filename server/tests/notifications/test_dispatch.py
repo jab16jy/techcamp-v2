@@ -257,6 +257,7 @@ async def _alert_on(
     code: str,
     plot_id: UUID | None = None,
     node_id: UUID | None = None,
+    severity: str = "warning",
 ) -> UUID:
     """A second open alert, on the seeded org's other plot or on a node.
 
@@ -277,7 +278,7 @@ async def _alert_on(
             plot_id=plot_id,
             node_id=node_id,
             state="open",
-            severity="warning",
+            severity=severity,
             opened_at=_DUE,
         )
     )
@@ -1344,6 +1345,92 @@ async def test_the_fifth_failed_attempt_gives_the_row_up(
     assert (given_up.status, given_up.attempts) == ("failed", MAX_ATTEMPTS)
 
 
+async def test_a_critical_whose_provider_is_unconfigured_goes_out_by_the_alternate(
+    db_session: AsyncSession,
+    seeded: Seeded,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider that is not CONFIGURED is treated as a provider whose circuit is
+    open, but only for a critical (D40).
+
+    With a malformed `TECHCAMP_VAPID_PRIVATE_KEY` there is no `push` sender at all
+    (#140, D31), so before this the claim never even asked for `push` and a
+    critical `push` row sat there forever: it could not be delivered, and it could
+    not take the alternate channel either, because the alternate switch needs the
+    row first. docs/06 §4 answers that exact situation — "mientras tanto las
+    críticas pasan al canal alterno" — and RF-08 asks for SMS or WhatsApp as the
+    backup, so a critical is claimed and sent by SMS inside the same run.
+
+    The negative half is the warning on the same farm, same user, same run: it
+    keeps D31 exactly as it was. A warning has no second channel (D5), so claiming
+    it would only spend a pass on a row nobody can send.
+    """
+    monkeypatch.setattr(senders_module, "is_seminar_profile", lambda: True)
+    monkeypatch.setattr(senders_module, "vapid_private_key", lambda: "a-private-key")
+    monkeypatch.setattr(senders_module, "vapid_subject", lambda: "mailto:soporte@techcamp.local")
+    critical_alert = await _alert_on(
+        db_session, seeded, code="heavy_rain_forecast", plot_id=seeded.plot_id, severity="critical"
+    )
+    critical_row = await _pending_row(
+        db_session, seeded, channel=Channel.PUSH, alert_id=critical_alert
+    )
+    critical_id = critical_row.id
+    warning_row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    warning_id = warning_row.id
+    senders = build_senders(SqlAlchemyPushSubscriptionRepository(db_session))
+    assert set(senders) == {Channel.SMS, Channel.WHATSAPP}
+
+    with caplog.at_level(logging.INFO, logger="techcamp.notifications.adapters.senders"):
+        report = await dispatch_due_notifications(
+            outbox=_outbox(db_session),
+            senders=senders,
+            circuits=_circuits(_Clock()),
+            now=_DUE,
+        )
+
+    # One row claimed, one delivered, and it went out as the seminar's SMS: the
+    # critical's own channel had nothing to send it.
+    assert (report.claimed, report.sent) == (1, 1)
+    assert f"simulated sms to user {seeded.user_id}" in caplog.text
+    assert (await _row(db_session, critical_id)).status == "sent"
+    # The warning is untouched: not claimed, not attempted, still due when it was.
+    assert (await _row(db_session, warning_id)).attempts == 0
+    assert (await _row(db_session, warning_id)).status == "pending"
+    assert (await _row(db_session, warning_id)).next_attempt_at == _DUE
+
+
+async def test_a_critical_with_no_sender_at_all_is_never_claimed(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The other half of D40's condition, and the shape production has today: no
+    VAPID key and no SMS/WhatsApp provider yet (ADR-0016, D31). A critical has
+    nowhere to go — not its own channel and not an alternate — so claiming it
+    would only put a row it cannot leave into a batch, and the row stays exactly
+    as D31 says: `pending`, unclaimed, no attempt spent, waiting for an adapter.
+
+    The pair with the test above is the whole decision: one alternate registered
+    and the same critical goes out through it; none registered and it is not
+    touched at all.
+    """
+    critical_alert = await _alert_on(
+        db_session, seeded, code="heavy_rain_forecast", plot_id=seeded.plot_id, severity="critical"
+    )
+    row = await _pending_row(db_session, seeded, channel=Channel.PUSH, alert_id=critical_alert)
+    row_id = row.id
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session),
+        senders={},
+        circuits=_circuits(_Clock()),
+        now=_DUE,
+    )
+
+    assert (report.claimed, report.sent, report.deferred) == (0, 0, 0)
+    held = await _row(db_session, row_id)
+    assert (held.status, held.attempts) == ("pending", 0)
+
+
 async def test_a_row_with_no_sender_yet_is_not_even_claimed(
     db_session: AsyncSession, seeded: Seeded, circuits: InProcessProviderCircuits
 ) -> None:
@@ -1355,7 +1442,7 @@ async def test_a_row_with_no_sender_yet_is_not_even_claimed(
 
     report = await dispatch_due_notifications(
         outbox=_outbox(db_session),
-        senders={Channel.SMS: SeminarSmsSender()},
+        senders={Channel.SMS: SeminarSmsSender(channel=Channel.SMS)},
         circuits=circuits,
         now=_DUE,
     )
@@ -1399,7 +1486,7 @@ async def test_the_seminar_sender_logs_the_sms_it_pretends_to_send(
 ) -> None:
     """ADR-0021: the simulated provider is a log line and the `/dev/outbox` tray."""
     await _pending_row(db_session, seeded, channel=Channel.WHATSAPP)
-    sender = SeminarSmsSender()
+    sender = SeminarSmsSender(channel=Channel.WHATSAPP)
     claimed = await _outbox(db_session).claim_due(now=_DUE, channels=[Channel.WHATSAPP])
 
     with caplog.at_level(logging.INFO, logger="techcamp.notifications.adapters.senders"):
