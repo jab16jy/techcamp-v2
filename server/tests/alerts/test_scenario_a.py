@@ -26,22 +26,36 @@ from __future__ import annotations
 import decimal
 import json
 import math
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.evaluate_readings import build_evaluator
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
+from techcamp.alerts.adapters.repositories import SqlAlchemyAlertRepository
+from techcamp.alerts.application import escalate_due_alerts
+from techcamp.alerts.domain import ESCALATION_DELAY
 from techcamp.farms.adapters.orm import FarmRow, PlotRow, SoilProfileRow
 from techcamp.farms.adapters.repositories import SqlAlchemyPlotRepository
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.domain.models import Role
 from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
+from techcamp.main import app
+from techcamp.notifications.adapters import senders as senders_module
+from techcamp.notifications.adapters.circuits import InProcessProviderCircuits
+from techcamp.notifications.adapters.orm import NotificationRow
+from techcamp.notifications.adapters.outbox import SqlAlchemyOutboxRepository
+from techcamp.notifications.adapters.senders import build_senders
+from techcamp.notifications.adapters.subscriptions import SqlAlchemyPushSubscriptionRepository
+from techcamp.notifications.application import dispatch_due_notifications
+from techcamp.notifications.domain.models import Channel, PendingNotification
 from techcamp.shared.dates import BOGOTA_TZ, local_today
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, SensorRow
@@ -103,7 +117,13 @@ _BOUNDARY = (
 @dataclass(frozen=True, slots=True)
 class Plot:
     """One scenario-A plot: the node, its two sensors and the people who read
-    its alerts (a producer and an owner, plus the technician who owns the farm)."""
+    its alerts — a producer and an owner, plus the technician who owns the farm.
+
+    The three are named apart because docs/06 §3 gives them different jobs and
+    the whole point of the delivery test is that they are not interchangeable: a
+    plot alert goes to the owner and the producer (D4), and the escalation goes
+    to the technician.
+    """
 
     org_id: UUID
     farm_id: UUID
@@ -111,6 +131,9 @@ class Plot:
     node_id: UUID
     moisture_sensor: int
     temp_sensor: int
+    owner: UUID
+    producer: UUID
+    technician: UUID
 
 
 def _moisture_pct(sample: int) -> float:
@@ -226,7 +249,9 @@ async def _make_scenario_plot(
     await db_session.commit()
     await db_session.refresh(moisture)
     await db_session.refresh(temperature)
-    return Plot(org_id, farm_id, plot_id, node_id, moisture.id, temperature.id)
+    return Plot(
+        org_id, farm_id, plot_id, node_id, moisture.id, temperature.id, owner, producer, technician
+    )
 
 
 async def _store_daily_balances(db_session: AsyncSession, plot: Plot) -> None:
@@ -564,3 +589,167 @@ async def _opened_at(db_session: AsyncSession, plot_id: UUID, code: str) -> date
             .where(AlertRow.plot_id == plot_id, AlertRuleRow.code == code)
         )
     ).scalar_one_or_none()
+
+
+# -- the scenario's own outbox rows, delivered and escalated --
+
+
+async def _push_rows(db_session: AsyncSession, plot: Plot, code: str) -> list[NotificationRow]:
+    """Every `push` row of a plot's alerts of one rule, oldest first."""
+    return list(
+        (
+            await db_session.execute(
+                select(NotificationRow)
+                .join(AlertRow, AlertRow.id == NotificationRow.alert_id)
+                .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
+                .where(
+                    AlertRow.plot_id == plot.plot_id,
+                    AlertRuleRow.code == code,
+                    NotificationRow.channel == "push",
+                )
+                .order_by(NotificationRow.created_at, NotificationRow.id)
+            )
+        ).scalars()
+    )
+
+
+class _FrozenClock:
+    """A circuit clock that never advances, so no cooldown a test did not ask
+    for is ever in play: these tests are about delivery, not the breaker (which
+    `tests/notifications/test_circuits.py` and `test_dispatch.py` own)."""
+
+    def __call__(self) -> float:
+        return 0.0
+
+
+class _LandingPushSender:
+    """The browser that receives the push, in the shape a real `WebPushSender`
+    has. A push needs a live endpoint, which a test does not have, so the sender
+    is the double docs/10:70's exit names ("llega un push") and the real one is
+    the seminar demo's job."""
+
+    def __init__(self) -> None:
+        self.sent: list[UUID] = []
+        self.messages = 0
+
+    async def send(self, notifications: Sequence[PendingNotification]) -> None:
+        self.sent.extend(notification.id for notification in notifications)
+        self.messages += 1
+
+
+async def test_scenario_a_delivers_the_push_escalates_and_shows_the_sms_in_the_outbox(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rest of the E7 exit, on the rows the ingest path actually wrote:
+    a push arrives, the 2 h clock escalates, and the SMS is in `/dev/outbox`.
+
+    Nothing here writes a notification row by hand. The alert's transaction
+    wrote them (ADR-0016), so what this proves is that the rows the SCENARIO
+    produced are deliverable, addressable and visible — the three links between
+    the previous test and the tray a seminar room looks at.
+    """
+    # ADR-0021: the seminar profile registers the simulated SMS pair, and an
+    # unset `TECHCAMP_VAPID_PRIVATE_KEY` leaves `push` unregistered (D31, D32).
+    monkeypatch.setattr(senders_module, "is_seminar_profile", lambda: True)
+    monkeypatch.setattr(senders_module, "vapid_private_key", lambda: None)
+
+    plot = await _make_scenario_plot(db_session)
+    await _store_daily_balances(db_session, plot)
+    await _replay(db_session, plot, through=_SAMPLES - 1)
+
+    # D4, D5: a plot alert notifies the owner and the producer, never the
+    # technician — and the 48 h upgrade notifies them AGAIN as critical.
+    rows = await _push_rows(db_session, plot, "water_stress")
+    recipients = Counter(row.user_id for row in rows)
+    assert recipients == {plot.owner: 2, plot.producer: 2}
+    assert plot.technician not in recipients
+    assert all(row.status == "pending" for row in rows)
+    assert await _severity(db_session, plot.plot_id, "water_stress") == "critical"
+
+    # The push arrives. Every pending push row of the scenario goes out through
+    # the sender, and none is left pending: RNF-05's two minutes is the promise
+    # this closes for the seminar profile.
+    pending = await _pending_pushes(db_session, plot)
+    sender = _LandingPushSender()
+    report = await dispatch_due_notifications(
+        outbox=SqlAlchemyOutboxRepository(db_session),
+        senders={Channel.PUSH: sender},
+        circuits=InProcessProviderCircuits(clock=_FrozenClock()),
+        now=_replay_end(),
+    )
+    assert report.sent == len(pending) > 0
+    assert set(sender.sent) == {row.id for row in pending}
+    assert await _pending_pushes(db_session, plot) == []
+
+    # D12: the clock runs from `opened_at`, so a sweep a second early finds
+    # nothing and the sweep at the 2 h escalates exactly one alert.
+    alerts = SqlAlchemyAlertRepository(db_session)
+    opened_at = await _opened_at(db_session, plot.plot_id, "water_stress")
+    assert opened_at is not None
+    at = opened_at + ESCALATION_DELAY
+    assert (
+        await escalate_due_alerts(org_id=plot.org_id, at=at - timedelta(seconds=1), alerts=alerts)
+        == 0
+    )
+    assert await _sms_rows(db_session, plot) == []
+    assert await escalate_due_alerts(org_id=plot.org_id, at=at, alerts=alerts) == 1
+    # A second sweep of the same org finds nothing new: one escalation is one
+    # `sms` row however often the 5-minute job runs.
+    assert await escalate_due_alerts(org_id=plot.org_id, at=at, alerts=alerts) == 0
+
+    sms = await _sms_rows(db_session, plot)
+    assert [row.user_id for row in sms] == [plot.technician]
+    assert [row.status for row in sms] == ["pending"]
+
+    # The seminar adapter logs it and marks it sent (D8), which is the other
+    # half of the same delivery the tray shows.
+    report = await dispatch_due_notifications(
+        outbox=SqlAlchemyOutboxRepository(db_session),
+        senders=build_senders(SqlAlchemyPushSubscriptionRepository(db_session)),
+        circuits=InProcessProviderCircuits(clock=_FrozenClock()),
+        now=at,
+    )
+    assert (report.sent, report.retried, report.failed) == (1, 0, 0)
+    assert [row.status for row in await _sms_rows(db_session, plot)] == ["sent"]
+
+    # And here it is, in the tray a seminar room reads (docs/04:182-210).
+    with TestClient(app, base_url="http://testserver/api/v1") as client:
+        tray = client.get("/dev/outbox").json()
+    assert len(tray) == 1
+    assert tray[0] == {
+        **tray[0],
+        "alert_id": str(sms[0].alert_id),
+        "user_id": str(plot.technician),
+        "org_id": str(plot.org_id),
+        "channel": "sms",
+        "status": "sent",
+        # 0, not 1: `attempts` counts the attempts that FAILED, and this one
+        # landed on its first send. A tray that showed 1 here would say the
+        # seminar's simulated SMS had already bounced once.
+        "attempts": 0,
+        "rule_code": "water_stress",
+        "severity": "critical",
+    }
+
+
+async def _pending_pushes(db_session: AsyncSession, plot: Plot) -> list[NotificationRow]:
+    result = await db_session.execute(
+        select(NotificationRow)
+        .join(AlertRow, AlertRow.id == NotificationRow.alert_id)
+        .where(AlertRow.plot_id == plot.plot_id, NotificationRow.status == "pending")
+    )
+    return list(result.scalars())
+
+
+async def _sms_rows(db_session: AsyncSession, plot: Plot) -> list[NotificationRow]:
+    result = await db_session.execute(
+        select(NotificationRow)
+        .join(AlertRow, AlertRow.id == NotificationRow.alert_id)
+        .where(AlertRow.plot_id == plot.plot_id, NotificationRow.channel == "sms")
+        .order_by(NotificationRow.created_at, NotificationRow.id)
+    )
+    return list(result.scalars())
+
+
+def _replay_end() -> datetime:
+    return _START + timedelta(seconds=(_SAMPLES - 1) * _INTERVAL_S)
