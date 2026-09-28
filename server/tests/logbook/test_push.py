@@ -477,6 +477,64 @@ async def test_a_crop_cycle_of_another_plot_is_not_found(env: SyncEnv, pusher: P
     assert await _entry_count(pusher.session) == 1
 
 
+async def test_a_delete_is_not_blocked_by_a_reference_an_upsert_would_be_refused_for(
+    env: SyncEnv, pusher: Pusher
+) -> None:
+    """D12 and RNF-01: a delete carries the row as last saved and the server
+    validates no field, and the same has to hold for the references the upsert
+    checks. Otherwise a change rejected `not_found` for a stale cycle or alert
+    could never be deleted and would stay on the phone forever."""
+    producer = env.mine.users["producer"]
+    # A cycle of another plot, and an alert of another plot: both refuse an
+    # upsert.
+    refused_cycle = _entry(env, crop_cycle_id=env.other_cycle_id)
+    upsert = await pusher.entry(refused_cycle, caller_id=producer)
+    never_stored = await pusher.entry(
+        _entry(env, op=SyncOp.DELETE, crop_cycle_id=env.other_cycle_id), caller_id=producer
+    )
+    assert upsert.status is SyncStatus.REJECTED
+    assert (never_stored.status, never_stored.error) == (SyncStatus.APPLIED, None)
+    assert never_stored.server_version is None
+    assert await _stored_entry(pusher.session, never_stored.id) is None
+
+    stored = _entry(env, alert_id=env.alert_id)
+    assert (await pusher.entry(stored, caller_id=producer)).status is SyncStatus.APPLIED
+    deleted = await pusher.entry(
+        _entry(
+            env,
+            id=stored.id,
+            op=SyncOp.DELETE,
+            client_updated_at=_later(env),
+            alert_id=env.other_alert_id,
+        ),
+        caller_id=producer,
+    )
+    tombstone = await _stored_entry(pusher.session, stored.id)
+
+    assert (deleted.status, deleted.error) == (SyncStatus.APPLIED, None)
+    assert tombstone is not None
+    assert tombstone.deleted_at == env.now
+    assert tombstone.server_version == deleted.server_version
+
+
+async def test_a_visit_delete_is_not_blocked_by_a_plot_outside_its_farm(
+    env: SyncEnv, pusher: Pusher
+) -> None:
+    """The same rule for the visit's own reference: a visit the upsert would
+    refuse `not_found` for a plot outside its farm is still deletable."""
+    never_stored = await pusher.visit(
+        _visit(env, op=SyncOp.DELETE, plot_id=env.mine.other_plot_id),
+        caller_id=env.mine.users["technician"],
+    )
+    upsert = await pusher.visit(
+        _visit(env, plot_id=env.mine.other_plot_id), caller_id=env.mine.users["technician"]
+    )
+
+    assert upsert.status is SyncStatus.REJECTED
+    assert (never_stored.status, never_stored.server_version) == (SyncStatus.APPLIED, None)
+    assert await _visit_count(pusher.session) == 0
+
+
 async def test_a_visit_with_a_plot_outside_its_farm_is_not_found(
     env: SyncEnv, pusher: Pusher
 ) -> None:

@@ -158,17 +158,22 @@ async def _apply_entry(
     except InsufficientRoleError:
         _reject(RejectReason.FORBIDDEN)
 
-    if change.crop_cycle_id is not None:
-        # D6: nullable, but a cycle of this plot when it is there.
-        cycle = await cycles.get_for_orgs(change.crop_cycle_id, list(roles_by_org))
-        if cycle is None or cycle.plot_id != plot.id:
-            _reject(RejectReason.NOT_FOUND)
-    if change.alert_id is not None:
-        alert = await alerts.get_for_orgs(change.alert_id, list(roles_by_org))
-        if alert is None:
-            _reject(RejectReason.NOT_FOUND)
-        if alert.plot_id != plot.id:
-            _reject(RejectReason.ALERT_PLOT_MISMATCH)
+    if change.op is not SyncOp.DELETE:
+        # D12: a delete validates no field and no reference. It carries the row
+        # as last saved, so a change already refused for a stale cycle or alert
+        # must still be deletable, or it stays on the phone for good (RNF-01).
+        # Visibility, org and role above stay: authorization fails closed.
+        if change.crop_cycle_id is not None:
+            # D6: nullable, but a cycle of this plot when it is there.
+            cycle = await cycles.get_for_orgs(change.crop_cycle_id, list(roles_by_org))
+            if cycle is None or cycle.plot_id != plot.id:
+                _reject(RejectReason.NOT_FOUND)
+        if change.alert_id is not None:
+            alert = await alerts.get_for_orgs(change.alert_id, list(roles_by_org))
+            if alert is None:
+                _reject(RejectReason.NOT_FOUND)
+            if alert.plot_id != plot.id:
+                _reject(RejectReason.ALERT_PLOT_MISMATCH)
 
     # D1: the lock, then the re-read. The stored row is what decides and it is
     # read here, under the lock, never from a read taken before it.
@@ -286,7 +291,11 @@ async def _apply_visit(
     if change.technician_id != caller_id:
         # docs/03 §extension_visit: `technician_id` is who synchronizes.
         _reject(RejectReason.FORBIDDEN)
-    if change.plot_id is not None:
+    if change.op is not SyncOp.DELETE and change.plot_id is not None:
+        # D12, as in the entry: the delete validates no reference, so a visit
+        # refused for a plot outside its farm can still be deleted. The farm
+        # above is what the org and the role come from, so authorization does
+        # not weaken.
         plot = await plots.get_for_orgs(change.plot_id, list(roles_by_org))
         if plot is None or plot.farm_id != farm.id:
             _reject(RejectReason.NOT_FOUND)
