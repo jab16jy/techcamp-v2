@@ -18,16 +18,32 @@ const WRITE_DEBOUNCE_MS = 2_000
  * iOS has no Background Sync, so the app syncs in the foreground and nothing
  * more (docs/06 §7, ADR-0005).
  */
+/**
+ * The only way a trigger starts a run.
+ *
+ * A timer or an event handler has no caller to catch a rejected promise, so a run
+ * that throws for a reason the run's own guards do not model would become a
+ * global unhandled rejection from a background trigger (#147). It is contained
+ * here and still reported: swallowing it would leave a fault nobody can
+ * diagnose. The defined failures do not come through this path at all, since
+ * `syncOnce` turns them into a `stopped` outcome.
+ */
+function startRun(): void {
+  void syncOnce().catch((error: unknown) => {
+    console.error('a synchronization run failed unexpectedly', error)
+  })
+}
+
 export function startSynchronizer(): () => void {
-  void syncOnce()
+  startRun()
 
   const onOnline = (): void => {
-    void syncOnce()
+    startRun()
   }
   window.addEventListener('online', onOnline)
 
   const interval = window.setInterval(() => {
-    if (document.visibilityState === 'visible') void syncOnce()
+    if (document.visibilityState === 'visible') startRun()
   }, SYNC_INTERVAL_MS)
 
   let debounce: number | null = null
@@ -35,7 +51,7 @@ export function startSynchronizer(): () => void {
     if (debounce !== null) window.clearTimeout(debounce)
     debounce = window.setTimeout(() => {
       debounce = null
-      void syncOnce()
+      startRun()
     }, WRITE_DEBOUNCE_MS)
   })
 

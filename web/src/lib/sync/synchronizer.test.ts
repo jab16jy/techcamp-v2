@@ -413,6 +413,24 @@ describe('syncOnce: stopping without losing anything (D11)', () => {
     expect(await getCursor()).toBe(0)
   })
 
+  it('treats a 2xx whose body is not JSON as stopped, not as a crash', async () => {
+    const entry = draft()
+    await saveLogbookEntry(entry)
+    // A proxy or a captive portal can answer 200 with an HTML page. That is not
+    // the server's answer, so it must not escape as a JSON parse error either.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<!doctype html><title>portal</title>', { status: 200 })),
+    )
+
+    const outcome = await syncOnce()
+
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unavailable' })
+    expect(await db.outbox.count()).toBe(1)
+    expect((await db.outbox.toArray())[0].status).toBe('pending')
+    expect(await getCursor()).toBe(0)
+  })
+
   it('pushes nothing at all when there is no session', async () => {
     await saveLogbookEntry(draft())
     clearSession()

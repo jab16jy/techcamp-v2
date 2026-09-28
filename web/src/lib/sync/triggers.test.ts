@@ -56,6 +56,11 @@ function stubSyncApi(): { runs: () => number } {
   return { runs: () => pulls }
 }
 
+/** A fresh counting stub, for asserting on runs started later in a test. */
+function api(): { runs: () => number } {
+  return stubSyncApi()
+}
+
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }
@@ -214,6 +219,42 @@ describe('startSynchronizer', () => {
     setVisibility('visible')
     await vi.advanceTimersByTimeAsync(60_000)
     await waitForRuns(api, 2)
+  })
+
+  it('contains a run that throws, so a trigger never leaves a rejected promise', async () => {
+    // A malformed page the guards do not model: `changes` is a number, so
+    // iterating it throws a plain TypeError that escapes `run()`. A timer or an
+    // event handler has no caller to catch that, so the trigger must.
+    const reported: unknown[] = []
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      reported.push(args)
+    })
+    stubSyncApi()
+    await saveLogbookEntry(draft())
+    start()
+    await waitForRuns(api(), 1)
+    // Replace the api for the next run with one that answers a broken page.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify(String(input).endsWith('/push') ? { results: [] } : { changes: 42, next_since: 0, has_more: false }),
+          { status: 200 },
+        ),
+      ),
+    )
+
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(0)
+    await flush()
+
+    // Contained, and still visible: swallowed silently would be a fault nobody
+    // can diagnose.
+    expect(reported).toHaveLength(1)
+    // The trigger survived it and keeps working.
+    const recovered = stubSyncApi()
+    window.dispatchEvent(new Event('online'))
+    await waitForRuns(recovered, 1)
   })
 
   it('stops every trigger it installed', async () => {
