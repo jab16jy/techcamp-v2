@@ -345,7 +345,12 @@ async def test_one_unresolvable_alert_does_not_stop_the_rest_of_its_org(
     org = await _make_org(db_session)
     second_plot = await _add_plot(db_session, org)
     real = SqlAlchemyAlertRepository(db_session)
-    unreadable = await _open(db_session, real, org, code="water_stress", at=_OPENED)
+    # STRICTLY older, because the lock hands the OLDEST candidate first: opened at
+    # the same instant, the order the lock returned them would be the primary key's
+    # and the test would not be exercising the order it claims to prove.
+    unreadable = await _open(
+        db_session, real, org, code="water_stress", at=_OPENED - timedelta(minutes=1)
+    )
     readable = await _open_on(
         db_session, real, org, plot_id=second_plot, code="heat_stress", at=_OPENED
     )
@@ -688,7 +693,9 @@ async def test_the_escalation_reaches_plot_events_as_an_alert_updated(
 # -- two workers racing on one alert (D42) --
 
 
-async def test_two_concurrent_sweeps_escalate_the_alert_once_and_text_the_technician_once() -> None:
+async def test_two_concurrent_sweeps_escalate_the_alert_once_and_text_the_technician_once(
+    db_session: AsyncSession,
+) -> None:
     """The invariant the lock exists for: two workers, two sessions, one alert past
     its 2 h — it escalates ONCE and its technician gets exactly ONE `sms` row.
 
@@ -700,6 +707,13 @@ async def test_two_concurrent_sweeps_escalate_the_alert_once_and_text_the_techni
 
     Each sweep runs on its own session, so the two really contend in the database
     instead of sharing a unit of work that would serialize them by accident.
+
+    `db_session` is requested for its TRUNCATE teardown ONLY, and nothing here is
+    written on it: without it this test's org, plot and alert would survive until
+    some LATER test's teardown, and `test_the_escalation_sweep_defers_one_job_per_org_
+    with_its_own_lock` asserts the exact set of organizations a sweep defers — so
+    the leak would make that test fail or pass on the order the suite happens to
+    run in (R3-concurrency-test-commits-outside-fixture).
     """
     async with async_session_factory() as setup:
         org = await _make_org(setup)
