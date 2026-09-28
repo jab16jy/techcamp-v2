@@ -360,7 +360,8 @@ work unit (`domain-modeling`).
   - [x] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
-    forecast ~450 — actual 1,250 (`836e7f1`, 336 prod / 835 tests / 79 docs+config)
+    forecast ~450 — actual 1,250 (`836e7f1`, 607 src / 564 tests / 79 docs+config), plus the
+    RDD correction `f165854` (236: 117 src / 94 tests / 25 docs)
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
     subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
@@ -535,7 +536,8 @@ work unit (`domain-modeling`).
   under the session cwd, so passing the E7 worktree was refused as "different session route".
   Boundary → `577a405`.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
-- T7a (`8cbae7f..f165854`, 20 files, 1,367 changed lines incl. the correction): high risk
+- T7a (`8cbae7f..f165854`, 19 files, 1,398 changed lines incl. the correction; 724 src /
+  658 tests / 82 docs+config): high risk
   (`process_boundary` on `server/alembic.ini`), four lenses (risk, resilience, readability,
   reliability), all captured and admitted. THREE CRITICAL, all real, all fixed in the one bounded
   correction `f165854` (117 source lines, plan captured against the frozen `fix_finding_ids`):
@@ -666,7 +668,8 @@ work unit (`domain-modeling`).
     is a pre-existing environmental failure, not T7a's. `uv run ruff check` → All checks passed!
     `uv run ruff format --check` → 237 files already formatted. `uv run mypy` → Success: no issues
     found in 160 source files. `uv run lint-imports` → 1 kept, 0 broken.
-  - Size: ~1,210 changed lines against a ~450 forecast — reported, not trimmed. 336 production,
-    835 tests, ~40 docs/config. The overage is behaviour tests against real Postgres (this repo's
-    stated rule, conftest: "no SQLite double"), because the claim's `SKIP LOCKED` promise and the
-    same-transaction defer are only provable against the database.
+  - Size: 1,250 changed lines against a ~450 forecast — reported, not trimmed (607 src /
+    564 tests / 79 docs+config). The overage is behaviour tests against real Postgres (this
+    repo's stated rule, conftest: "no SQLite double"), because the claim's `SKIP LOCKED` promise
+    and the same-transaction defer are only provable against the database, and the RDD correction
+    added 236 more lines (117 src / 94 tests / 25 docs).
