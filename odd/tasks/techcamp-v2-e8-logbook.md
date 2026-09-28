@@ -184,8 +184,8 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   ~650 → T7a store + outbox, T7b synchronizer, one session. Route: **OpenCode, high**; escalate
   to `odd-worker` if T7b's state handling stalls.
   Done: lane `e8-t7`, merged `ca97354` (#144, #147 fixes); RDD `review-fb0c138492a9057a`,
-  `review-6bc080d05399a4ad` approved (CRITICAL fixed in `d105968`); the #147 fixes are reviewed
-  with T8's first slice.
+  `review-6bc080d05399a4ad` approved (CRITICAL fixed in `d105968`); #147 fixes reviewed on their
+  own, `review-539f27f2073c24b7` approved (#163 → fixed in T8).
 - [ ] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
   (harvest with `sold_kg` / price, task with `labor_days`, link to a cached alert), "Guardado en el
   teléfono" state, conflict/rejected notices, `SyncIndicator` wired. First commit: regenerate
@@ -445,6 +445,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   design frozen. Open point: the T7 #147 fixes (`58fb730..ddb46bc`) are already under T8's base
   (merged in `ca97354`), so T8's slice cannot cover them as planned; they need their own short
   review or an explicit owner waiver.
+
+- #147 fixes review (owner go; temporary worktree `e8-t7-review` on `feat/e8-t7-sync`, removed
+  after): lineage `review-539f27f2073c24b7`, base `d105968`, lens `review-reliability` →
+  **approved**, acknowledged. Findings → [#163](https://github.com/jab16jy/techcamp-v2/issues/163):
+  R3-followup-module-state (WARNING: trigger flags are module-level, a follow-up can start after
+  stop) and R3-unknown-entity-permanent-stall (SUGGESTION: distinct stop reason). Both are in the
+  code T8 wires, so they are queued to `e8-t8` as their own commit `Refs #163`.
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
