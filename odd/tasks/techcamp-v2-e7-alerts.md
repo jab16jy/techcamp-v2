@@ -277,6 +277,20 @@ work unit (`domain-modeling`).
   holds its claim; and because that per-row commit ends the claim's transaction, every row takes
   its OWN lock (`hold`) right before it is sent, or a second worker could pick up an unprocessed
   row of the same batch (correction, below).
+- D25 T7a's outbox delivery is **AT LEAST ONCE**, and docs/06 §4 says so. The table row promised
+  "cada fila se envía una sola vez" — exactly once, which no external provider can give: a worker
+  that dies after the provider accepted the message but before `sent` is committed leaves the row
+  `pending`, and the next sweep sends it again. The obvious alternative, marking the row `sending`
+  before the send, converts that crash into a LOST critical alert, and a lost critical alert is worse
+  than a duplicate — docs/06 §4's own header says notifications "tienen que llegar aunque falle el
+  proveedor", RF-08 demands a fallback for criticals, and RNF-05's p95 < 2 min forbids an operator
+  step to notice a stuck row. So the guarantee is: while no process dies, a row's own lock stops
+  two workers from sending it; if a worker dies in that window the row is sent again, and a
+  possible duplicate is the accepted price. `hold` re-checks `status = 'pending'` and
+  `next_attempt_at <= now` under the lock precisely so the "no process died" half is enforced by
+  the database rather than by hope (the correction's `R4-completed-worker-race`). The alternative
+  worth revisiting only with a provider that supports a deduplication key: then exactly once
+  becomes reachable without holding a `sending` state.
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
@@ -361,7 +375,8 @@ work unit (`domain-modeling`).
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
     `GET /dev/outbox` (D8); docs/06 §4, docs/10 §3 — route: Herdr OpenCode —
     forecast ~450 — actual 1,250 (`836e7f1`, 607 src / 564 tests / 79 docs+config), plus the
-    RDD correction `f165854` (236: 117 src / 94 tests / 25 docs)
+    RDD correction `f165854` (236: 117 src / 94 tests / 25 docs) and the RDD correction
+    `45197b5` (59, closing the two remaining CRITICALs, D25) — APPROVED and acknowledged
   - [ ] T7b Web Push adapter (`pywebpush`, VAPID keys from config), 410 Gone deletes the
     subscription and tries the next channel — route: Herdr OpenCode — forecast ~300
   - [ ] T7c Per-provider circuit breaker (reuse the weather breaker via `shared`), critical
@@ -564,18 +579,22 @@ work unit (`domain-modeling`).
     1 pre-existing failure (the T6b forecast-day test, identical on the stashed base); ruff,
     format, mypy, lint-imports green. docs/06 §4's "Reclamo" and "Canal sin adaptador" rows and
     D24 were updated in the same commit, so the doc states all three rules.
-  - **NOT APPROVED, authority NOT burned.** The targeted validation cannot be captured: the
-    OpenCode host transport refuses the validator's result twice with
-    `opencode_provider_role_result_refused (role_capture_failed)`, and the bound STATUS now answers
-    `replayability: manual_action_required` on the same slot
-    (`targeted_validation_required`, revision `sha256:9011ffba…`). Same class as the tooling
-    blocker in #133 (the reviewer/refuter/validator route worked for T4/T5, so it is flaky, not a
-    usage error). Nothing was retried blindly and nothing else was touched: the delivery boundary
-    for T7a stays `8cbae7f` and the correction is committed but unapproved. The writer could not
-    surface the round's non-blocking (WARNING/SUGGESTION) findings either — `inspect-authority`
-    reports no findings — so NO GitHub issue was filed for the T7 round: filing one from an
-    unread list would be invention, not evidence. Whoever clears the transport should read the
-    four lens artifacts (`reopen-results`) and file that one issue.
+  - The first correction was refused: the actual correction was 288 changed lines against a frozen
+    budget of 200 (the plan had counted source lines only). Rewritten to **59** lines
+    (47 additions, 12 deletions) across five files, then accepted.
+  - **APPROVED, authority burned.** Correction `45197b5` (59 lines) closed both remaining CRITICALs:
+    `R4-completed-worker-race` — `hold` re-checks `status = 'pending'` and `next_attempt_at <= now`
+    under the same `FOR UPDATE SKIP LOCKED`, so a row another worker finished in the window where
+    the claim's locks were released is neither held nor sent (pinned by
+    `test_hold_takes_only_a_row_that_is_still_pending_and_due`, negative assertions included); and
+    `R3-001`, answered by D25 (delivery is at least once) rather than by machinery — docs/06 §4's
+    "Reclamo" row and `dispatch_due_notifications`' docstring now state it. Targeted validation ran
+    on the OpenCode host with no refusal, APPROVED and acknowledged (target
+    `sha256:4494bec6…`, `review-acknowledged/v1`, authority `burned`). Boundary → `45197b5`.
+  - The round's 6 non-blocking WARNING → #137 (seminar outbox endpoint has no auth, authz or
+    caller-org filter; a full all-refused pass can loop; `limit=0` never terminates the dispatch
+    loop; `SeminarSmsSender` registered for two channels; a stale `DispatchReport.deferred` name;
+    retry backoff measured from the run's start instead of the failure).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
 - Lesson: commit the feature doc before running a slice's RDD, so no review context is issued
@@ -622,9 +641,10 @@ work unit (`domain-modeling`).
   full suite 727 passed, ruff, format, mypy, lint-imports green. The writer changed the planned
   sequential test for a barrier-synchronised concurrent pair, because a sequential PATCH cannot
   observe the defect (each request would read a fresh row) — accepted, it is the stronger test.
-- Next step: T7a (the outbox dispatcher: sender port, claim with `FOR UPDATE SKIP LOCKED`, backoff
-  1 min / 5 min / 30 min / 2 h and 5 attempts, the per-minute sweep, the seminar SMS adapter and
-  `GET /dev/outbox`, D7/D8), then T7b, T7c, T8, T9, T10, T11. T6a and T6b are code-complete and
+- Next step: **T7a is closed** (code complete, RDD APPROVED and acknowledged at `45197b5`,
+  non-blocking follow-ups in #137). Next is T7b (the Web Push adapter, `pywebpush`, VAPID keys
+  from config, 410 Gone deletes the subscription), then T7c, T8, T9, T10, T11. T6a and T6b are
+  code-complete and
   gated; their lineages stay open at `correction_required` because of the tooling blocker, so the
   delivery boundary is `016df59` and the three pending validations should be re-run when it
   clears.
@@ -671,5 +691,18 @@ work unit (`domain-modeling`).
   - Size: 1,250 changed lines against a ~450 forecast — reported, not trimmed (607 src /
     564 tests / 79 docs+config). The overage is behaviour tests against real Postgres (this
     repo's stated rule, conftest: "no SQLite double"), because the claim's `SKIP LOCKED` promise
-    and the same-transaction defer are only provable against the database, and the RDD correction
+    and the same-transaction defer are only provable against the database,     and the RDD correction
     added 236 more lines (117 src / 94 tests / 25 docs).
+- T7a correction `45197b5` (fresh writer, 2026-09-27): TDD RED `TypeError:
+  SqlAlchemyOutboxRepository.hold() got an unexpected keyword argument 'now'`, then GREEN. Fixed
+  `R4-completed-worker-race` in `outbox.py::hold` (re-check `status`/`next_attempt_at` under the
+  lock) with the port and the dispatcher call site updated, and answered `R3-001` with D25 plus
+  docs/06 §4's "Reclamo" row and the `dispatch_due_notifications` docstring — no code path.
+  59 changed lines (47/12) against a 200 frozen budget; the first attempt at 288 had been refused.
+  Checks (own DB, 5439): `uv run pytest tests/notifications tests/alerts` → 149 passed, 1 failed —
+  the same pre-existing `tests/alerts/test_jobs.py::test_the_forecast_job_reads_the_forecast_day_
+  and_the_daily_job_the_cell_day`, confirmed identical on the stashed base; `uv run ruff check` →
+  All checks passed!; `uv run ruff format --check` → 237 files already formatted; `uv run mypy` →
+  Success: no issues found in 160 source files; `uv run lint-imports` → 1 kept, 0 broken.
+  Lineage `review-3c56ad3aef34dbf2` APPROVED and acknowledged (authority burned, target
+  `sha256:4494bec6…`); the 6 non-blocking WARNING → #137. T7b not started.
