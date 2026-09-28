@@ -226,6 +226,23 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   7 tests. Parent gate: lint, typecheck clean; `npm test -- --run src/lib/db` 3 files / 7 passed;
   build ok; size 163.38 kB. No `structuredClone` polyfill needed (jsdom provides it). Go given for
   OpenCode's own RDD over `fe7fb09..182420b` (base `9d31e90`). Its two open points became D12, D13.
+- T7a RDD (OpenCode-run, owner-grant relayed by the parent in the pane): lineage
+  `review-fb0c138492a9057a` → **approved**, acknowledged. R3-persistent-storage-rejection (WARNING)
+  → [#144](https://github.com/jab16jy/techcamp-v2/issues/144), fixed as T7b's first commit. T7b also
+  makes D13 unrepresentable: saving a row with a local `deleted_at` throws.
+- T2 final fixes `432c74b` (`.get` → `InsufficientRoleError`, not `KeyError`) and `a73c1ba`
+  (StrEnum message, no `getattr` fallback), both `Refs #143`, gated green (44 passed); merged into
+  integration as `a463a02` (tests/logbook 63 passed, mypy clean). Review of both rides in T3's first
+  slice.
+- T3 (OpenCode `e8-t3`, Space Bunny **xhigh**, lane `e8-t3`, DB 5444) started from `a463a02`.
+- T5 (AGY `e8-t5`) → `bfd8209` feat(logbook): visits read API, 847 lines. Writer: 25 passed, static
+  clean, CodeGraph ×5. Parent gate (DB 5443): same; the 2 pytest warnings are Starlette/anyio
+  deprecations inside `fastapi.testclient` (third party). Merged as `1783f20` with an add/add
+  conflict on `logbook/domain` (T5 branched before T2): T2's files kept as base; T5's export check
+  gets its own `VisitExportForbiddenError(role)` instead of a second `InsufficientRoleError`;
+  integration 69 passed, static clean. **Order slip:** merged before its RDD; the lane RDD
+  (`review-20cf11a1d3fa8cf3`, base `f242508`, covers `08dd5ef` + `bfd8209`, consent granted) runs
+  now and any finding is fixed on integration.
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
