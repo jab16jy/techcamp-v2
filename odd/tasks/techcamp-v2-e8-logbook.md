@@ -171,7 +171,10 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
 - [ ] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
   (harvest with `sold_kg` / price, task with `labor_days`, link to a cached alert), "Guardado en el
   teléfono" state, conflict/rejected notices, `SyncIndicator` wired. First commit: regenerate
-  `schema.d.ts` (T3/T4 paths) and swap T7's hand-typed `lib/sync` transport to `apiClient`. `impeccable`, design frozen.
+  `schema.d.ts` (T3/T4 paths) and swap T7's hand-typed `lib/sync` transport to `apiClient`.
+  The shell calls `requestPersistentStorage()` once on start (ADR-0005) and starts the
+  synchronizer. Test notes from T7: fake-indexeddb needs `setImmediate` unfaked (explicit
+  `toFake` list); a union of two Dexie tables types `put()` as the intersection (dispatch per entity). `impeccable`, design frozen.
   ~550 → T8a list + sync state, T8b entry sheet, one session. Route: **AGY**.
 - [ ] T9 Visits screen (`features/visits`): new visit sheet from a farm (five Ley 1876 topics),
   offline, plus client photo compression and pending upload queue for entries and visits.
