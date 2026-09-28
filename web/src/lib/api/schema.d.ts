@@ -369,11 +369,232 @@ export interface paths {
          *     `Last-Event-ID` (E4 T6 gap, docs are silent on replay): the browser sends
          *     it automatically on reconnect; it is accepted and simply ignored here,
          *     no replay is built.
+         *
+         *     The subscription is taken here, before the response exists, so an event
+         *     published while the body is still starting is buffered instead of lost
+         *     (#63). The body claims it on its first iteration and releases it in its
+         *     `finally`; a body that never starts leaves it to the hub's claim timeout
+         *     (#38), so a dropped response cannot hold a subscription forever.
          */
         get: operations["stream_events_api_v1_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plots/{plot_id}/weather": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plot Weather
+         * @description docs/04-api.md:94: `GET /plots/{plot_id}/weather?days=7 → WeatherDay[]`.
+         *
+         *     Returns the last `days` observed rows followed by `days` forecast rows,
+         *     with `stale` degradation flag. Unknown plot or another org's plot answers 404.
+         */
+        get: operations["get_plot_weather_api_v1_plots__plot_id__weather_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plots/{plot_id}/irrigation/recommendation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plot Irrigation Recommendation
+         * @description docs/04-api.md:108: `GET /plots/{plot_id}/irrigation/recommendation?day=`.
+         *
+         *     Returns the recommendation for the given day (defaults to local today in America/Bogota).
+         *     Unknown plot or another org's plot answers 404 "Plot not found".
+         *     Missing recommendation for the day answers 404 "Recommendation not found".
+         */
+        get: operations["get_plot_irrigation_recommendation_api_v1_plots__plot_id__irrigation_recommendation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plots/{plot_id}/water-balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plot Water Balance
+         * @description docs/04-api.md:109: `GET /plots/{plot_id}/water-balance?from=&to=`.
+         *
+         *     Returns daily water balance history ordered by day ascending with computed status.
+         *     Defaults: `to` = local yesterday in America/Bogota, `from` = `to` - 29 days.
+         *     `from > to` or range > 366 days answers 422.
+         *     Unknown plot or another org's plot answers 404 "Plot not found".
+         *     No rows in the range answers `[]`.
+         */
+        get: operations["get_plot_water_balance_api_v1_plots__plot_id__water_balance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Alerts
+         * @description docs/04 `GET /alerts?org_id=`: one org's alerts, newest first (D15).
+         */
+        get: operations["get_alerts_api_v1_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/{alert_id}:acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge Alert */
+        post: operations["acknowledge_alert_api_v1_alerts__alert_id__acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alerts/{alert_id}:resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Alert
+         * @description docs/06 §3: manual resolution only from `acknowledged`, so 409 otherwise.
+         *
+         *     The body is optional: `POST /alerts/{id}:resolve` closes the alert with no
+         *     note (docs/04 `{ note? }`).
+         */
+        post: operations["resolve_alert_api_v1_alerts__alert_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alert-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Alert Rules
+         * @description D11, D15: the factory rules and one org's own, for any member of it.
+         */
+        get: operations["get_alert_rules_api_v1_alert_rules_get"];
+        put?: never;
+        /**
+         * Post Alert Rule
+         * @description D11: an org writes its own threshold rules, `owner` only.
+         */
+        post: operations["post_alert_rule_api_v1_alert_rules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alert-rules/{rule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Alert Rule
+         * @description D11: a factory rule or another org's rule is 404, never 403.
+         */
+        patch: operations["patch_alert_rule_api_v1_alert_rules__rule_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/push-subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Push Subscription
+         * @description D15: an upsert on the UNIQUE `endpoint` — a browser that registers
+         *     again rebinds its row and replaces its keys.
+         */
+        post: operations["post_push_subscription_api_v1_push_subscriptions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/push-subscriptions/{subscription_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Push Subscription Route */
+        delete: operations["delete_push_subscription_route_api_v1_push_subscriptions__subscription_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -413,6 +634,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dev/jobs/weather:run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Weather Jobs */
+        post: operations["run_weather_jobs_api_v1_dev_jobs_weather_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dev/jobs/irrigation:run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Irrigation Jobs */
+        post: operations["run_irrigation_jobs_api_v1_dev_jobs_irrigation_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -434,6 +689,135 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AlertPage */
+        AlertPage: {
+            /** Items */
+            items: components["schemas"]["AlertView"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** AlertResolveRequest */
+        AlertResolveRequest: {
+            /** Note */
+            note?: string | null;
+        };
+        /** AlertRuleCreateRequest */
+        AlertRuleCreateRequest: {
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /** Code */
+            code: string;
+            /** Metric */
+            metric: string;
+            /**
+             * Operator
+             * @enum {string}
+             */
+            operator: "<" | ">";
+            /** Threshold */
+            threshold: number;
+            /**
+             * Hysteresis
+             * @default 0
+             */
+            hysteresis: number;
+            /**
+             * Min Duration Min
+             * @default 0
+             */
+            min_duration_min: number;
+            /** @default warning */
+            severity: components["schemas"]["Severity"];
+            /** Crop Id */
+            crop_id?: number | null;
+        };
+        /** AlertRulePatchRequest */
+        AlertRulePatchRequest: {
+            /** Threshold */
+            threshold?: number | null;
+            /** Hysteresis */
+            hysteresis?: number | null;
+            /** Min Duration Min */
+            min_duration_min?: number | null;
+            severity?: components["schemas"]["Severity"] | null;
+        };
+        /** AlertRuleView */
+        AlertRuleView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Org Id */
+            org_id: string | null;
+            /** Code */
+            code: string;
+            /** Metric */
+            metric: string | null;
+            /** Operator */
+            operator: string | null;
+            /** Threshold */
+            threshold: number | null;
+            /** Hysteresis */
+            hysteresis: number;
+            /** Min Duration Min */
+            min_duration_min: number;
+            severity: components["schemas"]["Severity"];
+            /** Crop Id */
+            crop_id: number | null;
+        };
+        /**
+         * AlertState
+         * @description Alert lifecycle state (docs/00-glosario.md; docs/06 §3).
+         * @enum {string}
+         */
+        AlertState: "open" | "acknowledged" | "resolved";
+        /** AlertView */
+        AlertView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Rule Id
+             * Format: uuid
+             */
+            rule_id: string;
+            /** Rule Code */
+            rule_code: string;
+            /** Plot Id */
+            plot_id: string | null;
+            /** Node Id */
+            node_id: string | null;
+            state: components["schemas"]["AlertState"];
+            severity: components["schemas"]["Severity"];
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Acknowledged At */
+            acknowledged_at: string | null;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Escalated At */
+            escalated_at: string | null;
+            /** Resolution Note */
+            resolution_note: string | null;
+        };
         /** CalibrationCreateRequest */
         CalibrationCreateRequest: {
             method: components["schemas"]["CalibrationMethod"];
@@ -626,6 +1010,51 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * IrrigationJobsRunRequest
+         * @description `{ day? }`: the day to compute recommendations for, defaulting to local today
+         *     (docs/04-api.md:181). A `date` field, so a malformed value is FastAPI's 422.
+         */
+        IrrigationJobsRunRequest: {
+            /** Day */
+            day?: string | null;
+        };
+        /**
+         * IrrigationJobsRunResponse
+         * @description The queued fan-out job.
+         */
+        IrrigationJobsRunResponse: {
+            /** Job Id */
+            job_id: number;
+        };
+        /**
+         * IrrigationRecommendationView
+         * @description Irrigation recommendation for a plot on a specific day.
+         */
+        IrrigationRecommendationView: {
+            /**
+             * Plot Id
+             * Format: uuid
+             */
+            plot_id: string;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Kind */
+            kind: string;
+            /** Depth Mm */
+            depth_mm?: number | null;
+            /** Duration Min */
+            duration_min?: number | null;
+            /** Advice */
+            advice?: string[];
+            /** Rationale */
+            rationale?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * IrrigationSystem
@@ -842,6 +1271,30 @@ export interface components {
             /** System Flow Lph */
             system_flow_lph: number | null;
         };
+        /**
+         * PushKeys
+         * @description The VAPID key pair of the browser's subscription (docs/06 §4).
+         */
+        PushKeys: {
+            /** P256Dh */
+            p256dh: string;
+            /** Auth */
+            auth: string;
+        };
+        /** PushSubscriptionCreateRequest */
+        PushSubscriptionCreateRequest: {
+            /** Endpoint */
+            endpoint: string;
+            keys: components["schemas"]["PushKeys"];
+        };
+        /** PushSubscriptionView */
+        PushSubscriptionView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
         /** ReadingSeriesView */
         ReadingSeriesView: {
             /** Sensor Id */
@@ -877,6 +1330,12 @@ export interface components {
             /** Unit */
             unit: string;
         };
+        /**
+         * Severity
+         * @description Alert severity level (docs/03:288; docs/06 §3).
+         * @enum {string}
+         */
+        Severity: "info" | "warning" | "critical";
         /** SoilProfilePutRequest */
         SoilProfilePutRequest: {
             /** Texture */
@@ -936,6 +1395,87 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * WaterBalanceDayView
+         * @description Daily root zone water balance observation and status.
+         */
+        WaterBalanceDayView: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Etc Mm */
+            etc_mm: number;
+            /** Effective Rain Mm */
+            effective_rain_mm: number;
+            /** Irrigation Mm */
+            irrigation_mm: number;
+            /** Taw Mm */
+            taw_mm: number;
+            /** Raw Mm */
+            raw_mm: number;
+            /** Depletion Model Mm */
+            depletion_model_mm: number;
+            /** Depletion Mm */
+            depletion_mm: number;
+            /** Soil Moisture Obs Pct */
+            soil_moisture_obs_pct?: number | null;
+            /** Assimilation K */
+            assimilation_k: number;
+            /** Stress Moisture Pct */
+            stress_moisture_pct: number;
+            /** Status */
+            status: string;
+        };
+        /** WeatherDayView */
+        WeatherDayView: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Is Forecast */
+            is_forecast: boolean;
+            /** Et0 Mm */
+            et0_mm: number | null;
+            /** Rain Mm */
+            rain_mm: number | null;
+            /** Tmin C */
+            tmin_c: number | null;
+            /** Tmax C */
+            tmax_c: number | null;
+            /** Rh Mean Pct */
+            rh_mean_pct: number | null;
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+            /** Stale */
+            stale: boolean;
+        };
+        /**
+         * WeatherJobsRunRequest
+         * @description `{ day? }`: the day to consolidate, defaulting to the previous one
+         *     (docs/04-api.md:177). A `date` field, so a malformed value is FastAPI's 422
+         *     rather than a `fromisoformat` failure inside the job.
+         */
+        WeatherJobsRunRequest: {
+            /** Day */
+            day?: string | null;
+        };
+        /**
+         * WeatherJobsRunResponse
+         * @description The queued jobs. Two, because the route runs both halves of the weather
+         *     schedule: the 3 h forecast refresh and the daily consolidation.
+         */
+        WeatherJobsRunResponse: {
+            /** Job Id */
+            job_id: number;
+            /** Consolidate Job Id */
+            consolidate_job_id: number;
         };
     };
     responses: never;
@@ -1715,6 +2255,390 @@ export interface operations {
             };
         };
     };
+    get_plot_weather_api_v1_plots__plot_id__weather_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeatherDayView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plot_irrigation_recommendation_api_v1_plots__plot_id__irrigation_recommendation_get: {
+        parameters: {
+            query?: {
+                day?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IrrigationRecommendationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plot_water_balance_api_v1_plots__plot_id__water_balance_get: {
+        parameters: {
+            query?: {
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaterBalanceDayView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_alerts_api_v1_alerts_get: {
+        parameters: {
+            query: {
+                org_id: string;
+                plot_id?: string | null;
+                state?: components["schemas"]["AlertState"] | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_alert_api_v1_alerts__alert_id__acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_alert_api_v1_alerts__alert_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AlertResolveRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_alert_rules_api_v1_alert_rules_get: {
+        parameters: {
+            query: {
+                org_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRuleView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_alert_rule_api_v1_alert_rules_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertRuleCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRuleView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_alert_rule_api_v1_alert_rules__rule_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertRulePatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertRuleView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_push_subscription_api_v1_push_subscriptions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSubscriptionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushSubscriptionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_push_subscription_route_api_v1_push_subscriptions__subscription_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                subscription_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     request_otp_api_v1_dev_auth_otp_post: {
         parameters: {
             query?: never;
@@ -1766,6 +2690,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_weather_jobs_api_v1_dev_jobs_weather_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WeatherJobsRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeatherJobsRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_irrigation_jobs_api_v1_dev_jobs_irrigation_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IrrigationJobsRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IrrigationJobsRunResponse"];
                 };
             };
             /** @description Validation Error */
