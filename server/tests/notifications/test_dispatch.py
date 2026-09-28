@@ -194,7 +194,9 @@ async def test_claim_due_takes_the_due_pending_rows_in_due_order(
     delivered.sent_at = _DUE
     await db_session.commit()
 
-    claimed = await _outbox(db_session).claim_due(now=_DUE + timedelta(minutes=5))
+    claimed = await _outbox(db_session).claim_due(
+        now=_DUE + timedelta(minutes=5), channels=[Channel.SMS]
+    )
 
     assert [row.id for row in claimed] == [sms.id, later.id]
 
@@ -205,7 +207,7 @@ async def test_claim_due_stops_at_the_batch_limit(db_session: AsyncSession, seed
     for _ in range(3):
         await _pending_row(db_session, seeded, channel=Channel.SMS)
 
-    claimed = await _outbox(db_session).claim_due(now=_DUE, limit=2)
+    claimed = await _outbox(db_session).claim_due(now=_DUE, channels=[Channel.SMS], limit=2)
 
     assert len(claimed) == 2
 
@@ -221,9 +223,9 @@ async def test_claim_due_skips_a_row_another_worker_is_sending(
     async with async_session_factory() as other_session:
         # The claim's locks live until that session commits or rolls back, so
         # while it is open `first` is invisible to any other claim.
-        held = await _outbox(other_session).claim_due(now=_DUE, limit=1)
+        held = await _outbox(other_session).claim_due(now=_DUE, channels=[Channel.SMS], limit=1)
 
-        claimed = await _outbox(db_session).claim_due(now=_DUE)
+        claimed = await _outbox(db_session).claim_due(now=_DUE, channels=[Channel.SMS])
 
     assert [row.id for row in held] == [first.id]
     assert [row.id for row in claimed] == [row.id for row in free]
@@ -280,19 +282,19 @@ async def test_the_fifth_failed_attempt_gives_the_row_up(
     assert (given_up.status, given_up.attempts) == ("failed", MAX_ATTEMPTS)
 
 
-async def test_a_row_with_no_sender_yet_is_left_alone(
+async def test_a_row_with_no_sender_yet_is_not_even_claimed(
     db_session: AsyncSession, seeded: Seeded
 ) -> None:
     """`push` has no sender until T7b, and a row nobody can send must not burn
-    its five attempts: it stays pending, with the same due time, for the adapter
-    that will send it."""
+    its five attempts: the claim does not ask for that channel, so the row keeps
+    its status, its attempts and its due time for the adapter that will send it."""
     row = await _pending_row(db_session, seeded, channel=Channel.PUSH)
 
     report = await dispatch_due_notifications(
         outbox=_outbox(db_session), senders={Channel.SMS: SeminarSmsSender()}, now=_DUE
     )
 
-    assert (report.claimed, report.deferred) == (1, 1)
+    assert (report.claimed, report.sent) == (0, 0)
     untouched = await _row(db_session, row.id)
     assert (untouched.status, untouched.attempts, untouched.next_attempt_at) == (
         "pending",
@@ -331,7 +333,7 @@ async def test_the_seminar_sender_logs_the_sms_it_pretends_to_send(
     """ADR-0021: the simulated provider is a log line and the `/dev/outbox` tray."""
     await _pending_row(db_session, seeded, channel=Channel.WHATSAPP)
     sender = SeminarSmsSender()
-    claimed = await _outbox(db_session).claim_due(now=_DUE)
+    claimed = await _outbox(db_session).claim_due(now=_DUE, channels=[Channel.WHATSAPP])
 
     with caplog.at_level(logging.INFO, logger="techcamp.notifications.adapters.senders"):
         for notification in claimed:
@@ -419,3 +421,77 @@ async def test_the_dispatch_job_sends_the_due_rows(
     await dispatch_outbox(timestamp=0)
 
     assert (await _row(db_session, row.id)).status == "sent"
+
+
+async def test_hold_refuses_a_row_another_worker_already_holds(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """The claim's locks all end with the first row's commit, so a row takes its
+    own lock right before it is sent — and `SKIP LOCKED` means a row another
+    worker got in between is simply not ours to send."""
+    free = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    taken = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    outbox = _outbox(db_session)
+
+    async with async_session_factory() as other_session:
+        await other_session.execute(
+            text("SELECT id FROM notification WHERE id = :id FOR UPDATE"), {"id": taken.id}
+        )
+
+        assert await outbox.hold(free.id) is True
+        assert await outbox.hold(taken.id) is False
+
+
+async def test_a_row_the_hold_refuses_is_passed_over_and_not_sent(
+    db_session: AsyncSession, seeded: Seeded, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the same promise: a refused hold costs no attempt and
+    no send, so the row stays for the worker that does hold it."""
+    first = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    second = await _pending_row(db_session, seeded, channel=Channel.SMS)
+    sender = _FailingSender(RuntimeError("the first row fails, which commits"))
+    outbox = _outbox(db_session)
+    real_hold = outbox.hold
+
+    async def _hold(notification_id: UUID) -> bool:
+        return await real_hold(notification_id) and notification_id == first.id
+
+    monkeypatch.setattr(outbox, "hold", _hold)
+
+    report = await dispatch_due_notifications(
+        outbox=outbox, senders={Channel.SMS: sender}, now=_DUE
+    )
+
+    assert (report.skipped, report.retried) == (1, 1)
+    assert sender.sent == [first.id]
+    assert (await _row(db_session, second.id)).attempts == 0
+
+
+async def test_a_backlog_larger_than_one_batch_is_drained_in_one_run(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """RNF-05 wants a critical inside p95 2 min. One pass takes 50 rows, so a
+    backlog is drained pass after pass instead of waiting for the next minute.
+    """
+    for _ in range(3):
+        await _pending_row(db_session, seeded, channel=Channel.SMS)
+
+    report = await dispatch_due_notifications(
+        outbox=_outbox(db_session), senders=build_senders(), now=_DUE, limit=2
+    )
+
+    assert report.sent == 3
+
+
+async def test_a_backlog_of_undeliverable_rows_cannot_starve_a_deliverable_one(
+    db_session: AsyncSession, seeded: Seeded
+) -> None:
+    """A `push` backlog waits for T7b, and while it waits it must not fill every
+    claim: the claim only asks for the channels that have a sender."""
+    for _ in range(3):
+        await _pending_row(db_session, seeded, channel=Channel.PUSH)
+    sms = await _pending_row(db_session, seeded, channel=Channel.SMS)
+
+    claimed = await _outbox(db_session).claim_due(now=_DUE, channels=[Channel.SMS], limit=50)
+
+    assert [row.id for row in claimed] == [sms.id]

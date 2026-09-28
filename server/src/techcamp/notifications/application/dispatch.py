@@ -32,13 +32,25 @@ evidence."""
 
 @dataclass(frozen=True, slots=True)
 class DispatchReport:
-    """What one pass over the outbox did. Counted, not logged per row."""
+    """What one run over the outbox did. Counted, not logged per row."""
 
     claimed: int
     sent: int
     retried: int
     failed: int
-    deferred: int
+    skipped: int
+
+    def __add__(self, other: DispatchReport) -> DispatchReport:
+        return DispatchReport(
+            claimed=self.claimed + other.claimed,
+            sent=self.sent + other.sent,
+            retried=self.retried + other.retried,
+            failed=self.failed + other.failed,
+            skipped=self.skipped + other.skipped,
+        )
+
+
+_EMPTY_REPORT = DispatchReport(0, 0, 0, 0, 0)
 
 
 async def dispatch_due_notifications(
@@ -50,21 +62,44 @@ async def dispatch_due_notifications(
 ) -> DispatchReport:
     """Send every due row whose channel has a sender (docs/06 §4).
 
-    A row whose channel has no sender is counted as deferred and left exactly as
-    it is — same status, same attempts, same due time. It has not been tried,
-    so it must not spend an attempt: a channel whose adapter is not written yet
-    (`push` until T7b) would otherwise burn all five retries and end `failed`
-    before any provider existed.
+    Runs pass after pass while a pass comes back FULL, so a backlog is drained in
+    one run instead of at 50 rows a minute (RNF-05, p95 < 2 min). The loop ends
+    because every pass either moves its rows out of the due set (sent, given up,
+    or backed off to a later `next_attempt_at`) or comes back short: a row
+    another worker holds is passed over by the claim and is not counted.
     """
-    claimed = await outbox.claim_due(now=now, limit=limit)
-    sent = retried = failed = deferred = 0
+    if not senders:
+        return _EMPTY_REPORT
+    report = _EMPTY_REPORT
+    while True:
+        passed = await _one_pass(outbox=outbox, senders=senders, now=now, limit=limit)
+        report += passed
+        if passed.claimed < limit:
+            return report
+
+
+async def _one_pass(
+    *,
+    outbox: OutboxRepository,
+    senders: Mapping[Channel, NotificationSender],
+    now: datetime,
+    limit: int,
+) -> DispatchReport:
+    """One `SELECT … FOR UPDATE SKIP LOCKED LIMIT …` and the rows it holds.
+
+    A row is locked again right before it is sent, and that second lock is what
+    makes the batch safe: the claim's locks all end with the first row's commit,
+    so without it a second worker could pick up an unprocessed row of this batch
+    and the row would be sent twice.
+    """
+    claimed = await outbox.claim_due(now=now, channels=list(senders), limit=limit)
+    sent = retried = failed = skipped = 0
     for notification in claimed:
-        sender = senders.get(notification.channel)
-        if sender is None:
-            deferred += 1
+        if not await outbox.hold(notification.id):
+            skipped += 1
             continue
         try:
-            await sender.send(notification)
+            await senders[notification.channel].send(notification)
         except Exception as exc:  # noqa: BLE001 — every provider failure is the same to us
             attempts = notification.attempts + 1
             error = str(exc)[:_MAX_ERROR_CHARS] or type(exc).__name__
@@ -83,5 +118,5 @@ async def dispatch_due_notifications(
             await outbox.mark_sent(notification.id, at=now)
             sent += 1
     return DispatchReport(
-        claimed=len(claimed), sent=sent, retried=retried, failed=failed, deferred=deferred
+        claimed=len(claimed), sent=sent, retried=retried, failed=failed, skipped=skipped
     )

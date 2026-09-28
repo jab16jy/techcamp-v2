@@ -37,10 +37,14 @@ class SqlAlchemyOutboxRepository:
         self._session = session
 
     async def claim_due(
-        self, *, now: datetime, limit: int = CLAIM_LIMIT
+        self, *, now: datetime, channels: Sequence[Channel], limit: int = CLAIM_LIMIT
     ) -> Sequence[PendingNotification]:
         """docs/06 §4: `SELECT … WHERE status='pending' AND next_attempt_at <=
         now() FOR UPDATE SKIP LOCKED LIMIT 50`.
+
+        `channels` is what keeps a backlog from starving: a row whose channel has
+        no sender yet (`push` until T7b) is not even asked for, so it cannot fill
+        every claim while the rows that CAN be delivered wait behind it.
 
         The alert's `rule_code` and `severity` join in because they are the
         message: a provider handed an id alone cannot render anything. `of=`
@@ -49,11 +53,17 @@ class SqlAlchemyOutboxRepository:
         that produce the notices. The join is to the row's own alert, so no row
         of one organization is reachable through another's.
         """
+        if not channels:
+            return []
         result = await self._session.execute(
             select(NotificationRow, AlertRow.org_id, AlertRow.severity, _RULE_CODE)
             .join(AlertRow, AlertRow.id == NotificationRow.alert_id)
             .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
-            .where(NotificationRow.status == "pending", NotificationRow.next_attempt_at <= now)
+            .where(
+                NotificationRow.status == "pending",
+                NotificationRow.next_attempt_at <= now,
+                NotificationRow.channel.in_(tuple(channel.value for channel in channels)),
+            )
             .order_by(NotificationRow.next_attempt_at, NotificationRow.id)
             .limit(limit)
             .with_for_update(of=NotificationRow, skip_locked=True)
@@ -71,6 +81,24 @@ class SqlAlchemyOutboxRepository:
             )
             for row, org_id, severity, rule_code in result
         ]
+
+    async def hold(self, notification_id: UUID) -> bool:
+        """Take one row's own lock right before it is sent; `False` if another
+        worker holds it already.
+
+        The claim locks the whole batch at once, and its first outcome commits,
+        which ends that transaction and releases every lock it took — including
+        the ones on rows not sent yet. This is the lock that protects the send
+        itself, and `SKIP LOCKED` is what lets the row go to the worker that
+        already has it rather than sending it twice.
+        """
+        return (
+            await self._session.execute(
+                select(NotificationRow.id)
+                .where(NotificationRow.id == notification_id)
+                .with_for_update(skip_locked=True)
+            )
+        ).scalar_one_or_none() is not None
 
     async def mark_sent(self, notification_id: UUID, *, at: datetime) -> None:
         row = await self._locked(notification_id)

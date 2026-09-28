@@ -98,15 +98,15 @@ async def dispatch_outbox(timestamp: int) -> None:
             senders=build_senders(),
             now=datetime.now(UTC),
         )
-        # Each outcome commits on its own, so this only matters for a batch of
-        # rows the dispatcher skipped (a channel with no sender yet): their
+        # Each outcome commits on its own, so this only matters when every row
+        # of the run was passed over (another worker held them all): their
         # claim locks are only released by a commit.
         await session.commit()
     logger.info(
-        "notifications: claimed %d, sent %d, retried %d, failed %d, deferred %d",
+        "notifications: claimed %d, sent %d, retried %d, failed %d, passed over %d",
         report.claimed,
         report.sent,
         report.retried,
         report.failed,
-        report.deferred,
+        report.skipped,
     )

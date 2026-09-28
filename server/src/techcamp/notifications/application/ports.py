@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.notifications.domain.models import CLAIM_LIMIT, PendingNotification
+from techcamp.notifications.domain.models import CLAIM_LIMIT, Channel, PendingNotification
 
 
 class PushSubscriptionRepository(Protocol):
@@ -62,14 +62,20 @@ class OutboxRepository(Protocol):
     """
 
     async def claim_due(
-        self, *, now: datetime, limit: int = CLAIM_LIMIT
+        self, *, now: datetime, channels: Sequence[Channel], limit: int = CLAIM_LIMIT
     ) -> Sequence[PendingNotification]:
-        """Take up to `limit` due `pending` rows, oldest first, and hold them.
+        """Take up to `limit` due `pending` rows of those `channels`, oldest first.
 
         "Hold" is the point: the claim is `FOR UPDATE SKIP LOCKED`, so the rows
         stay claimed until the caller's transaction ends and a second worker
-        passes over them instead of sending them twice.
+        passes over them instead of sending them twice. `channels` keeps a row
+        nobody can deliver yet out of the batch.
         """
+        ...
+
+    async def hold(self, notification_id: UUID) -> bool:
+        """Take one row's own lock before it is sent; `False` when another worker
+        already holds it, which is the row's answer: it is not ours to send."""
         ...
 
     async def mark_sent(self, notification_id: UUID, *, at: datetime) -> None:

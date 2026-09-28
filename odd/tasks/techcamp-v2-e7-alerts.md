@@ -264,16 +264,19 @@ work unit (`domain-modeling`).
   docs/06 §1 to state that guarantee instead of the old one, and keeps the transactional
   refactor out of the epic on purpose: making `ingest_uplinks` own the transaction would touch
   the status path and the flush retry, which is a unit of its own.
-- D24 T7a's dispatcher treats a channel with no registered sender as NOT an attempt. `push` has
-  no adapter until T7b, and ADR-0016 puts the real SMS/WhatsApp provider in future work, so a
-  naive dispatcher would count a missing adapter as a failure and burn all five retries: a row
-  would go `failed` before any provider existed, and the escalation SMS the room needs would
-  never be simulated either (production registers nothing at all). The row is left `pending` with
-  the same due time and counted as `deferred`. Also T7a: the claim's outcome is committed PER ROW,
+- D24 T7a's dispatcher treats a channel with no registered sender as NOT an attempt, and does
+  not even claim it. `push` has no adapter until T7b, and ADR-0016 puts the real SMS/WhatsApp
+  provider in future work, so a naive dispatcher would count a missing adapter as a failure and
+  burn all five retries: a row would go `failed` before any provider existed, and the escalation
+  SMS the room needs would never be simulated either (production registers nothing at all). The
+  claim asks only for the channels that have a sender, so a `push` backlog also cannot fill every
+  batch and starve the rows that CAN go out. Also T7a: the claim's outcome is committed PER ROW,
   not per batch — the message reached the provider, so a crash later in the batch must not leave
-  it `pending` and send it again; and `FOR UPDATE OF notification` names the outbox table because
-  the join brings `alert` and `alert_rule` in, whose rows must stay writable while the dispatcher
-  holds its claim.
+  it `pending` and send it again; `FOR UPDATE OF notification` names the outbox table because the
+  join brings `alert` and `alert_rule` in, whose rows must stay writable while the dispatcher
+  holds its claim; and because that per-row commit ends the claim's transaction, every row takes
+  its OWN lock (`hold`) right before it is sent, or a second worker could pick up an unprocessed
+  row of the same batch (correction, below).
 - D15 T4 API surface: `GET /alerts` takes the caller's `org_id` and lists only that org
   (`list_alerts(org_id, …)` resolves the membership and then `list_for_orgs([org_id], …)`), never
   every org of the caller; `acknowledge` and `resolve_manually` drop their `farm_id` parameter and
