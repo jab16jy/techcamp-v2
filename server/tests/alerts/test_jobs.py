@@ -543,7 +543,7 @@ async def _add_representative_sensor(db_session: AsyncSession, org: Org, *, plot
     await db_session.flush()
 
 
-# -- the escalation sweep on its own periodic (docs/06 §3; D41, D43) --
+# -- the escalation sweep on its own periodic (docs/06 §3; D43) --
 
 
 async def test_the_escalation_sweep_defers_one_job_per_org_with_its_own_lock(
