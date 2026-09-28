@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import NoReturn
+from typing import NoReturn, Protocol
 from uuid import UUID
 
 from techcamp.alerts.application.ports import AlertRepository
@@ -185,7 +185,14 @@ async def _apply_entry(
         _reject(RejectReason.NOT_FOUND)
 
     if change.op is SyncOp.DELETE:
-        return await _delete_entry(stored, change, now=now, tx=tx, entries=entries)
+        return await _apply_delete(
+            stored,
+            row_id=change.id,
+            client_updated_at=change.client_updated_at,
+            now=now,
+            tx=tx,
+            soft_delete=entries.soft_delete,
+        )
     if stored is not None and stored.deleted_at is not None:
         # D13: deletes are final, an upsert on a tombstone is not an undelete.
         _reject(RejectReason.NOT_FOUND)
@@ -207,30 +214,55 @@ async def _apply_entry(
     return PushResult(change.id, SyncStatus.APPLIED, version, None)
 
 
-async def _delete_entry(
+class _SoftDelete(Protocol):
+    """`soft_delete` already bound to its repository.
+
+    Both sync repositories declare the same signature (D12 writes the same
+    three columns either way), so the delete path is written once. The row id
+    is positional-only because the two methods name it after their own entity.
+    Not a new port: the two repository ports are unchanged, this is only the
+    shape of one of their methods.
+    """
+
+    async def __call__(
+        self,
+        row_id: UUID,
+        /,
+        *,
+        org_id: UUID,
+        deleted_at: datetime,
+        client_updated_at: datetime,
+        server_version: int,
+    ) -> None: ...
+
+
+async def _apply_delete(
     stored: StoredSyncRow | None,
-    change: LogbookEntryChange,
     *,
+    row_id: UUID,
+    client_updated_at: datetime,
     now: datetime,
     tx: SyncTransaction,
-    entries: LogbookEntrySyncRepository,
+    soft_delete: _SoftDelete,
 ) -> PushResult:
     """D12: the last write wins as in an upsert, and a row the server never
-    received is `applied` with nothing written and no version."""
+    received is `applied` with nothing written and no version. Only the
+    tombstone, the incoming `client_updated_at` and a new `server_version` are
+    written; the fields are not validated and not rewritten."""
     if stored is None:
-        return PushResult(change.id, SyncStatus.APPLIED, None, None)
-    status, answer = _decide(stored, change.client_updated_at)
+        return PushResult(row_id, SyncStatus.APPLIED, None, None)
+    status, answer = _decide(stored, client_updated_at)
     if status is not SyncStatus.APPLIED:
-        return PushResult(change.id, status, answer, None)
+        return PushResult(row_id, status, answer, None)
     version = await tx.next_server_version()
-    await entries.soft_delete(
-        change.id,
+    await soft_delete(
+        row_id,
         org_id=stored.org_id,
         deleted_at=now,
-        client_updated_at=change.client_updated_at,
+        client_updated_at=client_updated_at,
         server_version=version,
     )
-    return PushResult(change.id, SyncStatus.APPLIED, version, None)
+    return PushResult(row_id, SyncStatus.APPLIED, version, None)
 
 
 async def push_extension_visit(
@@ -308,20 +340,14 @@ async def _apply_visit(
         _reject(RejectReason.NOT_FOUND)
 
     if change.op is SyncOp.DELETE:
-        if stored is None:
-            return PushResult(change.id, SyncStatus.APPLIED, None, None)
-        status, answer = _decide(stored, change.client_updated_at)
-        if status is not SyncStatus.APPLIED:
-            return PushResult(change.id, status, answer, None)
-        version = await tx.next_server_version()
-        await visits.soft_delete(
-            change.id,
-            org_id=stored.org_id,
-            deleted_at=now,
+        return await _apply_delete(
+            stored,
+            row_id=change.id,
             client_updated_at=change.client_updated_at,
-            server_version=version,
+            now=now,
+            tx=tx,
+            soft_delete=visits.soft_delete,
         )
-        return PushResult(change.id, SyncStatus.APPLIED, version, None)
     if stored is not None and stored.deleted_at is not None:
         _reject(RejectReason.NOT_FOUND)
 
