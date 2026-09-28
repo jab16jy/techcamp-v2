@@ -151,7 +151,7 @@ async def _evaluate_plot(
             at,
             max_gap=_AGGREGATE_MAX_GAP,
             current_alert=current,
-            is_mild=evidence.is_mild,
+            mildness=evidence.mildness,
         )
         match decision.action:
             case AlertAction.OPEN:

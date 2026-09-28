@@ -363,8 +363,9 @@ work unit (`domain-modeling`).
   (field capacity + 5 from the plot soil), org custom threshold rules; open and resolve on each
   batch — route: Pi subagent (same session, no Herdr tab) — forecast ~450 — actual 4 commits,
   1,059 authored (`7e98815` 721, `4e7201d` 111, `db19ece` 109, `a204e92` 118) + decisions
-  D16, D17 — **validation pending**: the lineage is closed at `correction_required` because the
-  correction-plan capture is refused (see Review (RDD))
+  D16, D17 — **validation pending**: the lineage is still at `correction_required`; not
+  re-run through the OpenCode-host workaround because the re-entry was scoped to T6a/T6b
+  (see Review (RDD))
 - [x] T5c Isolate each plot's rule evaluation in the ingest hook (T5 follow-up from the parent's
   review, 2026-09-27): a plot whose evaluation raises must not stop the plots after it in the same
   batch, and `sensors.list_for_node` is read once per plot instead of once per rule — route:
@@ -394,6 +395,15 @@ work unit (`domain-modeling`).
     corrections during the unit: real humidity evidence plus a mild flag instead of the
     `_NOT_MILD_RH` fake sample, the docs/06 §3 rows in the same commit, and the saturation test
     recorded as a proxy (D20)
+  - [x] T6c #134: a cell-day that carries humidity and NO stored temperature no longer RESOLVES an
+    open `fungal_risk` alert. The temperature half is tri-state — mild, measured not mild, or
+    **no dicho** — and the two branches read the third differently on purpose: unsaid never opens
+    the rule and resolves nothing, so the humidity half alone is what closes such a day.
+    `is_mild` → `mildness: bool | None` on the evidence and on `decide_worker_rule` (a name that
+    admits three states, so no caller can read `not None` as "not mild"); `heavy_rain_forecast`
+    untouched. docs/06 §3 gets the absent-evidence line in the same commit — route: Herdr OpenCode
+    (branch `review/e7-rdd`, isolated; the owner merges it into `feat/e7-alerts`) — forecast ~120 —
+    actual 191 (`8c57ff0`; 56 production / 130 tests / 1 docs line)
 - [ ] T7 Notifications outbox
   - [ ] T7a Dispatcher: sender port, claim `FOR UPDATE SKIP LOCKED LIMIT 50`, backoff and max 5
     attempts, same-transaction defer + per-minute sweep (D7), seminar SMS adapter,
@@ -493,7 +503,16 @@ work unit (`domain-modeling`).
   `weather/adapters/jobs.py:66` already sets, with a test on an instant that is 20:00 of the
   previous day in Bogota. The writer missed an established pattern the parent had quoted in the
   brief; the same shape now lives in three modules, so one `shared/` calendar helper is the
-  follow-up. The lineage is stuck at `correction_required` (tooling blocker below).
+  follow-up (#132). **Lineage CLOSED 2026-09-27 from the OpenCode host** (see the host-switch
+  entry below): correction plan captured with 46 lines (`git show --numstat 016df59` = 42
+  additions + 4 deletions, ≤ the frozen 200 budget), targeted validation APPROVED, authority
+  burned on target `sha256:ae5ad3f7…` (`gentle-ai.review-acknowledged/v1`, consumed revision
+  `sha256:66a1cf55…`). Two non-blocking WARNINGs from the validator, non-blocking per the
+  native advisory, to be added to #132 (the T5/T6a/T6b follow-up tracker): `R3-job-test-wall-clock-boundary` (the new job integration test derives its fixture
+  dates from one wall-clock call while each job calls the clock again, so a run crossing UTC
+  midnight fails nondeterministically) and `R3-missing-temperature-resolves-alert` (a
+  `mean_temp_c=None` provider row makes `is_mild` false and so RESOLVES an open fungal alert
+  instead of leaving it for absent evidence).
   - The parent's T6a fix `77827a0` (owned by the parent, not the writer): a never-reported node
     alerted five minutes after being claimed, while the technician was still installing it
     (docs/06:78). The silence is now measured from `last_seen_at or claimed_at`, and a node with
@@ -516,8 +535,54 @@ work unit (`domain-modeling`).
   unregistered task keeps the suite green while the worker never runs it — so the parent added
   `server/tests/shared/test_periodic_schedules.py` (`37f6be9`): every schedule must enqueue a
   registered task on the queue the worker listens to, and the node-health sweep must be
-  `*/5 * * * *`. Same shape as T3's `DISTINCT ON` false positive, also refuted from the source.
-  The lineage could not advance past the correction-plan slot (tooling blocker below).
+  `*/5 * * * *`.
+  Same shape as T3's `DISTINCT ON` false positive, also refuted from the source.
+  **Lineage NOT CLOSED 2026-09-27 — recovered as a successor, which then found a CRITICAL.** The host
+  switch that closed T6b did not apply here: the CLI re-offers `recovery_authorization`
+  (`scope_changed`), NOT the correction-plan slot, on every read-only STATUS call on the same
+  binding (`--lineage review-23ebe1e7dc220953 --base-ref 1f268cf --committed-only`). Frozen tier
+  medium, budget 200, authority target `sha256:125c8200…` vs current candidate `sha256:799bb481…`
+  — the worktree now carries T6b's commits, so the live candidate no longer matches the frozen
+  one and native classifies the difference as a scope change. `review inspect-authority` reports
+  the authority `valid: true`, `complete: true`, **0 recovery edges**: nothing is corrupt, the
+  lineage is simply waiting on a maintainer artifact.
+  - The owner's first recovery attempts were refused, and the reason was the OPERATOR's, not
+    the tooling's: the binding was hand-built as a JSON object. The real contract is a
+    **six-line LF text record** —
+    `gentle-ai.review-recovery-authorization/v1` / `predecessor_lineage=` /
+    `predecessor_revision=` / `target_identity=` / `actor=` / `reason=` — and, more
+    decisively, `correction_required` is one of the states that **self-mints** it:
+    `RunReviewRecover` derives the actor from the repository Git identity, the reason from a
+    closed constant and the binding itself. Supplying `--maintainer-authorization` at all is
+    what triggers the strict comparison, so the correct invocation **omits** it, along with
+    `--actor` and `--reason`. That succeeded on the first try and created the successor
+    `review-411621a8a31dfb6b` in `reviewing`.
+    Flag-level facts that cost attempts along the way (no refusal mutated anything):
+    `--successor-lineage` is required despite the help calling it "optional native";
+    `--reason`/`--actor` are required again when the binding carries them;
+    `--expected-untracked-inventory` must be dropped; and **`--base-ref` is pinned to the
+    predecessor's base (`1f268cf`)**, so the minimal `21fb000` scope is refused too
+    (`recovery base-ref does not match predecessor base`) — a scope recovery therefore always
+    reviews T6a + the guard test + the parent fix + T6b.
+  - **Successor `review-411621a8a31dfb6b`**: tier medium, 2,588 changed lines, one
+    `review-reliability` lens → `correction_required` with CRITICAL
+    `R3-missing-temperature-resolves-alert` (deterministic, introduced,
+    `server/src/techcamp/alerts/domain/models.py:525`) → **#134**. So the guard test `37f6be9`
+    finally IS reviewed, and the review earned its keep. The T6b validator had raised the same
+    defect as a non-blocking WARNING; the divergence is recorded, not reconciled.
+    The lineage is NOT approved and NOT acknowledged.
+    Post-attempt state, verified: `inspect-authority` still 0 edges and valid, T6a still
+    `correction_required`/`recover`, and the successor id does not exist
+    (`applicability: unrelated`). Nothing was abandoned, recovered or reclaimed.
+  - The guard test `37f6be9` is correct on its own merits and its suite is green, but it is NOT
+    covered by an acknowledged review: `37f6be9` is T6b's BASE, so T6b's range starts after it,
+    and T6a's range ends at `21fb000`, also before it. So `37f6be9` is the one commit no
+    acknowledged lineage has reviewed, and this is why the T6a lineage matters — it is the only
+    binding that can carry it.
+  - **Bounded check re-run 2026-09-27** (owner's request): `uv run pytest tests/alerts` against
+    `techcamp-e7-db` on 5437 → **109 passed**, 2 third-party deprecation warnings
+    (starlette/httpx), 52s. Suite green with the guard test in it, which is evidence for the
+    test's correctness but NOT a substitute for its review.
   - Parent gate on `21fb000`: static checks green, 9 targeted tests; the writer's single full run
     (748 passed) is the slice's. Two writer deviations, both accepted as improvements: the domain
     decision takes `heard_run` instead of `rule` (the 60-minute clear run is NOT computable from
@@ -547,15 +612,26 @@ work unit (`domain-modeling`).
     evaluator selected rules by "has a metric and an operator", which also selected
     `fungal_risk` — it WOULD have opened from the ingestor on a pure RH run, ignoring the
     20–30 °C half of its condition and stealing T6b's rule).
-  - **Tooling blocker (2026-09-27, unresolved, three lineages now):** `gentle_review_capture`
-    refuses the correction-plan slot with "collectBinding is unknown, expired, or belongs to a
-    different session route" on `review-5104b9ca5c76ab6a` (T5), `review-23ebe1e7dc220953` (T6a)
-    and `review-59b7a7c4d9c8c889` (T6b), on both workspace roots and on both serializations of the
-    binding, while the SAME route works for the reviewer lens, the refuter and the targeted
-    validator (all used successfully in T4 and T5). T4 captured the identical slot only after
-    several retries, so it is flaky, not a usage error. Every CRITICAL found so far is fixed and
-    gated; what is missing is the provider's validation, not the fix. Tracked in #133, with the
-    reproduction and the code path to look at; the owner fixes the tooling on that side.
+  - **Tooling blocker (2026-09-27, WORKAROUND FOUND and VERIFIED, reported upstream):**
+    `gentle_review_capture` refuses the correction-plan slot with "collectBinding is unknown,
+    expired, or belongs to a different session route" on `review-5104b9ca5c76ab6a` (T5),
+    `review-23ebe1e7dc220953` (T6a) and `review-59b7a7c4d9c8c889` (T6b), on both workspace roots
+    and on both serializations of the binding, while the SAME route works for the reviewer
+    lens, the refuter and the targeted validator (all used successfully in T4 and T5). T4
+    captured the identical slot only after several retries, so it is flaky, not a usage error.
+    The refusal is in the Pi host's route table, BEFORE the provider: the native CLI has no
+    such check, and `gentle-ai review status --contract gentle-ai.review-integration/v2
+    --agent opencode --lineage <id> --base-ref <base> --committed-only --next-transition`
+    re-offers the slot with provider-issued `submission.argument_tokens`. **The workaround: run
+    the lifecycle from the OpenCode host through the `gentle-ai` CLI with `--agent opencode`,
+    never through the Pi wrapper.** It closed T6b end to end. T6a reached a second wall, now
+    also resolved: it asked for a `scope_changed` recovery, and the first attempts failed on a
+    hand-built JSON binding. The real contract is a six-line LF text record, and
+    `correction_required` self-mints it — the correct invocation simply omits
+    `--maintainer-authorization`, `--actor` and `--reason` (see its entry above). Its successor
+    `review-411621a8a31dfb6b` then reviewed 2,588 lines and found a CRITICAL → #134. T5 was not
+    attempted. The wrapper defect itself is unfixed; the occurrence is recorded upstream on
+    `Gentleman-Programming/gentle-ai#4921` and the local tracking issue was removed.
 - T4 (`5dbae1d..e15b969`, 24 files, 1,576 changed lines): medium, one reliability lens. START
   requested the per-slice committed range (`baseRef 5dbae1d`, `committedOnly`), not the
   whole-branch range the inspect offered, per the per-slice decision above. Lineage
@@ -621,6 +697,14 @@ work unit (`domain-modeling`).
     not see, and the second confirmed the fix by reading it, including the rollback-failure path the
     author had only reasoned about. The `RuntimeError`-only double of the first round would have
     passed against the un-fixed code, which is the whole argument for the database-failure test.
+- T6c #134 (`91323cd..8c57ff0`, 4 files, 191 changed lines, branch `review/e7-rdd`): `medium`
+  (`executable_change` on `evaluate_weather_rules.py`), `review_due: false`,
+  **`under_budget`** — the native assess named no `next_transition` and no lineage was started, so
+  the slice stays PENDING review at the `91323cd` boundary until a later commit reaches the ~400
+  line delivery budget. That matches #134's own plan: the fix lands on the isolated branch, the
+  owner merges it, and it is reviewed as a NEW candidate (a code change invalidates the frozen
+  `review-411621a8a31dfb6b`, which therefore stays at `correction_required` and is not closed here).
+  No consent envelope was raised, so the standing grant was not exercised.
 - Stop-hook proposals of a whole-branch review from `b627b66` were declined (per-slice lineages).
 - Other lineages in the shared store, not E7's: `review-1655892fb60acdfb` (E5, escalated),
   `review-8d4dc4757b571a56` (active, base tree `c5c49cc`; not ours — leave it).
@@ -697,9 +781,35 @@ work unit (`domain-modeling`).
     used: `epic:e7`, `area:server`, `type:feature`; the brief's `area:alerts` and `type:design`
     do not exist in this repository's label set and creating labels was not authorized, so the
     nearest existing labels were used.
-- Next step: T5c merged into `feat/e7-alerts` by the parent (2026-09-27); its tests run with
-  the `tests/alerts` rubric after the merge. Then `review/e7-rdd` (T6c, #134) merges, and T7a/b/c
-  run on `feat/e7-t7-outbox`, then T8, T9, T10, T11.
+- T6c 2026-09-27 (writer: OpenCode on `review/e7-rdd`, brief `.git-brief-e7-134.md`): #134 fixed
+  as a tri-state `mildness`. CodeGraph used from the first call (index initialized once in this
+  worktree), no grep-first fallback. TDD, RED first and recorded:
+  - domain RED: `AttributeError: 'CellDayHumidityEvidence' object has no attribute 'mildness'`
+    (5 tests) and `TypeError: decide_worker_rule() got an unexpected keyword argument 'mildness'`
+  - the BEHAVIORAL RED, on the real evaluator path: `AssertionError: assert 'resolved' == 'open'` in
+    `test_an_open_fungal_risk_alert_survives_a_cell_day_with_no_stored_temperature` — the defect
+    reproduced end to end, an open warning closed by a `weather_daily` row with no temperature ends
+  - GREEN `uv run pytest tests/alerts` (own DB `techcamp-e7-db-134` on **5438**, never 5437):
+    **111 passed, 1 failed**, 68 s. The failure is
+    `test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cell_day`, and it is
+    PRE-EXISTING: verified by stashing this unit and re-running it on base `91323cd`, where it
+    fails the same way (both rules missing, so nothing in the temperature half is involved). Not
+    fixed here — it is a T6b job test, outside this unit's scope, and the cause is not yet known
+    (`_make_org` in `tests/alerts/test_jobs.py` seeds no membership, unlike the evaluator tests
+    that do open alerts; the candidate is unproven). Reported to the owner as a follow-up, not
+    filed: it is not a review finding of this slice.
+  - Static checks in `server/`: `uv run ruff check` All checks passed; `uv run ruff format --check`
+    230 files already formatted; `uv run mypy` Success, no issues in 155 source files;
+    `uv run lint-imports` 1 kept, 0 broken.
+  - RDD: `gentle-ai review assess --cwd <worktree> --agent opencode --base-ref 91323cd
+    --committed-only --json` → `risk: medium`, `review_due: false`, `under_budget`, no
+    `next_transition`; no lineage started, boundary stays `91323cd` (see Review (RDD)).
+  - Rollback: `8c57ff0` alone; it touches the two evaluator files, one test file and one docs
+    line, and nothing else in the epic depends on the new name outside them.
+- Next step: T5c and `review/e7-rdd` (T6c, #134) merged into `feat/e7-alerts` by the parent
+  (2026-09-27); the `tests/alerts` rubric runs on the merge. T6c is PENDING review (under budget)
+  and the T6b job test `test_the_forecast_job_reads_the_forecast_day_and_the_daily_job_the_cell_day`
+  fails on the base. T7a/b/c run on `feat/e7-t7-outbox`, then T8, T9, T10, T11.
   Two invariants learned from T5's CRITICALs travel with every brief: a decision that reads a
   window is taken at the newest evidence of ITS OWN target, never a global time; and every
   behaviour test carries the negative assertion too, because in an alerting system the dangerous
