@@ -259,30 +259,50 @@ async def test_org_visits_export_filters_from_and_to_inclusive_and_pages(
         farm_id=org.farm_id,
         technician_id=org.user_ids["technician"],
         visited_on=date(2026, 9, 20),
+        client_updated_at=_NOW - timedelta(days=5),
     )
-    v_start = _make_visit(
+    # 5 active visits within the [2026-09-25, 2026-09-28] inclusive range
+    v1 = _make_visit(
         org_id=org.org_id,
         farm_id=org.farm_id,
         technician_id=org.user_ids["technician"],
         visited_on=date(2026, 9, 25),
+        client_updated_at=_NOW - timedelta(hours=4),
     )
-    v_mid = _make_visit(
+    v2 = _make_visit(
         org_id=org.org_id,
         farm_id=org.farm_id,
         technician_id=org.user_ids["technician"],
         visited_on=date(2026, 9, 26),
+        client_updated_at=_NOW - timedelta(hours=3),
     )
-    v_end = _make_visit(
+    v3 = _make_visit(
+        org_id=org.org_id,
+        farm_id=org.farm_id,
+        technician_id=org.user_ids["technician"],
+        visited_on=date(2026, 9, 27),
+        client_updated_at=_NOW - timedelta(hours=2),
+    )
+    v4 = _make_visit(
         org_id=org.org_id,
         farm_id=org.farm_id,
         technician_id=org.user_ids["technician"],
         visited_on=date(2026, 9, 28),
+        client_updated_at=_NOW - timedelta(hours=1),
+    )
+    v5 = _make_visit(
+        org_id=org.org_id,
+        farm_id=org.farm_id,
+        technician_id=org.user_ids["technician"],
+        visited_on=date(2026, 9, 28),
+        client_updated_at=_NOW,
     )
     v_after = _make_visit(
         org_id=org.org_id,
         farm_id=org.farm_id,
         technician_id=org.user_ids["technician"],
         visited_on=date(2026, 10, 2),
+        client_updated_at=_NOW + timedelta(days=1),
     )
     v_deleted_in_range = _make_visit(
         org_id=org.org_id,
@@ -291,30 +311,62 @@ async def test_org_visits_export_filters_from_and_to_inclusive_and_pages(
         visited_on=date(2026, 9, 26),
         deleted_at=_NOW,
     )
-    for v in (v_before, v_start, v_mid, v_end, v_after, v_deleted_in_range):
+    for v in (v_before, v1, v2, v3, v4, v5, v_after, v_deleted_in_range):
         db_session.add(v)
     await db_session.commit()
 
     client = _client()
 
-    # Filter from 2026-09-25 to 2026-09-28 inclusive (owner role)
-    response = client.get(
-        f"/organizations/{org.org_id}/visits?from=2026-09-25&to=2026-09-28",
+    # Limit/cursor walk over the 5 in-range visits with limit=2 (not an exact multiple: 2, 2, 1)
+    expected_newest = sorted([v1.id, v2.id, v3.id, v4.id, v5.id], reverse=True)
+
+    # Page 1: first 2 items
+    response_p1 = client.get(
+        f"/organizations/{org.org_id}/visits?from=2026-09-25&to=2026-09-28&limit=2",
         headers=_auth(org.tokens["owner"]),
     )
-    assert response.status_code == 200, response.text
-    data = response.json()
+    assert response_p1.status_code == 200, response_p1.text
+    data_p1 = response_p1.json()
+    assert len(data_p1["items"]) == 2
+    assert [item["id"] for item in data_p1["items"]] == [
+        str(expected_newest[0]),
+        str(expected_newest[1]),
+    ]
+    assert data_p1["next_cursor"] == str(expected_newest[1])
+    assert str(v_before.id) not in response_p1.text
+    assert str(v_after.id) not in response_p1.text
+    assert str(v_deleted_in_range.id) not in response_p1.text
 
-    returned_ids = [item["id"] for item in data["items"]]
-    assert len(returned_ids) == 3
-    assert str(v_start.id) in returned_ids
-    assert str(v_mid.id) in returned_ids
-    assert str(v_end.id) in returned_ids
+    # Page 2: next 2 items
+    response_p2 = client.get(
+        f"/organizations/{org.org_id}/visits?from=2026-09-25&to=2026-09-28&limit=2&cursor={data_p1['next_cursor']}",
+        headers=_auth(org.tokens["technician"]),
+    )
+    assert response_p2.status_code == 200, response_p2.text
+    data_p2 = response_p2.json()
+    assert len(data_p2["items"]) == 2
+    assert [item["id"] for item in data_p2["items"]] == [
+        str(expected_newest[2]),
+        str(expected_newest[3]),
+    ]
+    assert data_p2["next_cursor"] == str(expected_newest[3])
+    assert str(v_before.id) not in response_p2.text
+    assert str(v_after.id) not in response_p2.text
+    assert str(v_deleted_in_range.id) not in response_p2.text
 
-    # Negative assertions: outside visits and soft-deleted visit must NOT be present
-    assert str(v_before.id) not in response.text
-    assert str(v_after.id) not in response.text
-    assert str(v_deleted_in_range.id) not in response.text
+    # Page 3: last 1 item, next_cursor is null
+    response_p3 = client.get(
+        f"/organizations/{org.org_id}/visits?from=2026-09-25&to=2026-09-28&limit=2&cursor={data_p2['next_cursor']}",
+        headers=_auth(org.tokens["owner"]),
+    )
+    assert response_p3.status_code == 200, response_p3.text
+    data_p3 = response_p3.json()
+    assert len(data_p3["items"]) == 1
+    assert [item["id"] for item in data_p3["items"]] == [str(expected_newest[4])]
+    assert data_p3["next_cursor"] is None
+    assert str(v_before.id) not in response_p3.text
+    assert str(v_after.id) not in response_p3.text
+    assert str(v_deleted_in_range.id) not in response_p3.text
 
 
 async def test_org_visits_role_authorization_owner_technician_vs_producer_viewer(
