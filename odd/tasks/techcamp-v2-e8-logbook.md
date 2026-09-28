@@ -52,12 +52,16 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
   change stays local with its error).
 
 ## Route and checks
-- TDD: ON (AGENTS.md §Testing, owner decision 2026-09-22). Runners: server `uv run pytest`
-  (targeted RED/GREEN, then full once); web `npm test -- --run`.
+- TDD: ON (AGENTS.md §Testing, owner decision 2026-09-22). Runners: server `uv run pytest`,
+  web `npm test -- --run`.
+- **Targeted tests only (owner 2026-09-28, time budget):** every task and gate runs only the
+  tests it touches (`uv run pytest tests/logbook`, `npm test -- --run src/lib/sync`, …). The
+  full server and web suites run ONCE, at the end of E8 (T10). Static checks are cheap and run
+  per task.
 - Server checks (in `server/`, `DATABASE_URL=postgresql+asyncpg://techcamp:techcamp@localhost:5441/techcamp`,
-  container `techcamp-e8-db`): `uv run pytest`, `uv run ruff check`, `uv run ruff format --check`,
-  `uv run mypy`, `uv run lint-imports`.
-- Web checks (in `web/`): `npm run lint`, `npm run typecheck`, `npm test -- --run`,
+  container `techcamp-e8-db`): targeted `uv run pytest tests/logbook[/...]`, `uv run ruff check`,
+  `uv run ruff format --check`, `uv run mypy`, `uv run lint-imports`.
+- Web checks (in `web/`): `npm run lint`, `npm run typecheck`, targeted `npm test -- --run <paths>`,
   `npm run build`, `npm run size` (≤ 200 KB gzip initial JS, RNF-02).
 - Size (owner, E7): **≤ 700 authored lines per commit** (hard ceiling; split into work-unit
   commits deps → shape → behavior above it); **~400 authored lines per RDD slice**, reviewed as it
@@ -75,7 +79,7 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
   at `3120dac` (E7 is not on `main` yet: its migrations and the AGENTS.md rule change are needed);
   rebase onto `main` once E7 merges.
 
-## Decisions (proposed 2026-09-28, parent; T0 writes them into the owning docs)
+## Decisions (approved by the owner 2026-09-28; written into docs/03, 04, 06 §7 by T0)
 - **D1 Commit-ordered `server_version`.** A plain sequence is not commit-ordered: a transaction
   that took 10 can commit after one that took 11, and a client that already pulled `since=11`
   never sees 10. Push takes `pg_advisory_xact_lock(<sync key>)` before `nextval` so allocation
@@ -114,12 +118,12 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
   non-members `404`. Both are cursor pages ordered newest first. Owner doc: docs/04 §Visitas.
 
 ## Open questions
-- None blocking. D1–D9 await the owner's read before T0 writes them into docs.
+- None.
 
 ## Tasks
 Forecasts are authored lines (prod + tests). Route = writer and reason.
 
-- [ ] T0 Docs first: write D1–D9 into docs/03, docs/04, docs/06 §7 (`domain-modeling` skill);
+- [x] T0 Docs first: write D1–D9 into docs/03, docs/04, docs/06 §7 (`domain-modeling` skill);
   no ADR needed (ADR-0013 stands; D1 is its implementation detail). ~80. Route: parent inline
   (one mechanical doc unit per decision, already understood).
 - [ ] T1 Schema: migration from the E7 head for the sync sequence, `logbook_entry`,
@@ -152,7 +156,8 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   re-encode + upload queue).
 - [ ] T10 Close: scenario-D server integration (same batch twice → one row, `duplicate`; stale
   edit → `conflict_overwritten`), Vitest offline→online harvest with no duplicate, visit offline
-  sync; acceptance ticked with evidence; feature doc closed. ~250. Route: **AGY** + parent.
+  sync; the FULL server and web suites (the only full run in E8); acceptance ticked with evidence;
+  feature doc closed. ~250. Route: **AGY** + parent.
 
 Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 
@@ -176,5 +181,12 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   read: docs/00, 01 (RF-10, RF-19, RNF-01), 03 §logbook_entry/§extension_visit, 04 §Bitácora
   and §Visitas, 06 §7, 07 (structure, offline data flow), 10 (E8 row), ADR-0005, 0013, 0018.
 
+- 2026-09-28 T0 (parent inline, `domain-modeling`): owner approved D1–D9; written into docs/03
+  §logbook_entry (D6), docs/04 §Bitácora (D2, D3, D4, D5, D8) and §Visitas (D9), docs/06 §7 (D1,
+  D7, D8 flow without "confirmar"). No glossary term or ADR needed (D1 implements ADR-0013).
+  Evidence: `git diff --stat` 3 docs, +32/−2; anchors `09#seguridad` and `04#bitácora-…` resolve.
+  Review: passive documentation only → structural readback, no RDD.
+- 2026-09-28 Owner rule: targeted tests only per task and gate; full suites once at T10.
+
 ## Next step
-Owner reads D1–D9 → T0 (docs) → T1 on AGY.
+T1 (schema) on AGY.

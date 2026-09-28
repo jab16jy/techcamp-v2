@@ -406,6 +406,7 @@ erDiagram
 | Cursor de sincronización | `server_version` se toma de una secuencia global en cada escritura; el cliente pide `since=<último server_version>` |
 | Conflictos | Gana la última escritura según `client_updated_at` y se registra el conflicto ([ADR-0013](adr/0013-sincronizacion-offline.md)) |
 | Campos por tipo | Columnas tipadas y un `CHECK` por `kind` (por ejemplo, `harvest ⇒ yield_kg IS NOT NULL`) en vez de un JSON libre, porque las métricas los consultan. La tabla siguiente dice qué campo alimenta cada métrica |
+| Ciclo de cultivo | `crop_cycle_id` admite `null`. Si viene, debe ser un ciclo de la misma parcela; si no, la sincronización responde `rejected` (`not_found`). El teléfono envía el ciclo activo de la parcela que tiene en caché |
 
 **Campos que alimentan las métricas de impacto** ([11-metricas](11-metricas.md); brechas G04 y G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)):
 
