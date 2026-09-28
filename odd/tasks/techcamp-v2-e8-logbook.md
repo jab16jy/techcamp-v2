@@ -116,6 +116,12 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
 - **D9 Visits read API.** `GET /farms/{farm_id}/visits`: any member of the farm's org.
   `GET /organizations/{org_id}/visits`: `owner` and `technician` (export, RF-19); others `403`,
   non-members `404`. Both are cursor pages ordered newest first. Owner doc: docs/04 §Visitas.
+- **D10 Per-`kind` CHECKs** (parent, 2026-09-28, closing the gap docs/03 left as one example):
+  required `harvest ⇒ yield_kg`, `irrigation ⇒ irrigation_mm`, `task ⇒ labor_days`,
+  `input`/`cost ⇒ cost_cop`; exclusive `yield_kg`/`sold_kg`/`sale_price_cop_per_kg` harvest-only,
+  `labor_days` task-only, `irrigation_mm` irrigation-only; `sold_kg` and price together,
+  `sold_kg ≤ yield_kg`; non-negative amounts. Derived from docs/03's metric-fields table. Owner doc:
+  docs/03 §`logbook_entry`.
 
 ## Open questions
 - None.
