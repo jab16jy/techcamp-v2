@@ -5,7 +5,6 @@ Computes the water balance row for D-1 and stores the irrigation recommendation 
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -22,6 +21,7 @@ from techcamp.irrigation.application.ports import (
     IrrigationRecommendationRepository,
     WaterBalanceRepository,
 )
+from techcamp.irrigation.application.water_stress import representative_soil_moisture_sensors
 from techcamp.irrigation.domain.errors import InvalidCropStagesError
 from techcamp.irrigation.domain.models import (
     K_ASSIMILATION_DEFAULT,
@@ -40,7 +40,6 @@ from techcamp.irrigation.domain.models import (
     compute_stress_moisture,
     compute_taw,
     decide_recommendation,
-    is_sensor_depth_representative,
     stage_for_cycle_day,
 )
 from techcamp.shared.dates import BOGOTA_TZ
@@ -50,7 +49,6 @@ from techcamp.telemetry.application.ports import (
     ReadingRepository,
     SensorRepository,
 )
-from techcamp.telemetry.domain.models import CalibrationKind
 from techcamp.weather.application.ports import WeatherRepository
 from techcamp.weather.domain.models import WeatherDay
 
@@ -392,9 +390,6 @@ async def run_daily_balance(
         and calibrations is not None
         and readings is not None
     ):
-        node_list = await nodes.list_for_org(plot.org_id, plot_id=plot.id, limit=500)
-        candidate_sensors: list[tuple[float, float]] = []
-
         # Local day D-1 in America/Bogota (D3; docs/06 §5), converted to UTC instants
         local_day_start = datetime(
             d_balance.year, d_balance.month, d_balance.day, 0, 0, 0, tzinfo=BOGOTA_TZ
@@ -403,43 +398,27 @@ async def run_daily_balance(
         day_start_utc = local_day_start.astimezone(UTC)
         day_end_utc = local_day_end.astimezone(UTC)
 
-        for node in node_list:
-            node_sensors = await sensors.list_for_node(node.id, plot.org_id)
-            for sensor in node_sensors:
-                if sensor.metric != "soil_moisture" or sensor.depth_cm is None:
-                    continue
-
-                # 1. Calibration lookup anchors to the end of local day D-1
-                # (D2; R3-freshness-anchored-to-now)
-                cal = await calibrations.get_latest_valid_at(sensor.id, plot.org_id, at=day_end_utc)
-                if cal is None or cal.kind != CalibrationKind.FIELD:
-                    continue
-
-                # 2. Valid readings in the 24 h window ending at local day D-1 (D2, D3; docs/06 §5),
-                # excluding out-of-range readings (quality & 2).
-                valid_points = await readings.query_valid_raw(
-                    sensor.id, plot.org_id, start=day_start_utc, end=day_end_utc
-                )
-                if not valid_points:
-                    continue
-
-                # 3. Daily mean of valid sensor readings for D-1 (R3-daily-value-none)
-                values = [p.value for p in valid_points if not math.isnan(p.value)]
-                if not values:
-                    continue
-
-                candidate_sensors.append((float(sensor.depth_cm), sum(values) / len(values)))
-
-        root_depth_cm = float(soil.root_depth_cm)
-        if len(candidate_sensors) in (1, 2):
-            sensor_depths_cm = [depth for depth, _ in candidate_sensors]
-            if is_sensor_depth_representative(sensor_depths_cm, root_depth_cm):
-                k = K_ASSIMILATION_DEFAULT
-                theta_obs_pct = sum(mean for _, mean in candidate_sensors) / len(candidate_sensors)
-                theta_obs = theta_obs_pct / 100.0
-                dr_obs = compute_observed_depletion(fc, theta_obs, root_depth_m, taw)
-                dr_assimilated = assimilate_depletion(dr_model, dr_obs, k, taw)
-                soil_moisture_obs_pct = theta_obs_pct
+        # The `K > 0` sensor is the same one the `water_stress` reading rule uses
+        # (D26): `irrigation.application.water_stress` owns that rule so the daily
+        # balance and the alert cannot answer it differently.
+        representative = await representative_soil_moisture_sensors(
+            org_id=plot.org_id,
+            plot_id=plot.id,
+            root_depth_cm=float(soil.root_depth_cm),
+            start=day_start_utc,
+            end=day_end_utc,
+            nodes=nodes,
+            sensors=sensors,
+            calibrations=calibrations,
+            readings=readings,
+        )
+        if representative:
+            k = K_ASSIMILATION_DEFAULT
+            theta_obs_pct = sum(s.mean_moisture_pct for s in representative) / len(representative)
+            theta_obs = theta_obs_pct / 100.0
+            dr_obs = compute_observed_depletion(fc, theta_obs, root_depth_m, taw)
+            dr_assimilated = assimilate_depletion(dr_model, dr_obs, k, taw)
+            soil_moisture_obs_pct = theta_obs_pct
 
     rec = decide_recommendation(
         has_active_cycle=True,

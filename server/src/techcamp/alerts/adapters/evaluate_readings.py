@@ -23,7 +23,9 @@ from techcamp.farms.adapters.repositories import (
     SqlAlchemyPlotRepository,
     SqlAlchemySoilProfileRepository,
 )
+from techcamp.irrigation.adapters.repositories import SqlAlchemyWaterBalanceRepository
 from techcamp.telemetry.adapters.repositories import (
+    SqlAlchemyCalibrationRepository,
     SqlAlchemyNodeRepository,
     SqlAlchemyReadingRepository,
     SqlAlchemySensorRepository,
@@ -49,6 +51,11 @@ def build_evaluator(session: AsyncSession) -> AfterFlush:
             plots=SqlAlchemyPlotRepository(session),
             soils=SqlAlchemySoilProfileRepository(session),
             alerts=SqlAlchemyAlertRepository(session),
+            # T10: `water_stress` reads the plot's θ_estrés out of the daily
+            # balance and its series off the representative sensor (docs/06 §3,
+            # §5; ADR-0022; D25, D26), both through `irrigation.application`.
+            calibrations=SqlAlchemyCalibrationRepository(session),
+            balances=SqlAlchemyWaterBalanceRepository(session),
             # D24: the plot loop shares this session, so a database failure has to
             # leave it usable before the next plot runs.
             recover=session.rollback,

@@ -110,6 +110,7 @@ flowchart TB
   alerts --> identity
   alerts --> telemetry
   alerts --> weather
+  alerts --> irrigation
   alerts --> risk
   alerts --> notifications
   notifications --> identity
@@ -127,6 +128,8 @@ flowchart TB
 ```
 
 D14: `alerts` depende de `farms` e `identity` para obtener el suelo de la parcela, el técnico de la finca y los miembros de la organización; `notifications` depende de `identity` para las suscripciones push y el teléfono del usuario.
+
+D25: `alerts` depende de `irrigation` para la regla `water_stress` sobre el balance hídrico: lee `water_balance_daily` (el θ_estrés y el `Dr > RAW` de la parcela, [§3](06-diseno-detallado.md#3-evaluación-de-alertas) y [§5](06-diseno-detallado.md#5-riego-balance-hídrico-fao-56) de [06](06-diseno-detallado.md), [ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) y comparte con el job de riego la regla del sensor representativo (`K > 0`). La dependencia es de su paquete `application` (una lectura), nunca de su `domain`, y nunca al revés: `irrigation` no depende de `alerts`, así que el job de riego sigue sin llamar a ninguna regla.
 
 **Reglas de dependencia** (verificadas en CI con `import-linter`):
 

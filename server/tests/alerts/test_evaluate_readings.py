@@ -7,8 +7,9 @@ what matters is the alert the stored readings of the window produce.
 
 from __future__ import annotations
 
+import decimal
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -30,9 +31,12 @@ from techcamp.farms.adapters.repositories import (
 )
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.domain.models import Role
+from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
+from techcamp.irrigation.adapters.repositories import SqlAlchemyWaterBalanceRepository
 from techcamp.shared.ids import uuid7
-from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
+from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, SensorRow
 from techcamp.telemetry.adapters.repositories import (
+    SqlAlchemyCalibrationRepository,
     SqlAlchemyNodeRepository,
     SqlAlchemyReadingRepository,
     SqlAlchemySensorRepository,
@@ -66,6 +70,9 @@ async def _make_plot(
     *,
     metric: str = "air_temp",
     field_capacity_pct: float | None = None,
+    depth_cm: int | None = None,
+    root_depth_cm: float | None = None,
+    calibration_kind: str | None = None,
     with_member: bool = True,
 ) -> Plot:
     org_id, farm_id, plot_id, node_id = uuid7(), uuid7(), uuid7(), uuid7()
@@ -102,13 +109,14 @@ async def _make_plot(
             irrigation_system="drip",
         )
     )
-    if field_capacity_pct is not None:
+    if field_capacity_pct is not None or root_depth_cm is not None:
         db_session.add(
             SoilProfileRow(
                 plot_id=plot_id,
                 source="lab",
                 field_capacity_pct=field_capacity_pct,
                 wilting_point_pct=10.0,
+                root_depth_cm=root_depth_cm,
             )
         )
     db_session.add(
@@ -124,11 +132,60 @@ async def _make_plot(
             status="online",
         )
     )
-    sensor = SensorRow(node_id=node_id, channel_key=f"{metric}_0", metric=metric, unit="pct")
+    sensor = SensorRow(
+        node_id=node_id,
+        channel_key=f"{metric}_0",
+        metric=metric,
+        unit="pct",
+        depth_cm=depth_cm,
+    )
     db_session.add(sensor)
+    await db_session.flush()
+    if calibration_kind is not None:
+        db_session.add(
+            CalibrationRow(
+                id=uuid7(),
+                sensor_id=sensor.id,
+                version=1,
+                method="linear",
+                kind=calibration_kind,
+                params={"scale": 1.0, "offset": 0.0},
+                valid_from=_START - timedelta(days=30),
+            )
+        )
     await db_session.commit()
     await db_session.refresh(sensor)
     return Plot(org_id, farm_id, plot_id, node_id, sensor.id)
+
+
+async def _store_balance(
+    db_session: AsyncSession,
+    plot: Plot,
+    *,
+    day: date,
+    stress_moisture_pct: float,
+    depletion_mm: float = 10.0,
+    raw_mm: float = 50.0,
+) -> None:
+    """One `water_balance_daily` row, as the 04:30 irrigation job writes it
+    (docs/06 §5: the run for day D writes the row for D−1)."""
+    db_session.add(
+        WaterBalanceDailyRow(
+            plot_id=plot.plot_id,
+            day=day,
+            etc_mm=decimal.Decimal("5.0"),
+            effective_rain_mm=decimal.Decimal("0.0"),
+            irrigation_mm=decimal.Decimal("0.0"),
+            taw_mm=decimal.Decimal("100.0"),
+            raw_mm=decimal.Decimal(str(raw_mm)),
+            depletion_model_mm=decimal.Decimal(str(depletion_mm)),
+            depletion_mm=decimal.Decimal(str(depletion_mm)),
+            soil_moisture_obs_pct=None,
+            assimilation_k=decimal.Decimal("0"),
+            stress_moisture_pct=decimal.Decimal(str(stress_moisture_pct)),
+        )
+    )
+    await db_session.commit()
 
 
 async def _store_series(
@@ -306,6 +363,148 @@ async def test_a_plot_without_a_soil_profile_evaluates_no_waterlogging(
     assert await SqlAlchemySoilProfileRepository(db_session).get_for_plot(plot.plot_id) is None
 
 
+# -- water_stress: the representative sensor against the plot's θ_estrés
+#    (docs/06 §3 "Reglas de fábrica", §5; ADR-0022, D26, D29) --
+
+
+async def test_a_dry_run_below_the_plots_stress_moisture_opens_water_stress(
+    db_session: AsyncSession,
+) -> None:
+    """The documented branch: with a representative sensor, the rule compares the
+    plot's own θ_estrés (`water_balance_daily.stress_moisture_pct`, 15.3 % in the
+    scenario-A soil of docs/06 §3) and not a fixed threshold.
+
+    The sensor is representative for the reasons docs/06 §5 names: a `field`
+    calibration, a depth at Zr/2 of a 100 cm root zone, and valid readings in the
+    window. 25 readings every 15 min = the 360 min the rule asks for.
+    """
+    plot = await _make_plot(
+        db_session,
+        metric="soil_moisture",
+        depth_cm=50,
+        root_depth_cm=100.0,
+        calibration_kind="field",
+    )
+    await _store_balance(db_session, plot, day=date(2026, 9, 25), stress_moisture_pct=15.3)
+    at = await _store_series(db_session, plot, end=_START, values=[14.0] * 25)
+
+    await _landed(db_session, plot, at=at, metric="soil_moisture")
+
+    assert [(code, state) for code, state, _ in await _alerts(db_session, plot)] == [
+        ("water_stress", AlertState.OPEN)
+    ]
+
+
+async def test_a_dry_run_above_the_plots_stress_moisture_opens_nothing(
+    db_session: AsyncSession,
+) -> None:
+    """θ_estrés is the plot's own, not a fixed number: 16 % is below the 20 % the
+    scenario of ADR-0022 G02 rejected, and above this soil's 15.3 %, so the same
+    run that opens an alert for a 15.3 % soil opens nothing for this one."""
+    plot = await _make_plot(
+        db_session,
+        metric="soil_moisture",
+        depth_cm=50,
+        root_depth_cm=100.0,
+        calibration_kind="field",
+    )
+    await _store_balance(db_session, plot, day=date(2026, 9, 25), stress_moisture_pct=15.3)
+    at = await _store_series(db_session, plot, end=_START, values=[16.0] * 25)
+
+    await _landed(db_session, plot, at=at, metric="soil_moisture")
+
+    assert await _alerts(db_session, plot) == []
+
+
+async def test_water_stress_needs_a_balanced_row_for_its_threshold(
+    db_session: AsyncSession,
+) -> None:
+    """`resolve_threshold` says a missing θ_estrés is `None` and the rule is not
+    evaluated (docs/06 §3: θ_estrés "lo recalcula cada día" el job de riego). Before
+    the first balance there is no threshold, so a dry run opens nothing."""
+    plot = await _make_plot(
+        db_session,
+        metric="soil_moisture",
+        depth_cm=50,
+        root_depth_cm=100.0,
+        calibration_kind="field",
+    )
+    at = await _store_series(db_session, plot, end=_START, values=[14.0] * 25)
+
+    await _landed(db_session, plot, at=at, metric="soil_moisture")
+
+    assert await _alerts(db_session, plot) == []
+
+
+async def test_water_stress_is_not_decided_on_a_lab_calibrated_sensor(
+    db_session: AsyncSession,
+) -> None:
+    """ADR-0022 and docs/06 §5: only a `K > 0` sensor feeds the rule, and a `lab`
+    calibration is `K = 0` (5,5–19 moisture points of error). The plot belongs to
+    the balance branch then, so this evaluator opens nothing for it (D29)."""
+    plot = await _make_plot(
+        db_session,
+        metric="soil_moisture",
+        depth_cm=50,
+        root_depth_cm=100.0,
+        calibration_kind="lab",
+    )
+    await _store_balance(db_session, plot, day=date(2026, 9, 25), stress_moisture_pct=15.3)
+    at = await _store_series(db_session, plot, end=_START, values=[14.0] * 25)
+
+    await _landed(db_session, plot, at=at, metric="soil_moisture")
+
+    assert await _alerts(db_session, plot) == []
+
+
+async def test_water_stress_is_not_decided_on_a_sensor_outside_the_root_zone(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06 §5: a 10 cm sensor does not represent a 100 cm root zone, so it is
+    not the plot's representative sensor and its series is not this rule's
+    evidence."""
+    plot = await _make_plot(
+        db_session,
+        metric="soil_moisture",
+        depth_cm=10,
+        root_depth_cm=100.0,
+        calibration_kind="field",
+    )
+    await _store_balance(db_session, plot, day=date(2026, 9, 25), stress_moisture_pct=15.3)
+    at = await _store_series(db_session, plot, end=_START, values=[14.0] * 25)
+
+    await _landed(db_session, plot, at=at, metric="soil_moisture")
+
+    assert await _alerts(db_session, plot) == []
+
+
+async def test_water_stress_resolves_above_the_hysteresis_band(
+    db_session: AsyncSession,
+) -> None:
+    """D2/docs/06 §3: with the alert open, it resolves when the representative
+    sensor clears the band (θ_estrés + 3) for 60 min, not at θ_estrés itself."""
+    plot = await _make_plot(
+        db_session,
+        metric="soil_moisture",
+        depth_cm=50,
+        root_depth_cm=100.0,
+        calibration_kind="field",
+    )
+    await _store_balance(db_session, plot, day=date(2026, 9, 25), stress_moisture_pct=15.3)
+    dry_at = await _store_series(db_session, plot, end=_START, values=[14.0] * 25)
+    await _landed(db_session, plot, at=dry_at, metric="soil_moisture")
+
+    # 17 % is inside the band (15,3 + 3 is 18,3), 19 % clears it.
+    wet_at = await _store_series(
+        db_session, plot, end=dry_at + timedelta(hours=2), values=[19.0] * 5
+    )
+    await _landed(db_session, plot, at=wet_at, metric="soil_moisture")
+
+    assert [(code, state) for code, state, _ in await _alerts(db_session, plot)] == [
+        ("water_stress", AlertState.RESOLVED)
+    ]
+
+
 # -- the rules are data: one org's own threshold rule, and no other org's --
 
 
@@ -440,6 +639,8 @@ async def test_a_plot_whose_evaluation_raises_does_not_silence_the_next_plot(
         plots=SqlAlchemyPlotRepository(db_session),
         soils=SqlAlchemySoilProfileRepository(db_session),
         alerts=SqlAlchemyAlertRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        balances=SqlAlchemyWaterBalanceRepository(db_session),
         recover=db_session.rollback,
     )
 
@@ -475,6 +676,8 @@ async def test_a_database_failure_in_one_plot_does_not_silence_the_next_plot(
         plots=SqlAlchemyPlotRepository(db_session),
         soils=SqlAlchemySoilProfileRepository(db_session),
         alerts=SqlAlchemyAlertRepository(db_session),
+        calibrations=SqlAlchemyCalibrationRepository(db_session),
+        balances=SqlAlchemyWaterBalanceRepository(db_session),
         recover=db_session.rollback,
     )
 

@@ -4,9 +4,13 @@
 The rule set is data: `plot_rule_metric` (D17) says which of a plot's rules
 this source decides, so `heat_stress`, `waterlogging` and an org's own rules are
 decided by the same code, and the rules of the other four sources of docs/06 §3
-are skipped without a case per rule. `water_stress` is inert here until T10
-supplies the plot's `stress_moisture_pct` (its threshold is `None`, so
-`decide_alert` answers `NO_ACTION`).
+are skipped without a case per rule. `water_stress` is decided here too, on the
+plot's own evidence: its threshold is the plot's θ_estrés out of
+`water_balance_daily` and its series is the REPRESENTATIVE sensor's alone
+(docs/06 §3 "Reglas de fábrica", §5; ADR-0022; D26, D29), both read through
+`irrigation.application.water_stress` (docs/05's `alerts --> irrigation`, D25). A
+plot without a representative sensor is not decided here at all: its soil-moisture
+series is not evidence for this rule, and the daily balance owns it (D29).
 
 The use case supplies inputs and calls the right lifecycle use case (D9); the
 domain owns every decision. The whole window is read back from `reading`
@@ -51,7 +55,18 @@ from techcamp.alerts.domain import (
     plot_rule_metric,
 )
 from techcamp.farms.application.ports import PlotRepository, SoilProfileRepository
-from techcamp.telemetry.application.ports import NodeRepository, ReadingRepository, SensorRepository
+from techcamp.irrigation.application.ports import WaterBalanceRepository
+from techcamp.irrigation.application.water_stress import (
+    balance_stress_evidence,
+    representative_soil_moisture_sensors,
+)
+from techcamp.shared.dates import local_today
+from techcamp.telemetry.application.ports import (
+    CalibrationRepository,
+    NodeRepository,
+    ReadingRepository,
+    SensorRepository,
+)
 from techcamp.telemetry.domain.models import ReadingEvent, Sensor
 
 if TYPE_CHECKING:
@@ -69,6 +84,12 @@ _ONE_SECOND = timedelta(seconds=1)
 """`ReadingRepository.query_raw` is `[start, end)`, so the window has to end just
 after the batch's own newest reading: that sample is the evidence the decision
 is about."""
+
+_REPRESENTATIVE_LOOKBACK = timedelta(hours=24)
+"""docs/06 §5: a representative sensor needs "lectura válida en 24 h", so the
+rolling window that proves it is the 24 h ending at the decision instant. The
+daily balance proves the same thing with the local day D−1 (its D2/D3 anchor);
+the rule is shared, the window is each caller's (D26)."""
 
 
 def _plot_rules(rules: Sequence[AlertRule]) -> list[tuple[AlertRule, str]]:
@@ -96,6 +117,8 @@ async def evaluate_landed_readings(
     soils: SoilProfileRepository,
     alerts: AlertRepository,
     recover: UnitOfWorkRecovery,
+    calibrations: CalibrationRepository,
+    balances: WaterBalanceRepository,
 ) -> None:
     """Decide every reading-threshold rule of the plots the batch just landed.
 
@@ -140,6 +163,8 @@ async def evaluate_landed_readings(
                 nodes=nodes,
                 soils=soils,
                 alerts=alerts,
+                calibrations=calibrations,
+                balances=balances,
             )
         except Exception:
             logger.exception(
@@ -160,6 +185,8 @@ async def _evaluate_plot(
     nodes: NodeRepository,
     soils: SoilProfileRepository,
     alerts: AlertRepository,
+    calibrations: CalibrationRepository,
+    balances: WaterBalanceRepository,
 ) -> None:
     threshold_rules = _plot_rules(await rules.list_for_org(plot.org_id))
     if not threshold_rules:
@@ -173,15 +200,50 @@ async def _evaluate_plot(
     max_gap = timedelta(seconds=3 * max(node.interval_s for node in plot_nodes))
     soil = await soils.get_for_plot(plot.id)
     sensors_by_metric = await _sensors_by_metric(plot, plot_nodes, sensors=sensors)
+    # `water_stress` is the one plot rule whose threshold and series are the
+    # plot's own (docs/06 §3, §5; ADR-0022), so it is resolved once here instead
+    # of per rule. Read only when the org actually has the rule: a plot whose
+    # rules are all plain thresholds pays nothing for it.
+    stress_moisture_pct: float | None = None
+    representative: set[int] = set()
+    if any(rule.code == "water_stress" for rule, _ in threshold_rules):
+        evidence = await balance_stress_evidence(
+            balances, org_id=plot.org_id, plot_id=plot.id, to_day=local_today(at)
+        )
+        stress_moisture_pct = None if evidence is None else evidence.stress_moisture_pct
+        representative = {
+            sensor.sensor_id
+            for sensor in await representative_soil_moisture_sensors(
+                org_id=plot.org_id,
+                plot_id=plot.id,
+                root_depth_cm=None if soil is None else soil.root_depth_cm,
+                start=at - _REPRESENTATIVE_LOOKBACK,
+                end=at + _ONE_SECOND,
+                nodes=nodes,
+                sensors=sensors,
+                calibrations=calibrations,
+                readings=readings,
+            )
+        }
 
     for rule, metric in threshold_rules:
         # D2: an open alert also resolves on a 60 min clear run, so the window
         # covers the longer of the two runs.
         window = max(rule.min_duration, RESOLUTION_WINDOW)
+        sources = sensors_by_metric
+        if rule.code == "water_stress":
+            # docs/06 §5: "Solo ese sensor alimenta la regla `water_stress` sobre
+            # lecturas" (D29). The other soil-moisture sensors of the plot keep
+            # feeding the rules that are decided on the plot's series; an empty
+            # set leaves this rule with no samples, so it is not decided here.
+            sources = {
+                **sensors_by_metric,
+                metric: _sensors_of(sensors_by_metric, metric, representative),
+            }
         samples = await _samples(
             metric,
             org_id=plot.org_id,
-            sensors_by_metric=sensors_by_metric,
+            sensors_by_metric=sources,
             readings=readings,
             start=at - window,
             end=at + _ONE_SECOND,
@@ -198,6 +260,7 @@ async def _evaluate_plot(
             max_gap=max_gap,
             current_alert=current,
             field_capacity_pct=soil.field_capacity_pct if soil is not None else None,
+            stress_moisture_pct=stress_moisture_pct,
         )
         match decision.action:
             case AlertAction.OPEN:
@@ -224,6 +287,13 @@ async def _evaluate_plot(
                 )
             case AlertAction.NO_ACTION:
                 pass
+
+
+def _sensors_of(
+    sensors_by_metric: Mapping[str, Sequence[Sensor]], metric: str, keep: set[int]
+) -> list[Sensor]:
+    """The plot's sensors of `metric` that are in `keep` (the representative ones)."""
+    return [sensor for sensor in sensors_by_metric.get(metric, ()) if sensor.id in keep]
 
 
 async def _sensors_by_metric(

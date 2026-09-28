@@ -7,6 +7,7 @@ stay behind it.
 
 from techcamp.alerts.application.evaluate_node_health import evaluate_node_health
 from techcamp.alerts.application.evaluate_readings import evaluate_landed_readings
+from techcamp.alerts.application.evaluate_water_stress import evaluate_balance_rules
 from techcamp.alerts.application.evaluate_weather_rules import evaluate_weather_rules
 from techcamp.alerts.application.manage_rules import create_rule, list_rules, update_rule
 from techcamp.alerts.application.ports import AlertRepository, AlertRuleRepository, AlertTarget
@@ -25,6 +26,7 @@ __all__ = [
     "AlertTarget",
     "acknowledge",
     "create_rule",
+    "evaluate_balance_rules",
     "evaluate_landed_readings",
     "evaluate_node_health",
     "evaluate_weather_rules",
