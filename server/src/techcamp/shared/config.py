@@ -48,7 +48,9 @@ def vapid_private_key() -> str | None:
     rule for a channel nobody can send yet.
 
     The value is what `pywebpush` signs with: the base64 DER of the EC2
-    (prime256v1) private key, as `py_vapid` writes it. The public half is
+    (prime256v1) private key, as `py_vapid` writes it. `Vapid.from_string`
+    accepts it (non-32-byte payload routes to `from_der`), pinned by
+    `test_a_base64_der_vapid_key_from_the_config_path_signs`. The public half is
     derived from it, never configured separately, so the two can never drift
     apart in the server's own configuration.
     """

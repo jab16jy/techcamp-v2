@@ -13,7 +13,9 @@ makes the 404/410 mapping testable without a live service.
 
 from __future__ import annotations
 
+import base64
 import json
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -22,6 +24,9 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from py_vapid import Vapid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +44,7 @@ from techcamp.notifications.domain.errors import (
     PushSubscriptionGoneError,
 )
 from techcamp.notifications.domain.models import Channel, PushSubscription
+from techcamp.shared.config import vapid_private_key, vapid_subject
 from techcamp.shared.ids import uuid7
 
 pytestmark = pytest.mark.anyio
@@ -514,3 +520,51 @@ def _web_push_exception(status: int) -> push_transport_module.WebPushException:
         f"Push failed: {status}",
         response=SimpleNamespace(status=status, status_code=status),
     )
+
+
+async def test_a_base64_der_vapid_key_from_the_config_path_signs(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The configured key format is the one `py_vapid` actually accepts.
+
+    A review lens twice claimed the opposite — that `TECHCAMP_VAPID_PRIVATE_KEY`
+    is unusable because a base64 DER key is not the raw private-key scalar, and
+    in the previous round that `WebPushException` has no `status_code` at all.
+    Both were reasoned from this candidate's own docstrings rather than from the
+    installed library. This test settles it by walking the real config path and
+    then asking `py_vapid` itself, through the same call `webpush_async` makes,
+    whether the value it was handed signs.
+
+    `Vapid.from_string` decides by length: a 32-byte payload is the raw scalar and
+    anything else is DER, so a base64 DER key is exactly what it routes to
+    `from_der`. If the configured format ever stops being accepted, this fails
+    here instead of spending every `push` row its five attempts at runtime.
+    """
+    private = ec.generate_private_key(ec.SECP256R1())
+    # Exactly what `infra/compose.yaml` tells an operator to configure: an EC2
+    # (prime256v1) key, its PKCS#8 DER, base64-encoded.
+    configured = base64.b64encode(
+        private.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    ).decode()
+    monkeypatch.setenv("TECHCAMP_VAPID_PRIVATE_KEY", configured)
+
+    assert vapid_private_key() == configured
+    sender = build_senders(_subs(db_session))[Channel.PUSH]
+    assert isinstance(sender, WebPushSender)
+    delivered = sender._transport._private_key
+    assert delivered == configured
+
+    headers = Vapid.from_string(private_key=delivered).sign(
+        {
+            "sub": vapid_subject(),
+            "aud": "https://push.example.com",
+            "exp": int(time.time()) + 3600,
+        }
+    )
+    # RFC 8292's own header shape, so this is a real VAPID assertion and not just
+    # a key that happened to parse.
+    assert headers["Authorization"].startswith("vapid t=")
