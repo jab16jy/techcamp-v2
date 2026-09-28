@@ -297,6 +297,7 @@ def _float(val: Decimal | None) -> float | None:
 
 @router.get("/sync/pull", response_model=PullResponse)
 async def pull(
+    session: SessionDep,
     user_id: CurrentUserId,
     entries: EntrySyncRepoDep,
     visits: VisitSyncRepoDep,
@@ -304,7 +305,14 @@ async def pull(
     since: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=500)] = 500,
 ) -> PullResponse:
-    """`GET /sync/pull?since=<server_version>&limit=500` (docs/04 §Bitácora; D2)."""
+    """`GET /sync/pull?since=<server_version>&limit=500` (docs/04 §Bitácora; D1, D2).
+
+    Runs in a single REPEATABLE READ (read-only) transaction so that entries and visits
+    see one snapshot, preventing cursor gaps (D1; RNF-01).
+    """
+    await session.connection(
+        execution_options={"isolation_level": "REPEATABLE READ", "postgresql_readonly": True}
+    )
     page = await pull_changes(
         caller_id=user_id,
         since=since,

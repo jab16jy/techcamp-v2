@@ -25,8 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from techcamp.identity.adapters.orm import MembershipRow, OrganizationRow
 from techcamp.logbook.adapters.repositories import (
     SYNC_LOCK_KEY,
+    SqlAlchemyExtensionVisitSyncRepository,
 )
-from techcamp.logbook.application.ports import LogbookEntryChange
+from techcamp.logbook.application.ports import ExtensionVisitChange, LogbookEntryChange
 from techcamp.logbook.domain.models import SyncOp, SyncStatus
 from techcamp.main import app
 from techcamp.shared.config import database_url
@@ -503,3 +504,105 @@ async def test_d1_pull_returns_push_committed_after_concurrent_lock(
             assert str(blocked_id) in returned_ids2
     finally:
         await holder.close()
+
+
+async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
+    env: SyncEnv, pusher_for: type[Pusher], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3-pull-two-query-cursor-gap: pull reads must see a single snapshot.
+
+    If an entry commits at version N and a visit at version N+1 between the two
+    reads, the page must not return the visit at N+1 while missing the entry at N
+    and advancing next_since to N+1 (which would permanently skip version N).
+    Both reads must see ONE snapshot: either version N is returned, or next_since
+    stays below version N.
+    """
+    producer = env.mine.users["producer"]
+    token = env.mine.tokens["producer"]
+
+    seed_id = uuid7()
+    _push(token, [_entry_payload(seed_id, env.mine.plot_id, env.now)])
+
+    concurrent_entry_id = uuid7()
+    concurrent_visit_id = uuid7()
+
+    entry_change = LogbookEntryChange(
+        id=concurrent_entry_id,
+        op=SyncOp.UPSERT,
+        client_updated_at=env.now + timedelta(seconds=1),
+        plot_id=env.mine.plot_id,
+        crop_cycle_id=None,
+        kind="observation",
+        occurred_on=date(2026, 9, 28),
+        quantity=None,
+        unit=None,
+        cost_cop=None,
+        yield_kg=None,
+        sold_kg=None,
+        sale_price_cop_per_kg=None,
+        labor_days=None,
+        irrigation_mm=None,
+        alert_id=None,
+        notes="concurrent entry",
+        created_offline=False,
+    )
+    visit_change = ExtensionVisitChange(
+        id=concurrent_visit_id,
+        op=SyncOp.UPSERT,
+        client_updated_at=env.now + timedelta(seconds=1),
+        farm_id=env.mine.farm_id,
+        plot_id=None,
+        technician_id=env.mine.users["technician"],
+        visited_on=date(2026, 9, 28),
+        topics=["natural_resources"],
+        recommendations=None,
+        commitments=None,
+        notes="concurrent visit",
+    )
+
+    orig_list_for_pull = SqlAlchemyExtensionVisitSyncRepository.list_for_pull
+    interleaved = False
+
+    async def hooked_list_for_pull(self: Any, org_ids: Any, *, since: int, limit: int) -> Any:
+        nonlocal interleaved
+        if not interleaved:
+            interleaved = True
+            async with async_session_factory() as second_session:
+                pusher = pusher_for(second_session)
+                res_e = await pusher.entry(entry_change, caller_id=producer)
+                assert res_e.status is SyncStatus.APPLIED
+                res_v = await pusher.visit(visit_change, caller_id=env.mine.users["technician"])
+                assert res_v.status is SyncStatus.APPLIED
+                await second_session.commit()
+        return await orig_list_for_pull(self, org_ids, since=since, limit=limit)
+
+    monkeypatch.setattr(
+        SqlAlchemyExtensionVisitSyncRepository, "list_for_pull", hooked_list_for_pull
+    )
+
+    with _client() as client:
+        resp = client.get("/sync/pull?since=0", headers=_auth(token))
+    assert resp.status_code == 200
+    page = resp.json()
+    change_ids = [c["id"] for c in page["changes"]]
+
+    # Under READ COMMITTED bug: concurrent_visit is in page, but concurrent_entry is not,
+    # and next_since jumped past concurrent_entry!
+    # Assert that if concurrent_entry was not returned, next_since stays below it so that
+    # the subsequent pull from next_since retrieves concurrent_entry.
+    assert not (
+        str(concurrent_visit_id) in change_ids and str(concurrent_entry_id) not in change_ids
+    ), (
+        f"Cursor gap / silent loss: visit {concurrent_visit_id} was returned but concurrent "
+        f"entry {concurrent_entry_id} was skipped, next_since jumped to {page['next_since']}"
+    )
+
+    if str(concurrent_entry_id) not in change_ids:
+        # Verify subsequent pull recovers concurrent_entry
+        with _client() as client:
+            resp2 = client.get(f"/sync/pull?since={page['next_since']}", headers=_auth(token))
+        assert resp2.status_code == 200
+        page2 = resp2.json()
+        change_ids2 = [c["id"] for c in page2["changes"]]
+        assert str(concurrent_entry_id) in change_ids2
+        assert str(concurrent_visit_id) in change_ids2
