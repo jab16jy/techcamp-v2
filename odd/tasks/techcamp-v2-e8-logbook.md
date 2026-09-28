@@ -330,6 +330,14 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   review); R3-db-backstop-bypasses-push-contract stays in the issue. Then T3 merges (expect
   `main.py` and `logbook/adapters/api/deps.py`, `ports.py`, `repositories.py` conflicts with T5/T6).
 
+- E7 delivered to `main` (PRs up to #159, `20a1258`). `origin/main` merged into integration
+  (clean, 19 commits over the E8 base `3120dac`: E7 T11 scenario A + dispatch fixes; no new
+  migration, head `e8b109b00c01`). Integration: tests/logbook + notifications/test_dispatch 137
+  passed, ruff, format (271), mypy (181), lint-imports clean. E8 PRs now stack on `main` directly.
+- T4 waits for T3's #160 commits (owner, 2026-09-28): T3 merges first, then lane `e8-t4` (AGY,
+  DB 5446) starts from integration with `.git-brief-e8-T4.md`. T9a waits for T8 (owner: one new
+  screen at a time).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
