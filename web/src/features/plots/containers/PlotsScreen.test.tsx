@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../../../lib/api/session'
-import { PlotsScreen } from './PlotsScreen'
+import { PlotsScreen, type PlotsScreenProps } from './PlotsScreen'
 
 // The Leaflet map is mocked (task instruction): these wiring tests only care
 // that the creation sheets open with the right farm, not about map drawing.
@@ -257,5 +257,133 @@ describe('PlotsScreen', () => {
       screen.getByText('Humedad, suelo, ciclo de cultivo y nodos de esta parcela.'),
     ).toBeInTheDocument()
     expect(screen.getAllByText('Lote Norte')).toHaveLength(2)
+  })
+
+  it('shows the "Registrar visita" action for technician and NOT for owner/producer/viewer', async () => {
+    setSession('token-abc', 'org-1')
+
+    function mockRequests(role: string) {
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = requestUrl(input as Request)
+        if (url.includes('/me')) {
+          return jsonResponse({
+            id: 'user-1',
+            phone: '3001234567',
+            email: null,
+            full_name: 'Carlos Tecnico',
+            memberships: [{ org_id: 'org-1', role }],
+          })
+        }
+        if (url.includes('/farms/farm-1/plots')) return jsonResponse([])
+        if (url.includes('/farms?org_id=org-1')) {
+          return jsonResponse({
+            items: [{ id: 'farm-1', org_id: 'org-1', name: 'Finca La Esperanza' }],
+            next_cursor: null,
+          })
+        }
+        throw new Error(`unexpected request: ${url}`)
+      })
+    }
+
+    // Role = technician: action is visible
+    mockRequests('technician')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <PlotsScreen callerRole="technician" />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Finca La Esperanza')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Registrar visita' })).toBeInTheDocument()
+    unmount()
+
+    // Negative assertions for other roles: owner, producer, viewer, and default undefined
+    for (const nonTechRole of ['owner', 'producer', 'viewer'] as const) {
+      mockRequests(nonTechRole)
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const { unmount: unmountOther } = render(
+        <QueryClientProvider client={qc}>
+          <PlotsScreen callerRole={nonTechRole} />
+        </QueryClientProvider>,
+      )
+      await waitFor(() => expect(screen.getByText('Finca La Esperanza')).toBeInTheDocument())
+      expect(screen.queryByRole('button', { name: 'Registrar visita' })).not.toBeInTheDocument()
+      unmountOther()
+    }
+  })
+
+  it('opening the sheet from a farm offers that farms plots and not plots from other farms', async () => {
+    setSession('token-tech', 'org-1')
+
+    const farm1 = { id: 'farm-1', org_id: 'org-1', name: 'Finca La Esperanza' }
+    const farm2 = { id: 'farm-2', org_id: 'org-1', name: 'Finca El Porvenir' }
+
+    const plotFarm1 = {
+      id: 'plot-1-1',
+      farm_id: 'farm-1',
+      name: 'Lote Café 1',
+      area_ha: 2,
+      irrigation_system: 'drip' as const,
+    }
+    const plotFarm2 = {
+      id: 'plot-2-1',
+      farm_id: 'farm-2',
+      name: 'Lote Cacao 2',
+      area_ha: 3,
+      irrigation_system: 'none' as const,
+    }
+
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/farms?org_id=org-1')) {
+        return jsonResponse({
+          items: [farm1, farm2],
+          next_cursor: null,
+        })
+      }
+      if (url.includes('/farms/farm-1/plots')) {
+        return jsonResponse([plotFarm1])
+      }
+      if (url.includes('/farms/farm-2/plots')) {
+        return jsonResponse([plotFarm2])
+      }
+      throw new Error(`unexpected request: ${url}`)
+    })
+
+    const renderNewVisitSheet = vi.fn<NonNullable<PlotsScreenProps['renderNewVisitSheet']>>(
+      ({ farm, plots, open }) => (
+        <div data-testid="mock-visit-sheet">
+          <span>Finca: {farm.name}</span>
+          <span>Parcelas: {plots.map((p) => p.name).join(', ')}</span>
+          <span>Abierto: {open ? 'si' : 'no'}</span>
+        </div>
+      ),
+    )
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PlotsScreen callerRole="technician" renderNewVisitSheet={renderNewVisitSheet} />
+      </QueryClientProvider>,
+    )
+
+    // Wait for farms to load
+    await waitFor(() => expect(screen.getByText('Finca La Esperanza')).toBeInTheDocument())
+    expect(screen.getByText('Finca El Porvenir')).toBeInTheDocument()
+
+    // Find the two "Registrar visita" buttons
+    const visitButtons = screen.getAllByRole('button', { name: 'Registrar visita' })
+    expect(visitButtons).toHaveLength(2)
+
+    // Click "Registrar visita" on farm-1
+    fireEvent.click(visitButtons[0])
+
+    await waitFor(() => expect(renderNewVisitSheet).toHaveBeenCalled())
+    const lastCallFarm1 = renderNewVisitSheet.mock.calls.at(-1)![0]
+    expect(lastCallFarm1.farm.id).toBe('farm-1')
+    expect(lastCallFarm1.plots).toHaveLength(1)
+    expect(lastCallFarm1.plots[0].name).toBe('Lote Café 1')
+    expect(lastCallFarm1.plots.some((p) => p.name === 'Lote Cacao 2')).toBe(false)
   })
 })

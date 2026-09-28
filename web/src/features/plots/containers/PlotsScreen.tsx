@@ -1,25 +1,44 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
 import { MapIcon } from '../../../design-system/ui/icons'
 import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useOrgId } from '../../../lib/api/session'
-import { useFarms, usePlotsByFarm, type PlotView } from '../api/plotsApi'
+import type { Role } from '../../../lib/api/me'
+import { useFarms, usePlotsByFarm, type FarmView, type PlotView } from '../api/plotsApi'
 import { PlotsList } from '../components/PlotsList'
 import { CreateFarmSheet } from './CreateFarmSheet'
 import { CreatePlotSheet } from './CreatePlotSheet'
 import { PlotDetailSheet } from './PlotDetailSheet'
 
+export interface PlotsScreenProps {
+  /** Caller role in the active organization (E8 D14). Technician enables visit registration. */
+  callerRole?: Role | null
+  /** Optional extension visit sheet renderer (E8 D14). Keeps features decoupled. */
+  renderNewVisitSheet?: (props: {
+    farm: FarmView
+    plots: PlotView[]
+    open: boolean
+    onOpenChange: (open: boolean) => void
+  }) => ReactNode
+}
+
 /** Plots tab (replaces the `PlaceholderPage`): the org's farms and each farm's plots,
  * plus farm/plot creation (T8, docs/07: the tab's own empty-state CTA and list). */
-export function PlotsScreen() {
+export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScreenProps = {}) {
   const orgId = useOrgId()
+  const isTechnician = callerRole === 'technician'
   const farmsQuery = useFarms(orgId)
   const farmIds = farmsQuery.data?.farms.map((farm) => farm.id) ?? []
   const plotsQueries = usePlotsByFarm(farmIds)
   const [creatingFarm, setCreatingFarm] = useState(false)
   const [creatingPlotForFarmId, setCreatingPlotForFarmId] = useState<string | null>(null)
+  const [visitingFarm, setVisitingFarm] = useState<FarmView | null>(null)
   const [selectedPlot, setSelectedPlot] = useState<PlotView | null>(null)
+
+  const plotsByFarmId = new Map<string, PlotView[]>(
+    farmIds.map((id, index) => [id, plotsQueries[index]?.data ?? []]),
+  )
 
   return (
     <div className="px-0 pt-6">
@@ -74,6 +93,7 @@ export function PlotsScreen() {
                 plotsQuery: plotsQueries[index],
               }))}
               onAddPlot={setCreatingPlotForFarmId}
+              onAddVisit={isTechnician ? setVisitingFarm : undefined}
               onSelectPlot={setSelectedPlot}
             />
             {farmsQuery.data.hasMore && (
@@ -91,6 +111,14 @@ export function PlotsScreen() {
           onOpenChange={(open) => !open && setCreatingPlotForFarmId(null)}
           farmId={creatingPlotForFarmId}
         />
+      )}
+      {visitingFarm && renderNewVisitSheet && (
+        renderNewVisitSheet({
+          farm: visitingFarm,
+          plots: plotsByFarmId.get(visitingFarm.id) ?? [],
+          open: true,
+          onOpenChange: (open) => !open && setVisitingFarm(null),
+        })
       )}
       {selectedPlot && (
         <PlotDetailSheet

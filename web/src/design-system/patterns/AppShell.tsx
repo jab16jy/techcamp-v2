@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router'
+import { Toaster } from '../ui/toast'
 import { cn } from '../ui/utils'
 import { HomeIcon, BellIcon, NotebookIcon, MapIcon, MoreIcon, type IconProps } from '../ui/icons'
 import type { ComponentType } from 'react'
@@ -25,6 +26,7 @@ export function AppShell() {
       <main className="mx-auto w-full max-w-md flex-1 pb-24">
         <Outlet />
       </main>
+      <Toaster />
       <nav
         aria-label="Navegación principal"
         className="fixed inset-x-0 bottom-0 mx-auto flex max-w-md border-t border-text/10 bg-surface-raised"
