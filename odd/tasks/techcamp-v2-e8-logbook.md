@@ -530,6 +530,18 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   medium), not a data-loss path (more statuses stay pending; the hook is read-only) → no new round.
   **T9b merged** `f5e76d1`; integration web: lint, typecheck clean, 25 files / 156 passed, build,
   171.21 kB. #165 closed; `e8-t9b` session closed and worktree removed (web lane, no DB).
+- T10 started (owner go, 2026-09-29; owner chose OpenCode with DeepSeek v4.1 flash free, xhigh, so
+  the writer runs its own RDD): lane `e8-t10` (`feat/e8-t10-close` from `763670c`, server + web,
+  DB `techcamp-e8-db-t10` on 5447, CodeGraph index), session `e8-t10` in pane `wF:pH`, briefs
+  `.git-brief-e8-common.md` + `.git-brief-e8-T10.md`. The briefs cover the server scenario D over
+  HTTP (duplicate, stale edit `conflict_overwritten`, pull once; offline visit) and the web scenario
+  D (offline save, one push, a replay adds no row; the same for a visit). Leftovers the parent
+  assigned to T10: #142 R3-assert-fails-unspecific, #143 R3-weak-exception-assertions and
+  R3-non-finite-coverage-narrow (test-only). Left open: #145 (trailing empty page is a
+  codebase-wide convention; the inverted range needs a docs decision) and #160
+  R3-db-backstop (defensible by design). The orphan cleanup follow-up is
+  filed as [#166](https://github.com/jab16jy/techcamp-v2/issues/166) (ADR-0018; includes the
+  `api` → `minio-init` note). T10 also runs the only full server and web suites in E8.
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
