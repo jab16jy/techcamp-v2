@@ -187,9 +187,10 @@ Issue #139 (evidence from E7/E8):
   `gitleaks` job verifies the release checksum before executing it, because the step downloads
   and runs a release asset; a version pin alone would not catch a tampered download.
   Rejected: the action, for the two reasons above, and a version pin without the checksum.
-- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha` with `-m`, and with
-  neither `--first-parent` nor `--no-merges`. The three git-walk facts, each a silent hole that
-  was proven on a scratch branch rather than reasoned about (the evidence is in Progress):
+- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha`, with neither
+  `--first-parent` nor `--no-merges`, and the merge diff comes from D-T5.4's `--remerge-diff`.
+  Each fact below was proven on a scratch branch rather than reasoned about (the evidence is in
+  Progress):
   - *The merge base, not `base^..head`* (the shape gitleaks-action uses). On this branch
     `base^..head` covers 15 commits where the PR has 12: `base^` plus the commits main gained
     after the merge base, so a commit already on main is judged as part of the PR. A secret
@@ -203,19 +204,25 @@ Issue #139 (evidence from E7/E8):
     Nothing is lost by dropping it, because the merge base — not `--first-parent` — is what
     excludes main: on this branch all 12 commits in `merge-base..HEAD` are feature commits and
     0 of them are ancestors of main.
-  - *No `--no-merges`, and `-m` instead.* This is the same hole from the other side, and the
-    first cut of this job walked straight into it: `--no-merges` came from gitleaks-action
-    along with the reasoning that a merge's diff only repeats the branch commits. That is
-    false for a **conflict resolution** — the resolved lines exist in no other commit, so
-    dropping the merge drops a credential nobody else carries. Two CRITICAL findings, one from
-    the risk lens and one from the resilience lens, reported it independently. Removing
-    `--no-merges` alone is **not** the fix: `git log -p` emits no diff at all for a merge
-    commit, so the corrected-looking command still reported `no leaks found` over a branch
-    whose only secret lived in a conflict resolution. `-m` emits the merge's diff against each
-    parent, which is what actually reaches the resolved lines. Proved: `--no-merges` → 3
-    commits scanned, no leaks; no merge flag → 3 commits scanned, no leaks; `-m` → 4 commits
-    scanned, 2 leaks, exit 1. The duplicated finding is `-m` reporting the same line as added
-    against each of the two parents, which is noise in the log and not a defect in the gate.
+  - *No `--no-merges`*, which came from gitleaks-action with the reasoning that a merge's diff
+    only repeats the branch commits. That is false for a **conflict resolution**: the resolved
+    lines exist in no other commit, so dropping the merge drops a credential nobody else
+    carries. Two CRITICAL findings, one from the risk lens and one from the resilience lens,
+    reported it independently, and it is proven as `0 leaks` over a branch whose only secret
+    lived in a resolution. Note the other half of that trap: with no merge flag at all,
+    `git log -p` emits **no diff** for a merge commit, so a merge is walked and read as empty.
+    Reaching a resolution needs a flag that emits a merge diff, which is D-T5.4's job.
+- D-T5.4 The merge diff is `--remerge-diff`, **not** `-m`, and `-m` was a regression the parent
+  gate caught on 2cc0d0a. `-m` diffs a merge against **each** parent, so the diff against the
+  feature parent carries all of main's content; this repository merges main into an epic branch
+  before slicing chained PRs, so a clean merge of main re-reported main's own findings and the
+  gate failed on content already on main — the E8 PR #182 shape again, one layer over.
+  `--remerge-diff` diffs the merge against git's own automatic re-merge, so what shows is
+  exactly what the resolution wrote and main is not re-reported. It needs git 2.36 or newer,
+  which `ubuntu-latest` ships, and ci.yml names the floor because a runner that did not would
+  fail the walk rather than skip it. Rejected: `-m` (re-reports main; also duplicates one
+  finding per parent, so the same resolution logs twice where `--remerge-diff` logs once), and
+  `--first-parent` on its own (D-T5.2's second bullet: it hides a whole lane).
 - D-T5.3 gitleaks is CI-only and does **not** join `gate-fast`. `gate-fast` has no PR range,
   so the only shape it could use is a whole-history scan, and that fails on this repository
   today: 4 findings, all non-secrets, exit 1 (the evidence is in Progress). Hosting it would
@@ -468,12 +475,33 @@ Issue #139 (evidence from E7/E8):
       **exit 0**. Still missed — `git log -p` emits no diff for a merge commit at all, so
       removing the flag walks the merge and reads nothing. This is the trap: the obvious
       correction is not a correction.
-    - `-m`: `4 commits scanned`, `2 leaks found`, **exit 1**. The resolution is read, because
-      `-m` emits the merge's diff against each parent. The same line is reported once per
-      parent, which is log noise and not a gate defect.
+    - `-m`: `4 commits scanned`, `2 leaks found`, **exit 1**. The resolution is read, but this
+      flag was itself the next regression — see the D-T5.4 entry below. The final flag is
+      `--remerge-diff`, which reports the same resolution as **1** leak, once, because there is
+      one diff instead of one per parent.
     The lesson is the same one the `--first-parent` fix carries: neither hole was visible by
     reading the command, and both were visible in one scratch run. Reasoning about a git walk
     is not evidence; a merge on a scratch branch is.
+  - **`-m` was a third hole, caught by the parent gate on 2cc0d0a.** `-m` was the fix for the
+    conflict-resolution hole and it broke the other half of the problem. It diffs a merge
+    against **each** parent, so the diff against the feature parent carries all of main's
+    content, and this repository merges main into an epic branch before slicing chained PRs.
+    The parent proved it and I reproduced it before changing anything: branch from `e4dd324^`,
+    two feature commits, then `e4dd324` (the commit that added the fixtures) merged in as
+    "main"; over `merge-base(e4dd324, HEAD)..HEAD`, `-m` reported `2 leaks` in main's own
+    `CalibrationSheet.test.tsx` and `NodeDetailSheet.test.tsx` and exited 1 — the gate failing
+    on content already on main, the E8 PR #182 shape one layer over.
+  - **The final flag is `--remerge-diff`**, which diffs the merge against git's own automatic
+    re-merge, so only what the resolution wrote shows. All four cases on one scratch worktree
+    (`/tmp/opencode/t5-proof3`, removed afterwards with every scratch branch):
+    | case | required | `--remerge-diff` |
+    |---|---|---|
+    | clean merge of main | no false positive | `no leaks found`, exit 0 |
+    | conflict resolution writing a flagged value | caught | `1 leak`, exit 1 |
+    | second-parent lane carrying a secret | caught | `1 leak`, exit 1 |
+    | `--no-merges --first-parent` | shows both original holes | `no leaks found`, exit 0 |
+    On the conflict case the three flags read `--no-merges` 0 leaks, `-m` 2 leaks,
+    `--remerge-diff` 1 leak. It needs git 2.36 or newer, and ci.yml names that floor.
   - `actionlint` 1.7.12 on `ci.yml`: exit 0, no findings. Its `shellcheck` rule is **skipped
     silently** when shellcheck is not on `PATH` (first run reported `Rule "shellcheck" was
     disabled`), so shellcheck 0.11.0 was installed outside the repo and the run repeated:
