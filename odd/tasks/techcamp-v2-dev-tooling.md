@@ -129,13 +129,17 @@ Issue #139 (evidence from E7/E8):
   would diverge from the file's own convention without adding reproducibility the lock does not
   already give.
 - D-T2.2 `no-naive-today` covers the three shapes the docs forbid — `date.today()`, a zero-argument
-  `datetime.now()` and `datetime.utcnow()` — scoped with `files: server/src/**/*.py` and
-  `ignores: server/src/techcamp/shared/dates.py`, the one module allowed a naive read because it
-  attaches UTC to it on the next line. Recorded limit: `datetime.date.today()` (a three-segment
-  member chain) and `datetime.now(tz=None)` are not matched. A metavariable form (`$X.today()`)
-  would catch the first but would also flag any domain method named `today()`, so the precise
-  shapes stand and a second rule id can add more when a real occurrence demands it. The rule test
-  documents both what is covered and what is not.
+  `datetime.now()` and `datetime.utcnow()` — under **both** import styles this repository uses:
+  `from datetime import date, datetime` and the module-qualified `import datetime`, where the same
+  three are `datetime.date.today()`, `datetime.datetime.now()` and `datetime.datetime.utcnow()`.
+  The qualified spellings are not redundant with the direct ones: the member chain is a segment
+  longer, so a direct pattern cannot see them, and 14 files in `server/src` use `import datetime`.
+  The rule is scoped with `files: server/src/**/*.py` and `ignores:
+  server/src/techcamp/shared/dates.py`, the one module allowed a naive read because it attaches
+  UTC to it on the next line. Recorded limit: `datetime.now(tz=None)` is an explicit naive read
+  that the zero-argument pattern does not match; a metavariable form (`$X.today()`) would catch
+  the qualified chain too but would also flag any domain method named `today()`, so the precise
+  shapes stand. The rule test documents what is covered and what is not.
 - D-T2.3 The scan is one command, run from `server/` in both places: `uv run ast-grep scan
   --config ../sgconfig.yml`. Rule paths are relative to the config file, not the cwd, so the scan
   covers the whole tree whatever a rule names, and CI's server job (whose working directory is
@@ -254,6 +258,17 @@ Issue #139 (evidence from E7/E8):
     Both scratch edits were reverted and `git status` confirmed the tree.
   - The existing tree is clean under the rule: 30-odd `datetime.now(UTC)` calls and zero
     `date.today()`, zero-arg `datetime.now()` or `datetime.utcnow()` in `server/src`.
+  - Second cycle, the parent's probe before the review: the rule reported `date.today()` but not
+    `datetime.datetime.now()`, because a direct pattern cannot match a longer member chain. 14
+    files in `server/src` use `import datetime`, so the gap was half the repository's style. RED
+    after adding the three qualified invalid cases and the aware qualified valid ones:
+    `FAIL no-naive-today  .............MMM` with `[Missing] Expect rule no-naive-today to report
+    issues, but none found in: day = datetime.date.today()` and the same for
+    `datetime.datetime.now()` and `datetime.datetime.utcnow()`; `0 passed; 1 failed` (exit 4).
+    GREEN after the three extra patterns and a refreshed snapshot: `PASS no-naive-today
+    ................` (16 cases), `1 passed; 0 failed`. The repo scan stayed clean, the probe now
+    reports both shapes (`2 error(s) found`), and `datetime.datetime.now(UTC)` /
+    `datetime.date(2026, 9, 29)` stay unreported.
 
 ## Next step
 T2 committed; the parent gates the sha, then the RDD review runs for the slice. Next task: T3

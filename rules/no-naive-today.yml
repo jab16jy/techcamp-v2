@@ -3,8 +3,9 @@ language: Python
 severity: error
 message: >-
   no-naive-today: read the product's day through shared.dates.local_today, and take
-  the instant with an explicit timezone (datetime.now(UTC)). A naive read is UTC on
-  one host and local time on another (docs/06 §5).
+  the instant with an explicit timezone (datetime.now(UTC), or the module-qualified
+  datetime.datetime.now(UTC)). A naive read is UTC on one host and local time on
+  another (docs/06 §5).
 notes: |
   The product operates in one local timezone, America/Bogota (docs/04-api.md:63-75,
   docs/06 §5, docs/10-dag.md:156). A naive read is UTC on one host and local time on
@@ -17,8 +18,15 @@ ignores:
   - server/src/techcamp/shared/dates.py
 rule:
   any:
+    # `from datetime import date, datetime`, the import style most of the repository uses.
     - pattern: date.today()
     - pattern: datetime.utcnow()
     # No arguments at all: a call with any timezone is aware, so the shape with
     # parentheses and nothing inside is exactly the naive read.
     - pattern: datetime.now()
+    # `import datetime`, the other half of the repository's style. These are not
+    # redundant: the member chain is a segment longer, so the patterns above cannot see
+    # them at all, and a naive read under this import is the same defect.
+    - pattern: datetime.date.today()
+    - pattern: datetime.datetime.utcnow()
+    - pattern: datetime.datetime.now()

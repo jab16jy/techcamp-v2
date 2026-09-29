@@ -6,6 +6,24 @@ snapshots:
       style: primary
       start: 6
       end: 18
+  day = datetime.date.today():
+    labels:
+    - source: datetime.date.today()
+      style: primary
+      start: 6
+      end: 27
+  now = datetime.datetime.now():
+    labels:
+    - source: datetime.datetime.now()
+      style: primary
+      start: 6
+      end: 29
+  now = datetime.datetime.utcnow():
+    labels:
+    - source: datetime.datetime.utcnow()
+      style: primary
+      start: 6
+      end: 32
   now = datetime.now():
     labels:
     - source: datetime.now()

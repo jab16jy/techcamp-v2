@@ -14,9 +14,20 @@ valid:
   - day = local_today(now if now is not None else datetime.now(UTC))
   # A date is not "today" on its own: an explicit day is how a caller passes one.
   - day = date(2026, 9, 29)
+  - day = datetime.date(2026, 9, 29)
+  # The module-qualified spellings, which 14 files in this repo use (`import datetime`).
+  # The aware forms stay valid, or the rule would force a rewrite of all of them.
+  - now = datetime.datetime.now(UTC)
+  - now = datetime.datetime.now(tz=BOGOTA_TZ)
+  - day = datetime.date.fromtimestamp(0)
 
 invalid:
-  # The three shapes the rule exists for.
+  # The three shapes the rule exists for, under `from datetime import ...`.
   - day = date.today()
   - now = datetime.now()
   - now = datetime.utcnow()
+  # The same three under `import datetime`, which is half the repository's style and
+  # silently invisible to the direct spellings.
+  - day = datetime.date.today()
+  - now = datetime.datetime.now()
+  - now = datetime.datetime.utcnow()
