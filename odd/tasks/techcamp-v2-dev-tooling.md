@@ -93,9 +93,29 @@ Issue #139 (evidence from E7/E8):
   (`gate-full`). Owner: targeted pytest per task, full suite on a clean DB at epic close.
 - D-T0.2 Decision numbers are per task (`D-Tx.n`), starting with this doc.
 - D-T0.3 CODEOWNERS/hash test deferred to E10 (ADR-0020:42; `ml/` absent).
+- D-T1.1 The database identity is the worktree path through POSIX `cksum`: port
+  `55000 + crc % 10000`, container `techcamp-db-<slug>-<crc>`. Every worktree follows the rule,
+  the main checkout included, so the seminar stack on 5432 is never what these recipes touch and
+  the isolation invariant has no exception to remember. A taken port fails `db-up` loudly rather
+  than sharing a database. Rejected: keeping the main checkout on the compose DB (two rules, one
+  of them a carve-out from the invariant this task exists to remove).
+- D-T1.2 The identity is derived in a private `db-env` recipe, not in a backtick: `just` does not
+  interpolate `{{_worktree}}` inside a backtick string, so a backtick hashed the literal text
+  `{{_worktree}}` and every worktree resolved to the same container and port. Found by running
+  `db-info` from a second path, not by reading the docs.
+- D-T1.3 `gate-lane` checks each commit out in a detached temporary worktree and shares the lane's
+  `web/node_modules` by symlink (uv builds each checkout's `.venv` from its cache); no commit is
+  rewritten and the lane's tree never moves, so the shas it prints are the branch's shas. Rejected:
+  `git rebase -x` (rewrites shas) and checking out in place (leaves the tree on another commit when
+  the run stops at a failure).
+- D-T1.4 `gate` exports a `DATABASE_URL` derived from this worktree and ignores an inherited one: a
+  URL left in the environment by another checkout would point these tests at a database another
+  worktree migrates and drops. The escape hatch is running pytest directly.
+- D-T1.5 `just --working-directory` must be paired with `--justfile` (`just --help`, 1.58.0); the
+  ctx7 quick reference shows `-d` alone. Caught by the gate-lane evidence run, not by a doc.
 
 ## Tasks
-- [ ] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
+- [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
   Alembic head), `gate *paths`, `gate-full`, `gate-lane base`. AGENTS.md Commands + the
   `D-Tx.n` convention in Workflow. Evidence: each recipe run, `gate-lane` over a range with
   one broken commit (in a scratch branch, deleted after).
@@ -126,6 +146,39 @@ Issue #139 (evidence from E7/E8):
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
   `techcamp-v2-worktrees/dev-tooling` on `feat/dev-tooling` from `9519e05`, CodeGraph indexed.
+- 2026-09-29 T1: `justfile` at the repo root (`default`, `db-info`, `db-up`, `db-down`,
+  `db-reset`, `gate-fast`, `gate *paths`, `gate-full`, `gate-lane base="main"`, private
+  `db-env`) + AGENTS.md Commands and the Workflow decision convention. `just` 1.58.0 installed
+  for the runs via `uv tool install rust-just`. Every recipe run on this worktree:
+  - `just db-info` → `techcamp-db-dev-tooling-2722977105` on port 62105; the same justfile at
+    another path → `techcamp-db-other-wt-2302701857` on 56857, and the main checkout's path →
+    `techcamp-db-techcamp-v2-1942765054` on 60054. Three paths, three identities.
+  - `just db-up` → ready in ~7s; `postgis`, `timescaledb` and `vector` present in the container,
+    so the mounted `infra/postgres/init-extensions.sql` ran. Second `just db-up` → "already
+    exists; run 'just db-reset'", exit 1.
+  - `just gate-fast` → ruff, ruff format, mypy (186 files), lint-imports, one Alembic head
+    (`e8b109b00c01`), eslint, tsc: green in 22s. Negative case: an untracked scratch file with a
+    formatting error → `1 file would be reformatted`, exit 1, file deleted again.
+  - `just gate server/tests/shared/test_dates.py` → static checks + `4 passed`. A node id
+    (`…::test_bogota_tz_is_america_bogota`) → `1 passed`; `web/src/design-system/components/
+    MetricTile.test.tsx` → `3 passed`; `docs/09-cuellos-de-botella.md` → "no test runner; the
+    static checks already ran". A path with no tests → pytest exit 4, the recipe fails instead of
+    passing quietly. Bare `just gate` → the eight static steps and no test.
+  - `just gate-full` and `just gate-lane fdb248e` on a scratch branch (`scratch/gate-lane-t1`,
+  three commits: justfile, then a commit importing `techcamp.shared.not_yet` that the next commit
+  adds — the E8 PR #182 shape — then that module). The lane's HEAD passed `gate-fast`
+  ("Success: no issues found in 186 source files"), so gating HEAD alone would have passed;
+  `gate-lane` passed `31b1824`, stopped at `e266c06` with the mypy failure and named it, and never
+  reached the fixing commit. Exit 1. The main worktree stayed on `fdb248e` with an untracked
+  `justfile` for the whole run, the scratch shas were unchanged, and the scratch branch and both
+  temporary worktrees were removed after.
+  - Not run here: `gate-full`'s full pytest/vitest/build/size (T3 and T6 by design, the full
+    suite once on a clean DB at epic close).
+  - Known gap for T6's diff: the single-Alembic-head check is in `gate-fast` and not yet in CI,
+    which is the one check the two do not share. T1 does not touch CI (the scope adds ast-grep,
+    gitleaks and whatever T4 adopts, and nothing else), so the decision is T6's: add
+    `alembic heads` to the server job, or move the check out of `gate-fast`.
 
 ## Next step
-T1 by the OpenCode writer.
+T1 committed; the parent gates the sha and the RDD review runs for it. Next task: T2 (ast-grep
+`no-naive-today` + rule tests), after the parent's go.

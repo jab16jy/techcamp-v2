@@ -54,9 +54,10 @@ TimescaleDB and pgvector ([ADR-0003](docs/adr/0003-postgres-unico.md)); Mosquitt
 
 ## Commands
 
-Server (run in `server/`). Tests hit a real Postgres: start the stack first; `DATABASE_URL`
-defaults to `postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp`, and the session
-fixture migrates to head and downgrades after.
+Server (run in `server/`). Tests hit a real Postgres: `just db-up` (below) starts the one this
+worktree owns and the gate recipes export its `DATABASE_URL`; running `pytest` directly falls
+back to `postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp` (`shared/config.py`),
+the seminar stack's database. The session fixture migrates to head and downgrades after.
 
 - `uv run pytest` · one test: `uv run pytest tests/identity/test_x.py::test_name`
 - `uv run ruff check` · `uv run ruff format` · `uv run mypy` · `uv run lint-imports`
@@ -69,8 +70,28 @@ Web (run in `web/`):
 
 Infra: `podman-compose -f infra/compose.yaml --profile seminar up` (Docker: `docker compose`).
 
-CI (`.github/workflows/ci.yml`) runs all of the above, `ruff format --check` and the size budget
-included; green locally means green in CI.
+Gates (`just`, from the repo root). `just` is a system tool, not a project dependency:
+`uv tool install rust-just` (or `cargo install just`, or brew).
+
+- `just db-up` · `db-down` · `db-reset`: this worktree's own Postgres
+  (`docker.io/timescale/timescaledb-ha:pg16`, with the extensions `infra/compose.yaml` mounts),
+  on a container name and port derived from the worktree directory, so parallel worktrees never
+  share a database. `just db-info` prints the container, the port and the `DATABASE_URL` the
+  recipes export.
+- `just gate-fast`: the static checks only — server `ruff check`, `ruff format --check`, `mypy`,
+  `lint-imports` and a single Alembic head; web `lint`, `typecheck`. No database, no tests.
+- `just gate <paths…>`: `gate-fast` plus exactly the tests you name. `server/…` runs pytest (the
+  `server/` prefix is stripped), `web/…` runs `vitest --run`, any other path adds nothing.
+  Node ids pass through: `just gate server/tests/irrigation/test_x.py::test_y`. No paths means
+  the static checks only — the full suite is `gate-full`, taken on purpose.
+- `just gate-full`: the epic-close run. Recreates this worktree's database clean, then
+  `gate-fast`, full pytest, full vitest, web `build` and `size`.
+- `just gate-lane <base>`: `gate-fast` on every commit in `base..HEAD`, oldest first, stopping at
+  the first failure and naming its sha (the E8 PR #182 lesson). Each commit is checked out in a
+  detached temporary worktree, so the lane's own tree never moves and no commit is rewritten.
+
+CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`, and runs the same
+checks plus `ruff format --check` and the size budget; green locally means green in CI.
 
 ## Architecture rules
 
@@ -95,6 +116,9 @@ cover irrigation math. Vitest for web units; Playwright for e2e and scenarios ar
 
 - Organic Driven Development: one feature doc per epic at `odd/tasks/<feature>.md`, in the build
   order of docs/10. Branch per epic.
+- Decisions are numbered per task, `D-T3.1` or `D-T9b.2`: the task id plus a number inside it. A
+  bare `D24` collides the moment two branches work in parallel — three branches reused D24–D29 in
+  E7 — so the task is part of the id.
 - Conventional Commits, no AI attribution. Work-unit commits, receipt-driven review per commit.
 - Blocking review findings are fixed immediately, in the review's bounded correction, before the
   next task.
