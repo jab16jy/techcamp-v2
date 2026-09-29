@@ -186,7 +186,7 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   Done: lane `e8-t7`, merged `ca97354` (#144, #147 fixes); RDD `review-fb0c138492a9057a`,
   `review-6bc080d05399a4ad` approved (CRITICAL fixed in `d105968`); #147 fixes reviewed on their
   own, `review-539f27f2073c24b7` approved (#163 → fixed in T8).
-- [ ] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
+- [x] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
   (harvest with `sold_kg` / price, task with `labor_days`, link to a cached alert), "Guardado en el
   teléfono" state, conflict/rejected notices, `SyncIndicator` wired. First commit: regenerate
   `schema.d.ts` (T3/T4 paths) and swap T7's hand-typed `lib/sync` transport to `apiClient`.
@@ -194,6 +194,8 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   synchronizer. Test notes from T7: fake-indexeddb needs `setImmediate` unfaked (explicit
   `toFake` list); a union of two Dexie tables types `put()` as the intersection (dispatch per entity). `impeccable`, design frozen.
   ~550 → T8a list + sync state, T8b entry sheet, one session. Route: **AGY**.
+  Done: lane `e8-t8`, merged `893e874` (split per owner: schema chore, transport, list, sheet;
+  #163, #164 fixes); RDD `review-0646e53ffbede472` approved.
 - [ ] T9 Visits screen (`features/visits`): new visit sheet from a farm (five Ley 1876 topics),
   offline, plus client photo compression and pending upload queue for entries and visits.
   ~450 → T9a visit sheet, T9b photos, one session. Route: **AGY** (T9a), **OpenCode** (T9b, canvas
@@ -475,6 +477,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   `apiClient` swap; SUGGESTIONs stale `quantity` error, invalid `sold_kg` unchecked without price.
   All sent to `e8-t8` now (AGY rule).
 
+- #164 fixed by `e8-t8`: `18081f4` (syncState reset on session change + transition tests),
+  `2a88106` (sync 401 through `apiClient` expires the session, outbox untouched — D11), `fb0d097`
+  (quantity error cleared, invalid `sold_kg` validated without price). Gate: 17 files / 121 passed,
+  171.19 kB; fixes under budget, no new review. **T8 merged** (`893e874`): integration web lint,
+  typecheck, logbook+visits+plots+lib+app 24 files / 177 passed, build, 171.19 kB. #163, #164
+  closed; `e8-t8` session and worktree removed.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
@@ -519,13 +528,9 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-(2026-09-28, after the T4 merge) Integration `feat/e8-logbook` (on top of `main` `20a1258`) holds
-T0–T7 and T9a: tests/logbook 129 passed; web 173.1 kB. Nothing of E8 is on `main` yet: push and
-stacked PRs need the owner's explicit go.
-1. T8 logbook screen (AGY, `impeccable` mandatory, design frozen): first commit regenerates
-   `schema.d.ts` and swaps the T7 transport to `apiClient`; the shell calls
-   `requestPersistentStorage()` once and starts the synchronizer; a "sync blocked" state for an
-   unparseable pull page (T7 note). Its first RDD slice also covers T7's #147 fixes
-   (`58fb730..ddb46bc`, base `d105968`).
-2. T9b photos + upload queue (OpenCode, after T8; Content-Length = presigned `bytes`).
-3. T10 close with the only full-suite run; then delivery on the owner's go.
+(2026-09-29, after the T8 merge) Integration `feat/e8-logbook` holds T0–T8 and T9a (tests/logbook
+129 passed; web 177 passed, 171.19 kB). Nothing of E8 is on `main` yet: push and stacked PRs need the
+owner's explicit go.
+1. T9b photos + upload queue for entries and visits (OpenCode; canvas re-encode ≤ 200 KB, EXIF
+   stripped; Content-Length must equal the presigned `bytes`; `impeccable`, design frozen).
+2. T10 close with the only full-suite run; then delivery on the owner's go.
