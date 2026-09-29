@@ -4,6 +4,7 @@ import type { ExtensionVisitData, ExtensionVisitRow, LogbookEntryData, LogbookEn
 import { getCursor, getDeviceId, setCursor } from '../db/meta'
 import { recordSyncOutcome } from './syncState'
 import { pullChanges, pushChanges, type SyncStopReason, SyncStoppedError } from './transport'
+import { uploadPendingPhotos } from './uploadPhotos'
 import type { PullResponse, PushChange, PushResult } from './types'
 
 /** docs/04 §Bitácora: a batch carries at most 100 changes, and the server answers `422` beyond that. */
@@ -36,6 +37,11 @@ async function run(): Promise<SyncOutcome> {
   try {
     const pushed = await pushPending()
     const pulled = await pullMissing()
+    // docs/06 §7: the run ends with the pending photos. After the push, so an
+    // entry created offline is already on the server (D8 asks for a synced
+    // parent), and after the pull, so a parent another device synced is
+    // visible before its photos are presigned against it.
+    await uploadPendingPhotos()
     const outcome: SyncOutcome = { status: 'synced', pushed, pulled }
     recordSyncOutcome(outcome)
     return outcome
