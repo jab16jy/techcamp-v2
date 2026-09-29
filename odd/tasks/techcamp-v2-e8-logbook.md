@@ -612,6 +612,12 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   (add/add on `ports.py`, `repositories.py`) and only the merge carries the resolution. The last
   slice's tree is byte-identical to `feat/e8-logbook` at `72eae02` (verified). PRs over 400 lines
   are labelled `size:exception` after one slicing pass.
+  CI caught #182 (T8 slice cut at `2294889`) failing typecheck: `2294889` imports `./syncState`,
+  which only `93ce5c9` adds. The T8 split commit never compiled alone, and the gate only checked
+  the lane HEAD. With the owner's consent, the chain was rebuilt from slice 15 as **22 slices**:
+  15 = `93ce5c9`; `e8/15..22` were force-pushed, #182–#189 retitled, and #190 closed. Slices 01–14
+  are unchanged, and the final tree still equals `72eae02`. Lesson: when a lane is split into
+  commits, the gate runs typecheck on every commit, not only on HEAD.
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
