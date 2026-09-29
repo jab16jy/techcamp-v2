@@ -12,21 +12,22 @@ set export
 # downgrades to base once per session, so two worktrees on one database drop each
 # other's tables (#139). Identity is the path of the worktree this justfile lives in.
 #
-# The identity is derived in the private `db-env` recipe, not in a backtick: `just`
-# does not interpolate `{{_worktree}}` inside a backtick string, so a backtick would
-# hash the literal text "{{_worktree}}" and every worktree would resolve to the same
-# container and port. Recipes read the three values from its output instead.
+# The path reaches the recipes through this exported variable, never as interpolated
+# shell text: a worktree directory may contain a space, a `$` or a quote, and bash would
+# expand whatever `{{...}}` put inside a double-quoted string. Backticks cannot read the
+# variable at all (just does not interpolate inside a backtick string), which is why the
+# derivation lives in the private `db-env` recipe and the recipes read its output.
 #
 # ponytail: the derivation is four lines of POSIX shell, and no dependency earns its
 # place here. A port already bound fails `db-up` loudly rather than sharing a database.
-_worktree := justfile_directory()
+export _worktree := justfile_directory()
 _runtime := `sh -c 'command -v podman || command -v docker'`
 # podman runs the container under SELinux on Linux and needs the bind mount labelled;
 # docker rejects the label, so it only rides on the podman side.
 _vol_label := `sh -c 'command -v podman >/dev/null 2>&1 && echo ",z" || echo ""'`
 
 # `<port> <container name> <database url>` for this worktree. Read as
-# `read -r port container url <<<"$(just --justfile "{{_worktree}}/justfile" db-env)"`.
+# `read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"`.
 [private]
 [no-exit-message]
 db-env:
@@ -34,10 +35,10 @@ db-env:
     set -euo pipefail
     # cksum prints the CRC and a byte count, and the CRC is the first field. It is POSIX
     # and deterministic, so the same worktree path always lands on the same port.
-    crc=$(printf %s "{{_worktree}}" | cksum)
+    crc=$(printf %s "$_worktree" | cksum)
     crc=${crc%% *}
     port=$((55000 + crc % 10000))
-    slug=$(basename "{{_worktree}}" | tr "[:upper:]" "[:lower:]" | sed "s/[^a-z0-9-]/-/g")
+    slug=$(basename "$_worktree" | tr "[:upper:]" "[:lower:]" | sed "s/[^a-z0-9-]/-/g")
     echo "$port techcamp-db-$slug-$crc postgresql+asyncpg://techcamp:techcamp@127.0.0.1:$port/techcamp"
 
 # Listing the recipes is the default. Without this, the first recipe in the file would
@@ -55,8 +56,8 @@ default:
 db-info:
     #!/usr/bin/env bash
     set -euo pipefail
-    read -r port container url <<<"$(just --justfile "{{_worktree}}/justfile" db-env)"
-    echo "worktree:  {{_worktree}}"
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
+    echo "worktree:  $_worktree"
     echo "container: $container"
     echo "port:      $port"
     echo "runtime:   {{_runtime}}"
@@ -75,7 +76,7 @@ db-up:
       echo "neither podman nor docker is on PATH; one of them is needed for the test database" >&2
       exit 1
     fi
-    read -r port container url <<<"$(just --justfile "{{_worktree}}/justfile" db-env)"
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
     if [ -n "$({{_runtime}} ps -aq --filter "name=^$container$")" ]; then
       echo "$container already exists; run 'just db-reset' for a clean one" >&2
       exit 1
@@ -83,7 +84,7 @@ db-up:
     {{_runtime}} run -d --name "$container" \
       -e POSTGRES_USER=techcamp -e POSTGRES_PASSWORD=techcamp -e POSTGRES_DB=techcamp \
       -p 127.0.0.1:$port:5432 \
-      -v "{{_worktree}}/infra/postgres/init-extensions.sql:/docker-entrypoint-initdb.d/init-extensions.sql:ro{{_vol_label}}" \
+      -v "$_worktree/infra/postgres/init-extensions.sql:/docker-entrypoint-initdb.d/init-extensions.sql:ro{{_vol_label}}" \
       docker.io/timescale/timescaledb-ha:pg16
     for _ in $(seq 1 30); do
       # -h 127.0.0.1 on purpose: while the image runs its init scripts the entrypoint
@@ -106,7 +107,7 @@ db-up:
 db-down:
     #!/usr/bin/env bash
     set -euo pipefail
-    read -r port container url <<<"$(just --justfile "{{_worktree}}/justfile" db-env)"
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
     if [ -z "$({{_runtime}} ps -aq --filter "name=^$container$")" ]; then
       echo "no $container to remove"
       exit 0
@@ -129,7 +130,7 @@ db-reset: db-down db-up
 gate-fast:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd "{{_worktree}}/server"
+    cd "$_worktree/server"
     echo "--- ruff check";        uv run ruff check
     echo "--- ruff format";      uv run ruff format --check
     echo "--- mypy";             uv run mypy
@@ -143,7 +144,7 @@ gate-fast:
       uv run alembic heads >&2
       exit 1
     fi
-    cd "{{_worktree}}/web"
+    cd "$_worktree/web"
     echo "--- eslint";           npm run lint
     echo "--- tsc";              npm run typecheck
 
@@ -162,7 +163,7 @@ gate-fast:
 gate *paths: gate-fast
     #!/usr/bin/env bash
     set -euo pipefail
-    read -r port container url <<<"$(just --justfile "{{_worktree}}/justfile" db-env)"
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
     export DATABASE_URL="$url"
     for path in "$@"; do
       case "$path" in
@@ -174,11 +175,11 @@ gate *paths: gate-fast
             exit 1
           fi
           echo "--- pytest $path"
-          (cd "{{_worktree}}/server" && uv run pytest "${path#server/}")
+          (cd "$_worktree/server" && uv run pytest "${path#server/}")
           ;;
         web/*)
           echo "--- vitest $path"
-          (cd "{{_worktree}}/web" && npm test -- --run "${path#web/}")
+          (cd "$_worktree/web" && npm test -- --run "${path#web/}")
           ;;
         *)
           echo "--- $path: no test runner; the static checks already ran"
@@ -194,11 +195,11 @@ gate *paths: gate-fast
 gate-full: db-reset gate-fast
     #!/usr/bin/env bash
     set -euo pipefail
-    read -r port container url <<<"$(just --justfile "{{_worktree}}/justfile" db-env)"
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
     export DATABASE_URL="$url"
-    cd "{{_worktree}}/server"
+    cd "$_worktree/server"
     echo "--- pytest (full)"; uv run pytest
-    cd "{{_worktree}}/web"
+    cd "$_worktree/web"
     echo "--- vitest (full)"; npm test -- --run
     echo "--- vite build";    npm run build
     echo "--- size budget";   npm run size
@@ -220,7 +221,7 @@ gate-full: db-reset gate-fast
 gate-lane base="main":
     #!/usr/bin/env bash
     set -euo pipefail
-    lane_root="{{_worktree}}"
+    lane_root="$_worktree"
     shas=$(git -C "$lane_root" rev-list --reverse "{{base}}..HEAD")
     if [ -z "$shas" ]; then
       echo "no commits in {{base}}..HEAD; nothing to gate"

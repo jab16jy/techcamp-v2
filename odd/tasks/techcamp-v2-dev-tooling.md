@@ -103,11 +103,15 @@ Issue #139 (evidence from E7/E8):
   interpolate `{{_worktree}}` inside a backtick string, so a backtick hashed the literal text
   `{{_worktree}}` and every worktree resolved to the same container and port. Found by running
   `db-info` from a second path, not by reading the docs.
-- D-T1.3 `gate-lane` checks each commit out in a detached temporary worktree and shares the lane's
-  `web/node_modules` by symlink (uv builds each checkout's `.venv` from its cache); no commit is
-  rewritten and the lane's tree never moves, so the shas it prints are the branch's shas. Rejected:
-  `git rebase -x` (rewrites shas) and checking out in place (leaves the tree on another commit when
-  the run stops at a failure).
+- D-T1.3 `gate-lane` checks each commit out in a detached temporary worktree and judges it against
+  its own dependency graph: uv builds that commit's own `.venv` from its own `uv.lock`, and
+  `web/node_modules` is symlinked from the lane root only while the two agree on
+  `web/package-lock.json`, installed with `npm ci` in the checkout when they do not. Symlinking it
+  unconditionally was `R3-lane-node-modules`, fixed in the RDD correction `001e7cb`: a borrowed
+  graph is E8 PR #182's shape, a commit gated against something other than its own tree. No commit
+  is rewritten and the lane's tree never moves, so the shas it prints are the branch's shas.
+  Rejected: `git rebase -x` (rewrites shas) and checking out in place (leaves the tree on another
+  commit when the run stops at a failure).
 - D-T1.4 `gate` exports a `DATABASE_URL` derived from this worktree and ignores an inherited one: a
   URL left in the environment by another checkout would point these tests at a database another
   worktree migrates and drops. The escape hatch is running pytest directly.
@@ -153,6 +157,12 @@ Issue #139 (evidence from E7/E8):
 - Boundary: branch point `9519e05`. Per work-unit commit; the parent gates first, then the
   OpenCode session runs RDD. Non-blocking findings go to one issue per round
   (`review-follow-up`, `area:*`, `type:*`).
+- T1 is done. Round 1, lineage `review-429366d35a8ea6b3`: candidate `9519e05..HEAD` (3 files, 485
+  lines, `medium`), one lens (`review-reliability`), one correction budget. One CRITICAL,
+  `R3-lane-node-modules`, fixed in the single bounded correction `001e7cb`; approved and
+  acknowledged, `authority: burned`. The two WARNINGs (`R3-stale-ci-parity`,
+  `R3-unescaped-worktree-path`) and the D-T1.3 drift are #193; the unescaped path and the doc drift
+  are fixed in this session, and `R3-stale-ci-parity` is accepted until T2 lands D-T1.6 in this PR.
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
@@ -188,7 +198,10 @@ Issue #139 (evidence from E7/E8):
   - Known gap, closed in T2 by D-T1.6: the single-Alembic-head check is in `gate-fast` and not
     yet in CI, the one check the two did not share. T1 does not touch CI (the scope adds
     ast-grep, gitleaks and whatever T4 adopts, and nothing else); T2 adds `alembic heads` to the
-    server job in the same work unit as the ast-grep scan.
+    server job in the same work unit as the ast-grep scan, in the same PR. The RDD WARNING
+    `R3-stale-ci-parity` on the AGENTS.md sentence that already claims parity is therefore
+    accepted for this round and AGENTS.md is left as is: T2 makes the sentence true in the same
+    PR that ships the rest of the feature, and softening it now would only be true twice.
 
 ## Next step
 T1 committed; the parent gates the sha and the RDD review runs for it. Next task: T2 (ast-grep
