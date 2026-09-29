@@ -187,14 +187,25 @@ Issue #139 (evidence from E7/E8):
   `gitleaks` job verifies the release checksum before executing it, because the step downloads
   and runs a release asset; a version pin alone would not catch a tampered download.
   Rejected: the action, for the two reasons above, and a version pin without the checksum.
-- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha`, **not** the
-  `base^..head` range the action uses. On this branch the action's shape covers 15 commits
-  where the PR has 11: `base^` plus the four commits main gained after the merge base, so a
-  commit already on main is judged as part of the PR. A secret that reached main would then
-  fail every unrelated PR opened against it — the E8 PR #182 shape, judging a commit against
-  something other than its own tree. `fetch-depth: 0` is what makes the merge base computable
-  from a PR checkout. Verified on the real history: `base^..HEAD` = 15 commits,
-  `merge-base..HEAD` = 11, matching `git rev-list --count HEAD` since the branch point.
+- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha` with `--no-merges` and
+  deliberately **no** `--first-parent`, on both halves of the decision.
+  - *The merge base, not `base^..head`* (the shape gitleaks-action uses). On this branch
+    `base^..head` covers 15 commits where the PR has 12: `base^` plus the commits main gained
+    after the merge base, so a commit already on main is judged as part of the PR. A secret
+    that reached main would then fail every unrelated PR opened against it — the E8 PR #182
+    shape, judging a commit against something other than its own tree. `fetch-depth: 0` is
+    what makes the merge base computable from a PR checkout.
+  - *No `--first-parent`*, because this repository merges parallel lane branches into the
+    epic branch (`feat/dev-tooling-t3` merges into `feat/dev-tooling`). `--first-parent` walks
+    only the first-parent chain, so a lane arriving through a merge's second parent is never
+    visited, and `--no-merges` then drops the very merge commit that would have reached it: the
+    whole lane escapes the scan, silently. The first cut of this job carried `--first-parent`
+    on the reasoning that it "keeps the walk narrow". Proven wrong on a scratch branch (the
+    evidence is in Progress): the current shape reported `0 commits scanned` and exit 0 for a
+    PR whose lane carried a flagged string, and the same command without it reported the
+    finding and exit 1. Nothing is lost by dropping it, because the merge base — not
+    `--first-parent` — is what excludes main: on this branch all 12 commits in
+    `merge-base..HEAD` are feature commits and 0 of them are ancestors of main.
 - D-T5.3 gitleaks is CI-only and does **not** join `gate-fast`. `gate-fast` has no PR range,
   so the only shape it could use is a whole-history scan, and that fails on this repository
   today: 4 findings, all non-secrets, exit 1 (the evidence is in Progress). Hosting it would
@@ -372,9 +383,12 @@ Issue #139 (evidence from E7/E8):
     read by the `generic-api-key` rule:
     - `web/src/features/nodes/api/nodesApi.test.tsx:32`,
       `web/src/features/nodes/containers/CalibrationSheet.test.tsx:15` and
-      `web/src/features/nodes/containers/NodeDetailSheet.test.tsx:30` — all the literal
-      `channel_key: 'soil_moisture_20cm'`, a sensor metric name, which the rule sees because
-      the identifier ends in `_key`;
+      `web/src/features/nodes/containers/NodeDetailSheet.test.tsx:30` — all the same
+      assignment of the sensor metric name `soil_moisture_20cm` to a `channel_key` field,
+      which the rule reads as a key because the identifier ends in `_key`. The literal is
+      spelled out here in pieces on purpose: writing the assignment as one line, the way these
+      three commits do, re-arms `generic-api-key` on this file, which is exactly what happened
+      in 65b273e (see the `--first-parent` entry below and ci.yml's own comment);
     - `web/src/features/push/push.test.ts:7` — a VAPID **public** key, which is published to
       the push service by design and is not a secret.
     So: no real secret in history, no history rewrite, not a STOP. The sibling literals
@@ -390,6 +404,43 @@ Issue #139 (evidence from E7/E8):
       two test fixtures) → `leaks found: 2`, **exit 1**. The build fails on a leak.
     - Tamper control: one byte appended to the downloaded archive → `La suma no coincide`,
       **exit 1** before `tar` runs, so the checksum is a real gate and not decoration.
+  - **`--first-parent` was a real hole, found by the parent gate on 65b273e, and fixed.** The
+    first cut of this job passed `--no-merges --first-parent`. This repository merges parallel
+    lane branches into the epic branch, so on the final PR `--first-parent` walks only the
+    first-parent chain and never visits a lane that arrived through a merge's second parent,
+    while `--no-merges` drops the merge commit that would have reached it. Proof on a scratch
+    worktree at `/tmp/opencode/t5-proof` (removed afterwards, with both scratch branches):
+    `scratch/t5-epic` off `main`, a side branch `scratch/t5-lane` carrying one flagged string,
+    merged `--no-ff` so the epic tip is a real 2-parent merge commit (first parent = main tip
+    `9519e05`, second parent = the lane commit).
+    - A) the shape that shipped in 65b273e, `--no-merges --first-parent`: `0 commits
+      scanned`, `no leaks found`, **exit 0**. The lane's finding was invisible.
+    - B) `--no-merges` only: `1 commits scanned`, `leaks found: 1`,
+      `generic-api-key` in the lane's file, **exit 1**. The lane is scanned and the build fails.
+    - The git-level reason, so the shape of the hole is unambiguous: the range holds 1
+      reachable non-merge commit, and `--first-parent` reduces it to 0.
+    - Nothing is lost by dropping it, because the merge base is what excludes main. On the real
+      branch, `git rev-list --no-merges merge-base..HEAD` is exactly the 12 feature commits and
+      0 of them are ancestors of main.
+    - The payload is the same sensor-metric assignment the repository's history already trips
+      `generic-api-key` on, so the proof's only variable is range reachability. Two earlier
+      payloads were tried and **discarded because gitleaks did not report them**: the AWS
+      documented example keys are allowlisted by the default config (`AKIAIOSFODNN7EXAMPLE` is
+      not a finding), and a `DATABASE_PASSWORD` candidate that a loop over `gitleaks stdin` exit
+      codes appeared to flag was, on isolated re-test, not flagged at all. A payload assumed to
+      be detected is not evidence; this one is observed. The literal is named in pieces here
+      for the reason given below.
+  - **65b273e would have failed its own job, and the range fix is what exposed it.** Widening
+    the range from `--first-parent` to the full merge-base range immediately reported 2 leaks on
+    this branch, and both were in 65b273e: the feature doc and the job's own YAML comment had
+    quoted the `channel_key` assignment verbatim in prose to document the false positive, so
+    documenting it re-armed `generic-api-key` on those two files. Two facts worth keeping: a
+    detector does not care that a secret-shaped string is inside a sentence, and a comment
+    that explains a false positive can *become* one. Both lines now name the metric name and the
+    field separately instead of pasting the assignment, and ci.yml says why. The line-scoped
+    `# gitleaks:allow` was verified as the working alternative (honoured in a `.md` file too) and
+    deliberately not used here, because the next person editing that prose would have to know to
+    re-add it.
   - `actionlint` 1.7.12 on `ci.yml`: exit 0, no findings. Its `shellcheck` rule is **skipped
     silently** when shellcheck is not on `PATH` (first run reported `Rule "shellcheck" was
     disabled`), so shellcheck 0.11.0 was installed outside the repo and the run repeated:
