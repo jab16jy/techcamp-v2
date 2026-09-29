@@ -167,6 +167,12 @@ gate *paths: gate-fast
     for path in "$@"; do
       case "$path" in
         server/*)
+          # A connection traceback from pytest says nothing about what to do; the test
+          # database is per worktree and this worktree's own container has to be up.
+          if [ -z "$({{_runtime}} ps -q --filter "name=^$container$")" ]; then
+            echo "this worktree's database ($container) is not running: run 'just db-up' first" >&2
+            exit 1
+          fi
           echo "--- pytest $path"
           (cd "{{_worktree}}/server" && uv run pytest "${path#server/}")
           ;;

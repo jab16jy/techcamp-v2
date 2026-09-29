@@ -113,6 +113,10 @@ Issue #139 (evidence from E7/E8):
   worktree migrates and drops. The escape hatch is running pytest directly.
 - D-T1.5 `just --working-directory` must be paired with `--justfile` (`just --help`, 1.58.0); the
   ctx7 quick reference shows `-d` alone. Caught by the gate-lane evidence run, not by a doc.
+- D-T1.6 The single-Alembic-head check joins the CI server job, in T2 (owner call, 2026-09-29).
+  T2 already edits `ci.yml` for the ast-grep scan, so the head check lands in that work unit and
+  T1 does not touch CI. Until T2 lands, `gate-fast` is the only place the check runs; after it,
+  CI and `gate-fast` list the same static checks.
 
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
@@ -181,10 +185,10 @@ Issue #139 (evidence from E7/E8):
   temporary worktrees were removed after.
   - Not run here: `gate-full`'s full pytest/vitest/build/size (T3 and T6 by design, the full
     suite once on a clean DB at epic close).
-  - Known gap for T6's diff: the single-Alembic-head check is in `gate-fast` and not yet in CI,
-    which is the one check the two do not share. T1 does not touch CI (the scope adds ast-grep,
-    gitleaks and whatever T4 adopts, and nothing else), so the decision is T6's: add
-    `alembic heads` to the server job, or move the check out of `gate-fast`.
+  - Known gap, closed in T2 by D-T1.6: the single-Alembic-head check is in `gate-fast` and not
+    yet in CI, the one check the two did not share. T1 does not touch CI (the scope adds
+    ast-grep, gitleaks and whatever T4 adopts, and nothing else); T2 adds `alembic heads` to the
+    server job in the same work unit as the ast-grep scan.
 
 ## Next step
 T1 committed; the parent gates the sha and the RDD review runs for it. Next task: T2 (ast-grep

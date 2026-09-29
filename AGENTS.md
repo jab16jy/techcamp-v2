@@ -90,8 +90,9 @@ Gates (`just`, from the repo root). `just` is a system tool, not a project depen
   the first failure and naming its sha (the E8 PR #182 lesson). Each commit is checked out in a
   detached temporary worktree, so the lane's own tree never moves and no commit is rewritten.
 
-CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`, and runs the same
-checks plus `ruff format --check` and the size budget; green locally means green in CI.
+CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`: the same static
+checks as `gate-fast`, plus the full pytest and vitest runs, the web build and the size budget.
+Green locally means green in CI.
 
 ## Architecture rules
 
