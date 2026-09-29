@@ -550,6 +550,15 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   clean; web lint, typecheck clean, scenarioD 2 passed. Assertions match the brief (duplicate keeps
   the `server_version`, pull once, B's values never A's, offline run pushes nothing and keeps the
   outbox, replay leaves one server row). Go given for OpenCode's own RDD (base `763670c`).
+- T10 RDD (OpenCode-run): lineage `review-e54d823a658510a7`, slice `763670c..d6ba943` →
+  **approved**, acknowledged (`authority: burned`), no blocking findings, no correction. Full runs
+  re-pasted by the writer: server `1120 passed, 2 warnings in 522.14s` (the warnings are the
+  Starlette/anyio deprecation inside `fastapi.testclient`); web `Test Files 50 passed (50)`,
+  `Tests 334 passed (334)`; static clean; 171.21 kB. Two test WARNINGs →
+  [#167](https://github.com/jab16jy/techcamp-v2/issues/167): R3-device-id-not-varied (the
+  two-device scenario uses one `device_id`) and R3-lost-response-bypasses-outbox (the lost-answer
+  retry calls `pushChanges` directly instead of `syncOnce`). Being fixed now by `e8-t10`
+  (test-only, `Refs #167`, no new round).
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
