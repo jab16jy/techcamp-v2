@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { render, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createMemoryRouter, RouterProvider } from 'react-router'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import * as triggers from '../lib/sync/triggers'
+import * as db from '../lib/db/db'
+import { clearSession, setSession } from '../lib/api/session'
 import { buildRoutes } from './routes'
 
 describe('buildRoutes', () => {
@@ -19,5 +25,55 @@ describe('buildRoutes', () => {
 
     expect(routes[0].path).toBe('/')
     expect(routes[0].children?.length).toBe(5)
+  })
+})
+
+describe('shell wiring (ADR-0005, synchronizer lifecycle)', () => {
+  let stopSyncSpy: () => void
+
+  beforeEach(() => {
+    stopSyncSpy = vi.fn()
+    vi.spyOn(triggers, 'startSynchronizer').mockImplementation(() => stopSyncSpy)
+    vi.spyOn(db, 'requestPersistentStorage').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    clearSession()
+    vi.restoreAllMocks()
+  })
+
+  it('starts the synchronizer once per signed-in session and calls requestPersistentStorage', async () => {
+    setSession('token-abc', 'org-1')
+    const queryClient = new QueryClient()
+    const memoryRouter = createMemoryRouter(buildRoutes(null), { initialEntries: ['/'] })
+
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={memoryRouter} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(db.requestPersistentStorage).toHaveBeenCalledTimes(1)
+      expect(triggers.startSynchronizer).toHaveBeenCalledTimes(1)
+    })
+
+    // Stopping on sign-out / unmount
+    unmount()
+    expect(stopSyncSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start the synchronizer on the sign-in screen', () => {
+    clearSession()
+    const queryClient = new QueryClient()
+    const memoryRouter = createMemoryRouter(buildRoutes(null), { initialEntries: ['/ingreso'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={memoryRouter} />
+      </QueryClientProvider>,
+    )
+
+    expect(triggers.startSynchronizer).not.toHaveBeenCalled()
   })
 })

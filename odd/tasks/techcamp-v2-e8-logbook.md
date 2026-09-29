@@ -154,26 +154,38 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
 - [x] T0 Docs first: write D1–D9 into docs/03, docs/04, docs/06 §7 (`domain-modeling` skill);
   no ADR needed (ADR-0013 stands; D1 is its implementation detail). ~80. Route: parent inline
   (one mechanical doc unit per decision, already understood).
-- [ ] T1 Schema: migration from the E7 head for the sync sequence, `logbook_entry`,
+- [x] T1 Schema: migration from the E7 head for the sync sequence, `logbook_entry`,
   `extension_visit`, `attachment`, CHECKs and indexes; ORM rows. Test: migration up/down + CHECK
   violations. ~300. Route: **AGY** (mechanical, docs/03 is exact).
-- [ ] T2 Logbook domain (pure): entry fields per `kind`, visit invariants (topics vocabulary),
+  Done: `f242508` + fix `08dd5ef` (#142) on integration; RDD `review-b3312c6f95cbe5ea` approved.
+- [x] T2 Logbook domain (pure): entry fields per `kind`, visit invariants (topics vocabulary),
   push decision D4, clock-skew rule D5. ~350. Route: **AGY**.
-- [ ] T3 Sync push: ports, repositories (lock D1, `FOR UPDATE`, savepoint per change), use case
+  Done: lane `e8-t2`, merged `a463a02` (#143 fixes); RDD `review-179da1ed2198145c`,
+  `review-8d2d19fb3861286a` approved.
+- [x] T3 Sync push: ports, repositories (lock D1, `FOR UPDATE`, savepoint per change), use case
   with role/plot/cycle/alert/farm checks, `POST /sync/push`, isolation + concurrency tests (two
   pushes of the same id). ~650 → T3a repositories + use case, T3b router + isolation/concurrency
   tests, one session. Route: **OpenCode, xhigh** (concurrency and ordering).
-- [ ] T4 Sync pull: merged cursor across both tables, `has_more`, deletes, org scope (D2);
+  Done: lane `e8-t3`, merged `f3677ad` (#160 test fixes); RDD `review-7f77739c188c70fd` approved.
+- [x] T4 Sync pull: merged cursor across both tables, `has_more`, deletes, org scope (D2);
   test that a late-committing push is never skipped (D1). ~300. Route: **AGY**.
-- [ ] T5 Visits read API (D9) + isolation tests. ~250. Route: **AGY**.
-- [ ] T6 Presign (D8): S3 client for MinIO (library via `find-docs`; `chore(deps)` commit first),
+  Done: lane `e8-t4`, merged `da0255b` (#161 fixes); RDD `review-385c26a740fec0d2`,
+  `review-c3fab950fca8ac0d` approved.
+- [x] T5 Visits read API (D9) + isolation tests. ~250. Route: **AGY**.
+  Done: lane `e8-t5`, merged `1783f20` + `84ac62d` (#145); RDD `review-20cf11a1d3fa8cf3` approved.
+- [x] T6 Presign (D8): S3 client for MinIO (library via `find-docs`; `chore(deps)` commit first),
   config, `POST /attachments:presign`, tests. ~350. Route: **OpenCode, high** (new external
   dependency and config).
-- [ ] T7 Web local store + synchronizer: Dexie schema (`lib/db`), outbox, push batches ≤ 100,
+  Done: lane `e8-t6`, merged `be22d13`; RDD `review-9ed2f09b8ef0ddd5` approved (CRITICAL fixed in
+  the correction `f0d484c`).
+- [x] T7 Web local store + synchronizer: Dexie schema (`lib/db`), outbox, push batches ≤ 100,
   pull cursor, triggers (open, `online`, 60 s visible, 2 s after write), token refresh first,
   `storage.persist()`, D7 apply rule; Vitest with `fake-indexeddb`; bundle budget checked.
   ~650 → T7a store + outbox, T7b synchronizer, one session. Route: **OpenCode, high**; escalate
   to `odd-worker` if T7b's state handling stalls.
+  Done: lane `e8-t7`, merged `ca97354` (#144, #147 fixes); RDD `review-fb0c138492a9057a`,
+  `review-6bc080d05399a4ad` approved (CRITICAL fixed in `d105968`); the #147 fixes are reviewed
+  with T8's first slice.
 - [ ] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
   (harvest with `sold_kg` / price, task with `labor_days`, link to a cached alert), "Guardado en el
   teléfono" state, conflict/rejected notices, `SyncIndicator` wired. First commit: regenerate
@@ -186,6 +198,10 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   offline, plus client photo compression and pending upload queue for entries and visits.
   ~450 → T9a visit sheet, T9b photos, one session. Route: **AGY** (T9a), **OpenCode** (T9b, canvas
   re-encode + upload queue).
+  - [x] T9a visit sheet: lane `e8-t9`, merged `b8621aa` (#162 fixes); RDD
+    `review-305a9f040645709b` approved; entry point D14.
+  - [ ] T9b photos + upload queue (after T8). From T6: the browser's Content-Length must equal the
+    presigned `bytes`.
 - [ ] T10 Close: scenario-D server integration (same batch twice → one row, `duplicate`; stale
   edit → `conflict_overwritten`), Vitest offline→online harvest with no duplicate, visit offline
   sync; the FULL server and web suites (the only full run in E8); acceptance ticked with evidence;
@@ -413,6 +429,17 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   WARNINGs added to #161 (isolation silently lost if the session was used first; conditional
   snapshot test) → fixed now by `e8-t4`, last round on these tests (no further review).
 
+- #161 round 2 fixed by `e8-t4`: `dd35632` (pull raises if the session is already in a
+  transaction, so the snapshot guarantee can never be lost silently), `169eaef` (snapshot test
+  unconditional; RED `assert ... not in [...]` with REPEATABLE READ removed). Gate: 22 passed ×2,
+  static clean. **T4 merged** into integration: tests/logbook 129 passed, ruff, format (278), mypy
+  (184), lint-imports clean. #161 closed, `e8-t4` session closed. T8 unblocked (T3, T4, T7 in).
+
+- Cleanup (owner, 2026-09-28): merged lane worktrees `e8-t2`, `e8-t3`, `e8-t4`, `e8-t5`,
+  `e8-t6`, `e8-t7`, `e8-t9` removed (all clean, all merged) and their DB containers
+  `techcamp-e8-db-t2..t6` deleted. Kept: integration `e8-logbook` + `techcamp-e8-db` (5441). Lane
+  branches kept (merged; they back the RDD lineages). New lanes reuse ports from 5442.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
@@ -457,13 +484,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-(2026-09-28, session handoff) Integration `feat/e8-logbook` holds T0, T1, T2, T5 (69 logbook tests).
-1. T7 (`e8-t7`): gate the #147 fix commits → merge `feat/e8-t7-sync` into integration.
-2. T3 (`e8-t3`): wait for the concurrency-tests commit → parent gate (DB 5444) → go for OpenCode's
-   own RDD (base `a463a02`; the slice also covers T2's `432c74b`, `a73c1ba`) → merge. Expect an
-   add/add conflict on `logbook/application/ports.py` and `logbook/adapters/repositories.py`
-   (T3 branched before T5): combine both, like the T5 merge (`1783f20`).
-3. T6 (`e8-t6`): gate → go for its RDD → merge.
-4. Then T4 pull (after T3), T8 logbook screen (after T3/T4/T7; first commit regenerates
-   `schema.d.ts` and swaps the T7 transport to `apiClient`, calls `requestPersistentStorage()` on
-   start), T9 visits screen + photos, T10 close with the only full-suite run.
+(2026-09-28, after the T4 merge) Integration `feat/e8-logbook` (on top of `main` `20a1258`) holds
+T0–T7 and T9a: tests/logbook 129 passed; web 173.1 kB. Nothing of E8 is on `main` yet: push and
+stacked PRs need the owner's explicit go.
+1. T8 logbook screen (AGY, `impeccable` mandatory, design frozen): first commit regenerates
+   `schema.d.ts` and swaps the T7 transport to `apiClient`; the shell calls
+   `requestPersistentStorage()` once and starts the synchronizer; a "sync blocked" state for an
+   unparseable pull page (T7 note). Its first RDD slice also covers T7's #147 fixes
+   (`58fb730..ddb46bc`, base `d105968`).
+2. T9b photos + upload queue (OpenCode, after T8; Content-Length = presigned `bytes`).
+3. T10 close with the only full-suite run; then delivery on the owner's go.
