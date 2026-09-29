@@ -196,14 +196,15 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   ~550 → T8a list + sync state, T8b entry sheet, one session. Route: **AGY**.
   Done: lane `e8-t8`, merged `893e874` (split per owner: schema chore, transport, list, sheet;
   #163, #164 fixes); RDD `review-0646e53ffbede472` approved.
-- [ ] T9 Visits screen (`features/visits`): new visit sheet from a farm (five Ley 1876 topics),
+- [x] T9 Visits screen (`features/visits`): new visit sheet from a farm (five Ley 1876 topics),
   offline, plus client photo compression and pending upload queue for entries and visits.
   ~450 → T9a visit sheet, T9b photos, one session. Route: **AGY** (T9a), **OpenCode** (T9b, canvas
   re-encode + upload queue).
   - [x] T9a visit sheet: lane `e8-t9`, merged `b8621aa` (#162 fixes); RDD
     `review-305a9f040645709b` approved; entry point D14.
-  - [ ] T9b photos + upload queue (after T8). From T6: the browser's Content-Length must equal the
-    presigned `bytes`.
+  - [x] T9b photos + upload queue: lane `e8-t9b`, merged `f5e76d1` (#165 fixes `84ec7e2`,
+    `bfd3f99`); RDD `review-eab43be4d320dde0` approved (CRITICALs R3-001/R3-002 fixed in the
+    correction `a8e5bd9`). PUT sends the same bytes that were presigned (T6).
 - [ ] T10 Close: scenario-D server integration (same batch twice → one row, `duplicate`; stale
   edit → `conflict_overwritten`), Vitest offline→online harvest with no duplicate, visit offline
   sync; the FULL server and web suites (the only full run in E8); acceptance ticked with evidence;
@@ -522,6 +523,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   presign fails the photo for good, so 408/429 should retry) and R3-004 (`usePhotos` can keep the
   previous parent's rows when `parentId` becomes null). Both are in this task's code, so under the
   OpenCode rule `e8-t9b` fixes both now, one commit each `Refs #165`.
+- #165 fixes `84ec7e2` (one `classifyPresign`: 408/429/5xx retry, other 4xx fail, 401 stops,
+  404 pending; RED ×2 `expected 'failed' to be 'pending'`) and `bfd3f99` (`usePhotos` with no
+  parent returns `[]`; RED `expected [ { …(9) } ] to deeply equal []`). Parent gate: lint,
+  typecheck clean; 25 files / 156 passed; build ok; 171.21 kB. Assess `under_budget` (123 lines,
+  medium), not a data-loss path (more statuses stay pending; the hook is read-only) → no new round.
+  **T9b merged** `f5e76d1`; integration web: lint, typecheck clean, 25 files / 156 passed, build,
+  171.21 kB. #165 closed; `e8-t9b` session closed and worktree removed (web lane, no DB).
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
@@ -569,9 +577,11 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-(2026-09-29, after the T8 merge) Integration `feat/e8-logbook` holds T0–T8 and T9a (tests/logbook
-129 passed; web 177 passed, 171.19 kB). Nothing of E8 is on `main` yet: push and stacked PRs need the
-owner's explicit go.
-1. T9b photos + upload queue for entries and visits (OpenCode; canvas re-encode ≤ 200 KB, EXIF
-   stripped; Content-Length must equal the presigned `bytes`; `impeccable`, design frozen).
-2. T10 close with the only full-suite run; then delivery on the owner's go.
+(2026-09-29, after the T9b merge) Integration `feat/e8-logbook` holds T0–T9 (tests/logbook 129
+passed at T8; web targeted 156 passed, 171.21 kB). Nothing of E8 is on `main` yet: push and stacked
+PRs need the owner's explicit go.
+1. T10 close (AGY + parent; own lane + DB): scenario-D server integration, Vitest offline→online
+   harvest with no duplicate, visit offline sync; the FULL server and web suites (the only full run
+   in E8); acceptance ticked with evidence; decide #142, #143, #145, #160 leftovers; file the
+   orphan-object cleanup follow-up (ADR-0018); close the feature doc.
+2. Delivery on the owner's go.
