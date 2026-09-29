@@ -223,6 +223,24 @@ Issue #139 (evidence from E7/E8):
   fail the walk rather than skip it. Rejected: `-m` (re-reports main; also duplicates one
   finding per parent, so the same resolution logs twice where `--remerge-diff` logs once), and
   `--first-parent` on its own (D-T5.2's second bullet: it hides a whole lane).
+- D-T5.5 `--remerge-diff` does **not** open the bypass the R1-001 finding of round
+  `review-c0c0c311c59ce08f` claimed, and the flag stays. The claim was that credentials added
+  manually during an **otherwise clean** merge commit escape the scan. They do not, and the
+  reason is structural rather than incidental: the re-merge diff is *the merge result against
+  git's own automatic re-merge of the two parents*, so any content unique to the merge commit
+  necessarily differs from what the automatic merge would have produced, and therefore appears
+  in the diff. Content can only fail to show if the automatic merge would have written the same
+  thing, which means a parent already carried it and it is not new. Measured on a scratch
+  worktree (removed afterwards), each case a real clean merge of main with the credential added
+  by hand while merging, existing in no non-merge commit:
+  - a **new file added during the clean merge** → `1 leak`, **exit 1**;
+  - an **append to a file the feature side owns** → `1 leak`, **exit 1**, with
+    `git log -1 --remerge-diff` printing the added line as an explicit `+` addition.
+  For contrast on the same cases `--no-merges --first-parent` and `--cc` both report
+  `no leaks found` (exit 0), and `-m` reports 4 — the shape that catches the manual edit but
+  also re-reports main. The parent reproduced the clean-merge case independently and agreed
+  R1-001 is false. This entry is the correction the round's single bounded budget was spent on:
+  evidence, with no change to `ci.yml`.
 - D-T5.3 gitleaks is CI-only and does **not** join `gate-fast`. `gate-fast` has no PR range,
   so the only shape it could use is a whole-history scan, and that fails on this repository
   today: 4 findings, all non-secrets, exit 1 (the evidence is in Progress). Hosting it would
