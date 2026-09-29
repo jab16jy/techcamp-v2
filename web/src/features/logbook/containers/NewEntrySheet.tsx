@@ -230,6 +230,7 @@ function NewEntrySheetModal({
       submitLabel="Guardar"
       onSubmit={handleSubmit}
       submitLoading={saving}
+      submitDisabled={photos.processing}
     >
       <LogbookEntryForm
         plots={plots}
@@ -301,7 +302,7 @@ function NewEntrySheetModal({
         onPick={(files) => void photos.addFiles(files)}
         onRemove={(id) => void photos.remove(id)}
         error={photos.error}
-        disabled={saving}
+        disabled={saving || photos.processing}
       />
     </FormSheet>
   )

@@ -67,6 +67,11 @@ const NO_PHOTOS: PhotoRow[] = []
  * the last value the query published — never a copy this component has to
  * re-synchronise. A failing read keeps the last known list on screen instead of
  * emptying it: the user still sees the photos they took.
+ *
+ * With no parent there is nothing to observe, and the snapshot answers that
+ * rather than the previous parent's rows: `rowsRef` still holds them, so a
+ * consumer reading it directly (or removing by id) would act on a record it has
+ * already left.
  */
 export function usePhotos(entity: SyncEntity, parentId: string | null): PhotoRow[] {
   const query = useMemo(
@@ -88,7 +93,7 @@ export function usePhotos(entity: SyncEntity, parentId: string | null): PhotoRow
     },
     [query],
   )
-  const getSnapshot = useCallback(() => rowsRef.current, [])
+  const getSnapshot = useCallback(() => (query === null ? NO_PHOTOS : rowsRef.current), [query])
 
   return useSyncExternalStore(subscribe, getSnapshot, () => NO_PHOTOS)
 }

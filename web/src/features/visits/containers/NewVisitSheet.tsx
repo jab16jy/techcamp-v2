@@ -126,6 +126,7 @@ export function NewVisitSheet({
       submitLabel="Guardar visita"
       onSubmit={handleSubmit}
       submitLoading={saving}
+      submitDisabled={photos.processing}
     >
       <VisitForm
         visitedOn={visitedOn}
@@ -149,7 +150,7 @@ export function NewVisitSheet({
         onPick={(files) => void photos.addFiles(files)}
         onRemove={(id) => void photos.remove(id)}
         error={photos.error}
-        disabled={saving}
+        disabled={saving || photos.processing}
       />
     </FormSheet>
   )
