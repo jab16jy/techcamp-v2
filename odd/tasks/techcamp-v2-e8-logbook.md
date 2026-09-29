@@ -542,6 +542,14 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   R3-db-backstop (defensible by design). The orphan cleanup follow-up is
   filed as [#166](https://github.com/jab16jy/techcamp-v2/issues/166) (ADR-0018; includes the
   `api` → `minio-init` note). T10 also runs the only full server and web suites in E8.
+- T10 (OpenCode `e8-t10`): `10a88cb` server scenario D over HTTP (218), `8260fe1` web scenario D
+  offline→online (251), `6841077` #142 exact violated constraint (84), `d6ba943` #143 exact role
+  exception + non-finite coverage (90); test-only, 643 lines. Writer: full server and web runs
+  green (server 1,120 passed), acceptance table mapped to test ids. Parent gate in the lane (DB
+  5447): scenario_d + schema + domain 93 passed; ruff, format (279), mypy (184), lint-imports
+  clean; web lint, typecheck clean, scenarioD 2 passed. Assertions match the brief (duplicate keeps
+  the `server_version`, pull once, B's values never A's, offline run pushes nothing and keeps the
+  outbox, replay leaves one server row). Go given for OpenCode's own RDD (base `763670c`).
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
