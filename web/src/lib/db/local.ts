@@ -90,6 +90,23 @@ async function replaceOutboxItem(item: NewOutboxItem): Promise<void> {
 }
 
 /**
+ * A delete is final (D13: docs/07 has no undelete), so a save refuses a row
+ * this device already tombstoned instead of quietly writing an upsert over the
+ * tombstone. Raising here rather than in the screen makes the undelete
+ * unrepresentable: the store cannot end up with a live local row whose delete
+ * the server already applied.
+ */
+function assertNotDeleted(
+  stored: LogbookEntryRow | ExtensionVisitRow | undefined,
+  entity: string,
+  id: string,
+): void {
+  if (stored?.deleted_at != null) {
+    throw new Error(`${entity} ${id} was deleted on this device; a delete is final`)
+  }
+}
+
+/**
  * Creates or updates a logbook entry on this device and queues its push.
  *
  * The row and its outbox item are written in ONE transaction, so the invariant
@@ -103,6 +120,7 @@ export async function saveLogbookEntry(draft: LogbookEntryDraft): Promise<Logboo
     // Read inside the transaction, never from an earlier call: `created_offline`
     // and `server_version` must reflect the stored row right now.
     const stored = await db.logbookEntries.get(draft.id)
+    assertNotDeleted(stored, 'logbook entry', draft.id)
     const row: LogbookEntryRow = {
       ...draft,
       // Only the creation sees the connection; an edit keeps what the create
@@ -110,7 +128,8 @@ export async function saveLogbookEntry(draft: LogbookEntryDraft): Promise<Logboo
       created_offline: stored === undefined ? !navigator.onLine : stored.created_offline,
       client_updated_at: at,
       server_version: stored?.server_version ?? null,
-      deleted_at: stored?.deleted_at ?? null,
+      // Unreachable as anything but null: a deleted row cannot be saved (D13).
+      deleted_at: null,
       syncState: 'pending',
       syncError: null,
     }
@@ -139,11 +158,13 @@ export async function saveExtensionVisit(draft: ExtensionVisitDraft): Promise<Ex
   const at = nowIso()
   return db.transaction('rw', [db.extensionVisits, db.outbox], async () => {
     const stored = await db.extensionVisits.get(draft.id)
+    assertNotDeleted(stored, 'extension visit', draft.id)
     const row: ExtensionVisitRow = {
       ...draft,
       client_updated_at: at,
       server_version: stored?.server_version ?? null,
-      deleted_at: stored?.deleted_at ?? null,
+      // Unreachable as anything but null: a deleted row cannot be saved (D13).
+      deleted_at: null,
       syncState: 'pending',
       syncError: null,
     }

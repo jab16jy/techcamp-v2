@@ -146,5 +146,8 @@ export function requestPersistentStorage(): void {
   persistRequested = true
   const storage: StorageManager | undefined = navigator.storage
   if (storage === undefined || typeof storage.persist !== 'function') return
-  void storage.persist()
+  // A refusal is not a failure the app can act on, and this function hands the
+  // caller no promise to handle, so the rejection is absorbed here rather than
+  // surfacing as a global unhandled rejection from a best-effort call (#144).
+  void storage.persist().catch(() => {})
 }
