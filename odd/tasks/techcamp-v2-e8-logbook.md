@@ -491,6 +491,11 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   (presign `bytes === blob.size`, PUT the same Blob; 404 → pending, 422 → failed, D11 on 401),
   UI in both sheets; evidence section with mutation proof and stated jsdom limits.
 
+- 2026-09-29 Housekeeping: #144 and #147 closed (fixed and merged with T7, #147 fixes reviewed in
+  `review-539f27f2073c24b7`). Open with leftover non-blocking items: #142, #143, #145, #160 (decide
+  in T10). Session handoff for T9b + T10 written to `.git-brief-e8-handoff.md` and Engram
+  `e8/handoff`.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
