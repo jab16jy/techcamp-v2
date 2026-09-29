@@ -469,6 +469,12 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   170.97 kB. T8 RDD (parent-run, consent granted): lineage `review-0646e53ffbede472`, base
   `39eb6b9`, lens `review-reliability`, running.
 
+- T8 RDD `review-0646e53ffbede472` → **approved**, acknowledged, no blockers. Findings →
+  [#164](https://github.com/jab16jy/techcamp-v2/issues/164): WARNINGs module `syncState` not reset
+  on sign-out, `recordSyncOutcome` untested, sync 401 → session expiry (D11) unproved after the
+  `apiClient` swap; SUGGESTIONs stale `quantity` error, invalid `sold_kg` unchecked without price.
+  All sent to `e8-t8` now (AGY rule).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
