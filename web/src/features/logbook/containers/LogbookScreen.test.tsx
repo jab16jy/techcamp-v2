@@ -153,4 +153,38 @@ describe('LogbookScreen', () => {
     })
     expect(screen.queryByText('Datos no válidos')).not.toBeInTheDocument()
   })
+
+  it('opens the sheet to correct a rejected entry when Corregir is clicked', async () => {
+    const rejectedEntry = await saveLogbookEntry({
+      id: uuidv7(),
+      org_id: ORG_ID,
+      plot_id: PLOT_ID,
+      crop_cycle_id: null,
+      kind: 'harvest',
+      occurred_on: '2026-09-27',
+      quantity: null,
+      unit: null,
+      cost_cop: null,
+      yield_kg: 50,
+      sold_kg: 100,
+      sale_price_cop_per_kg: 1500,
+      labor_days: null,
+      irrigation_mm: null,
+      alert_id: null,
+      notes: null,
+      created_by: null,
+    })
+    await db.logbookEntries.update(rejectedEntry.id, {
+      syncState: 'rejected',
+      syncError: 'invalid',
+    })
+
+    renderScreen()
+
+    expect(await screen.findByText('Datos no válidos')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Corregir' }))
+
+    expect(await screen.findByText('Corregir entrada de bitácora')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('50')).toBeInTheDocument()
+  })
 })
