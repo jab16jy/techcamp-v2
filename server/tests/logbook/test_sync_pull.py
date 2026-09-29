@@ -19,18 +19,22 @@ from uuid import UUID
 import asyncpg
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.identity.adapters.orm import MembershipRow, OrganizationRow
+from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.logbook.adapters.repositories import (
     SYNC_LOCK_KEY,
+    SqlAlchemyExtensionVisitSyncRepository,
+    SqlAlchemyLogbookEntrySyncRepository,
 )
-from techcamp.logbook.application.ports import LogbookEntryChange
+from techcamp.logbook.application.ports import ExtensionVisitChange, LogbookEntryChange
 from techcamp.logbook.domain.models import SyncOp, SyncStatus
 from techcamp.main import app
 from techcamp.shared.config import database_url
-from techcamp.shared.db import async_session_factory
+from techcamp.shared.db import async_session_factory, get_session
 from techcamp.shared.ids import uuid7
 
 if TYPE_CHECKING:
@@ -503,3 +507,179 @@ async def test_d1_pull_returns_push_committed_after_concurrent_lock(
             assert str(blocked_id) in returned_ids2
     finally:
         await holder.close()
+
+
+async def test_pull_caller_with_no_membership(env: SyncEnv) -> None:
+    """A caller with no org membership gets an empty page with next_since == since (D2)."""
+    unaffiliated_user = uuid7()
+    token = issue_token(str(unaffiliated_user))
+    with _client() as client:
+        resp = client.get("/sync/pull?since=42", headers=_auth(token))
+    assert resp.status_code == 200
+    assert resp.json() == {"changes": [], "next_since": 42, "has_more": False}
+
+
+async def test_pull_viewer_in_scope(env: SyncEnv) -> None:
+    """A viewer has read access to their org and receives pull changes (D2)."""
+    producer_token = env.mine.tokens["producer"]
+    technician_token = env.mine.tokens["technician"]
+    viewer_token = env.mine.tokens["viewer"]
+
+    entry_id = uuid7()
+    visit_id = uuid7()
+    _push(producer_token, [_entry_payload(entry_id, env.mine.plot_id, env.now)])
+    _push(
+        technician_token,
+        [
+            _visit_payload(
+                visit_id,
+                env.mine.farm_id,
+                env.mine.users["technician"],
+                env.now,
+            ),
+        ],
+    )
+
+    with _client() as client:
+        resp = client.get("/sync/pull?since=0", headers=_auth(viewer_token))
+    assert resp.status_code == 200
+    page = resp.json()
+    returned_ids = [c["id"] for c in page["changes"]]
+    assert str(entry_id) in returned_ids
+    assert str(visit_id) in returned_ids
+
+
+async def test_pull_repeatable_read_snapshot_prevents_cursor_gap(
+    env: SyncEnv, pusher_for: type[Pusher], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3-pull-two-query-cursor-gap: pull reads must see a single snapshot.
+
+    If an entry commits at version N and a visit at version N+1 between the two
+    reads, the page must not return the visit at N+1 while missing the entry at N
+    and advancing next_since to N+1 (which would permanently skip version N).
+    Under REPEATABLE READ, both reads see ONE snapshot: page 1 excludes both
+    concurrent rows, and the subsequent pull from next_since returns BOTH rows.
+    """
+    producer = env.mine.users["producer"]
+    token = env.mine.tokens["producer"]
+
+    seed_id = uuid7()
+    _push(token, [_entry_payload(seed_id, env.mine.plot_id, env.now)])
+
+    concurrent_entry_id = uuid7()
+    concurrent_visit_id = uuid7()
+
+    entry_change = LogbookEntryChange(
+        id=concurrent_entry_id,
+        op=SyncOp.UPSERT,
+        client_updated_at=env.now + timedelta(seconds=1),
+        plot_id=env.mine.plot_id,
+        crop_cycle_id=None,
+        kind="observation",
+        occurred_on=date(2026, 9, 28),
+        quantity=None,
+        unit=None,
+        cost_cop=None,
+        yield_kg=None,
+        sold_kg=None,
+        sale_price_cop_per_kg=None,
+        labor_days=None,
+        irrigation_mm=None,
+        alert_id=None,
+        notes="concurrent entry",
+        created_offline=False,
+    )
+    visit_change = ExtensionVisitChange(
+        id=concurrent_visit_id,
+        op=SyncOp.UPSERT,
+        client_updated_at=env.now + timedelta(seconds=1),
+        farm_id=env.mine.farm_id,
+        plot_id=None,
+        technician_id=env.mine.users["technician"],
+        visited_on=date(2026, 9, 28),
+        topics=["natural_resources"],
+        recommendations=None,
+        commitments=None,
+        notes="concurrent visit",
+    )
+
+    orig_entries_list_for_pull = SqlAlchemyLogbookEntrySyncRepository.list_for_pull
+    orig_visits_list_for_pull = SqlAlchemyExtensionVisitSyncRepository.list_for_pull
+    entries_read = False
+    hook_fired_after_entries = False
+
+    async def hooked_entries_list_for_pull(
+        self: Any, org_ids: Any, *, since: int, limit: int
+    ) -> Any:
+        nonlocal entries_read
+        res = await orig_entries_list_for_pull(self, org_ids, since=since, limit=limit)
+        entries_read = True
+        return res
+
+    async def hooked_visits_list_for_pull(
+        self: Any, org_ids: Any, *, since: int, limit: int
+    ) -> Any:
+        nonlocal hook_fired_after_entries
+        if not hook_fired_after_entries:
+            assert entries_read, "Interleaving hook must fire AFTER entries read"
+            hook_fired_after_entries = True
+            async with async_session_factory() as second_session:
+                pusher = pusher_for(second_session)
+                res_e = await pusher.entry(entry_change, caller_id=producer)
+                assert res_e.status is SyncStatus.APPLIED
+                res_v = await pusher.visit(visit_change, caller_id=env.mine.users["technician"])
+                assert res_v.status is SyncStatus.APPLIED
+                await second_session.commit()
+        return await orig_visits_list_for_pull(self, org_ids, since=since, limit=limit)
+
+    monkeypatch.setattr(
+        SqlAlchemyLogbookEntrySyncRepository, "list_for_pull", hooked_entries_list_for_pull
+    )
+    monkeypatch.setattr(
+        SqlAlchemyExtensionVisitSyncRepository, "list_for_pull", hooked_visits_list_for_pull
+    )
+
+    with _client() as client:
+        resp = client.get("/sync/pull?since=0", headers=_auth(token))
+    assert resp.status_code == 200
+    page = resp.json()
+    change_ids = [c["id"] for c in page["changes"]]
+
+    # Assert that the hook indeed fired after the entries read
+    assert hook_fired_after_entries is True, "Interleaving hook did not fire after entries read"
+
+    # Under REPEATABLE READ, page 1 MUST exclude both concurrent rows
+    assert str(concurrent_entry_id) not in change_ids
+    assert str(concurrent_visit_id) not in change_ids
+
+    # Unconditionally pull from next_since and assert BOTH concurrent rows are returned
+    with _client() as client:
+        resp2 = client.get(f"/sync/pull?since={page['next_since']}", headers=_auth(token))
+    assert resp2.status_code == 200
+    page2 = resp2.json()
+    change_ids2 = [c["id"] for c in page2["changes"]]
+    assert str(concurrent_entry_id) in change_ids2
+    assert str(concurrent_visit_id) in change_ids2
+
+
+async def test_pull_fails_when_session_already_in_transaction(env: SyncEnv) -> None:
+    """R3-001: pull fails loudly (500) if session was used before handler established isolation."""
+    from collections.abc import AsyncIterator
+
+    token = env.mine.tokens["producer"]
+
+    async def dirty_session() -> AsyncIterator[AsyncSession]:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+            assert session.in_transaction()
+            yield session
+
+    app.dependency_overrides[get_session] = dirty_session
+    try:
+        with _client() as client:
+            resp = client.get("/sync/pull?since=0", headers=_auth(token))
+        assert resp.status_code == 500
+        problem = resp.json()
+        assert problem["title"] == "Session already in transaction"
+    finally:
+        app.dependency_overrides.pop(get_session, None)

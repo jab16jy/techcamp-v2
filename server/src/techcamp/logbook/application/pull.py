@@ -7,26 +7,36 @@ the caller is a member of, ordered strictly by `server_version` ascending.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Literal
 from uuid import UUID
 
+from techcamp.identity.application.ports import MembershipRepository
+from techcamp.logbook.application.ports import (
+    ExtensionVisitSyncRepository,
+    LogbookEntrySyncRepository,
+)
 from techcamp.logbook.domain.models import ExtensionVisit, LogbookEntry, SyncEntity, SyncOp
-
-if TYPE_CHECKING:
-    from techcamp.identity.application.ports import MembershipRepository
-    from techcamp.logbook.application.ports import (
-        ExtensionVisitSyncRepository,
-        LogbookEntrySyncRepository,
-    )
 
 
 @dataclass(frozen=True, slots=True)
-class PullChangeItem:
+class LogbookEntryPullItem:
     id: UUID
-    entity: SyncEntity
     op: SyncOp
     server_version: int
-    data: LogbookEntry | ExtensionVisit
+    data: LogbookEntry
+    entity: Literal[SyncEntity.LOGBOOK_ENTRY] = SyncEntity.LOGBOOK_ENTRY
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionVisitPullItem:
+    id: UUID
+    op: SyncOp
+    server_version: int
+    data: ExtensionVisit
+    entity: Literal[SyncEntity.EXTENSION_VISIT] = SyncEntity.EXTENSION_VISIT
+
+
+PullChangeItem = LogbookEntryPullItem | ExtensionVisitPullItem
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +72,8 @@ async def pull_changes(
     for e in entry_rows:
         op = SyncOp.DELETE if e.deleted_at is not None else SyncOp.UPSERT
         candidates.append(
-            PullChangeItem(
+            LogbookEntryPullItem(
                 id=e.id,
-                entity=SyncEntity.LOGBOOK_ENTRY,
                 op=op,
                 server_version=e.server_version,
                 data=e,
@@ -73,9 +82,8 @@ async def pull_changes(
     for v in visit_rows:
         op = SyncOp.DELETE if v.deleted_at is not None else SyncOp.UPSERT
         candidates.append(
-            PullChangeItem(
+            ExtensionVisitPullItem(
                 id=v.id,
-                entity=SyncEntity.EXTENSION_VISIT,
                 op=op,
                 server_version=v.server_version,
                 data=v,
