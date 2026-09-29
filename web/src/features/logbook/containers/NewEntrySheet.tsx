@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { FormSheet } from '../../../design-system/patterns/FormSheet'
+import { PhotoField } from '../../../design-system/patterns/PhotoField'
 import { toast } from '../../../design-system/ui/toast'
 import { useOrgId } from '../../../lib/api/session'
 import { todayInBogota } from '../../../lib/date'
 import { uuidv7 } from '../../../lib/db/ids'
 import { saveLogbookEntry, type LogbookEntryDraft } from '../../../lib/db/local'
 import type { LogbookEntryRow, LogbookKind } from '../../../lib/db/db'
+import { usePhotoAttachments } from '../../../lib/photos/usePhotoAttachments'
 import { LogbookEntryForm, type AlertOption, type PlotOption } from '../components/LogbookEntryForm'
 
 export interface NewEntrySheetProps {
@@ -80,6 +82,11 @@ function NewEntrySheetModal({
   const [errors, setErrors] = useState<Record<string, string | null>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+
+  // Photos of the entry (ADR-0018). A brand new entry has no id yet, so its
+  // photos are staged until the save; an entry being corrected already has one,
+  // and its stored photos are listed next to the new ones.
+  const photos = usePhotoAttachments('logbook_entry', entryToEdit?.id ?? null)
 
   const effectivePlotId = plotId || (plots[0]?.id ?? '')
 
@@ -200,7 +207,10 @@ function NewEntrySheetModal({
         created_by: entryToEdit?.created_by ?? null,
       }
 
-      await saveLogbookEntry(draft)
+      const entry = await saveLogbookEntry(draft)
+      // The photos go with the entry they document; if this fails the catch
+      // below shows it and the sheet stays open, so nothing is lost silently.
+      await photos.attachTo(entry.id)
       toast('Guardado en el teléfono')
       onClose(false)
     } catch (err) {
@@ -220,6 +230,7 @@ function NewEntrySheetModal({
       submitLabel="Guardar"
       onSubmit={handleSubmit}
       submitLoading={saving}
+      submitDisabled={photos.processing}
     >
       <LogbookEntryForm
         plots={plots}
@@ -285,6 +296,13 @@ function NewEntrySheetModal({
         onAlertIdChange={setAlertId}
         errors={errors}
         formError={formError}
+      />
+      <PhotoField
+        items={photos.items}
+        onPick={(files) => void photos.addFiles(files)}
+        onRemove={(id) => void photos.remove(id)}
+        error={photos.error}
+        disabled={saving || photos.processing}
       />
     </FormSheet>
   )
