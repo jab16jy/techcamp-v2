@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../db/db'
 import { savePhoto } from '../db/photos'
 import { resetLocalDb } from '../db/testDb'
@@ -72,6 +72,7 @@ describe('a photo that will not fit under 200 KB', () => {
     expect(result.current.error).toBe(PHOTO_TOO_LARGE_MESSAGE)
     expect(result.current.items).toEqual([])
     expect(await db.photos.count()).toBe(0)
+    expect(result.current.processing).toBe(false)
   })
 })
 
@@ -117,6 +118,48 @@ describe('a photo already stored on this device', () => {
     })
 
     await waitFor(async () => expect(await db.photos.count()).toBe(0))
+  })
+})
+
+describe('a photo still being compressed', () => {
+  it('reports processing, so no save can close the sheet over a photo it has not staged', async () => {
+    let finish: (() => void) | null = null
+    const stalling = async () => {
+      await new Promise<void>((resolve) => void (finish = resolve))
+      return encodedPhoto(new Uint8Array(new ArrayBuffer(600)), 'image/jpeg')
+    }
+    const { result } = renderHook(() => usePhotoAttachments('logbook_entry', null, stalling))
+    let picking: Promise<void> = Promise.resolve()
+    await act(async () => void (picking = result.current.addFiles(fileList('lenta.jpg'))))
+
+    await waitFor(() => expect(result.current.processing).toBe(true))
+    expect(result.current.items).toEqual([])
+    await act(async () => {
+      finish?.()
+      await picking
+    })
+    await waitFor(() => expect(result.current.processing).toBe(false))
+    expect(result.current.items).toHaveLength(1)
+  })
+})
+
+describe('a save that fails after one photo was already attached', () => {
+  it('leaves only the unattached photo staged, so saving again stores no duplicate', async () => {
+    const { result } = renderHook(() => usePhotoAttachments('logbook_entry', null, compressing))
+    await act(async () => void (await result.current.addFiles(fileList('a.jpg', 'b.jpg'))))
+    const [, second] = result.current.items.map((item) => item.id)
+
+    const realPut = db.photos.put.bind(db.photos)
+    const put = vi.spyOn(db.photos, 'put')
+    put.mockImplementationOnce((row) => realPut(row))
+    put.mockRejectedValueOnce(new Error('IndexedDB write failed'))
+    await act(async () => void (await expect(result.current.attachTo(PARENT_ID)).rejects.toThrow('IndexedDB write failed')))
+    put.mockRestore()
+
+    expect(await db.photos.count()).toBe(1)
+    expect(result.current.items.map((item) => item.id)).toEqual([second])
+    await act(async () => void (await result.current.attachTo(PARENT_ID)))
+    expect(await db.photos.count()).toBe(2)
   })
 })
 
