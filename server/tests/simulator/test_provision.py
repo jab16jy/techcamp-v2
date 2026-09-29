@@ -96,11 +96,22 @@ async def test_provision_unclaimed_node_leaves_no_node_when_the_sensor_insert_fa
     """#40: node and sensor were committed separately, so a failed sensor insert
     left behind a claimable node with no sensors — `claim_node` then returns a
     node the simulator cannot publish anything for. One transaction means the
-    node rolls back with its sensor."""
+    node rolls back with its sensor.
+
+    What is owed here is that THIS failed provision left no node behind, not
+    that the table happens to be empty, so the assertion is scoped to a
+    baseline (#139, T3). `test_provision_works_in_a_plain_process...` commits a
+    node of its own through a subprocess, and the truncate that would clear it
+    only runs in a `db_session` teardown — that test has no `db_session`, so in
+    a random order its node is still in the table when this one runs. A global
+    `nodes == []` made the result depend on the order the module happened to
+    draw, and it failed under `--randomly-seed=101`."""
 
     def _fail_on_sensor(session: object, flush_context: object, instances: object) -> None:
         if any(isinstance(obj, SensorRow) for obj in session.new):  # type: ignore[attr-defined]
             raise RuntimeError("sensor insert failed")
+
+    before = set((await db_session.execute(select(NodeRow.id))).scalars().all())
 
     event.listen(db_session.sync_session, "before_flush", _fail_on_sensor)
     try:
@@ -110,5 +121,5 @@ async def test_provision_unclaimed_node_leaves_no_node_when_the_sensor_insert_fa
         event.remove(db_session.sync_session, "before_flush", _fail_on_sensor)
     await db_session.rollback()
 
-    nodes = (await db_session.execute(select(NodeRow))).scalars().all()
-    assert nodes == []
+    after = set((await db_session.execute(select(NodeRow.id))).scalars().all())
+    assert after == before
