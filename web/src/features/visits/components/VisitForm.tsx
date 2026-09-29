@@ -28,6 +28,7 @@ export interface VisitFormProps {
   notes: string
   onNotesChange: (val: string) => void
   topicError?: string | null
+  formError?: string | null
 }
 
 /**
@@ -49,9 +50,16 @@ export function VisitForm({
   notes,
   onNotesChange,
   topicError,
+  formError,
 }: VisitFormProps) {
   return (
     <div className="flex flex-col gap-4">
+      {formError && (
+        <p role="alert" className="text-base text-severity-critical">
+          {formError}
+        </p>
+      )}
+
       <label className="flex flex-col gap-2 text-base" htmlFor="visit-date">
         Fecha de la visita
         <Input

@@ -40,6 +40,7 @@ export function NewVisitSheet({
   const [commitments, setCommitments] = useState('')
   const [notes, setNotes] = useState('')
   const [topicError, setTopicError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   function reset() {
@@ -50,6 +51,7 @@ export function NewVisitSheet({
     setCommitments('')
     setNotes('')
     setTopicError(null)
+    setFormError(null)
     setSaving(false)
   }
 
@@ -66,6 +68,8 @@ export function NewVisitSheet({
   }
 
   async function handleSubmit() {
+    setFormError(null)
+
     if (selectedTopics.length === 0) {
       setTopicError('Selecciona al menos un tema de la visita.')
       return
@@ -73,7 +77,7 @@ export function NewVisitSheet({
 
     const resolvedTechId = technicianId ?? me?.id
     if (!resolvedTechId) {
-      setTopicError('No se pudo identificar al técnico que registra la visita.')
+      setFormError('No se pudo identificar al técnico que registra la visita.')
       return
     }
 
@@ -96,6 +100,8 @@ export function NewVisitSheet({
       toast('Guardado en el teléfono')
       reset()
       onOpenChange(false)
+    } catch {
+      setFormError('No se pudo guardar la visita en el teléfono. Intenta nuevamente.')
     } finally {
       setSaving(false)
     }
@@ -126,6 +132,7 @@ export function NewVisitSheet({
         notes={notes}
         onNotesChange={setNotes}
         topicError={topicError}
+        formError={formError}
       />
     </FormSheet>
   )
