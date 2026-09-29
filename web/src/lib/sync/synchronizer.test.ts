@@ -5,7 +5,7 @@ import { getCursor } from '../db/meta'
 import { saveLogbookEntry } from '../db/local'
 import { resetLocalDb } from '../db/testDb'
 import { uuidv7 } from '../db/ids'
-import { clearSession, setSession } from '../api/session'
+import { clearSession, getToken, setSession } from '../api/session'
 import type { LogbookEntryDraft } from '../db/local'
 import { syncOnce } from './synchronizer'
 import { getSyncState } from './syncState'
@@ -393,6 +393,22 @@ describe('syncOnce: stopping without losing anything (D11)', () => {
     expect(await getCursor()).toBe(0)
     // No pull after a refused push: the run stops where it was.
     expect(pullQueries).toHaveLength(0)
+    expect(getToken()).toBeNull()
+    expect(navigations).toEqual(['/ingreso'])
+  })
+
+  it('expires the session and leaves outbox untouched when a pull returns 401', async () => {
+    stubSyncApi({
+      push: () => json({ results: [] }),
+      pull: () => new Response(null, { status: 401 }),
+    })
+
+    const outcome = await syncOnce()
+
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unauthorized' })
+    expect(await db.outbox.count()).toBe(0)
+    expect(await getCursor()).toBe(0)
+    expect(getToken()).toBeNull()
     expect(navigations).toEqual(['/ingreso'])
   })
 
