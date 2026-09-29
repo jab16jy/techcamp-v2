@@ -46,3 +46,15 @@ class InsufficientRoleError(ForbiddenRoleError):
 
 class NaiveDatetimeError(ValueError):
     """Raised when a datetime without timezone information is passed to sync logic."""
+
+
+class VisitExportForbiddenError(Exception):
+    """Raised when a member's role cannot export the org's extension visits.
+
+    Mapped to 403 by the visits router (docs/04 §Visitas; D9; RF-19): only `owner`
+    and `technician` export, and a non-member never gets here (404).
+    """
+
+    def __init__(self, role: Role) -> None:
+        self.role = role
+        super().__init__(f"Role '{role}' cannot export visits")
