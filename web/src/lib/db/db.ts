@@ -110,11 +110,52 @@ export interface MetaRow {
   value: string | number
 }
 
+/** ADR-0018: the photo went up or did not; `failed` carries why. */
+export type PhotoStatus = 'pending' | 'uploaded' | 'failed'
+
+/**
+ * One photo waiting to reach object storage, stored on the phone only.
+ *
+ * It is never a row in the outbox: ADR-0018 keeps the bytes out of the API
+ * (the client PUTs them straight to the presigned URL), so only the parent
+ * entry or visit is pushed. `bytes` is what `POST /attachments:presign` is
+ * told and what the presigned URL signs as `Content-Length`, so the upload
+ * must PUT exactly those bytes (`bytes === data.byteLength`, always).
+ *
+ * `data` holds the compressed bytes rather than a `Blob`: that is what
+ * IndexedDB stores a Blob as anyway (the HTML structured clone serializes it
+ * to bytes + type), it is the one shape both a browser and `fake-indexeddb`
+ * clone natively (a jsdom `Blob` does not survive Node's `structuredClone`),
+ * and the upload builds the Blob it PUTs from these very bytes, once.
+ *
+ * `data` is null once the photo is `uploaded`: the object is in storage and
+ * the local copy only keeps phone storage (ADR-0018's storage note).
+ */
+export interface PhotoRow {
+  id: string
+  entity: SyncEntity
+  parent_id: string
+  data: Uint8Array | null
+  content_type: string
+  bytes: number
+  status: PhotoStatus
+  /** Why a `failed` photo failed, shown to the user; null otherwise. */
+  error: string | null
+  created_at: string
+}
+
+/** What the store queues: `status`, `error` and `created_at` are the store's. */
+export type NewPhoto = Pick<
+  PhotoRow,
+  'id' | 'entity' | 'parent_id' | 'data' | 'content_type' | 'bytes'
+>
+
 export class TechcampDb extends Dexie {
   declare logbookEntries: Table<LogbookEntryRow, string>
   declare extensionVisits: Table<ExtensionVisitRow, string>
   declare outbox: Table<OutboxItem, number>
   declare meta: Table<MetaRow, string>
+  declare photos: Table<PhotoRow, string>
 
   constructor() {
     super('techcamp')
@@ -127,6 +168,18 @@ export class TechcampDb extends Dexie {
       extensionVisits: 'id, farm_id, visited_on, syncState',
       outbox: '++key, id, status',
       meta: 'key',
+    })
+    // Photos (ADR-0018, E8 T9b). Dexie adds the table and keeps every v1 row:
+    // an upgrade that dropped a phone's unsynced logbook would break RNF-01.
+    // `status` is what the upload queue selects; `[entity+parent_id]` is the one
+    // lookup the two sheets make, and it is answered by an index instead of a
+    // scan of every photo on the phone.
+    this.version(2).stores({
+      logbookEntries: 'id, plot_id, occurred_on, syncState',
+      extensionVisits: 'id, farm_id, visited_on, syncState',
+      outbox: '++key, id, status',
+      meta: 'key',
+      photos: 'id, [entity+parent_id], status',
     })
   }
 }
