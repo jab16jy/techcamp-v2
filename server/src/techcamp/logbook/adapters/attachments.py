@@ -102,16 +102,31 @@ class Boto3Presigner:
             config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         )
 
-    async def presign_put(self, *, object_key: str, content_type: str, expires_in: int) -> str:
+    async def presign_put(
+        self, *, object_key: str, content_type: str, size: int, expires_in: int
+    ) -> str:
         """Sign the `PUT` locally: no request is sent, so nothing can time out.
 
+        `ContentLength` is what puts the length inside the signature: botocore
+        does not blacklist `content-length` (`SIGNED_HEADERS_BLACKLIST` in
+        `auth.py` holds connection/expect/keep-alive/te/trailer/transfer-encoding/
+        upgrade/user-agent/x-amzn-trace-id), so a request carrying it lists
+        `content-length` in `X-Amz-SignedHeaders` and the store rejects a body
+        of any other size. The client does not have to set the header — a
+        browser sets `Content-Length` from the blob it is given — but it must
+        not add one that disagrees with the length it asked to presign.
+
         boto3 ships no type marker, so the URL's type is stated here instead of
-        being read off an untyped call; the test that follows asserts what that
-        URL actually is.
+        being read off an untyped call; the tests assert what that URL is.
         """
         url: str = self._client.generate_presigned_url(
             "put_object",
-            Params={"Bucket": self._bucket, "Key": object_key, "ContentType": content_type},
+            Params={
+                "Bucket": self._bucket,
+                "Key": object_key,
+                "ContentType": content_type,
+                "ContentLength": size,
+            },
             ExpiresIn=expires_in,
         )
         return url

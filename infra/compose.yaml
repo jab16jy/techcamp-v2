@@ -39,6 +39,47 @@ services:
     volumes:
       - minio-data:/data
 
+  minio-init:
+    # One-shot: create the logbook photo bucket (ADR-0021: MinIO in the seminar
+    # profile; ADR-0018: the presigned upload the API emits needs it to exist).
+    # `--ignore-existing` makes it a repair rather than a race, so restarting
+    # the stack over a kept volume is a no-op.
+    # Floating on purpose: no `minio/mc` release tag could be verified from the
+    # environment this was written in (both quay.io and Docker Hub deny
+    # anonymous pulls of the repo there, `:latest` included), and an
+    # init container pinned to a tag that does not exist is a stack that will
+    # not start. `mc alias set` and `mc mb --ignore-existing` are a stable CLI;
+    # pin a release here once one can be pulled and confirmed.
+    image: quay.io/minio/mc:latest
+    profiles: [seminar]
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    # `depends_on` below only waits for MinIO's container to START, not to be
+    # ready to serve, so `mc` can reach a server that is not listening yet and
+    # fail. A failure here is not a warning: `api` waits for
+    # `service_completed_successfully`, so the whole stack would stay down. The
+    # retry is what covers readiness; it is bounded so a genuinely broken MinIO
+    # still fails loudly instead of hanging the stack forever.
+    command:
+      - |
+        for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          if mc alias set seminar http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" \
+            && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_BUCKET}"; then
+            echo "bucket $${TECHCAMP_S3_BUCKET} is ready"
+            exit 0
+          fi
+          echo "minio not ready yet (attempt $${attempt}/10)"
+          sleep 2
+        done
+        echo "minio never became ready; the photo bucket was not created" >&2
+        exit 1
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-techcamp}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-techcamp123}
+      TECHCAMP_S3_BUCKET: ${TECHCAMP_S3_BUCKET:-logbook-photos}
+    depends_on:
+      - minio
+
   migrate:
     build:
       context: ../server
@@ -58,12 +99,27 @@ services:
     environment:
       TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-techcamp}:${POSTGRES_PASSWORD:-techcamp}@postgres:5432/${POSTGRES_DB:-techcamp}
+      # Object storage for logbook photos (ADR-0018, ADR-0021). The URL is the
+      # one the BROWSER uploads to, so it is the published MinIO port and not the
+      # in-network `minio:9000`. The keys default to the MinIO root user above
+      # only in the seminar profile; left empty here, `shared/config.py` falls
+      # back to that same emulator credential in seminar and to nothing in
+      # production, which answers 503 rather than inventing a credential.
+      TECHCAMP_S3_PUBLIC_URL: ${TECHCAMP_S3_PUBLIC_URL:-http://localhost:9000}
+      TECHCAMP_S3_BUCKET: ${TECHCAMP_S3_BUCKET:-logbook-photos}
+      TECHCAMP_S3_ACCESS_KEY: ${TECHCAMP_S3_ACCESS_KEY:-}
+      TECHCAMP_S3_SECRET_KEY: ${TECHCAMP_S3_SECRET_KEY:-}
+      TECHCAMP_S3_REGION: ${TECHCAMP_S3_REGION:-us-east-1}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      # The bucket has to exist before the first photo is presigned; the API
+      # signs the URL, MinIO only rejects the PUT if the bucket is missing.
+      minio-init:
         condition: service_completed_successfully
 
   ingestor:
