@@ -57,6 +57,15 @@ export function encodedPhoto(data: PhotoBytes, contentType: PhotoContentType): E
   return { data, content_type: contentType, bytes: data.byteLength }
 }
 
+/**
+ * The Blob an encoding describes. One construction for everyone: the sheet
+ * previews it, and `photoBlob` in `lib/db/photos.ts` builds the same Blob for
+ * the upload, so what the user saw is what gets PUT.
+ */
+export function encodedBlob(encoded: EncodedPhoto): Blob {
+  return new Blob([encoded.data], { type: encoded.content_type })
+}
+
 export type PhotoEncoder = (step: EncodeStep) => Promise<EncodedPhoto>
 
 /**

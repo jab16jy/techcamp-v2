@@ -6,6 +6,17 @@ import { db } from '../../../lib/db/db'
 import { resetLocalDb } from '../../../lib/db/testDb'
 import { NewVisitSheet } from './NewVisitSheet'
 
+// jsdom has no canvas and no `createImageBitmap`, so the real compressor cannot
+// run here. Everything else — the sheet, the store, the attachment — is real.
+vi.mock('../../../lib/photos/browser', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/photos/browser')>()
+  const { encodedPhoto } = await import('../../../lib/photos/compress')
+  return {
+    ...actual,
+    compressPhoto: async () => encodedPhoto(new Uint8Array(new ArrayBuffer(2048)), 'image/jpeg'),
+  }
+})
+
 const ORG_ID = '018f0c2a-0000-7000-8000-0000000000aa'
 const FARM_ID = '018f0c2a-0000-7000-8000-0000000000cc'
 const TECHNICIAN_ID = '018f0c2a-0000-7000-8000-0000000000dd'
@@ -103,6 +114,31 @@ describe('NewVisitSheet', () => {
       technician_id: TECHNICIAN_ID,
       topics: ['human_capacities', 'natural_resources'],
     })
+  })
+
+  it('a chosen photo is attached to the visit that was saved, and never before', async () => {
+    const { onOpenChange } = renderSheet()
+    fireEvent.click(screen.getByLabelText(/Capacidades humanas integrales/i))
+
+    fireEvent.change(screen.getByLabelText('Agregar foto'), {
+      target: { files: [new File(['x'], 'visita.jpg', { type: 'image/jpeg' })] },
+    })
+
+    // It is on screen as pending, and nowhere in the store yet: the visit it
+    // belongs to does not exist until the user saves.
+    expect(await screen.findByText('Pendiente de subir')).toBeInTheDocument()
+    expect(await db.photos.count()).toBe(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar visita' }))
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+
+    const visits = await db.extensionVisits.toArray()
+    const photos = await db.photos.toArray()
+    expect(photos).toHaveLength(1)
+    expect(photos[0].entity).toBe('extension_visit')
+    expect(photos[0].parent_id).toBe(visits[0].id)
+    expect(photos[0].status).toBe('pending')
+    expect(photos[0].bytes).toBe(2048)
   })
 
   it('no topic selected → save is blocked with visible field error, and nothing is written', async () => {

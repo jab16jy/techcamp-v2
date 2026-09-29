@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { FormSheet } from '../../../design-system/patterns/FormSheet'
+import { PhotoField } from '../../../design-system/patterns/PhotoField'
 import { toast } from '../../../design-system/ui/toast'
 import { useMe } from '../../../lib/api/me'
 import { uuidv7 } from '../../../lib/db/ids'
 import { saveExtensionVisit, type ExtensionVisitDraft } from '../../../lib/db/local'
 import { todayInBogota } from '../../../lib/date'
+import { usePhotoAttachments } from '../../../lib/photos/usePhotoAttachments'
 import { VisitForm, type PlotOption } from '../components/VisitForm'
 
 export interface FarmContext {
@@ -42,6 +44,10 @@ export function NewVisitSheet({
   const [topicError, setTopicError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // Photos of a visit (ADR-0018). Staged until the visit has an id, which only
+  // happens on save: a photo cannot be stored against a record that does not
+  // exist yet.
+  const photos = usePhotoAttachments('extension_visit', null)
 
   function reset() {
     setVisitedOn(todayInBogota())
@@ -53,6 +59,7 @@ export function NewVisitSheet({
     setTopicError(null)
     setFormError(null)
     setSaving(false)
+    photos.reset()
   }
 
   function handleOpenChange(next: boolean) {
@@ -96,7 +103,10 @@ export function NewVisitSheet({
         notes: notes.trim() || null,
       }
 
-      await saveExtensionVisit(draft)
+      const visit = await saveExtensionVisit(draft)
+      // The photos go with the visit they document; if this fails the catch
+      // below shows it and the sheet stays open, so nothing is lost silently.
+      await photos.attachTo(visit.id)
       toast('Guardado en el teléfono')
       reset()
       onOpenChange(false)
@@ -133,6 +143,13 @@ export function NewVisitSheet({
         onNotesChange={setNotes}
         topicError={topicError}
         formError={formError}
+      />
+      <PhotoField
+        items={photos.items}
+        onPick={(files) => void photos.addFiles(files)}
+        onRemove={(id) => void photos.remove(id)}
+        error={photos.error}
+        disabled={saving}
       />
     </FormSheet>
   )
