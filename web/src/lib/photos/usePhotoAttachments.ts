@@ -37,6 +37,8 @@ interface StagedPhoto {
 
 export interface PhotoAttachments {
   items: PhotoAttachmentItem[]
+  /** True while a chosen file is still compressing; the sheet must not save yet. */
+  processing: boolean
   /** Why the last chosen photo was refused (Spanish, shown under the control). */
   error: string | null
   addFiles: (files: FileList | null) => Promise<void>
@@ -55,6 +57,7 @@ export function usePhotoAttachments(
   const storedPreviews = useStoredPreviews(stored)
   const [staged, setStaged] = useState<StagedPhoto[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [compressingCount, setCompressingCount] = useState(0)
   // The unmount cleanup needs the staged list without re-subscribing on every
   // chosen photo, so it reads a ref the render pass keeps fresh.
   const stagedRef = useRef<StagedPhoto[]>(staged)
@@ -72,22 +75,27 @@ export function usePhotoAttachments(
   async function addFiles(files: FileList | null): Promise<void> {
     if (files === null) return
     setError(null)
-    for (const file of Array.from(files)) {
-      let encoded: EncodedPhoto
-      try {
-        encoded = await compress(file)
-      } catch (reason) {
-        // A refused photo leaves the ones already staged alone, and the sheet
-        // says why instead of silently keeping a file it cannot send.
-        setError(refusalMessage(reason))
-        return
+    setCompressingCount((count) => count + 1)
+    try {
+      for (const file of Array.from(files)) {
+        let encoded: EncodedPhoto
+        try {
+          encoded = await compress(file)
+        } catch (reason) {
+          // A refused photo leaves the ones already staged alone, and the sheet
+          // says why instead of silently keeping a file it cannot send.
+          setError(refusalMessage(reason))
+          return
+        }
+        const photo: StagedPhoto = {
+          id: uuidv7(),
+          encoded,
+          previewUrl: URL.createObjectURL(encodedBlob(encoded)),
+        }
+        setStaged((current) => [...current, photo])
       }
-      const photo: StagedPhoto = {
-        id: uuidv7(),
-        encoded,
-        previewUrl: URL.createObjectURL(encodedBlob(encoded)),
-      }
-      setStaged((current) => [...current, photo])
+    } finally {
+      setCompressingCount((count) => count - 1)
     }
   }
 
@@ -104,9 +112,11 @@ export function usePhotoAttachments(
   async function attachTo(savedParentId: string): Promise<void> {
     for (const photo of staged) {
       await attachCompressedPhoto(entity, savedParentId, photo.encoded)
+      // Each photo leaves the staged list as it lands: a write that fails
+      // halfway leaves only the unattached ones, so saving again adds no duplicate.
+      discardStaged([photo])
+      setStaged((current) => current.filter((candidate) => candidate.id !== photo.id))
     }
-    discardStaged(staged)
-    setStaged([])
   }
 
   return {
@@ -128,6 +138,7 @@ export function usePhotoAttachments(
         }),
       ),
     ],
+    processing: compressingCount > 0,
     error,
     addFiles,
     remove,

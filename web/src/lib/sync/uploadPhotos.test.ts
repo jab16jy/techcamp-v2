@@ -266,6 +266,46 @@ describe('presign answers the server can give', () => {
   })
 })
 
+describe('a presign answer that asks for a later try', () => {
+  it('408 Request Timeout leaves the photo pending, never failed', async () => {
+    await syncedEntry()
+    await pendingPhoto('0192f0c2a-0000-7000-8000-0000000000a1', 1024)
+    stubApi({ presign: () => problem(408, 'Request Timeout') })
+
+    await syncOnce()
+
+    const stored = await photoRow('0192f0c2a-0000-7000-8000-0000000000a1')
+    expect(stored.status).toBe('pending')
+    // Negative: a timeout is not a refusal, so the photo must not be given a
+    // failure the user can do nothing about.
+    expect(stored.error).toBeNull()
+  })
+
+  it('429 Too Many Requests leaves the photo pending, never failed', async () => {
+    await syncedEntry()
+    await pendingPhoto('0192f0c2a-0000-7000-8000-0000000000a1', 1024)
+    stubApi({ presign: () => problem(429, 'Too Many Requests') })
+
+    await syncOnce()
+
+    const stored = await photoRow('0192f0c2a-0000-7000-8000-0000000000a1')
+    expect(stored.status).toBe('pending')
+    expect(stored.error).toBeNull()
+  })
+
+  it('403 marks the photo failed with its reason: a role refusal will not change', async () => {
+    await syncedEntry()
+    await pendingPhoto('0192f0c2a-0000-7000-8000-0000000000a1', 1024)
+    stubApi({ presign: () => problem(403, 'Forbidden') })
+
+    await syncOnce()
+
+    const stored = await photoRow('0192f0c2a-0000-7000-8000-0000000000a1')
+    expect(stored.status).toBe('failed')
+    expect(stored.error).toBe('Forbidden')
+  })
+})
+
 describe('a PUT that does not land', () => {
   it('keeps the photo pending for the next run instead of losing it', async () => {
     await syncedEntry()
