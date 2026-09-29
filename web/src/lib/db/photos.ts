@@ -37,6 +37,19 @@ export async function listPhotos(entity: SyncEntity, parentId: string): Promise<
 }
 
 /**
+ * The Blob a stored photo describes, built from its own bytes.
+ *
+ * One construction for both consumers: the upload queue PUTs exactly this Blob
+ * (its `size` is what it also told presign, and what the presigned URL signs as
+ * `Content-Length`), and the sheet renders its thumbnail from the same one.
+ * `null` once the photo is `uploaded`, because the bytes were dropped then.
+ */
+export function photoBlob(photo: PhotoRow): Blob | null {
+  if (photo.data === null) return null
+  return new Blob([photo.data], { type: photo.content_type })
+}
+
+/**
  * Removes a photo this device stored. Removing one that is not there is not an
  * error: the sheet lets the user remove a photo before it is saved, and a
  * second tap on an already-removed thumbnail must not throw.
