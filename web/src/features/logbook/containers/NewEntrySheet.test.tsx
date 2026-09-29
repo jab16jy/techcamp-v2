@@ -7,6 +7,17 @@ import { resetLocalDb } from '../../../lib/db/testDb'
 import { setSession, clearSession } from '../../../lib/api/session'
 import { NewEntrySheet } from './NewEntrySheet'
 
+// jsdom has no canvas and no `createImageBitmap`, so the real compressor cannot
+// run here. Everything else — the sheet, the store, the attachment — is real.
+vi.mock('../../../lib/photos/browser', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/photos/browser')>()
+  const { encodedPhoto } = await import('../../../lib/photos/compress')
+  return {
+    ...actual,
+    compressPhoto: async () => encodedPhoto(new Uint8Array(new ArrayBuffer(2048)), 'image/jpeg'),
+  }
+})
+
 const ORG_ID = '018f0c2a-0000-7000-8000-0000000000aa'
 const PLOTS = [
   { id: '018f0c2a-0000-7000-8000-0000000000bb', name: 'Parcela Norte' },
@@ -37,6 +48,30 @@ describe('NewEntrySheet', () => {
   afterEach(() => {
     clearSession()
     vi.restoreAllMocks()
+  })
+
+  it('a chosen photo is attached to the entry that was saved, and never before', async () => {
+    renderSheet()
+
+    fireEvent.change(screen.getByLabelText(/Rendimiento \(kg\)/i), { target: { value: '100' } })
+    fireEvent.change(screen.getByLabelText('Agregar foto'), {
+      target: { files: [new File(['x'], 'cosecha.jpg', { type: 'image/jpeg' })] },
+    })
+
+    // It is on screen as pending, and nowhere in the store yet: the entry it
+    // belongs to does not exist until the user saves.
+    expect(await screen.findByText('Pendiente de subir')).toBeInTheDocument()
+    expect(await db.photos.count()).toBe(0)
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+    await waitFor(async () => expect(await db.logbookEntries.count()).toBe(1))
+
+    const entries = await db.logbookEntries.toArray()
+    const photos = await db.photos.toArray()
+    expect(photos).toHaveLength(1)
+    expect(photos[0].entity).toBe('logbook_entry')
+    expect(photos[0].parent_id).toBe(entries[0].id)
+    expect(photos[0].status).toBe('pending')
   })
 
   it('a harvest without yield_kg, or sold_kg without price, or sold_kg > yield_kg, blocks the save with a field error and writes nothing; a valid harvest writes one row + one outbox item', async () => {
