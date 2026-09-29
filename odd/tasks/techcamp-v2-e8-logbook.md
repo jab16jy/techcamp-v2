@@ -592,6 +592,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   mypy (184), lint-imports clean; web lint, typecheck clean, lib+logbook+visits 146 passed; build
   ok; 171.21 kB. #142, #143, #167 closed. Left open: #145 and #160 (reasons above), and #166. The
   `e8-t10` session is closed; its worktree and DB `techcamp-e8-db-t10` are removed.
+- T10b (owner: "resuélvelo", 2026-09-29): closes the UI half of acceptance criterion 2. Lane
+  `e8-t10b` (`feat/e8-t10b-conflict-notice` from `f1de361`, web only, CodeGraph index), AGY
+  `e8-t10b` medium in pane `wG:p1` (`wF:pH` was gone; `wH:p1` was busy with the owner's
+  `codegraph upgrade`), brief `.git-brief-e8-T10b.md`: one `LogbookScreen` test that renders a
+  `conflict_overwritten` entry and asserts "Sobrescrito en el servidor". Negatives: no
+  "Guardado en el teléfono" and no "Corregir"/"Descartar". RED comes from removing the notice block.
+  Test-only, so the parent gates it with no RDD round.
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
