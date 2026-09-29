@@ -1,0 +1,22 @@
+# Rule tests for no-naive-today. `valid` must stay unreported, `invalid` must be
+# reported: a rule test that never saw a failing case proves nothing
+# (docs/09, org isolation tests, same argument).
+
+id: no-naive-today
+
+valid:
+  # The product's own day, and an explicit UTC instant: the shapes docs/04-api.md:63-75
+  # and docs/06 §5 require. An instant with any timezone is aware, so it is valid.
+  - day = local_today()
+  - now = datetime.now(UTC)
+  - now = datetime.now(tz=UTC)
+  - now = datetime.now(BOGOTA_TZ)
+  - day = local_today(now if now is not None else datetime.now(UTC))
+  # A date is not "today" on its own: an explicit day is how a caller passes one.
+  - day = date(2026, 9, 29)
+
+invalid:
+  # The three shapes the rule exists for.
+  - day = date.today()
+  - now = datetime.now()
+  - now = datetime.utcnow()

@@ -33,6 +33,11 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    # Ships the `ast-grep` binary (and an `sg` that must never be used: on a Linux
+    # workstation `sg` is the system switch-group command). The rule tests are
+    # `uv run ast-grep test`; the version is frozen by uv.lock, as for every other
+    # dev dependency.
+    "ast-grep-cli>=0.45.3",
     "import-linter>=2.15",
     "mypy>=2.3.1",
     "pytest>=9.1.1",

@@ -144,6 +144,11 @@ gate-fast:
       uv run alembic heads >&2
       exit 1
     fi
+    # The rules in ../rules are the invariants a review used to catch by hand
+    # (docs/06 §5's America/Bogota day, caught in E7 and again in E8). The config sits at
+    # the repository root and its paths are relative to it, so it is named explicitly and
+    # the scan covers the whole tree, web/ included, whatever a rule names.
+    echo "--- ast-grep scan"; uv run ast-grep scan --config ../sgconfig.yml
     cd "$_worktree/web"
     echo "--- eslint";           npm run lint
     echo "--- tsc";              npm run typecheck

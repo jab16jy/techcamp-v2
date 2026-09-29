@@ -121,13 +121,36 @@ Issue #139 (evidence from E7/E8):
   T2 already edits `ci.yml` for the ast-grep scan, so the head check lands in that work unit and
   T1 does not touch CI. Until T2 lands, `gate-fast` is the only place the check runs; after it,
   CI and `gate-fast` list the same static checks.
+- D-T2.1 The dev dependency is `ast-grep-cli`: it ships the `ast-grep` binary as a wheel script,
+  while `ast-grep-py` is the library binding and installs no executable. The venv also gets an
+  `sg` from the same wheel, while `sg` in a shell is the system switch-group command, so every
+  recipe and CI step calls `ast-grep` and never `sg`. The version is frozen by `uv.lock`
+  (0.45.3) like every other dev dependency and CI syncs with `uv sync --locked`; an exact `==` pin
+  would diverge from the file's own convention without adding reproducibility the lock does not
+  already give.
+- D-T2.2 `no-naive-today` covers the three shapes the docs forbid — `date.today()`, a zero-argument
+  `datetime.now()` and `datetime.utcnow()` — scoped with `files: server/src/**/*.py` and
+  `ignores: server/src/techcamp/shared/dates.py`, the one module allowed a naive read because it
+  attaches UTC to it on the next line. Recorded limit: `datetime.date.today()` (a three-segment
+  member chain) and `datetime.now(tz=None)` are not matched. A metavariable form (`$X.today()`)
+  would catch the first but would also flag any domain method named `today()`, so the precise
+  shapes stand and a second rule id can add more when a real occurrence demands it. The rule test
+  documents both what is covered and what is not.
+- D-T2.3 The scan is one command, run from `server/` in both places: `uv run ast-grep scan
+  --config ../sgconfig.yml`. Rule paths are relative to the config file, not the cwd, so the scan
+  covers the whole tree whatever a rule names, and CI's server job (whose working directory is
+  `server`) runs the identical line. CI also runs `uv run ast-grep test`, so a rule that stops
+  reporting what it claims fails the build instead of passing silently.
+- D-T2.4 D-T1.6 lands with T2: the CI server job asserts exactly one Alembic head, spelled out as
+  the recipe spells it, because CI calls the tools directly and never `just`. That closes
+  `R3-stale-ci-parity` (#193) without touching the AGENTS.md sentence, which is now true.
 
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
   Alembic head), `gate *paths`, `gate-full`, `gate-lane base`. AGENTS.md Commands + the
   `D-Tx.n` convention in Workflow. Evidence: each recipe run, `gate-lane` over a range with
   one broken commit (in a scratch branch, deleted after).
-- [ ] T2 ast-grep: pinned dev dep, `sgconfig.yml`, rule `no-naive-today` + rule tests (RED
+- [x] T2 ast-grep: pinned dev dep, `sgconfig.yml`, rule `no-naive-today` + rule tests (RED
   first), wired into `gate-fast` and CI.
 - [ ] T3 pytest-randomly: dev dep; full suite on a clean DB with 3 seeds; flakes reported on
   #89 with seeds; fix only trivial ones.
@@ -203,6 +226,36 @@ Issue #139 (evidence from E7/E8):
     accepted for this round and AGENTS.md is left as is: T2 makes the sentence true in the same
     PR that ships the rest of the feature, and softening it now would only be true twice.
 
+  - Known gap, closed in T2 by D-T1.6: the single-Alembic-head check is in `gate-fast` and not
+    yet in CI, the one check the two did not share. T1 does not touch CI (the scope adds
+    ast-grep, gitleaks and whatever T4 adopts, and nothing else); T2 adds `alembic heads` to the
+    server job in the same work unit as the ast-grep scan, in the same PR. The RDD WARNING
+    `R3-stale-ci-parity` on the AGENTS.md sentence that already claims parity is therefore
+    accepted for this round and AGENTS.md is left as is: T2 makes the sentence true in the same
+    PR that ships the rest of the feature, and softening it now would only be true twice.
+- 2026-09-29 T2: `ast-grep-cli` in the server dev group (locked at 0.45.3), `sgconfig.yml` at the
+  root, `rules/no-naive-today.yml`, `rule-tests/no-naive-today-test.yml` with its generated
+  snapshot, the scan in `gate-fast` and in the CI server job, the rule tests in CI, and D-T1.6's
+  single-Alembic-head assertion in the same job. One commit, so CI and `gate-fast` list the same
+  checks at every commit of the lane.
+  - RED, rule matching only `date.today()`: `[Missing] Expect rule no-naive-today to report
+    issues, but none found in: now = datetime.now()` and the same for `datetime.utcnow()`;
+    `FAIL no-naive-today  ......WMM` / `test failed. 0 passed; 1 failed` (exit 4). The first RED
+    was structural: `Error: Cannot read rule directory .../rules` (exit 6).
+  - GREEN: `PASS no-naive-today  .........` / `test result: ok. 1 passed; 0 failed` (exit 0). The
+    first all-three-shapes run failed with `Test failed due to mismatching snapshots`, so the
+    baseline was generated with `ast-grep test --update-all` and committed.
+  - Six `valid` cases (including `datetime.now(UTC)`, `datetime.now(tz=UTC)`,
+    `datetime.now(BOGOTA_TZ)` and `local_today(...)`) and three `invalid` ones.
+  - Negative controls: a scratch `date.today()` in `server/src` is reported from the repo root and
+    from `server/ --config ../sgconfig.yml` alike, and `just gate-fast` then exits 1 with the
+    rule's message; the same read inside `server/src/techcamp/shared/dates.py` is not reported
+    (file held the violation at line 34 while the scan exited 0), which is what `ignores` is for.
+    Both scratch edits were reverted and `git status` confirmed the tree.
+  - The existing tree is clean under the rule: 30-odd `datetime.now(UTC)` calls and zero
+    `date.today()`, zero-arg `datetime.now()` or `datetime.utcnow()` in `server/src`.
+
 ## Next step
-T1 committed; the parent gates the sha and the RDD review runs for it. Next task: T2 (ast-grep
-`no-naive-today` + rule tests), after the parent's go.
+T2 committed; the parent gates the sha, then the RDD review runs for the slice. Next task: T3
+(pytest-randomly: dev dep, full suite on a clean DB with 3 seeds, flakes on #89), after the
+parent's go.
