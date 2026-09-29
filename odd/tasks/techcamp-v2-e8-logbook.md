@@ -604,6 +604,26 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   el servidor/`; GREEN 4 passed. Parent gate in the lane: lint, typecheck exit 0, LogbookScreen
   4 passed. Test-only → no RDD. **Merged** `69d9880`; integration lint, typecheck clean,
   features/logbook 13 passed. `e8-t10b` session is closed and its worktree removed.
+- Delivery (owner go, 2026-09-29): stacked-to-main, **23 PRs #168–#190**, merged in order. Each
+  slice branch `e8/NN` = `merge(e8/NN-1, <E8 cut commit>)` built with `git merge-tree` +
+  `commit-tree`. Every head descends from `main` and from the previous slice, so no PR diff carries a
+  criss-cross base (the E7 #151–#153 problem). Cuts sit at lane work-unit commits or integration
+  merges. T3 is one slice (`f3677ad`, 2,396 lines), because its lane commits conflict with T5/T6
+  (add/add on `ports.py`, `repositories.py`) and only the merge carries the resolution. The last
+  slice's tree is byte-identical to `feat/e8-logbook` at `72eae02` (verified). PRs over 400 lines
+  are labelled `size:exception` after one slicing pass.
+  CI caught #182 (T8 slice cut at `2294889`) failing typecheck: `2294889` imports `./syncState`,
+  which only `93ce5c9` adds. The T8 split commit never compiled alone, and the gate only checked
+  the lane HEAD. With the owner's consent, the chain was rebuilt from slice 15 as **22 slices**:
+  15 = `93ce5c9`; `e8/15..22` were force-pushed, #182–#189 retitled, and #190 closed. Slices 01–14
+  are unchanged, and the final tree still equals `72eae02`. Lesson: when a lane is split into
+  commits, the gate runs typecheck on every commit, not only on HEAD.
+  **E8 delivered to `main`** (2026-09-29): #191 merged first (`ci: run the checks on pull requests
+  only`, owner request; PR CI already covers each tree, and the free Actions quota ran short). Then
+  #168–#189 merged in order, each retargeted to `main` before its merge, and each diff identical to
+  its stacked diff. `main` = `033baba`; `git diff 72eae02 origin/main` shows only `ci.yml`. Every
+  PR had green `server` and `web` (#189 also shows one run that never started, for billing). No CI
+  run on `main` after the merges.
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
@@ -651,7 +671,6 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-(2026-09-29, E8 closed) All tasks T0–T10 (+T10b) are merged into `feat/e8-logbook` (`69d9880`), and all 7
-acceptance criteria are ticked with evidence. Open follow-ups outside E8: #145, #160, #166. Nothing
-of E8 is on `main`: push and stacked-to-main chained PRs (~400 authored lines each, `chained-pr`,
-`work-unit-commits`) wait for the owner's explicit go.
+(2026-09-29) E8 is delivered to `main` (`033baba`; PRs #168–#189, after #191). All 7 acceptance
+criteria are ticked with evidence. Open follow-ups outside E8: #145, #160, #166. The `e8/01..22` and
+lane branches stay (they back the RDD lineages); delete them only on the owner's word.
