@@ -72,11 +72,28 @@ async def _create_test_context(
     return org_id, farm_id, plot_id, user_id, make_entry
 
 
-async def _assert_fails(db_session: AsyncSession, row: Any) -> None:
+def _constraint_name(error: IntegrityError) -> str | None:
+    """The constraint Postgres refused (#142).
+
+    SQLAlchemy wraps the asyncpg exception in the DBAPI error; the driver's
+    own object carries `constraint_name`, asyncpg's equivalent of psycopg's
+    `exc.orig.diag.constraint_name`.
+    """
+    cause = error.orig.__cause__ if error.orig is not None else None
+    return getattr(cause, "constraint_name", None)
+
+
+async def _assert_fails(db_session: AsyncSession, row: Any, *, constraint: str) -> None:
+    """The insert must fail on THIS constraint, not merely on some CHECK.
+
+    A bare `IntegrityError` would also pass if the row tripped a different
+    constraint, so a renamed or dropped rule would go unnoticed (#142).
+    """
     db_session.add(row)
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError) as excinfo:
         await db_session.commit()
     await db_session.rollback()
+    assert _constraint_name(excinfo.value) == constraint
 
 
 async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
@@ -111,12 +128,28 @@ async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.parametrize(
-    ("desc", "overrides"),
+    ("desc", "overrides", "constraint"),
     [
-        ("harvest without yield", {"kind": "harvest", "yield_kg": None}),
-        ("task without labor", {"kind": "task", "labor_days": None}),
-        ("labor on non-task", {"kind": "observation", "labor_days": decimal.Decimal("1")}),
-        ("irrigation without mm", {"kind": "irrigation", "irrigation_mm": None}),
+        (
+            "harvest without yield",
+            {"kind": "harvest", "yield_kg": None},
+            "ck_logbook_entry_harvest_yield",
+        ),
+        (
+            "task without labor",
+            {"kind": "task", "labor_days": None},
+            "ck_logbook_entry_task_labor",
+        ),
+        (
+            "labor on non-task",
+            {"kind": "observation", "labor_days": decimal.Decimal("1")},
+            "ck_logbook_entry_task_exclusive",
+        ),
+        (
+            "irrigation without mm",
+            {"kind": "irrigation", "irrigation_mm": None},
+            "ck_logbook_entry_irrigation_depth",
+        ),
         (
             "mm on non-irrigation",
             {
@@ -124,9 +157,14 @@ async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
                 "labor_days": decimal.Decimal("1"),
                 "irrigation_mm": decimal.Decimal("5"),
             },
+            "ck_logbook_entry_irrigation_exclusive",
         ),
-        ("input without cost", {"kind": "input", "cost_cop": None}),
-        ("cost without cost", {"kind": "cost", "cost_cop": None}),
+        (
+            "input without cost",
+            {"kind": "input", "cost_cop": None},
+            "ck_logbook_entry_cost_required",
+        ),
+        ("cost without cost", {"kind": "cost", "cost_cop": None}, "ck_logbook_entry_cost_required"),
         (
             "sold without price",
             {
@@ -134,6 +172,7 @@ async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
                 "yield_kg": decimal.Decimal("100"),
                 "sold_kg": decimal.Decimal("80"),
             },
+            "ck_logbook_entry_sold_and_price",
         ),
         (
             "price without sold",
@@ -142,6 +181,7 @@ async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
                 "yield_kg": decimal.Decimal("100"),
                 "sale_price_cop_per_kg": decimal.Decimal("3000"),
             },
+            "ck_logbook_entry_sold_and_price",
         ),
         (
             "sold > yield",
@@ -151,13 +191,23 @@ async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
                 "sold_kg": decimal.Decimal("120"),
                 "sale_price_cop_per_kg": decimal.Decimal("3000"),
             },
+            "ck_logbook_entry_sold_le_yield",
         ),
-        ("negative yield", {"kind": "harvest", "yield_kg": decimal.Decimal("-10")}),
-        ("negative cost", {"kind": "cost", "cost_cop": decimal.Decimal("-500")}),
-        ("invalid kind", {"kind": "pruning"}),
+        (
+            "negative yield",
+            {"kind": "harvest", "yield_kg": decimal.Decimal("-10")},
+            "ck_logbook_entry_non_negative",
+        ),
+        (
+            "negative cost",
+            {"kind": "cost", "cost_cop": decimal.Decimal("-500")},
+            "ck_logbook_entry_non_negative",
+        ),
+        ("invalid kind", {"kind": "pruning"}, "ck_logbook_entry_kind"),
         (
             "yield_kg on non-harvest fails",
             {"kind": "task", "labor_days": decimal.Decimal("1"), "yield_kg": decimal.Decimal("50")},
+            "ck_logbook_entry_harvest_exclusive",
         ),
         (
             "sold_kg and price on non-harvest fails",
@@ -167,15 +217,16 @@ async def test_valid_row_of_each_kind_inserts(db_session: AsyncSession) -> None:
                 "sold_kg": decimal.Decimal("50"),
                 "sale_price_cop_per_kg": decimal.Decimal("2000"),
             },
+            "ck_logbook_entry_harvest_exclusive",
         ),
     ],
 )
 async def test_logbook_entry_checks_enforce_invariants(
-    db_session: AsyncSession, desc: str, overrides: dict[str, Any]
+    db_session: AsyncSession, desc: str, overrides: dict[str, Any], constraint: str
 ) -> None:
     """CHECKs enforce required, exclusive, sold<=yield, non-negative and kind domain."""
     _org, _farm, _plot, _user, make_entry = await _create_test_context(db_session)
-    await _assert_fails(db_session, make_entry(**overrides))
+    await _assert_fails(db_session, make_entry(**overrides), constraint=constraint)
 
 
 async def test_shared_sequence_strictly_increases_across_logbook_entry_and_extension_visit(
@@ -246,7 +297,7 @@ async def test_extension_visit_topics_invariants(db_session: AsyncSession) -> No
         topics=["human_capacities", "invalid_topic"],
         client_updated_at=datetime.datetime.now(datetime.UTC),
     )
-    await _assert_fails(db_session, bad_visit)
+    await _assert_fails(db_session, bad_visit, constraint="ck_extension_visit_topics")
 
 
 async def test_attachment_parent_exactly_one_and_positive_bytes(
@@ -309,6 +360,7 @@ async def test_attachment_parent_exactly_one_and_positive_bytes(
             content_type="image/jpeg",
             bytes=100000,
         ),
+        constraint="ck_attachment_parent_exactly_one",
     )
 
     # Negative 2: neither parent set fails
@@ -322,6 +374,7 @@ async def test_attachment_parent_exactly_one_and_positive_bytes(
             content_type="image/jpeg",
             bytes=100000,
         ),
+        constraint="ck_attachment_parent_exactly_one",
     )
 
     # Negative 3: bytes <= 0 fails
@@ -335,4 +388,5 @@ async def test_attachment_parent_exactly_one_and_positive_bytes(
             content_type="image/jpeg",
             bytes=0,
         ),
+        constraint="ck_attachment_bytes_positive",
     )
