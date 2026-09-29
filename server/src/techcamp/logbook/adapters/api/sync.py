@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import AwareDatetime, BaseModel, Field
 
 from techcamp.alerts.adapters.api.deps import AlertRepoDep
@@ -25,6 +25,7 @@ from techcamp.logbook.adapters.api.deps import (
     SyncTransactionDep,
     VisitSyncRepoDep,
 )
+from techcamp.logbook.application import pull_changes
 from techcamp.logbook.application.ports import ExtensionVisitChange, LogbookEntryChange
 from techcamp.logbook.application.push import (
     MAX_BATCH_CHANGES,
@@ -32,7 +33,7 @@ from techcamp.logbook.application.push import (
     push_extension_visit,
     push_logbook_entry,
 )
-from techcamp.logbook.domain.models import SyncOp
+from techcamp.logbook.domain.models import LogbookEntry, SyncOp
 from techcamp.shared.db import SessionDep
 
 router = APIRouter(tags=["logbook"])
@@ -216,3 +217,162 @@ async def push_changes(
     # versions allocated above are allocated in commit order (docs/06 §7).
     await session.commit()
     return PushResponse(results=[_view(result) for result in results])
+
+
+class LogbookEntryPullData(BaseModel):
+    """`data` of a `logbook_entry` pull change. Amounts are floats so they serialize
+    as JSON numbers, matching web types (docs/03 §logbook_entry).
+    """
+
+    id: UUID
+    org_id: UUID
+    plot_id: UUID
+    crop_cycle_id: UUID | None = None
+    kind: str
+    occurred_on: date
+    quantity: float | None = None
+    unit: str | None = None
+    cost_cop: float | None = None
+    yield_kg: float | None = None
+    sold_kg: float | None = None
+    sale_price_cop_per_kg: float | None = None
+    labor_days: float | None = None
+    irrigation_mm: float | None = None
+    alert_id: UUID | None = None
+    notes: str | None = None
+    created_by: UUID | None = None
+    created_offline: bool
+    client_updated_at: AwareDatetime
+    deleted_at: AwareDatetime | None = None
+
+
+class ExtensionVisitPullData(BaseModel):
+    """`data` of an `extension_visit` pull change (docs/03 §extension_visit)."""
+
+    id: UUID
+    org_id: UUID
+    farm_id: UUID
+    plot_id: UUID | None = None
+    technician_id: UUID
+    visited_on: date
+    topics: list[str]
+    recommendations: str | None = None
+    commitments: str | None = None
+    notes: str | None = None
+    client_updated_at: AwareDatetime
+    deleted_at: AwareDatetime | None = None
+
+
+class LogbookEntryPullChange(BaseModel):
+    id: UUID
+    entity: Literal["logbook_entry"]
+    op: SyncOp
+    server_version: int
+    data: LogbookEntryPullData
+
+
+class ExtensionVisitPullChange(BaseModel):
+    id: UUID
+    entity: Literal["extension_visit"]
+    op: SyncOp
+    server_version: int
+    data: ExtensionVisitPullData
+
+
+_PullChange = Annotated[
+    LogbookEntryPullChange | ExtensionVisitPullChange,
+    Field(discriminator="entity"),
+]
+
+
+class PullResponse(BaseModel):
+    changes: list[_PullChange]
+    next_since: int
+    has_more: bool
+
+
+def _float(val: Decimal | None) -> float | None:
+    return float(val) if val is not None else None
+
+
+@router.get("/sync/pull", response_model=PullResponse)
+async def pull(
+    user_id: CurrentUserId,
+    entries: EntrySyncRepoDep,
+    visits: VisitSyncRepoDep,
+    memberships: MembershipRepoDep,
+    since: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 500,
+) -> PullResponse:
+    """`GET /sync/pull?since=<server_version>&limit=500` (docs/04 §Bitácora; D2)."""
+    page = await pull_changes(
+        caller_id=user_id,
+        since=since,
+        limit=limit,
+        memberships=memberships,
+        entries=entries,
+        visits=visits,
+    )
+    change_views: list[_PullChange] = []
+    for item in page.changes:
+        if isinstance(item.data, LogbookEntry):
+            entry = item.data
+            change_views.append(
+                LogbookEntryPullChange(
+                    id=item.id,
+                    entity="logbook_entry",
+                    op=item.op,
+                    server_version=item.server_version,
+                    data=LogbookEntryPullData(
+                        id=entry.id,
+                        org_id=entry.org_id,
+                        plot_id=entry.plot_id,
+                        crop_cycle_id=entry.crop_cycle_id,
+                        kind=entry.kind,
+                        occurred_on=entry.occurred_on,
+                        quantity=_float(entry.quantity),
+                        unit=entry.unit,
+                        cost_cop=_float(entry.cost_cop),
+                        yield_kg=_float(entry.yield_kg),
+                        sold_kg=_float(entry.sold_kg),
+                        sale_price_cop_per_kg=_float(entry.sale_price_cop_per_kg),
+                        labor_days=_float(entry.labor_days),
+                        irrigation_mm=_float(entry.irrigation_mm),
+                        alert_id=entry.alert_id,
+                        notes=entry.notes,
+                        created_by=entry.created_by,
+                        created_offline=entry.created_offline,
+                        client_updated_at=entry.client_updated_at,
+                        deleted_at=entry.deleted_at,
+                    ),
+                )
+            )
+        else:
+            visit = item.data
+            change_views.append(
+                ExtensionVisitPullChange(
+                    id=item.id,
+                    entity="extension_visit",
+                    op=item.op,
+                    server_version=item.server_version,
+                    data=ExtensionVisitPullData(
+                        id=visit.id,
+                        org_id=visit.org_id,
+                        farm_id=visit.farm_id,
+                        plot_id=visit.plot_id,
+                        technician_id=visit.technician_id,
+                        visited_on=visit.visited_on,
+                        topics=visit.topics,
+                        recommendations=visit.recommendations,
+                        commitments=visit.commitments,
+                        notes=visit.notes,
+                        client_updated_at=visit.client_updated_at,
+                        deleted_at=visit.deleted_at,
+                    ),
+                )
+            )
+    return PullResponse(
+        changes=change_views,
+        next_since=page.next_since,
+        has_more=page.has_more,
+    )
