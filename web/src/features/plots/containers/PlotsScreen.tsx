@@ -4,6 +4,7 @@ import { MapIcon } from '../../../design-system/ui/icons'
 import { Button } from '../../../design-system/ui/button'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useOrgId } from '../../../lib/api/session'
+import type { Role } from '../../../lib/api/me'
 import { useFarms, usePlotsByFarm, type FarmView, type PlotView } from '../api/plotsApi'
 import { PlotsList } from '../components/PlotsList'
 import { CreateFarmSheet } from './CreateFarmSheet'
@@ -12,7 +13,7 @@ import { PlotDetailSheet } from './PlotDetailSheet'
 
 export interface PlotsScreenProps {
   /** Caller role in the active organization (E8 D14). Technician enables visit registration. */
-  callerRole?: string | null
+  callerRole?: Role | null
   /** Optional extension visit sheet renderer (E8 D14). Keeps features decoupled. */
   renderNewVisitSheet?: (props: {
     farm: FarmView
@@ -34,6 +35,10 @@ export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScr
   const [creatingPlotForFarmId, setCreatingPlotForFarmId] = useState<string | null>(null)
   const [visitingFarm, setVisitingFarm] = useState<FarmView | null>(null)
   const [selectedPlot, setSelectedPlot] = useState<PlotView | null>(null)
+
+  const plotsByFarmId = new Map<string, PlotView[]>(
+    farmIds.map((id, index) => [id, plotsQueries[index]?.data ?? []]),
+  )
 
   return (
     <div className="px-0 pt-6">
@@ -110,9 +115,7 @@ export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScr
       {visitingFarm && renderNewVisitSheet && (
         renderNewVisitSheet({
           farm: visitingFarm,
-          plots:
-            plotsQueries[farmsQuery.data?.farms.findIndex((f) => f.id === visitingFarm.id) ?? -1]
-              ?.data ?? [],
+          plots: plotsByFarmId.get(visitingFarm.id) ?? [],
           open: true,
           onOpenChange: (open) => !open && setVisitingFarm(null),
         })

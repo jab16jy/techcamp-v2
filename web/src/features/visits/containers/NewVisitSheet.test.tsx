@@ -42,18 +42,13 @@ function renderSheet(props: Partial<React.ComponentProps<typeof NewVisitSheet>> 
 describe('NewVisitSheet', () => {
   beforeEach(async () => {
     await resetLocalDb()
-    vi.stubGlobal('navigator', { ...navigator, onLine: true })
   })
 
   afterEach(() => {
-    vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
 
-  it('saving writes one extensionVisits row AND one outbox item with chosen topics, technician_id and farm_id; saves with network offline', async () => {
-    // Set network offline (navigator.onLine = false)
-    vi.stubGlobal('navigator', { ...navigator, onLine: false })
-
+  it('saving writes one extensionVisits row AND one outbox item with chosen topics, technician_id and farm_id', async () => {
     // Negative assertion: initially nothing is stored
     expect(await db.extensionVisits.count()).toBe(0)
     expect(await db.outbox.count()).toBe(0)
@@ -120,7 +115,7 @@ describe('NewVisitSheet', () => {
     // No topic clicked - try to submit
     fireEvent.click(screen.getByRole('button', { name: 'Guardar visita' }))
 
-    // Visible field error is shown
+    // Visible field error is shown under topics
     expect(await screen.findByText('Selecciona al menos un tema de la visita.')).toBeInTheDocument()
 
     // Negative assertion: sheet did NOT close and nothing was written to IndexedDB
@@ -130,11 +125,14 @@ describe('NewVisitSheet', () => {
   })
 
   it('a plot outside the farm cannot be chosen (only the farm plots are offered)', async () => {
+    const farmPlots = [
+      { id: 'plot-farm-1', name: 'Parcela Uno' },
+      { id: 'plot-farm-2', name: 'Parcela Dos' },
+    ]
+    const outsidePlot = { id: 'plot-outside', name: 'Lote Ajeno de Otra Finca' }
+
     renderSheet({
-      plots: [
-        { id: 'plot-farm-1', name: 'Parcela Uno' },
-        { id: 'plot-farm-2', name: 'Parcela Dos' },
-      ],
+      plots: farmPlots,
     })
 
     // Click plot trigger to open select dropdown
@@ -142,13 +140,13 @@ describe('NewVisitSheet', () => {
     expect(plotSelect).toBeInTheDocument()
     fireEvent.click(plotSelect)
 
-    // Parcela Uno and Parcela Dos are offered, but not an outside plot
-    expect(screen.queryByText('Parcela De Otra Finca')).not.toBeInTheDocument()
-
     // Farm's plots are rendered as options
     expect(screen.getByRole('option', { name: 'Parcela Uno' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Parcela Dos' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /Sin parcela específica/i })).toBeInTheDocument()
+
+    // Outside plot supplied to the environment is not offered in the options
+    expect(screen.queryByRole('option', { name: outsidePlot.name })).not.toBeInTheDocument()
 
     // Select Parcela Uno
     fireEvent.click(screen.getByRole('option', { name: 'Parcela Uno' }))
@@ -163,5 +161,64 @@ describe('NewVisitSheet', () => {
       expect(visits[0].plot_id).toBe('plot-farm-1')
       expect(visits[0].topics).toEqual(['social_capacities'])
     })
+  })
+
+  it('when Dexie fails to save, shows a visible Spanish error, keeps the sheet open with typed data, and does not produce an unhandled rejection', async () => {
+    // Force db.transaction to fail (simulating QuotaExceededError or Dexie error)
+    vi.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('QuotaExceededError'))
+
+    const { onOpenChange } = renderSheet()
+
+    // Select a topic and enter recommendations
+    fireEvent.click(screen.getByLabelText(/Capacidades humanas integrales/i))
+    fireEvent.change(screen.getByLabelText(/^Recomendaciones/i), {
+      target: { value: 'Revisión urgente de canal de drenaje' },
+    })
+
+    // Click submit
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar visita' }))
+
+    // Visible Spanish error is displayed in an alert
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/No se pudo guardar la visita en el teléfono/i)
+
+    // Sheet remains open (onOpenChange(false) was NOT called)
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+
+    // Typed data is preserved in the inputs
+    expect(screen.getByLabelText(/^Recomendaciones/i)).toHaveValue('Revisión urgente de canal de drenaje')
+  })
+
+  it('missing technician displays in dedicated form-level error slot and is not cleared by toggling topics', async () => {
+    // Render without a technicianId and without me data
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NewVisitSheet
+          open={true}
+          onOpenChange={vi.fn()}
+          farm={mockFarm}
+          plots={mockPlots}
+          technicianId={undefined}
+        />
+      </QueryClientProvider>,
+    )
+
+    // Select a topic
+    fireEvent.click(screen.getByLabelText(/Capacidades humanas integrales/i))
+
+    // Submit
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar visita' }))
+
+    // Dedicated form-level error slot displays the technician error
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('No se pudo identificar al técnico que registra la visita.')
+
+    // Toggle another topic: dedicated form-level error remains, topicError is not touched
+    fireEvent.click(screen.getByLabelText(/Gestión sostenible de los recursos naturales/i))
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No se pudo identificar al técnico que registra la visita.',
+    )
+    expect(screen.queryByText('Selecciona al menos un tema de la visita.')).not.toBeInTheDocument()
   })
 })

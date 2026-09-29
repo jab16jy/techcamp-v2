@@ -139,6 +139,12 @@ irrigation entries feeding the water balance (ADR-0009), and E9 (tray `last_visi
   keeps the local `deleted_at` on a re-save, and the server answers an `upsert` on a deleted id
   with `rejected` (`not_found`). Owner doc: docs/04 §Bitácora.
 
+- **D14 Visit sheet entry point until E9** (parent, 2026-09-28): the technician tray is E9
+  (docs/10:72). Until then the new-visit sheet opens from the Parcelas tab: a "Registrar visita"
+  action per farm row, shown only when the caller's role in the active org is `technician` (D3).
+  Composed in `app/` (optional prop into `PlotsScreen`, like `onAddPlot`), so `plots` never imports
+  `visits` (docs/07 "Entre features") and E9 moves it to the tray without touching `plots`.
+
 ## Open questions
 - None.
 
@@ -337,6 +343,61 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 - T4 waits for T3's #160 commits (owner, 2026-09-28): T3 merges first, then lane `e8-t4` (AGY,
   DB 5446) starts from integration with `.git-brief-e8-T4.md`. T9a waits for T8 (owner: one new
   screen at a time).
+
+- #160 test fixes `b656c4d` (D1 lock test reads the sequence while the lock is held; RED
+  `assert 4 == 3` with the order inverted) and `d5d6b99` (LWW re-reads the row; RED `assert
+  'primera' == 'revisada'`). Owner: no separate RDD for these test-only follow-ups. Parent gate
+  (DB 5444): test_push 22 passed ×3, ruff, format, mypy clean. R3-db-backstop stays in #160.
+  **T3 merged** (`f3677ad`), add/add on `deps.py`, `ports.py`, `repositories.py` and `main.py`
+  combined (sync + visits + attachments); integration tests/logbook 119 passed, ruff, format
+  (276), mypy (183), lint-imports clean. `e8-t3` session closed.
+- T4 started: lane `e8-t4` (`feat/e8-t4-pull` from `f3677ad`, DB `techcamp-e8-db-t4` on 5446,
+  CodeGraph index), AGY `e8-t4` medium, brief `.git-brief-e8-T4.md`.
+- T9a started (owner, 2026-09-28): lane `e8-t9` (`feat/e8-t9-visits` from `f3677ad`, web only,
+  CodeGraph index), AGY `e8-t9a` medium, brief `.git-brief-e8-T9a.md`; `impeccable` mandatory
+  (owner), design frozen, entry point D14.
+
+- Owner rule (2026-09-28): AGY lanes fix EVERY RDD finding right away (blocking and
+  non-blocking), same session, `Refs #N`; the round's issue is still filed and closed by those
+  commits. Applies to T4, T9a and later AGY units.
+
+- T4 (AGY) `1a1fd8c` feat(logbook): GET /sync/pull (871 lines: prod ~366 / test 505). Writer
+  RED `test_pull_validation_and_auth assert 404 == 422`, GREEN 18 passed, CodeGraph ×9. Parent gate
+  (DB 5446): pull + sync_api 18 passed, ruff, format (278), mypy (184), lint-imports clean; wire
+  `data` matches `web/src/lib/sync/types.ts`, amounts as floats, `since`/`limit` bounds 422.
+  Quality sent back (one commit): the router dispatches with `isinstance` + a bare `else` over a
+  loose `LogbookEntry | ExtensionVisit` union (must fail closed on `entity`); `TYPE_CHECKING`
+  port imports unlike the rest of the module.
+- T9a (AGY) `b3e39aa` feat(visits) sheet + offline save, `37f8109` feat(plots) D14 entry point
+  (683 lines). Writer: impeccable read + detector 0 findings, 48 px targets, Bogotá date, sheet
+  lazy-loaded. Parent gate: lint, typecheck clean; visits+plots+app 10 files / 63 passed; build ok;
+  **172.88 kB** (+9.5 kB: sonner `Toaster` now mounted once in `AppShell`, an E1 primitive;
+  accepted). **Bug sent back (TDD):** `/me` is cached in `localStorage` (`techcamp.me`) and the
+  `['me']` query, but `clearSession()` (sign-out and 401) clears neither, so on a shared phone the
+  next user inherits the previous user's role and id (sees "Registrar visita", records visits
+  with the wrong `technician_id` that the server rejects `forbidden` and that stay stuck — D3, D11,
+  RNF-01). Also type the role as the four literals.
+
+- T4 fix `6424881` (dispatch on `entity`, raise on anything else; plain port imports) and T9a
+  fix `616a0a0` (`clearSession()` removes the cached `/me`, query keyed by session token, role typed
+  as four literals; 15 files / 110 passed, 172.93 kB) both gated green.
+- T4 RDD (parent-run for AGY, consent granted under the standing grant): lineage
+  `review-385c26a740fec0d2`, base `f3677ad`, medium, lens `review-reliability` → **approved**,
+  acknowledged. Findings → [#161](https://github.com/jab16jy/techcamp-v2/issues/161):
+  **R3-pull-two-query-cursor-gap (WARNING, real)** — the two per-table reads use two READ COMMITTED
+  snapshots, so a version committed between them can be skipped by `next_since` (the D1 gap on
+  the read side); R3-missing-membership-coverage (SUGGESTION). Both sent to `e8-t4` now (AGY rule).
+- T9a RDD (parent-run, consent granted): lineage `review-305a9f040645709b`, **high** (auth path in
+  `authApi.ts`), four lenses. First launch failed at preflight with no mutation (my zsh
+  word-splitting of a shared-argument variable); bound STATUS re-offered the same four slots,
+  relaunched with literal tokens.
+
+- T9a RDD `review-305a9f040645709b` → **approved**, acknowledged, no blockers. Findings →
+  [#162](https://github.com/jab16jy/techcamp-v2/issues/162): WARNINGs visit save without catch
+  (Dexie failure silent, RNF-01), `/me` seed treated as fresh and not tied to the token,
+  technician error in `topicError`, inline `findIndex ?? -1` plot lookup; SUGGESTIONs plaintext
+  profile in localStorage, implicit cache coupling, weak offline/outside-plot tests. All sent to
+  `e8-t9a` now (AGY rule).
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
