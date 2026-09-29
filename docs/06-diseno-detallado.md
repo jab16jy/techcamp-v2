@@ -303,17 +303,19 @@ sequenceDiagram
   S->>API: GET /sync/pull?since=cursor
   API-->>S: cambios de otros dispositivos y usuarios
   S->>L: aplicar y guardar el nuevo cursor
-  S->>API: fotos pendientes: presign → PUT a S3 → confirmar
+  S->>API: fotos pendientes: presign → PUT a S3
 ```
 
 | Caso | Comportamiento |
 |---|---|
 | Visitas de extensión | `extension_visit` usa el mismo sincronizador, outbox y reglas que la bitácora; el técnico la registra en la finca sin señal |
 | El mismo cambio llega dos veces | `duplicate`: sin efecto (mismo `id` y mismo `client_updated_at`) |
+| Orden del cursor | Una secuencia de Postgres no sigue el orden de confirmación: una transacción que tomó el 10 puede confirmar después de otra que tomó el 11, y un cliente que ya pidió `since=11` nunca vería el 10. Por eso el push toma `pg_advisory_xact_lock` con una clave fija antes de `nextval`, y el orden de asignación queda igual al de confirmación. Es un candado global, suficiente a la escala del piloto; si el push llega a ser un cuello de botella, se cambia por una marca de agua con el `xmin` del snapshot. El registro guardado se lee con `SELECT … FOR UPDATE` bajo ese candado antes de decidir ([04](04-api.md#bitácora-sincronización-offline)) |
+| Pull de un registro con cambio local pendiente | El pull no pisa un registro que tiene un cambio en el outbox: lo decide el push (última escritura gana). `conflict_overwritten` y `rejected` se muestran en la entrada; un cambio `rejected` se queda en el teléfono hasta que el usuario lo corrige o lo descarta, nunca se borra en silencio |
 | Dos dispositivos editan la misma entrada | Gana el `client_updated_at` mayor; el perdedor recibe `conflict_overwritten` y la interfaz lo avisa. Se acepta porque las entradas de bitácora casi nunca las editan dos personas a la vez ([ADR-0013](adr/0013-sincronizacion-offline.md)). |
 | Entrada con `alert_id` | El servidor comprueba que la alerta sea de la misma parcela; si no, responde `rejected`. El teléfono toma el `alert_id` de las alertas en caché, así que se puede vincular una acción sin conexión |
 | Reloj del teléfono muy desfasado | El servidor rechaza un `client_updated_at` más de 24 h en el futuro (`rejected`); la interfaz pide corregir la hora. |
-| Token vencido sin conexión | Se sigue escribiendo en local. Al volver la señal se renueva el token antes de sincronizar. |
+| Token vencido sin conexión | Se sigue escribiendo en local. Al volver la señal se renueva el token antes de sincronizar. En el perfil seminario no hay token de refresco (solo el ingreso por OTP, [04](04-api.md)): con un `401` el sincronizador se detiene sin tocar el outbox, la app pide ingresar de nuevo y, al volver, sube lo pendiente. Cerrar sesión nunca borra la bitácora local. |
 | iOS | No hay Background Sync API: la sincronización ocurre con la app en primer plano. |
 | Almacenamiento | Se pide `navigator.storage.persist()` para que el navegador no borre IndexedDB. Las fotos se comprimen en el cliente a ≤ 200 KB. |
 

@@ -160,7 +160,30 @@ POST /attachments:presign  { logbook_entry_id | extension_visit_id, content_type
 
 `data` lleva los campos de `logbook_entry` según su `kind`, incluidos `sold_kg`, `sale_price_cop_per_kg`, `labor_days` y `alert_id` ([03](03-modelo-datos.md#logbook_entry-la-tabla-que-se-sincroniza-offline)).
 
-El cliente sube la foto directo al almacenamiento de objetos con la URL prefirmada. La API nunca recibe los bytes ([ADR-0018](adr/0018-almacenamiento-de-objetos.md)).
+**Push.** Un lote trae como máximo 100 cambios; con más responde `422`. Cada cambio se aplica por separado: un `rejected` no anula el resto del lote. Resultado por cambio, con el registro guardado leído bajo bloqueo ([06 §7](06-diseno-detallado.md#7-sincronización-offline-de-la-bitácora)):
+
+| Situación | `status` |
+|---|---|
+| El `id` no existe | `applied` |
+| Mismo `id` y mismo `client_updated_at` | `duplicate`, sin escribir |
+| `client_updated_at` más reciente que el guardado | `applied` |
+| `client_updated_at` más antiguo que el guardado | `conflict_overwritten`, sin escribir; `server_version` es el del registro guardado |
+
+`rejected` lleva un `error` estable que la interfaz traduce a su texto:
+
+| `error` | Cuándo |
+|---|---|
+| `clock_skew` | `client_updated_at` más de 24 h en el futuro |
+| `invalid` | Falla una regla de campos (el `CHECK` por `kind`, `sold_kg > yield_kg`, un tema fuera de los cinco) |
+| `not_found` | La parcela, la finca, el ciclo, la alerta o el `id` no son visibles para quien sincroniza: un `id` de otra organización o de la otra entidad responde igual, para no revelar que existe ([09](09-cuellos-de-botella.md#seguridad)) |
+| `alert_plot_mismatch` | `alert_id` es de otra parcela |
+| `forbidden` | El rol no puede escribir esa entidad |
+
+**Roles.** `logbook_entry`: `owner`, `technician` y `producer`; `viewer` recibe `forbidden`. `extension_visit`: solo `technician`, y `technician_id` debe ser quien sincroniza.
+
+**Pull.** Devuelve los `logbook_entry` y `extension_visit` de todas las organizaciones de quien sincroniza, mezclados por `server_version` ascendente. Un registro con `deleted_at` llega como `op: "delete"`. Las dos tablas comparten la secuencia, así que un solo cursor las cubre.
+
+**Fotos.** El cliente sube la foto directo al almacenamiento de objetos con la URL prefirmada. La API nunca recibe los bytes ([ADR-0018](adr/0018-almacenamiento-de-objetos.md)). `POST /attachments:presign` crea la fila de `attachment` (`object_key`, `content_type`, `bytes`) y responde la URL: no hay paso de confirmación, y una subida que nunca llega queda huérfana para el job de limpieza. Exige `bytes ≤ 200 KB` y `content_type` `image/jpeg` o `image/webp` (`422` si no), y que la entrada o visita ya esté sincronizada y sea visible para quien la pide (`404` si no).
 
 ### Visitas de extensión y bandeja del técnico
 
@@ -171,6 +194,8 @@ GET  /me/tray                                  → [{ farm, open_alerts: Alert[]
 GET  /farms/{farm_id}/visits                   → Page<ExtensionVisit>
 GET  /organizations/{org_id}/visits?from=&to=  → Page<ExtensionVisit>   # exportación de visitas por organización
 ```
+
+`GET /farms/{farm_id}/visits` responde a cualquier miembro de la organización de la finca. `GET /organizations/{org_id}/visits` es la exportación (RF-19): `owner` y `technician`; otro rol recibe `403` y un no miembro `404`. Las dos son páginas con cursor, de la más reciente a la más antigua.
 
 ### Riesgo, métricas y asistente
 
