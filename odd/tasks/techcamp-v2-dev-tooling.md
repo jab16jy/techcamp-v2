@@ -171,6 +171,13 @@ Issue #139 (evidence from E7/E8):
   `../sgconfig.yml` explicitly rather than relying on ast-grep's upward search for it, in the
   justfile and in CI alike, because a rule's `files` and `ignores` resolve against the config file
   and not against the working directory (R2-astgrep-wrong-working-directory).
+- D-T3.1 A random seed is a **session** knob, not a property of a test. `--randomly-seed=N` runs
+  the whole session in that order, and it is the only knob that proves anything about order
+  dependence. The two debugging flags are not interchangeable, which is the part worth writing
+  down: `-p no:randomly` disables the plugin entirely and therefore also drops the per-test
+  `random.seed()` reset, so code that relies on that reset changes behaviour under it;
+  `--randomly-dont-reorganize` keeps the per-test reset and only pins the file order. Reach for
+  the second while debugging one test and the first only when the plugin itself is in question.
 
 - D-T5.1 CI runs the pinned **gitleaks binary**, not `gitleaks/gitleaks-action`, even though
   the action needs no licence key on this personal account (its own README: "If you are
@@ -260,7 +267,7 @@ Issue #139 (evidence from E7/E8):
   one broken commit (in a scratch branch, deleted after).
 - [x] T2 ast-grep: pinned dev dep, `sgconfig.yml`, rule `no-naive-today` + rule tests (RED
   first), wired into `gate-fast` and CI.
-- [ ] T3 pytest-randomly: dev dep; full suite on a clean DB with 3 seeds; flakes reported on
+- [x] T3 pytest-randomly: dev dep; full suite on a clean DB with 3 seeds; flakes reported on
   #89 with seeds; fix only trivial ones.
 - [ ] T4 **deferred to #194** by the owner (2026-09-29), out of scope for this feature.
   `alembic check` trial on a clean DB: adopt (with a small `include_object` filter if
@@ -275,7 +282,14 @@ Issue #139 (evidence from E7/E8):
   run, owner go needed for a push). Data: last 40 PRs, 24 server-only, 13 web-only; server
   job ~7 min, web ~2 min; repo private (2000 min/month free plan).
 - [ ] T6 Close: `just gate-full` on a clean DB, CI ↔ justfile check list diff, feature doc
-  progress, #139 comment with results.
+  progress, #139 comment with results. Plus, as its own `docs(agents)` commit (owner decision
+  2026-09-29): trim AGENTS.md with the `writing-for-agents` skill from ~164 to ~100-110 lines —
+  the ast-grep paragraph becomes one line stating WHEN to add a rule ("When a review catches the
+  same mistake a second time, encode it as an ast-grep rule: `rules/<id>.yml` plus
+  `rule-tests/<id>-test.yml` with valid and invalid cases"); the CI paragraph becomes one line
+  (CI = `gate-fast` + the full suites + gitleaks, and gitleaks is CI-only); one line per just
+  recipe; Layout keeps only the non-derivable facts; the review-findings bullets go 3 → 2. The
+  docs table, Architecture rules and Testing sections stay.
 
 ## Acceptance criteria
 - `just gate server/tests/logbook` runs static checks plus only those tests, against this
@@ -314,6 +328,38 @@ Issue #139 (evidence from E7/E8):
   remaining limit — an aliased `datetime` import is not matched — is written in the rule's own
   `notes` with the evidence that the repository imports no alias, so it lives where the next
   person editing the rule will read it rather than only in this doc.
+- T3 is done, in its own lane (`feat/dev-tooling-t3` in the `dev-tooling-t3` worktree, a separate
+  session) and merged into this branch at `822489a`. Round 1, lineage `review-7c760a6cbca01a44`,
+  `high` risk (a `subprocess` call in the test), four lenses, **zero findings**; approved and
+  acknowledged, `authority: burned`.
+- T5 took two rounds and three parent-gated corrections, which is the record worth keeping: every
+  one of them was a hole in the *git walk*, and none was visible by reading the command.
+  - Round 1, lineage `review-095ab09de7d1a0a3`, base `780b46b`: 3 files / 200 lines, `high` risk
+    (`shell_source` in `ci.yml`), four lenses, correction budget 100. Two CRITICALs from two
+    lenses independently — `R1-001` (risk) and `R4-001` (resilience), both `deterministic`, both
+    `introduced` — with one root cause: `--no-merges`, inherited from gitleaks-action, drops a
+    merge commit, so a credential that exists only in a **conflict resolution** is never scanned.
+    Fixed in the single bounded correction `2cc0d0a` (`-m`). Approved and acknowledged,
+    `authority: burned`. Two non-blocking advisories survived as informational:
+    `R2-PR-EVENT-SCOPE` (no explicit event guard, so a future `push` would pass empty base/head)
+    and `R2-DUPLICATED-POLICY-RATIONALE` (the licence rationale duplicated in doc and YAML).
+  - Round 2, lineage `review-c0c0c311c59ce08f`, base `2cc0d0a`: the correction only, 2 files / 90
+    lines, `high` risk, budget 45. One CRITICAL, `R1-001` (risk, `deterministic`, `worsened`),
+    claiming `--remerge-diff` opens a bypass for credentials added manually during an otherwise
+    clean merge. **Refuted, not fixed**: the bounded correction `f660ab1` was spent on evidence
+    in D-T5.5, with no change to `ci.yml`. The re-merge diff is the merge result against git's
+    own automatic re-merge, so merge-unique content necessarily differs from it and shows up; both
+    plausible shapes measure `1 leak` / exit 1. The parent reproduced the clean-merge case
+    independently and agreed. Approved and acknowledged, `authority: burned`, with `R1-001`
+    carried as a non-blocking advisory.
+  - The parent gate rejected two of my own corrections before the round ever saw them: the
+    `--first-parent` flag (a lane merged through a second parent was never visited, fixed in
+    `dab375d`) and `-m` (it re-reports main when main is merged into an epic branch, replaced by
+    `--remerge-diff` in `3596e06`). Both were proven on a scratch branch, both scratch
+    worktrees removed afterwards.
+  - `5b2993d` (`.gitleaksignore`, the two `65b273e` prose fingerprints) is part of the T5 slice
+    and was parent-gated: the parent re-ran the exact scan over `merge-base(main, HEAD)..HEAD`
+    and got no leaks, with `gate-fast` exit 0.
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
@@ -530,13 +576,50 @@ Issue #139 (evidence from E7/E8):
     in this task touches the recipes; the run confirms the tree.
   - Not run here, by design: a live Actions run. The brief forbids a push without the owner's
     go, so the job's first real execution is the parent's gate on the PR.
+  - T5 closed: the parent gate passed on `5b2993d` (their own run: `gitleaks --remerge-diff` over
+    `merge-base(main, HEAD)..HEAD` → no leaks, `gate-fast` exit 0), and the T3 lane was merged in
+    as `822489a` (clean, no conflicts). After that merge, on the merged branch: `uv lock --check`
+    OK, `gate-fast` exit 0, `gitleaks` over 19 commits **including the real lane merge** → no
+    leaks, and `just gate server/tests/simulator` → 34 passed. That last run is the one that
+    matters for T5b: the lane merge is a real two-parent merge in this repository's history, and
+    the committed scan shape walks it and stays green.
+- 2026-09-29 T3: `pytest-randomly` in the server dev group, in its own lane and session
+  (`feat/dev-tooling-t3` in the `dev-tooling-t3` worktree), merged into this branch at `822489a`.
+  Two commits: `b79b5a0` `fix(test)` and `5e9b374` `build`.
+  - `b79b5a0` `fix(test)`: a baseline-scoped assertion in `server/tests/simulator/test_provision.py`.
+    RED first — the assertion failed under `--randomly-seed=101` before the fix.
+  - `5e9b374` `build`: `pytest-randomly>=5.0.0` as the dev dependency, plus the AGENTS.md
+    Testing note.
+  - Three full seeded runs on a clean database: seeds **101, 202 and 7**, `1120 passed` each, no
+    failures on any of them.
+  - Four failures appeared only on an **abandoned** database, and did not reproduce on a clean
+    one. They are filed as unreproduced in #89
+    (https://github.com/jab16jy/techcamp-v2/issues/89#issuecomment-5899715148), together with the
+    real gap they pointed at: a test that writes without `db_session` gets no teardown. That gap
+    is #89's own scope and is not fixed here — the finding is that the seeded runs are clean, so
+    this feature does not own it.
+  - D-T3.1: a seed is a **session knob**, not a test annotation. `-p no:randomly` also drops the
+    per-test `random.seed()` reset, while `--randomly-dont-reorganize` keeps that reset and only
+    pins the file order, so the latter is the one to reach for while debugging a single test.
+  - RDD lineage `review-7c760a6cbca01a44`, `high` risk (a `subprocess` call in the test), four
+    lenses, **zero findings**; approved and acknowledged, `authority: burned`.
 
 ## Next step
-T2 committed and its review follow-ups fixed; the T2 round is closed (lineage
-`review-43815f8285e2faaf`, approved, `authority: burned`). T3 (pytest-randomly) is owned by a
-separate session on `feat/dev-tooling-t3` in the `dev-tooling-t3` worktree — this lane does not
-touch it. T5 (gitleaks in CI) is committed and awaits the parent's gate; its RDD round comes
-after that go. This lane resumes at T5b (`concurrency` plus per-JOB path filters), then T6. Two
-things T5b inherits: the `gitleaks` job reads `github.event.pull_request.base.sha` and
-`head.sha`, so a path filter must not skip it, and a skipped job must report success for
-required checks.
+T1, T2, T3 and T5 are done and merged into this branch (T3 as `822489a`), with their review rounds
+closed, approved and acknowledged. T4 is deferred to #194 by the owner and is out of this
+feature's scope. What is left is **T5b, in a fresh session**, then T6.
+
+T5b (`concurrency` plus per-JOB path filters) inherits three things from T5, all of them learned
+the hard way:
+- the `gitleaks` job must stay **always-on**. It reads `github.event.pull_request.base.sha` and
+  `head.sha` and `fetch-depth: 0`, so a path filter that skips it on a docs-only change is safe
+  for the scan but breaks the required check.
+- a skipped job must **report success** for required checks to pass, which is why the filter goes
+  at job level with an explicit `if:` and never at workflow level with `paths:`.
+- the lane merge at `822489a` is now a real two-parent merge in this history, so any T5b change to
+  the scan walk has to keep it green — the flag is `--remerge-diff` over
+  `merge-base(base, head)..head`, and `5b2993d`'s `.gitleaksignore` must not become a blanket
+  allowlist.
+
+T6 then closes the feature: `just gate-full` on a clean DB, the CI ↔ justfile check-list diff,
+and the AGENTS.md trim that is now on its checklist as its own `docs(agents)` commit.
