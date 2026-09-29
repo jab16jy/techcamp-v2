@@ -195,4 +195,77 @@ describe('NewEntrySheet', () => {
       expect(outbox?.error).toBeNull()
     })
   })
+
+  it('harvest 0 kg saves (zero is valid, a real crop loss)', async () => {
+    renderSheet()
+
+    fireEvent.change(screen.getByLabelText(/Parcela/i), { target: { value: PLOTS[0].id } })
+    fireEvent.change(screen.getByLabelText(/Tipo de registro/i), { target: { value: 'harvest' } })
+
+    const yieldInput = screen.getByLabelText(/Rendimiento \(kg\)/i)
+    fireEvent.change(yieldInput, { target: { value: '0' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(async () => {
+      expect(await db.logbookEntries.count()).toBe(1)
+    })
+
+    const [row] = await db.logbookEntries.toArray()
+    expect(row.kind).toBe('harvest')
+    expect(row.yield_kg).toBe(0)
+    expect(row.sold_kg).toBeNull()
+  })
+
+  it('observation without notes saves (observation does not require fields)', async () => {
+    renderSheet()
+
+    fireEvent.change(screen.getByLabelText(/Parcela/i), { target: { value: PLOTS[0].id } })
+    fireEvent.change(screen.getByLabelText(/Tipo de registro/i), { target: { value: 'observation' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(async () => {
+      expect(await db.logbookEntries.count()).toBe(1)
+    })
+
+    const [row] = await db.logbookEntries.toArray()
+    expect(row.kind).toBe('observation')
+    expect(row.notes).toBeNull()
+  })
+
+  it('observation with alert sends its losses (quantity, unit, cost_cop)', async () => {
+    const alert = { id: '018f0c2a-0000-7000-8000-0000000000ff', plot_id: PLOTS[0].id, title: 'Alerta de plaga' }
+    renderSheet({ alerts: [alert] })
+
+    fireEvent.change(screen.getByLabelText(/Parcela/i), { target: { value: PLOTS[0].id } })
+    fireEvent.change(screen.getByLabelText(/Tipo de registro/i), { target: { value: 'observation' } })
+
+    // Link alert
+    const alertSelect = screen.getByLabelText(/Alerta relacionada/i)
+    fireEvent.change(alertSelect, { target: { value: alert.id } })
+
+    // Fill losses
+    const costInput = screen.getByLabelText(/Costo|Pérdidas/i)
+    fireEvent.change(costInput, { target: { value: '50000' } })
+
+    const qtyInput = screen.getByLabelText(/Cantidad/i)
+    fireEvent.change(qtyInput, { target: { value: '15' } })
+
+    const unitInput = screen.getByLabelText(/Unidad/i)
+    fireEvent.change(unitInput, { target: { value: 'kg' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    await waitFor(async () => {
+      expect(await db.logbookEntries.count()).toBe(1)
+    })
+
+    const [row] = await db.logbookEntries.toArray()
+    expect(row.kind).toBe('observation')
+    expect(row.alert_id).toBe(alert.id)
+    expect(row.cost_cop).toBe(50000)
+    expect(row.quantity).toBe(15)
+    expect(row.unit).toBe('kg')
+  })
 })
