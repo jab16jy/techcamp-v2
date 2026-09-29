@@ -18,6 +18,15 @@ export function getSyncState(): SyncState {
   return state
 }
 
+/** Resets the module-level sync state on sign-out or session change. */
+export function resetSyncState(): void {
+  state = {
+    lastSyncedAt: null,
+    syncStopped: false,
+  }
+  for (const listener of listeners) listener()
+}
+
 export function recordSyncOutcome(outcome: SyncOutcome): void {
   if (outcome.status === 'synced') {
     state = {
