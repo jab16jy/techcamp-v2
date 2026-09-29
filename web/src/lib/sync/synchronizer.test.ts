@@ -50,9 +50,10 @@ function stubSyncApi(options: {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = input instanceof Request ? input.url : String(input)
       if (url.endsWith('/push')) {
-        const request = JSON.parse(String(init?.body)) as PushRequest
+        const raw = input instanceof Request ? await input.clone().text() : String(init?.body)
+        const request = JSON.parse(raw) as PushRequest
         pushRequests.push(request)
         return (options.push ?? (() => json({ results: [] })))(request, pushIndex++)
       }

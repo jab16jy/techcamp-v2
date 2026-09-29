@@ -562,6 +562,49 @@ export interface paths {
         patch: operations["patch_alert_rule_api_v1_alert_rules__rule_id__patch"];
         trace?: never;
     };
+    "/api/v1/sync/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Push Changes
+         * @description Apply a batch of offline changes, one result per change.
+         */
+        post: operations["push_changes_api_v1_sync_push_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sync/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pull
+         * @description `GET /sync/pull?since=<server_version>&limit=500` (docs/04 §Bitácora; D1, D2).
+         *
+         *     Runs in a single REPEATABLE READ (read-only) transaction so that entries and visits
+         *     see one snapshot, preventing cursor gaps (D1; RNF-01).
+         */
+        get: operations["pull_api_v1_sync_pull_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/push-subscriptions": {
         parameters: {
             query?: never;
@@ -595,6 +638,68 @@ export interface paths {
         post?: never;
         /** Delete Push Subscription Route */
         delete: operations["delete_push_subscription_route_api_v1_push_subscriptions__subscription_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/farms/{farm_id}/visits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Farm Visits
+         * @description docs/04 `GET /farms/{farm_id}/visits`: any member of the farm's org.
+         */
+        get: operations["get_farm_visits_api_v1_farms__farm_id__visits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/{org_id}/visits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Org Visits
+         * @description docs/04 `GET /organizations/{org_id}/visits?from=&to=`: export (RF-19).
+         */
+        get: operations["get_org_visits_api_v1_organizations__org_id__visits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attachments:presign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Presign Attachment
+         * @description docs/04 §Bitácora "Fotos": create the row, hand back the URL.
+         *
+         *     201 because a row was created; there is no later call to confirm it (D8).
+         */
+        post: operations["presign_attachment_api_v1_attachments_presign_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -662,6 +767,29 @@ export interface paths {
         put?: never;
         /** Run Irrigation Jobs */
         post: operations["run_irrigation_jobs_api_v1_dev_jobs_irrigation_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dev/outbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dev Outbox
+         * @description The simulated SMS/WhatsApp rows, newest first.
+         *
+         *     `push` rows are not here: a push is a browser notification, and the service
+         *     worker is what shows it (D8, T9).
+         */
+        get: operations["get_dev_outbox_api_v1_dev_outbox_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -937,6 +1065,176 @@ export interface components {
             /** Stages */
             stages: components["schemas"]["CropStageView"][];
         };
+        /** ExtensionVisitChangeBody */
+        ExtensionVisitChangeBody: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            entity: "extension_visit";
+            op: components["schemas"]["SyncOp"];
+            /**
+             * Client Updated At
+             * Format: date-time
+             */
+            client_updated_at: string;
+            data: components["schemas"]["ExtensionVisitData"];
+        };
+        /**
+         * ExtensionVisitData
+         * @description `data` of an `extension_visit` change (docs/03 §extension_visit).
+         */
+        ExtensionVisitData: {
+            /**
+             * Farm Id
+             * Format: uuid
+             */
+            farm_id: string;
+            /** Plot Id */
+            plot_id?: string | null;
+            /**
+             * Technician Id
+             * Format: uuid
+             */
+            technician_id: string;
+            /**
+             * Visited On
+             * Format: date
+             */
+            visited_on: string;
+            /** Topics */
+            topics: string[];
+            /** Recommendations */
+            recommendations?: string | null;
+            /** Commitments */
+            commitments?: string | null;
+            /** Notes */
+            notes?: string | null;
+        };
+        /** ExtensionVisitPage */
+        ExtensionVisitPage: {
+            /** Items */
+            items: components["schemas"]["ExtensionVisitView"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** ExtensionVisitPullChange */
+        ExtensionVisitPullChange: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            entity: "extension_visit";
+            op: components["schemas"]["SyncOp"];
+            /** Server Version */
+            server_version: number;
+            data: components["schemas"]["ExtensionVisitPullData"];
+        };
+        /**
+         * ExtensionVisitPullData
+         * @description `data` of an `extension_visit` pull change (docs/03 §extension_visit).
+         */
+        ExtensionVisitPullData: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Farm Id
+             * Format: uuid
+             */
+            farm_id: string;
+            /** Plot Id */
+            plot_id?: string | null;
+            /**
+             * Technician Id
+             * Format: uuid
+             */
+            technician_id: string;
+            /**
+             * Visited On
+             * Format: date
+             */
+            visited_on: string;
+            /** Topics */
+            topics: string[];
+            /** Recommendations */
+            recommendations?: string | null;
+            /** Commitments */
+            commitments?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /**
+             * Client Updated At
+             * Format: date-time
+             */
+            client_updated_at: string;
+            /** Deleted At */
+            deleted_at?: string | null;
+        };
+        /** ExtensionVisitView */
+        ExtensionVisitView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Farm Id
+             * Format: uuid
+             */
+            farm_id: string;
+            /** Plot Id */
+            plot_id: string | null;
+            /**
+             * Technician Id
+             * Format: uuid
+             */
+            technician_id: string;
+            /**
+             * Visited On
+             * Format: date
+             */
+            visited_on: string;
+            /** Topics */
+            topics: string[];
+            /** Recommendations */
+            recommendations: string | null;
+            /** Commitments */
+            commitments: string | null;
+            /** Notes */
+            notes: string | null;
+            /**
+             * Client Updated At
+             * Format: date-time
+             */
+            client_updated_at: string;
+            /** Server Version */
+            server_version: number;
+            /** Deleted At */
+            deleted_at?: string | null;
+        };
         /** FarmCreateRequest */
         FarmCreateRequest: {
             /**
@@ -1061,6 +1359,151 @@ export interface components {
          * @enum {string}
          */
         IrrigationSystem: "none" | "drip" | "sprinkler" | "gravity";
+        /** LogbookEntryChangeBody */
+        LogbookEntryChangeBody: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            entity: "logbook_entry";
+            op: components["schemas"]["SyncOp"];
+            /**
+             * Client Updated At
+             * Format: date-time
+             */
+            client_updated_at: string;
+            data: components["schemas"]["LogbookEntryData"];
+        };
+        /**
+         * LogbookEntryData
+         * @description `data` of a `logbook_entry` change: the columns of docs/03 §logbook_entry
+         *     for that `kind`, `alert_id` included.
+         */
+        LogbookEntryData: {
+            /**
+             * Plot Id
+             * Format: uuid
+             */
+            plot_id: string;
+            /** Crop Cycle Id */
+            crop_cycle_id?: string | null;
+            /** Kind */
+            kind: string;
+            /**
+             * Occurred On
+             * Format: date
+             */
+            occurred_on: string;
+            /** Quantity */
+            quantity?: number | string | null;
+            /** Unit */
+            unit?: string | null;
+            /** Cost Cop */
+            cost_cop?: number | string | null;
+            /** Yield Kg */
+            yield_kg?: number | string | null;
+            /** Sold Kg */
+            sold_kg?: number | string | null;
+            /** Sale Price Cop Per Kg */
+            sale_price_cop_per_kg?: number | string | null;
+            /** Labor Days */
+            labor_days?: number | string | null;
+            /** Irrigation Mm */
+            irrigation_mm?: number | string | null;
+            /** Alert Id */
+            alert_id?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /**
+             * Created Offline
+             * @default false
+             */
+            created_offline: boolean;
+        };
+        /** LogbookEntryPullChange */
+        LogbookEntryPullChange: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            entity: "logbook_entry";
+            op: components["schemas"]["SyncOp"];
+            /** Server Version */
+            server_version: number;
+            data: components["schemas"]["LogbookEntryPullData"];
+        };
+        /**
+         * LogbookEntryPullData
+         * @description `data` of a `logbook_entry` pull change. Amounts are floats so they serialize
+         *     as JSON numbers, matching web types (docs/03 §logbook_entry).
+         */
+        LogbookEntryPullData: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Plot Id
+             * Format: uuid
+             */
+            plot_id: string;
+            /** Crop Cycle Id */
+            crop_cycle_id?: string | null;
+            /** Kind */
+            kind: string;
+            /**
+             * Occurred On
+             * Format: date
+             */
+            occurred_on: string;
+            /** Quantity */
+            quantity?: number | null;
+            /** Unit */
+            unit?: string | null;
+            /** Cost Cop */
+            cost_cop?: number | null;
+            /** Yield Kg */
+            yield_kg?: number | null;
+            /** Sold Kg */
+            sold_kg?: number | null;
+            /** Sale Price Cop Per Kg */
+            sale_price_cop_per_kg?: number | null;
+            /** Labor Days */
+            labor_days?: number | null;
+            /** Irrigation Mm */
+            irrigation_mm?: number | null;
+            /** Alert Id */
+            alert_id?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Created Offline */
+            created_offline: boolean;
+            /**
+             * Client Updated At
+             * Format: date-time
+             */
+            client_updated_at: string;
+            /** Deleted At */
+            deleted_at?: string | null;
+        };
         /** MeResponse */
         MeResponse: {
             /**
@@ -1214,6 +1657,56 @@ export interface components {
             /** Code */
             code: string;
         };
+        /**
+         * OutboxMessageView
+         * @description One simulated message with the alert it belongs to (D8).
+         *
+         *     `rule_code` and `severity` come from the alert because a tray row that only
+         *     said "sms sent" would not tell the room what arrived. `last_error` is
+         *     included on purpose: a message the dispatcher gave up on is the one a room
+         *     needs to see.
+         */
+        OutboxMessageView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Alert Id
+             * Format: uuid
+             */
+            alert_id: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /** Channel */
+            channel: string;
+            /** Status */
+            status: string;
+            /** Attempts */
+            attempts: number;
+            /** Rule Code */
+            rule_code: string;
+            /** Severity */
+            severity: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Sent At */
+            sent_at: string | null;
+            /** Last Error */
+            last_error: string | null;
+        };
         /** PasswordResponse */
         PasswordResponse: {
             /** Password */
@@ -1272,6 +1765,46 @@ export interface components {
             system_flow_lph: number | null;
         };
         /**
+         * PresignRequest
+         * @description `{ logbook_entry_id | extension_visit_id, content_type, bytes }`.
+         *
+         *     Both parent ids are left unconstrained on purpose: FastAPI's own 422 is not
+         *     `problem+json` (docs/04's error convention), so the router decides the
+         *     "exactly one parent" rule and answers in the same shape as every other
+         *     error. `content_type` and `bytes` are plain types for the same reason — the
+         *     domain owns the 200 KB ceiling and the closed photo vocabulary (D8).
+         */
+        PresignRequest: {
+            /** Logbook Entry Id */
+            logbook_entry_id?: string | null;
+            /** Extension Visit Id */
+            extension_visit_id?: string | null;
+            /** Content Type */
+            content_type: string;
+            /** Bytes */
+            bytes: number;
+        };
+        /**
+         * PresignResponse
+         * @description `{ upload_url, object_key }`: the client PUTs to the first and keeps the
+         *     second, which is the only thing the server stores (ADR-0018).
+         */
+        PresignResponse: {
+            /** Upload Url */
+            upload_url: string;
+            /** Object Key */
+            object_key: string;
+        };
+        /** PullResponse */
+        PullResponse: {
+            /** Changes */
+            changes: (components["schemas"]["LogbookEntryPullChange"] | components["schemas"]["ExtensionVisitPullChange"])[];
+            /** Next Since */
+            next_since: number;
+            /** Has More */
+            has_more: boolean;
+        };
+        /**
          * PushKeys
          * @description The VAPID key pair of the browser's subscription (docs/06 §4).
          */
@@ -1280,6 +1813,36 @@ export interface components {
             p256dh: string;
             /** Auth */
             auth: string;
+        };
+        /**
+         * PushRequest
+         * @description D5: at most 100 changes per batch, more answers 422 for the whole
+         *     request, before any change is applied.
+         */
+        PushRequest: {
+            /** Device Id */
+            device_id: string;
+            /** Changes */
+            changes: (components["schemas"]["LogbookEntryChangeBody"] | components["schemas"]["ExtensionVisitChangeBody"])[];
+        };
+        /** PushResponse */
+        PushResponse: {
+            /** Results */
+            results: components["schemas"]["PushResultView"][];
+        };
+        /** PushResultView */
+        PushResultView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Status */
+            status: string;
+            /** Server Version */
+            server_version: number | null;
+            /** Error */
+            error?: string | null;
         };
         /** PushSubscriptionCreateRequest */
         PushSubscriptionCreateRequest: {
@@ -1373,6 +1936,12 @@ export interface components {
             /** Root Depth Cm */
             root_depth_cm: number | null;
         };
+        /**
+         * SyncOp
+         * @description Sync operations (docs/04 §Bitácora).
+         * @enum {string}
+         */
+        SyncOp: "upsert" | "delete";
         /** TokenResponse */
         TokenResponse: {
             /** Access Token */
@@ -2573,6 +3142,75 @@ export interface operations {
             };
         };
     };
+    push_changes_api_v1_sync_push_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pull_api_v1_sync_pull_get: {
+        parameters: {
+            query?: {
+                since?: number;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_push_subscription_api_v1_push_subscriptions_post: {
         parameters: {
             query?: never;
@@ -2627,6 +3265,115 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_farm_visits_api_v1_farms__farm_id__visits_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                farm_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionVisitPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_org_visits_api_v1_organizations__org_id__visits_get: {
+        parameters: {
+            query?: {
+                from?: string | null;
+                to?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionVisitPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    presign_attachment_api_v1_attachments_presign_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresignRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresignResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -2765,6 +3512,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dev_outbox_api_v1_dev_outbox_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutboxMessageView"][];
                 };
             };
         };
