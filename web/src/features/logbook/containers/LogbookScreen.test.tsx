@@ -187,4 +187,42 @@ describe('LogbookScreen', () => {
     expect(await screen.findByText('Corregir entrada de bitácora')).toBeInTheDocument()
     expect(screen.getByDisplayValue('50')).toBeInTheDocument()
   })
+
+  it('shows an entry with conflict_overwritten as Sobrescrito en el servidor with no actions to fix', async () => {
+    const entry = await saveLogbookEntry({
+      id: uuidv7(),
+      org_id: ORG_ID,
+      plot_id: PLOT_ID,
+      crop_cycle_id: null,
+      kind: 'harvest',
+      occurred_on: '2026-09-28',
+      quantity: null,
+      unit: null,
+      cost_cop: null,
+      yield_kg: 300,
+      sold_kg: null,
+      sale_price_cop_per_kg: null,
+      labor_days: null,
+      irrigation_mm: null,
+      alert_id: null,
+      notes: null,
+      created_by: null,
+    })
+    await db.logbookEntries.update(entry.id, {
+      syncState: 'conflict_overwritten',
+    })
+
+    renderScreen()
+
+    // 1. Conflict notice is visible
+    expect(
+      await screen.findByText(/Sobrescrito en el servidor/),
+    ).toBeInTheDocument()
+
+    // 2. Negatives: no "Guardado en el teléfono", no "Corregir" / "Descartar"
+    expect(screen.queryByText('Guardado en el teléfono')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Corregir' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Descartar' })).not.toBeInTheDocument()
+  })
 })
+
