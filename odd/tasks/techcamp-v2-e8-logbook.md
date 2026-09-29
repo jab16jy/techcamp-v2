@@ -399,6 +399,20 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   profile in localStorage, implicit cache coupling, weak offline/outside-plot tests. All sent to
   `e8-t9a` now (AGY rule).
 
+- #162 fixed by `e8-t9a` (`63343c7` save failure visible + own form error slot + test
+  assertions, `2a4d824` `/me` seed tied to the token with `initialDataUpdatedAt`, only
+  `{user_id, memberships}` stored, `090fa15` plots by farm id + wiring test). Gate: 116 passed,
+  173.1 kB. Assess `under_budget`; merged without a new review (UI/error-handling fixes, parent
+  call under the owner's "haz lo que creas oportuno"). **T9a merged** into integration: web lint,
+  typecheck, visits+plots+app+lib 20 files / 151 passed, build, 173.1 kB. #162 closed, session
+  closed.
+- #161 fixed by `e8-t4` (`a92cce8` pull reads in one REPEATABLE READ read-only transaction, RED
+  reproduced the lost visit; `8fa5da1` no-membership and viewer tests). Gate: 21 passed, static
+  clean. Short RDD on the fix (parent's call: production code on the data-loss path; owner
+  delegated the decision): lineage `review-c3fab950fca8ac0d` → **approved**, acknowledged; two
+  WARNINGs added to #161 (isolation silently lost if the session was used first; conditional
+  snapshot test) → fixed now by `e8-t4`, last round on these tests (no further review).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
