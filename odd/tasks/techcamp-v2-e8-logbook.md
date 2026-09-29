@@ -510,6 +510,20 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   plan (parent, owner delegated): ONE round over `fa7edf6..323a480` run by OpenCode — gentle-ai
   reviews base..HEAD only, so slicing would strand a bounded correction off the lane (T3 and T7b
   precedent); go given 2026-09-29.
+- T9b RDD (OpenCode-run, consent granted in the pane): lineage `review-eab43be4d320dde0`, medium,
+  24 files / 1,860 lines, lens `review-reliability` → **approved** after the bounded correction,
+  acknowledged (`authority: burned`, target `sha256:7fedc670…`). Two CRITICALs, both deterministic
+  and introduced: R3-001 (a save while a photo was still compressing dropped the photo, RNF-01) and
+  R3-002 (a mid-loop attach failure re-attached already-stored photos on retry), fixed in
+  `a8e5bd9` (+76/−20; `processing` blocks submit, each photo leaves the staged list as it lands;
+  both fixes mutated back out and caught), validator approved. Parent gate on `a8e5bd9`: lint,
+  typecheck clean; 24 files / 152 passed; build ok; 171.21 kB. Two WARNINGs →
+  [#165](https://github.com/jab16jy/techcamp-v2/issues/165): R3-003 (every non-401/404 4xx from
+  presign fails the photo for good, so 408/429 should retry) and R3-004 (`usePhotos` can keep the
+  previous parent's rows when `parentId` becomes null). Both are in this task's code, so under the
+  OpenCode rule `e8-t9b` fixes both now, one commit each `Refs #165`.
+  Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
+  `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
