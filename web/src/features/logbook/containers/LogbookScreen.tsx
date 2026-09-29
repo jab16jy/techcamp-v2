@@ -13,6 +13,7 @@ import { usePendingCount } from '../../../lib/db/live'
 import { deleteLogbookEntry } from '../../../lib/db/local'
 import { useOnlineStatus, useSyncState } from '../../../lib/sync/syncState'
 import { LogbookItem } from '../components/LogbookItem'
+import { NewEntrySheet } from './NewEntrySheet'
 
 export interface PlotInfo {
   id: string
@@ -164,16 +165,29 @@ export function LogbookScreen({ plots = [], onEditEntry, renderNewEntrySheet }: 
         )}
       </section>
 
-      {/* New entry sheet renderer (if provided) */}
-      {renderNewEntrySheet?.({
-        open: sheetOpen,
-        onOpenChange: setSheetOpen,
-        entryToEdit: selectedEntry,
-        onClose: () => {
-          setSheetOpen(false)
-          setSelectedEntry(null)
-        },
-      })}
+      {/* New entry sheet */}
+      {renderNewEntrySheet ? (
+        renderNewEntrySheet({
+          open: sheetOpen,
+          onOpenChange: setSheetOpen,
+          entryToEdit: selectedEntry,
+          onClose: () => {
+            setSheetOpen(false)
+            setSelectedEntry(null)
+          },
+        })
+      ) : (
+        <NewEntrySheet
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
+          plots={plots}
+          entryToEdit={selectedEntry}
+          onClose={() => {
+            setSheetOpen(false)
+            setSelectedEntry(null)
+          }}
+        />
+      )}
     </div>
   )
 }
