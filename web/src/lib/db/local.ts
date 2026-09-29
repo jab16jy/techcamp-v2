@@ -51,6 +51,12 @@ function notifyLocalWrite(): void {
   for (const listener of localWriteListeners) listener()
 }
 
+/** The same signal for the other local writes this store owns (photos), so the
+ * synchronizer still runs 2 s after one (docs/06 §7). */
+export function publishLocalWrite(): void {
+  notifyLocalWrite()
+}
+
 /**
  * The `data` a change carries (docs/04 §Bitácora): the docs/03 fields the
  * client owns, and nothing else. The four fields this device or the server own
