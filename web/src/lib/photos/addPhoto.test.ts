@@ -16,7 +16,7 @@ describe('adding a photo to an entry', () => {
   it('stores the compressed photo against its parent, pending and unsent', async () => {
     const stored = await addPhoto(
       { file: new Blob(['hola']), entity: 'logbook_entry', parentId: PARENT_ID },
-      async () => encodedPhoto(new Uint8Array([1, 2, 3, 4]), 'image/jpeg'),
+      async () => encodedPhoto(new Uint8Array(new ArrayBuffer(4)), 'image/jpeg'),
     )
 
     expect(stored.parent_id).toBe(PARENT_ID)
@@ -35,7 +35,10 @@ describe('a photo that cannot be compressed under 200 KB', () => {
       addPhoto(
         { file: new Blob(['hola']), entity: 'logbook_entry', parentId: PARENT_ID },
         // The real ladder, with an encoder that never gets under the ceiling.
-        () => compressPhotoWithinLimit(async () => encodedPhoto(new Uint8Array(PHOTO_MAX_BYTES + 1), 'image/jpeg')),
+        () =>
+          compressPhotoWithinLimit(
+            async () => encodedPhoto(new Uint8Array(new ArrayBuffer(PHOTO_MAX_BYTES + 1)), 'image/jpeg'),
+          ),
       ),
     ).rejects.toThrow('200 KB')
 

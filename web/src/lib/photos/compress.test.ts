@@ -11,7 +11,7 @@ import {
 
 /** An encoding of `bytes` bytes, whatever step asked for it. */
 function encodingOf(bytes: number): ReturnType<typeof encodedPhoto> {
-  return encodedPhoto(new Uint8Array(bytes), 'image/jpeg')
+  return encodedPhoto(new Uint8Array(new ArrayBuffer(bytes)), 'image/jpeg')
 }
 
 describe('the encoding step loop', () => {
