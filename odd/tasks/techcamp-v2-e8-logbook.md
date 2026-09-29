@@ -484,6 +484,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   typecheck, logbook+visits+plots+lib+app 24 files / 177 passed, build, 171.19 kB. #163, #164
   closed; `e8-t8` session and worktree removed.
 
+- T9b started (owner go, 2026-09-29, "demostrar la evidencia"): lane `e8-t9b`
+  (`feat/e8-t9b-photos` from `fa7edf6`, web, CodeGraph index), OpenCode `e8-t9b` (Space Bunny,
+  variant as left in the pane: xhigh), brief `.git-brief-e8-T9b.md`: Dexie v2 `photos` table,
+  pure compression loop (≤ 200 KB, EXIF dropped by re-encode), upload queue after push/pull
+  (presign `bytes === blob.size`, PUT the same Blob; 404 → pending, 422 → failed, D11 on 401),
+  UI in both sheets; evidence section with mutation proof and stated jsdom limits.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
