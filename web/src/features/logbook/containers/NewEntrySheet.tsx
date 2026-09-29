@@ -2,23 +2,11 @@ import { useState } from 'react'
 import { FormSheet } from '../../../design-system/patterns/FormSheet'
 import { toast } from '../../../design-system/ui/toast'
 import { useOrgId } from '../../../lib/api/session'
+import { todayInBogota } from '../../../lib/date'
 import { uuidv7 } from '../../../lib/db/ids'
 import { saveLogbookEntry, type LogbookEntryDraft } from '../../../lib/db/local'
 import type { LogbookEntryRow, LogbookKind } from '../../../lib/db/db'
 import { LogbookEntryForm, type AlertOption, type PlotOption } from '../components/LogbookEntryForm'
-
-function todayInBogota(now: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Bogota',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now)
-  const y = parts.find((p) => p.type === 'year')?.value ?? '1970'
-  const m = parts.find((p) => p.type === 'month')?.value ?? '01'
-  const d = parts.find((p) => p.type === 'day')?.value ?? '01'
-  return `${y}-${m}-${d}`
-}
 
 export interface NewEntrySheetProps {
   open: boolean
@@ -107,53 +95,63 @@ function NewEntrySheetModal({
 
     if (kind === 'harvest') {
       const numYield = Number(yieldKg)
-      if (!yieldKg.trim() || Number.isNaN(numYield) || numYield <= 0) {
-        nextErrors.yieldKg = 'El rendimiento es requerido y debe ser mayor a 0.'
+      if (!yieldKg.trim() || Number.isNaN(numYield) || numYield < 0) {
+        nextErrors.yieldKg = 'El rendimiento es requerido y no puede ser negativo.'
       }
 
       const hasSold = soldKg.trim().length > 0
       const hasPrice = salePriceCopPerKg.trim().length > 0
 
-      if (hasSold && !hasPrice) {
-        nextErrors.salePriceCopPerKg = 'Debes indicar el precio de venta si registras cantidad vendida.'
-      } else if (!hasSold && hasPrice) {
-        nextErrors.soldKg = 'Debes indicar la cantidad vendida si registras precio de venta.'
-      } else if (hasSold && hasPrice) {
+      if (hasSold) {
         const numSold = Number(soldKg)
-        const numPrice = Number(salePriceCopPerKg)
         if (Number.isNaN(numSold) || numSold < 0) {
           nextErrors.soldKg = 'La cantidad vendida debe ser mayor o igual a 0.'
+        } else if (!Number.isNaN(numYield) && numSold > numYield) {
+          nextErrors.soldKg = 'La cantidad vendida no puede superar el rendimiento.'
         }
+        if (!hasPrice) {
+          nextErrors.salePriceCopPerKg = 'Debes indicar el precio de venta si registras cantidad vendida.'
+        }
+      }
+      if (hasPrice) {
+        const numPrice = Number(salePriceCopPerKg)
         if (Number.isNaN(numPrice) || numPrice < 0) {
           nextErrors.salePriceCopPerKg = 'El precio debe ser mayor o igual a 0.'
         }
-        if (!Number.isNaN(numYield) && !Number.isNaN(numSold) && numSold > numYield) {
-          nextErrors.soldKg = 'La cantidad vendida no puede superar el rendimiento.'
+        if (!hasSold) {
+          nextErrors.soldKg = 'Debes indicar la cantidad vendida si registras precio de venta.'
         }
       }
     } else if (kind === 'irrigation') {
       const numIrrigation = Number(irrigationMm)
-      if (!irrigationMm.trim() || Number.isNaN(numIrrigation) || numIrrigation <= 0) {
-        nextErrors.irrigationMm = 'La lámina de riego debe ser mayor a 0.'
+      if (!irrigationMm.trim() || Number.isNaN(numIrrigation) || numIrrigation < 0) {
+        nextErrors.irrigationMm = 'La lámina de riego debe ser mayor o igual a 0.'
       }
     } else if (kind === 'task') {
       const numLabor = Number(laborDays)
-      if (!laborDays.trim() || Number.isNaN(numLabor) || numLabor <= 0) {
-        nextErrors.laborDays = 'Los jornales deben ser mayores a 0.'
+      if (!laborDays.trim() || Number.isNaN(numLabor) || numLabor < 0) {
+        nextErrors.laborDays = 'Los jornales deben ser mayores o iguales a 0.'
       }
-    } else if (kind === 'input') {
-      const numCost = Number(costCop)
-      if (!costCop.trim() || Number.isNaN(numCost) || numCost < 0) {
-        nextErrors.costCop = 'El costo es requerido y debe ser mayor o igual a 0.'
-      }
-    } else if (kind === 'cost') {
+    } else if (kind === 'input' || kind === 'cost') {
       const numCost = Number(costCop)
       if (!costCop.trim() || Number.isNaN(numCost) || numCost < 0) {
         nextErrors.costCop = 'El costo es requerido y debe ser mayor o igual a 0.'
       }
     } else if (kind === 'observation') {
-      if (!notes.trim()) {
-        nextErrors.notes = 'La observación es requerida.'
+      // docs/03: observation no exige campos. Con alert_id usa quantity, unit y cost_cop como pérdidas.
+      if (alertId) {
+        if (costCop.trim()) {
+          const numCost = Number(costCop)
+          if (Number.isNaN(numCost) || numCost < 0) {
+            nextErrors.costCop = 'El costo de pérdidas debe ser mayor o igual a 0.'
+          }
+        }
+        if (quantity.trim()) {
+          const numQty = Number(quantity)
+          if (Number.isNaN(numQty) || numQty < 0) {
+            nextErrors.quantity = 'La cantidad perdida debe ser mayor o igual a 0.'
+          }
+        }
       }
     }
 
@@ -174,6 +172,7 @@ function NewEntrySheetModal({
     }
 
     const selectedPlot = plots.find((p) => p.id === effectivePlotId)
+    const isObsWithAlert = kind === 'observation' && alertId !== null
 
     setSaving(true)
     try {
@@ -184,9 +183,12 @@ function NewEntrySheetModal({
         crop_cycle_id: selectedPlot?.activeCropCycleId ?? entryToEdit?.crop_cycle_id ?? null,
         kind,
         occurred_on: occurredOn,
-        quantity: kind === 'input' && quantity.trim() ? Number(quantity) : null,
-        unit: kind === 'input' && unit.trim() ? unit.trim() : null,
-        cost_cop: (kind === 'input' || kind === 'cost') && costCop.trim() ? Number(costCop) : null,
+        quantity: (kind === 'input' || isObsWithAlert) && quantity.trim() ? Number(quantity) : null,
+        unit: (kind === 'input' || isObsWithAlert) && unit.trim() ? unit.trim() : null,
+        cost_cop:
+          (kind === 'input' || kind === 'cost' || isObsWithAlert) && costCop.trim()
+            ? Number(costCop)
+            : null,
         yield_kg: kind === 'harvest' && yieldKg.trim() ? Number(yieldKg) : null,
         sold_kg: kind === 'harvest' && soldKg.trim() ? Number(soldKg) : null,
         sale_price_cop_per_kg:
@@ -267,7 +269,10 @@ function NewEntrySheetModal({
           setErrors((prev) => ({ ...prev, costCop: null }))
         }}
         quantity={quantity}
-        onQuantityChange={setQuantity}
+        onQuantityChange={(val) => {
+          setQuantity(val)
+          setErrors((prev) => ({ ...prev, quantity: null }))
+        }}
         unit={unit}
         onUnitChange={setUnit}
         notes={notes}

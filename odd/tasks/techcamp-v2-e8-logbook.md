@@ -184,8 +184,8 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   ~650 → T7a store + outbox, T7b synchronizer, one session. Route: **OpenCode, high**; escalate
   to `odd-worker` if T7b's state handling stalls.
   Done: lane `e8-t7`, merged `ca97354` (#144, #147 fixes); RDD `review-fb0c138492a9057a`,
-  `review-6bc080d05399a4ad` approved (CRITICAL fixed in `d105968`); the #147 fixes are reviewed
-  with T8's first slice.
+  `review-6bc080d05399a4ad` approved (CRITICAL fixed in `d105968`); #147 fixes reviewed on their
+  own, `review-539f27f2073c24b7` approved (#163 → fixed in T8).
 - [ ] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
   (harvest with `sold_kg` / price, task with `labor_days`, link to a cached alert), "Guardado en el
   teléfono" state, conflict/rejected notices, `SyncIndicator` wired. First commit: regenerate
@@ -439,6 +439,41 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   `e8-t6`, `e8-t7`, `e8-t9` removed (all clean, all merged) and their DB containers
   `techcamp-e8-db-t2..t6` deleted. Kept: integration `e8-logbook` + `techcamp-e8-db` (5441). Lane
   branches kept (merged; they back the RDD lineages). New lanes reuse ports from 5442.
+
+- T8 started (owner go, 2026-09-28): lane `e8-t8` (`feat/e8-t8-logbook` from `39eb6b9`, web, no
+  DB, CodeGraph index), AGY `e8-t8` medium, brief `.git-brief-e8-T8.md`; `impeccable` mandatory,
+  design frozen. Open point: the T7 #147 fixes (`58fb730..ddb46bc`) are already under T8's base
+  (merged in `ca97354`), so T8's slice cannot cover them as planned; they need their own short
+  review or an explicit owner waiver.
+
+- #147 fixes review (owner go; temporary worktree `e8-t7-review` on `feat/e8-t7-sync`, removed
+  after): lineage `review-539f27f2073c24b7`, base `d105968`, lens `review-reliability` →
+  **approved**, acknowledged. Findings → [#163](https://github.com/jab16jy/techcamp-v2/issues/163):
+  R3-followup-module-state (WARNING: trigger flags are module-level, a follow-up can start after
+  stop) and R3-unknown-entity-permanent-stall (SUGGESTION: distinct stop reason). Both are in the
+  code T8 wires, so they are queued to `e8-t8` as their own commit `Refs #163`.
+
+- T8 (AGY) five commits after the owner-requested split of the bundled `ffde5a9` (reset --soft,
+  parent-authorized): `bb57e65` chore schema.d.ts (767 generated), `2294889` typed transport
+  (261), `93ce5c9` list + sync state + shell (680), `cb52bfb` new-entry sheet (917: prod 685 /
+  test 232), `29aaf76` #163 fixes (128). Gate: lint, typecheck clean; 16 files / 81 passed; build;
+  170.95 kB. Docs diff sent back (one commit): the form contradicts docs/03 D10 — amounts must be
+  `>= 0` (it required `> 0`), `observation` requires no field (it required notes), an observation
+  linked to an alert carries `quantity`/`unit`/`cost_cop` as losses (dropped today); identical
+  input/cost branches; `todayInBogota` duplicated with `features/visits` → one helper in `lib/`.
+
+- T8 `f5b1451` fix(logbook): validation aligned with docs/03 D10 (amounts `>= 0`, observation
+  requires nothing, observation + alert sends `quantity`/`unit`/`cost_cop` losses, one input/cost
+  branch, shared `lib/date.ts` `todayInBogota`); the run was cut by a session restart mid-checks
+  and resumed. Gate: lint, typecheck clean; logbook+visits+lib+app 16 files / 109 passed; build;
+  170.97 kB. T8 RDD (parent-run, consent granted): lineage `review-0646e53ffbede472`, base
+  `39eb6b9`, lens `review-reliability`, running.
+
+- T8 RDD `review-0646e53ffbede472` → **approved**, acknowledged, no blockers. Findings →
+  [#164](https://github.com/jab16jy/techcamp-v2/issues/164): WARNINGs module `syncState` not reset
+  on sign-out, `recordSyncOutcome` untested, sync 401 → session expiry (D11) unproved after the
+  `apiClient` swap; SUGGESTIONs stale `quantity` error, invalid `sold_kg` unchecked without price.
+  All sent to `e8-t8` now (AGY rule).
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from

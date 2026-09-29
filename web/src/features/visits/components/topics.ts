@@ -32,18 +32,4 @@ export const VALID_TOPIC_IDS: ReadonlySet<string> = new Set(
   VISIT_TOPICS.map((topic) => topic.id),
 )
 
-/**
- * Returns today's date formatted as YYYY-MM-DD in America/Bogota (invariant checklist).
- */
-export function todayInBogota(now: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Bogota',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now)
-  const y = parts.find((p) => p.type === 'year')?.value ?? '1970'
-  const m = parts.find((p) => p.type === 'month')?.value ?? '01'
-  const d = parts.find((p) => p.type === 'day')?.value ?? '01'
-  return `${y}-${m}-${d}`
-}
+export { todayInBogota } from '../../../lib/date'
