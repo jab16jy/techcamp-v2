@@ -297,6 +297,39 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   note. Gap sent back: the presigned PUT does not sign the length, so D8's 200 KB is only checked
   on the declared `bytes`: sign `ContentLength` (or report if botocore cannot).
 
+- T7 `ddb46bc` (JSDoc back on `startSynchronizer`, 14/14 pure move) gated: lint, typecheck,
+  35 passed. **T7 merged** into integration (`feat/e8-t7-sync`, lane RDD `review-fb0c138492a9057a`
+  + `review-6bc080d05399a4ad` approved); integration web: lint, typecheck, db+sync 35 passed,
+  build, 163.37 kB. `e8-t7` session closed. The #147 fixes (`58fb730..ddb46bc`) are reviewed with
+  T8's first slice (base `d105968`).
+- T3 fixes `3c8ff85` (`created_offline` from `data` on insert, kept on update), `0393bb6` (delete
+  skips cycle/alert and the visit's plot-in-farm checks; visibility, org, role, technician_id
+  stay), `b28adf4` (one `_apply_delete`). Gate (DB 5444): push + sync_api 34 passed, static clean.
+  Go given for OpenCode's own RDD (base `a463a02`); consent answered by the parent in the pane.
+- T6 `887e944` (signs `ContentLength`; UNSIGNED-PAYLOAD, so the ceiling binds the declared length).
+  Gate (DB 5445): 16 passed, static clean. **T9b obligation:** the browser's Content-Length must
+  equal the presigned `bytes` (never re-encode after presign). Go given for OpenCode's own RDD
+  (base `3cf2653`).
+
+- T6 RDD (OpenCode, consent granted by the parent under the standing grant): lineage
+  `review-9ed2f09b8ef0ddd5`, lens `review-reliability`, one **CRITICAL R3-MINIO-STARTUP-RACE**
+  (short `depends_on` waits for MinIO to start, not to serve; `api` waits on
+  `service_completed_successfully`, so one early `mc` failure kept the stack down) fixed in the
+  bounded correction `f0d484c` (bounded 10× retry, 22 lines), validator approved, acknowledged. No
+  non-blocking findings. Open design note (not a finding): `api` still hard-depends on
+  `minio-init`, so a broken MinIO keeps the API down although presign alone would 503.
+  **T6 merged** into integration: tests/logbook 85 passed, ruff, format (270), mypy (181),
+  lint-imports clean. `e8-t6` session closed.
+
+- T3 RDD (OpenCode, consent granted by the parent under the standing grant): lineage
+  `review-7f77739c188c70fd`, slice `fef63b0..b28adf4` (base `a463a02`; T2's `432c74b`, `a73c1ba`
+  sit under the base), medium, 2,369 lines, lens `review-reliability` → **approved**, acknowledged,
+  no blocking findings, no correction. Three test WARNINGs →
+  [#160](https://github.com/jab16jy/techcamp-v2/issues/160): R3-lock-test-does-not-prove-allocation-order
+  and R3-newer-update-content-unproved are fixed now by `e8-t3` (test-only, `Refs #160`, no new
+  review); R3-db-backstop-bypasses-push-contract stays in the issue. Then T3 merges (expect
+  `main.py` and `logbook/adapters/api/deps.py`, `ports.py`, `repositories.py` conflicts with T5/T6).
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs

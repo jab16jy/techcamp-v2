@@ -46,11 +46,16 @@ class Presigner(Protocol):
     nothing to stub and nothing to wait for.
     """
 
-    async def presign_put(self, *, object_key: str, content_type: str, expires_in: int) -> str:
+    async def presign_put(
+        self, *, object_key: str, content_type: str, size: int, expires_in: int
+    ) -> str:
         """Sign a `PUT` of `object_key` and return the URL the browser uses.
 
-        The content type is part of the signature, so the upload cannot be a
-        different type than the row says (ADR-0018 keeps the bucket to images).
+        The content type and `size` are part of the signature, not decoration on
+        the row: a URL that did not carry them would let whoever holds it for
+        `expires_in` seconds upload a body of any type and any length, which
+        would make the 200 KB ceiling (D8) a promise about the request instead
+        of about what the bucket receives.
         """
         ...
 
@@ -120,8 +125,14 @@ async def presign_photo(
     )
     # Signed before the row exists: a presigner that cannot sign leaves nothing
     # claiming an upload that was never offered (D8's row exists from presign).
+    # `size` goes in too, and it is already inside the 200 KB ceiling because
+    # `ensure_valid_photo` ran first: the store will refuse a body of any other
+    # length, so what lands is what the row says.
     upload_url = await presigner.presign_put(
-        object_key=object_key, content_type=photo_type.value, expires_in=PRESIGN_EXPIRY_SECONDS
+        object_key=object_key,
+        content_type=photo_type.value,
+        size=size,
+        expires_in=PRESIGN_EXPIRY_SECONDS,
     )
     await attachments.add(
         Attachment(
