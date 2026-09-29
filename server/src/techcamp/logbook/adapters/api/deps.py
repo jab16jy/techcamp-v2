@@ -10,7 +10,13 @@ from techcamp.logbook.adapters.attachments import (
     Boto3Presigner,
     SqlAlchemyAttachmentRepository,
 )
-from techcamp.logbook.adapters.repositories import SqlAlchemyExtensionVisitRepository
+from techcamp.logbook.adapters.repositories import (
+    PostgresSyncTransaction,
+    SqlAlchemyExtensionVisitRepository,
+    SqlAlchemyExtensionVisitSyncRepository,
+    SqlAlchemyLogbookEntrySyncRepository,
+    SqlAlchemySyncIdProbe,
+)
 from techcamp.logbook.application import Presigner
 from techcamp.shared.config import (
     s3_access_key,
@@ -76,3 +82,31 @@ def get_presigner() -> Presigner:
 
 
 PresignerDep = Annotated[Presigner, Depends(get_presigner)]
+
+
+async def get_sync_transaction(session: SessionDep) -> PostgresSyncTransaction:
+    """The request's transaction: one D1 lock for the whole batch, so a
+    version is only ever allocated by a transaction that is about to commit."""
+    return PostgresSyncTransaction(session)
+
+
+async def get_sync_id_probe(session: SessionDep) -> SqlAlchemySyncIdProbe:
+    return SqlAlchemySyncIdProbe(session)
+
+
+async def get_entry_sync_repository(session: SessionDep) -> SqlAlchemyLogbookEntrySyncRepository:
+    return SqlAlchemyLogbookEntrySyncRepository(session)
+
+
+async def get_visit_sync_repository(session: SessionDep) -> SqlAlchemyExtensionVisitSyncRepository:
+    return SqlAlchemyExtensionVisitSyncRepository(session)
+
+
+SyncTransactionDep = Annotated[PostgresSyncTransaction, Depends(get_sync_transaction)]
+SyncIdProbeDep = Annotated[SqlAlchemySyncIdProbe, Depends(get_sync_id_probe)]
+EntrySyncRepoDep = Annotated[
+    SqlAlchemyLogbookEntrySyncRepository, Depends(get_entry_sync_repository)
+]
+VisitSyncRepoDep = Annotated[
+    SqlAlchemyExtensionVisitSyncRepository, Depends(get_visit_sync_repository)
+]
