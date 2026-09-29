@@ -128,18 +128,26 @@ Issue #139 (evidence from E7/E8):
   (0.45.3) like every other dev dependency and CI syncs with `uv sync --locked`; an exact `==` pin
   would diverge from the file's own convention without adding reproducibility the lock does not
   already give.
-- D-T2.2 `no-naive-today` covers the three shapes the docs forbid — `date.today()`, a zero-argument
+- D-T2.2 `no-naive-today` covers the shapes the docs forbid — `date.today()`, a naive
   `datetime.now()` and `datetime.utcnow()` — under **both** import styles this repository uses:
   `from datetime import date, datetime` and the module-qualified `import datetime`, where the same
-  three are `datetime.date.today()`, `datetime.datetime.now()` and `datetime.datetime.utcnow()`.
+  shapes are `datetime.date.today()`, `datetime.datetime.now()` and `datetime.datetime.utcnow()`.
   The qualified spellings are not redundant with the direct ones: the member chain is a segment
   longer, so a direct pattern cannot see them, and 14 files in `server/src` use `import datetime`.
-  The rule is scoped with `files: server/src/**/*.py` and `ignores:
-  server/src/techcamp/shared/dates.py`, the one module allowed a naive read because it attaches
-  UTC to it on the next line. Recorded limit: `datetime.now(tz=None)` is an explicit naive read
-  that the zero-argument pattern does not match; a metavariable form (`$X.today()`) would catch
-  the qualified chain too but would also flag any domain method named `today()`, so the precise
-  shapes stand. The rule test documents what is covered and what is not.
+  A naive `now()` is either **no argument at all or an explicit `None` timezone** (keyword or
+  positional), because `tz=None` returns a naive datetime and is the way to reach the same defect
+  while looking deliberate; a call with a real timezone is valid and needs no `not` clause, since
+  each pattern matches the exact shape rather than a prefix. Recorded limit: an aliased import
+  (`from datetime import datetime as dt`) is a different name and is not matched; a metavariable
+  form (`$X.today()`) would cover the qualified chain and the aliases together but would also
+  flag any domain method named `today()`, so the precise shapes stand. The rule test documents
+  what is covered and what is not.
+- D-T2.6 The rule has **no `ignores` entry**. `shared/dates.py` is where the timezone is owned
+  and it never needed an exemption: its only read is `datetime.now(UTC)`, which is aware, and the
+  naive value it handles arrives as an argument (`now.replace(tzinfo=UTC)`), not as a call. The
+  file-level ignore added in T2 shielded every naive read a future edit put in that file, which
+  is the opposite of the invariant (R3-blanket-timezone-ignore). Suppress a line with
+  `# ast-grep-ignore` when a line genuinely needs it, never a file.
 - D-T2.3 The scan is one command, run from `server/` in both places: `uv run ast-grep scan
   --config ../sgconfig.yml`. Rule paths are relative to the config file, not the cwd, so the scan
   covers the whole tree whatever a rule names, and CI's server job (whose working directory is
@@ -154,6 +162,12 @@ Issue #139 (evidence from E7/E8):
   in T2 (D-T1.6, D-T2.4), so nothing this feature promised is left unbuilt. The risk the trial
   was scoped around (Timescale, PostGIS and procrastinate objects reported as drift) is real
   and still unanswered, so #194 keeps the question with the evidence behind it.
+- D-T2.7 `ast-grep test` joins `ast-grep scan` in `gate-fast`, so CI's server job is exactly
+  `gate-fast`'s seven server checks plus the full pytest run and the parity sentence in AGENTS.md
+  can name all seven instead of asserting parity (R2-ci-gate-parity-ambiguous). Both commands name
+  `../sgconfig.yml` explicitly rather than relying on ast-grep's upward search for it, in the
+  justfile and in CI alike, because a rule's `files` and `ignores` resolve against the config file
+  and not against the working directory (R2-astgrep-wrong-working-directory).
 
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
@@ -201,10 +215,18 @@ Issue #139 (evidence from E7/E8):
   249 lines, `high` risk (`shell_source` in `ci.yml`), four lenses (risk, resilience, readability,
   reliability), correction budget 125. No correction opened; approved and acknowledged,
   `authority: burned`. `R3-lane-node-modules`-class findings did not recur: risk reported none.
-  Six non-blocking WARNINGs, all informational: `R2-astgrep-wrong-working-directory`,
-  `R2-ci-gate-parity-ambiguous`, `R2-naive-time-comment-contradiction`,
-  `R3-blanket-timezone-ignore`, and `R3-no-naive-today-tz-none` / `R4-naive-now-tz-none` (the same
-  `datetime.now(tz=None)` gap from two lenses). They await a `review-follow-up` issue.
+  Six non-blocking WARNINGs, all informational, filed as #195 and all fixed in the same session:
+  `R2-astgrep-wrong-working-directory` (both commands now name `../sgconfig.yml` explicitly, in
+  `gate-fast` and in CI), `R2-ci-gate-parity-ambiguous` (`ast-grep test` joined `gate-fast`, so
+  CI's server job is exactly `gate-fast`'s seven server checks plus the full pytest run, and
+  AGENTS.md names all seven instead of asserting parity), `R2-naive-time-comment-contradiction`
+  (the comment now states the two naive shapes precisely, including the explicit `None`),
+  `R3-blanket-timezone-ignore` (the `ignores` entry is **deleted**: `shared/dates.py` never needed
+  an exemption, since its only read is `datetime.now(UTC)` and the naive value it handles arrives
+  as an argument, and a file-level ignore shielded every naive read a future edit put there — the
+  rule's `notes` now say that and point at a line-scoped `# ast-grep-ignore` instead), and
+  `R3-no-naive-today-tz-none` / `R4-naive-now-tz-none` (the same gap from two lenses: four
+  patterns added for `tz=None` and a positional `None`, under both import styles).
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
@@ -276,8 +298,20 @@ Issue #139 (evidence from E7/E8):
     ................` (16 cases), `1 passed; 0 failed`. The repo scan stayed clean, the probe now
     reports both shapes (`2 error(s) found`), and `datetime.datetime.now(UTC)` /
     `datetime.date(2026, 9, 29)` stay unreported.
+  - Third cycle, the T2 review's six WARNINGs (#195), all fixed in one commit. RED after adding
+    the four explicit-`None` invalid cases: `FAIL no-naive-today  ................MMMM`, with
+    `[Missing] … none found in: now = datetime.now(tz=None)` and the same for `datetime.now(None)`,
+    `datetime.datetime.now(tz=None)` and `datetime.datetime.now(None)`; `0 passed; 1 failed`
+    (exit 4). GREEN after the four patterns and a refreshed snapshot: `PASS no-naive-today
+    ....................` (20 cases), `1 passed; 0 failed`. The `ignores` entry is gone and the
+    repo scan is still clean, which is the proof that `shared/dates.py` never needed it; the
+    negative control now runs the other way, a `date.today()` appended to that file is
+    **reported** (line 34, `1 error(s) found`) where T2's ignore hid it. `datetime.now(tz=None)`
+    in a scratch module is reported, and `datetime.datetime.now(UTC)`, `datetime.now(tz=UTC)` and
+    `datetime.date(2026, 9, 29)` stay unreported. Every scratch edit was reverted.
 
 ## Next step
-T2 committed; the parent gates the sha, then the RDD review runs for the slice. Next task: T3
-(pytest-randomly: dev dep, full suite on a clean DB with 3 seeds, flakes on #89), after the
-parent's go.
+T2 committed and its review follow-ups fixed; the T2 round is closed (lineage
+`review-43815f8285e2faaf`, approved, `authority: burned`). T3 (pytest-randomly) is owned by a
+separate session on `feat/dev-tooling-t3` in the `dev-tooling-t3` worktree — this lane does not
+touch it. After T3, this lane resumes at T5 (gitleaks in CI), then T5b and T6.

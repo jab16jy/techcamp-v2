@@ -1,11 +1,16 @@
 # ast-grep rules for the invariants the docs already state and RDD had to catch by
-# review (#139). Everything is resolved from the repository root, which is where
-# `gate-fast`, CI and an agent run it from: `uv run ast-grep test` proves the rules,
-# `uv run ast-grep scan` applies them.
+# review (#139).
 #
-# A rule path is relative to this file, so a rule says which tree it governs. Keep the
-# first word of every `message` on the rule id: the message is what a developer reads
-# in CI, and the id is what they suppress deliberately.
+# The tools run from the SERVER project, not from here, because that is where `uv` lives
+# and where the `just` recipes and the CI server job already are. Every invocation names
+# this file explicitly — `uv run ast-grep test --config ../sgconfig.yml` proves the rules,
+# `uv run ast-grep scan --config ../sgconfig.yml` applies them — rather than relying on
+# ast-grep's upward search, so a rule resolves the same file wherever it is run from.
+#
+# A rule's `files` and `ignores` paths are relative to THIS file, not to the cwd, so a
+# rule says which tree it governs and the scan covers the whole repository. Keep the first
+# word of every `message` on the rule id: the message is what a developer reads in CI, and
+# the id is what they suppress deliberately.
 
 ruleDirs:
   - rules

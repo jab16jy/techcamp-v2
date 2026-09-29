@@ -81,8 +81,8 @@ Gates (`just`, from the repo root). `just` is a system tool, not a project depen
   share a database. `just db-info` prints the container, the port and the `DATABASE_URL` the
   recipes export.
 - `just gate-fast`: the static checks only — server `ruff check`, `ruff format --check`, `mypy`,
-  `lint-imports`, a single Alembic head and `ast-grep scan`; web `lint`, `typecheck`. No database,
-  no tests.
+  `lint-imports`, a single Alembic head, `ast-grep test` and `ast-grep scan`; web `lint`,
+  `typecheck`. No database, no tests.
 - `just gate <paths…>`: `gate-fast` plus exactly the tests you name. `server/…` runs pytest (the
   `server/` prefix is stripped), `web/…` runs `vitest --run`, any other path adds nothing.
   Node ids pass through: `just gate server/tests/irrigation/test_x.py::test_y`. No paths means
@@ -95,12 +95,19 @@ Gates (`just`, from the repo root). `just` is a system tool, not a project depen
 
 Rules: `sgconfig.yml` at the root, one file per rule in `rules/`, and its test in
 `rule-tests/<id>-test.yml` with a `valid` and an `invalid` case each — a rule that has never seen
-a failing case proves nothing. `uv run ast-grep test` (from `server/`) proves the rules and their
-snapshots, `uv run ast-grep scan --config ../sgconfig.yml` applies them; a rule reaches CI through
-`just gate-fast`. A new rule is a new file plus its test, not an edit to an existing one.
+a failing case proves nothing. Both commands run from `server/` and name the config explicitly,
+because a rule's paths resolve against the config file rather than the working directory:
+`uv run ast-grep test --config ../sgconfig.yml` proves the rules and their snapshots,
+`uv run ast-grep scan --config ../sgconfig.yml` applies them. Prefer a line-scoped
+`# ast-grep-ignore` over exempting a whole file in a rule's `ignores`: a file that "obviously
+needs it" is exactly the file whose next naive read goes unnoticed. A new rule is a new file plus
+its test, not an edit to an existing one.
 
-CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`: the same static
-checks as `gate-fast`, plus the full pytest and vitest runs, the web build and the size budget.
+CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`, and runs the same
+checks in the same order. Its server job is `gate-fast`'s seven server checks — `ruff check`,
+`ruff format --check`, `mypy`, `lint-imports`, one Alembic head, `ast-grep test`, `ast-grep scan`
+— plus the full pytest run. Its web job is `gate-fast`'s `lint` and `typecheck` plus the full
+vitest run, the build and the size budget. No check exists in one place and not the other.
 Green locally means green in CI.
 
 ## Architecture rules
