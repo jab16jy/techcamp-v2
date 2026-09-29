@@ -29,6 +29,28 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+type LocalWriteListener = () => void
+
+const localWriteListeners = new Set<LocalWriteListener>()
+
+/**
+ * Notifies the synchronizer that this device changed something, so it can run
+ * 2 s later (docs/06 §7). The store cannot import the synchronizer — that would
+ * turn the layer above into a dependency of the layer below — so it publishes a
+ * signal instead, the same `session.ts` pattern already used in `lib/`.
+ */
+export function subscribeToLocalWrites(listener: LocalWriteListener): () => void {
+  localWriteListeners.add(listener)
+  return () => {
+    localWriteListeners.delete(listener)
+  }
+}
+
+/** Called after a change has committed, never inside its transaction. */
+function notifyLocalWrite(): void {
+  for (const listener of localWriteListeners) listener()
+}
+
 /**
  * The `data` a change carries (docs/04 §Bitácora): the docs/03 fields the
  * client owns, and nothing else. The four fields this device or the server own
@@ -116,7 +138,7 @@ function assertNotDeleted(
  */
 export async function saveLogbookEntry(draft: LogbookEntryDraft): Promise<LogbookEntryRow> {
   const at = nowIso()
-  return db.transaction('rw', [db.logbookEntries, db.outbox], async () => {
+  const row = await db.transaction('rw', [db.logbookEntries, db.outbox], async () => {
     // Read inside the transaction, never from an earlier call: `created_offline`
     // and `server_version` must reflect the stored row right now.
     const stored = await db.logbookEntries.get(draft.id)
@@ -143,6 +165,8 @@ export async function saveLogbookEntry(draft: LogbookEntryDraft): Promise<Logboo
     })
     return row
   })
+  notifyLocalWrite()
+  return row
 }
 
 /**
@@ -150,13 +174,15 @@ export async function saveLogbookEntry(draft: LogbookEntryDraft): Promise<Logboo
  * reaches the other devices) and queues the delete change.
  */
 export async function deleteLogbookEntry(id: string): Promise<LogbookEntryRow> {
-  return deleteLocally(id, 'logbook_entry', db.logbookEntries, toEntryData)
+  const row = await deleteLocally(id, 'logbook_entry', db.logbookEntries, toEntryData)
+  notifyLocalWrite()
+  return row
 }
 
 /** Creates or updates an extension visit and queues its push (docs/03 `extension_visit`). */
 export async function saveExtensionVisit(draft: ExtensionVisitDraft): Promise<ExtensionVisitRow> {
   const at = nowIso()
-  return db.transaction('rw', [db.extensionVisits, db.outbox], async () => {
+  const row = await db.transaction('rw', [db.extensionVisits, db.outbox], async () => {
     const stored = await db.extensionVisits.get(draft.id)
     assertNotDeleted(stored, 'extension visit', draft.id)
     const row: ExtensionVisitRow = {
@@ -178,11 +204,15 @@ export async function saveExtensionVisit(draft: ExtensionVisitDraft): Promise<Ex
     })
     return row
   })
+  notifyLocalWrite()
+  return row
 }
 
 /** Soft-deletes an extension visit and queues the delete change. */
 export async function deleteExtensionVisit(id: string): Promise<ExtensionVisitRow> {
-  return deleteLocally(id, 'extension_visit', db.extensionVisits, toVisitData)
+  const row = await deleteLocally(id, 'extension_visit', db.extensionVisits, toVisitData)
+  notifyLocalWrite()
+  return row
 }
 
 async function deleteLocally<TRow extends LogbookEntryRow | ExtensionVisitRow>(

@@ -213,6 +213,52 @@ describe('syncOnce: push results', () => {
     expect(await db.outbox.count()).toBe(0)
   })
 
+  it('does not settle a newer edit made while the push was in flight', async () => {
+    const entry = draft({ yield_kg: 120 })
+    await saveLogbookEntry(entry)
+    stubSyncApi({
+      push: async (request) => {
+        // The user edits again while this request is open: the answer is now
+        // about a version no longer queued.
+        await saveLogbookEntry({ ...entry, yield_kg: 150 })
+        return json({
+          results: request.changes.map((change) => ({ id: change.id, status: 'applied', server_version: 7 })),
+        })
+      },
+    })
+
+    await syncOnce()
+
+    // The newer edit survives: still queued, and the row does not claim it.
+    const items = await db.outbox.toArray()
+    expect(items).toHaveLength(1)
+    expect(items[0].data).toMatchObject({ yield_kg: 150 })
+    expect(items[0].status).toBe('pending')
+    const row = await db.logbookEntries.get(entry.id)
+    expect(row?.syncState).toBe('pending')
+    expect(row?.yield_kg).toBe(150)
+  })
+
+  it('does not flag a newer edit with a rejection either', async () => {
+    const entry = draft()
+    await saveLogbookEntry(entry)
+    stubSyncApi({
+      push: async (request) => {
+        await saveLogbookEntry({ ...entry, yield_kg: 150 })
+        return json({ results: request.changes.map((c) => ({ id: c.id, status: 'rejected', server_version: null, error: 'clock_skew' })) })
+      },
+    })
+
+    await syncOnce()
+
+    // A rejection the server never saw must not stall the newer edit, which a
+    // `rejected` item never re-pushes.
+    const [item] = await db.outbox.toArray()
+    expect(item.status).toBe('pending')
+    expect(item.error).toBeNull()
+    expect((await db.logbookEntries.get(entry.id))?.syncState).toBe('pending')
+  })
+
   it('ignores a result for a change the run never sent', async () => {
     const entry = draft()
     await saveLogbookEntry(entry)
@@ -276,6 +322,34 @@ describe('syncOnce: pull', () => {
     expect(await getCursor()).toBe(8)
   })
 
+  it('refuses a pull change whose entity it does not know, and does not advance the cursor', async () => {
+    const known = uuidv7()
+    const alien = uuidv7()
+    stubSyncApi({
+      pull: () =>
+        json({
+          changes: [
+            { id: known, entity: 'logbook_entry', op: 'upsert', data: serverEntry(known), server_version: 3 },
+            // An entity this client does not sync. It must never fall through to
+            // the `else` branch and land in `extensionVisits`.
+            { id: alien, entity: 'sensor_reading', op: 'upsert', data: { id: alien }, server_version: 4 },
+          ],
+          next_since: 4,
+          has_more: false,
+        }),
+    })
+
+    const outcome = await syncOnce()
+
+    // Fail closed: the run stops and the cursor stays where it was, because
+    // skipping the change would lose it silently and advancing would never
+    // bring it back. The change before it is rolled back with the transaction.
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unavailable' })
+    expect(await getCursor()).toBe(0)
+    expect(await db.logbookEntries.count()).toBe(0)
+    expect(await db.extensionVisits.count()).toBe(0)
+  })
+
   it('keeps a deleted row tombstoned when the server sends the delete', async () => {
     const gone = uuidv7()
     stubSyncApi({
@@ -336,6 +410,24 @@ describe('syncOnce: stopping without losing anything (D11)', () => {
 
     expect(outcome).toEqual({ status: 'stopped', reason: 'unavailable' })
     expect(await db.outbox.count()).toBe(1)
+    expect(await getCursor()).toBe(0)
+  })
+
+  it('treats a 2xx whose body is not JSON as stopped, not as a crash', async () => {
+    const entry = draft()
+    await saveLogbookEntry(entry)
+    // A proxy or a captive portal can answer 200 with an HTML page. That is not
+    // the server's answer, so it must not escape as a JSON parse error either.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<!doctype html><title>portal</title>', { status: 200 })),
+    )
+
+    const outcome = await syncOnce()
+
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unavailable' })
+    expect(await db.outbox.count()).toBe(1)
+    expect((await db.outbox.toArray())[0].status).toBe('pending')
     expect(await getCursor()).toBe(0)
   })
 
