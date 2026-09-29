@@ -604,6 +604,14 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   el servidor/`; GREEN 4 passed. Parent gate in the lane: lint, typecheck exit 0, LogbookScreen
   4 passed. Test-only → no RDD. **Merged** `69d9880`; integration lint, typecheck clean,
   features/logbook 13 passed. `e8-t10b` session is closed and its worktree removed.
+- Delivery (owner go, 2026-09-29): stacked-to-main, **23 PRs #168–#190**, merged in order. Each
+  slice branch `e8/NN` = `merge(e8/NN-1, <E8 cut commit>)` built with `git merge-tree` +
+  `commit-tree`. Every head descends from `main` and from the previous slice, so no PR diff carries a
+  criss-cross base (the E7 #151–#153 problem). Cuts sit at lane work-unit commits or integration
+  merges. T3 is one slice (`f3677ad`, 2,396 lines), because its lane commits conflict with T5/T6
+  (add/add on `ports.py`, `repositories.py`) and only the merge carries the resolution. The last
+  slice's tree is byte-identical to `feat/e8-logbook` at `72eae02` (verified). PRs over 400 lines
+  are labelled `size:exception` after one slicing pass.
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
