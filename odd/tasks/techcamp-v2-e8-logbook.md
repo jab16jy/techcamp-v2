@@ -496,6 +496,21 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   in T10). Session handoff for T9b + T10 written to `.git-brief-e8-handoff.md` and Engram
   `e8/handoff`.
 
+- T9b (OpenCode `e8-t9b`): `18aec54` photos table + v2 upgrade (311), `5941721` refactor v2
+  declares only its changes (13), `0d6f846` compression ladder (337), `476d30b` upload queue (552),
+  `323a480` photo block in both sheets (684); 1,857 lines. Writer RED/GREEN per behavior; mutation
+  proofs caught (truncated and re-encoded body after presign, parent-not-synced guard, D7 guard);
+  impeccable detector `[]` on the 4 UI files; stated limits: no canvas in jsdom (`browser.ts`
+  untested, real EXIF removal unproven), no real MinIO PUT. Parent gate re-run in the lane: lint,
+  typecheck clean; vitest lib + logbook + visits + app + PhotoField 24 files / 150 passed; build
+  ok; size 171.21 kB. Docs diff OK (docs/04 Fotos, D7, D8, D11, D13, docs/06 §7 order, T6 same-bytes
+  PUT, ceiling `200 * 1024` = server `MAX_PHOTO_BYTES`). Deviations accepted: bytes stored as
+  `Uint8Array` (fake-indexeddb cannot clone a jsdom Blob), `test/setup.ts` object-URL stubs,
+  `PhotoField` in `design-system/patterns` (docs/07 "Entre features"; E1 primitives only). RDD
+  plan (parent, owner delegated): ONE round over `fa7edf6..323a480` run by OpenCode — gentle-ai
+  reviews base..HEAD only, so slicing would strand a bounded correction off the lane (T3 and T7b
+  precedent); go given 2026-09-29.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
