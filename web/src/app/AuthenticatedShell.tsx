@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { AppShell } from '../design-system/patterns/AppShell'
 import { useToken } from '../lib/api/session'
+import { resetSyncState } from '../lib/sync/syncState'
 
 /**
  * Top-level authenticated shell layout in `app/`.
@@ -32,6 +33,7 @@ export function AuthenticatedShell() {
       active = false
       stopRef.current?.()
       stopRef.current = null
+      resetSyncState()
     }
   }, [token])
 

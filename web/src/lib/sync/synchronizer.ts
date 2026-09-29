@@ -202,7 +202,7 @@ async function applyPage(page: PullResponse): Promise<number> {
         // does not advance and no row from this page is half-applied: a skipped
         // change is a silent loss, and a cursor past it never brings it back.
         if (!isKnownEntity(change.entity)) {
-          throw new SyncStoppedError('unavailable', null)
+          throw new SyncStoppedError('unknown_entity', null)
         }
         // D7 (docs/06 §7 "Pull de un registro con cambio local pendiente"): a row
         // with a change in the outbox is never overwritten by a pull; the push
