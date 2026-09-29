@@ -11,7 +11,6 @@ import {
 } from '../db/local'
 import { resetLocalDb } from '../db/testDb'
 import { syncOnce } from './synchronizer'
-import { pushChanges } from './transport'
 import type { PushRequest, PushResult } from './types'
 
 const ORG_ID = '018f0c2a-0000-7000-8000-0000000000aa'
@@ -88,10 +87,12 @@ function startFakeServer(): {
   pushRequests: PushRequest[]
   rowCount: () => number
   row: (id: string) => FakeRow | undefined
+  loseNextResponse: () => void
 } {
   const rows = new Map<string, FakeRow>()
   const pushRequests: PushRequest[] = []
   let lastVersion = 0
+  let loseNextPushResponse = false
 
   const handle = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     if (!navigator.onLine) throw new TypeError('Failed to fetch')
@@ -120,6 +121,14 @@ function startFakeServer(): {
         })
         return { id: change.id, status: 'applied', server_version: lastVersion, error: null }
       })
+      if (loseNextPushResponse) {
+        // The change is applied and committed; the answer dies on the way
+        // back, which is the one failure the phone cannot tell apart from
+        // "never arrived". The next run must therefore replay the very same
+        // change and hear `duplicate` (ADR-0013).
+        loseNextPushResponse = false
+        throw new TypeError('Failed to fetch')
+      }
       return json({ results })
     }
 
@@ -141,7 +150,14 @@ function startFakeServer(): {
   }
 
   vi.stubGlobal('fetch', vi.fn(handle))
-  return { pushRequests, rowCount: () => rows.size, row: (id: string) => rows.get(id) }
+  return {
+    pushRequests,
+    rowCount: () => rows.size,
+    row: (id: string) => rows.get(id),
+    loseNextResponse: () => {
+      loseNextPushResponse = true
+    },
+  }
 }
 
 function setOnline(online: boolean): void {
@@ -181,29 +197,46 @@ describe('scenario D: offline harvest', () => {
     expect(await db.outbox.count()).toBe(1)
     expect((await db.outbox.toArray())[0].status).toBe('pending')
 
-    // Back online: exactly one push, one server row, outbox settled.
+    // Back online, but the answer is lost after the server applied the change:
+    // the phone must keep the change queued and must not claim a version.
     setOnline(true)
+    server.loseNextResponse()
+    const lostOutcome = await syncOnce()
+
+    expect(lostOutcome).toEqual({ status: 'stopped', reason: 'unavailable' })
+    expect(server.pushRequests).toHaveLength(1)
+    expect(server.row(entry.id)?.data.created_offline).toBe(true)
+    expect(server.rowCount()).toBe(1)
+    expect(await db.outbox.count()).toBe(1)
+    expect((await db.outbox.toArray())[0].status).toBe('pending')
+    expect(await db.logbookEntries.get(entry.id)).toMatchObject({
+      syncState: 'pending',
+      server_version: null,
+    })
+
+    // The next run replays that very same change: the server answers
+    // `duplicate` (same id, same client_updated_at) and keeps one row, and
+    // the phone settles it with the version the server already had (ADR-0013).
     const onlineOutcome = await syncOnce()
 
     expect(onlineOutcome).toEqual({ status: 'synced', pushed: 1, pulled: 1 })
-    expect(server.pushRequests).toHaveLength(1)
-    expect(server.pushRequests[0].changes.map((change) => change.id)).toEqual([entry.id])
-    expect(server.row(entry.id)?.data.created_offline).toBe(true)
+    expect(server.pushRequests).toHaveLength(2)
+    expect(server.pushRequests[1].changes.map((change) => change.id)).toEqual([entry.id])
+    expect(server.pushRequests[1].changes[0].client_updated_at).toBe(
+      server.pushRequests[0].changes[0].client_updated_at,
+    )
     expect(server.rowCount()).toBe(1)
+    expect(server.row(entry.id)?.version).toBe(1)
     expect(await db.outbox.count()).toBe(0)
     expect(await db.logbookEntries.get(entry.id)).toMatchObject({
       syncState: 'synced',
       server_version: 1,
     })
 
-    // Replaying the run pushes nothing (the change is settled) and, when the
-    // same change does arrive again — a lost answer retried — the server
-    // answers `duplicate` and keeps one row.
+    // A further run has nothing queued and adds nothing.
     await syncOnce()
-    expect(server.pushRequests).toHaveLength(1)
 
-    const retried = await pushChanges(server.pushRequests[0])
-    expect(retried.results[0].status).toBe('duplicate')
+    expect(server.pushRequests).toHaveLength(2)
     expect(server.rowCount()).toBe(1)
   })
 })
@@ -227,12 +260,25 @@ describe('scenario D: offline extension visit', () => {
     expect(await db.outbox.count()).toBe(1)
 
     setOnline(true)
-    const onlineOutcome = await syncOnce()
+    server.loseNextResponse()
+    const lostOutcome = await syncOnce()
 
-    expect(onlineOutcome).toEqual({ status: 'synced', pushed: 1, pulled: 1 })
+    expect(lostOutcome).toEqual({ status: 'stopped', reason: 'unavailable' })
     expect(server.pushRequests).toHaveLength(1)
     expect(server.pushRequests[0].changes[0].entity).toBe('extension_visit')
     expect(server.rowCount()).toBe(1)
+    expect(await db.outbox.count()).toBe(1)
+
+    const onlineOutcome = await syncOnce()
+
+    expect(onlineOutcome).toEqual({ status: 'synced', pushed: 1, pulled: 1 })
+    expect(server.pushRequests).toHaveLength(2)
+    expect(server.pushRequests[1].changes[0].entity).toBe('extension_visit')
+    expect(server.pushRequests[1].changes[0].client_updated_at).toBe(
+      server.pushRequests[0].changes[0].client_updated_at,
+    )
+    expect(server.rowCount()).toBe(1)
+    expect(server.row(visit.id)?.version).toBe(1)
     expect(await db.outbox.count()).toBe(0)
     expect(await db.extensionVisits.get(visit.id)).toMatchObject({
       syncState: 'synced',
@@ -242,10 +288,7 @@ describe('scenario D: offline extension visit', () => {
     })
 
     await syncOnce()
-    expect(server.pushRequests).toHaveLength(1)
-
-    const retried = await pushChanges(server.pushRequests[0])
-    expect(retried.results[0].status).toBe('duplicate')
+    expect(server.pushRequests).toHaveLength(2)
     expect(server.rowCount()).toBe(1)
   })
 })
