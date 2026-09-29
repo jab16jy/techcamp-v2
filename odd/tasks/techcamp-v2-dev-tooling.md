@@ -42,9 +42,6 @@ Issue #139 (evidence from E7/E8):
     (`date.today()`, `datetime.now()` without tz, `datetime.utcnow()` in `server/src` outside
     `shared/dates.py`), with `ast-grep test` rule tests. Wired into `gate-fast` and CI.
   - pytest-randomly in the server dev group; flakes it surfaces go to #89 with their seed.
-  - `alembic check` (ORM ↔ migration drift) on trial: adopted into `gate-full` and CI only if
-    clean or clean with a small `include_object` filter (Timescale, PostGIS, procrastinate
-    objects); otherwise rejected with evidence in #139.
   - gitleaks step in CI (docs/09:78).
   - Decision-number convention: decisions are numbered per task (`D-T3.1`, `D-T9b.2`), so
     parallel branches cannot collide. Stated in AGENTS.md Workflow.
@@ -61,6 +58,9 @@ Issue #139 (evidence from E7/E8):
     pytest-recording, deepeval, pytest-xdist (until per-worker DBs), squawk (E14).
   - Fixing the #89 teardown deadlock itself, unless a fix is trivial.
   - Changing CI triggers (PR-only stays, commit `ci/pr-only`).
+  - `alembic check` (ORM ↔ migration drift) on trial: **deferred to #194** by the owner
+    (2026-09-29). The single-Alembic-head check it would have joined is already in `gate-fast`
+    and in CI (D-T1.6, D-T2.4); the drift question the trial was meant to answer is #194's.
 
 ## Constraints
 - AGENTS.md: docs first; English identifiers and prose in code/docs; Conventional Commits,
@@ -71,7 +71,7 @@ Issue #139 (evidence from E7/E8):
 - CI keeps calling the tools directly (no `just` in CI), so CI and the justfile must list the
   same checks; the close task diffs them.
 - Library/tool APIs from current docs (`find-docs` / ctx7), not memory: just, ast-grep,
-  pytest-randomly, alembic check, gitleaks.
+  pytest-randomly, gitleaks.
 - No destructive git in the writer (no `reset --hard`, `checkout -- .`, `clean`, `stash`,
   `git add -A`).
 
@@ -148,6 +148,12 @@ Issue #139 (evidence from E7/E8):
 - D-T2.4 D-T1.6 lands with T2: the CI server job asserts exactly one Alembic head, spelled out as
   the recipe spells it, because CI calls the tools directly and never `just`. That closes
   `R3-stale-ci-parity` (#193) without touching the AGENTS.md sentence, which is now true.
+- D-T2.5 T4 is deferred by the owner (2026-09-29) and tracked in #194. The `alembic check` ORM ↔
+  migration drift trial leaves this feature's Scope, its CI acceptance criterion and the task
+  list; the only migration check it could have joined — the single Alembic head — already landed
+  in T2 (D-T1.6, D-T2.4), so nothing this feature promised is left unbuilt. The risk the trial
+  was scoped around (Timescale, PostGIS and procrastinate objects reported as drift) is real
+  and still unanswered, so #194 keeps the question with the evidence behind it.
 
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
@@ -158,7 +164,8 @@ Issue #139 (evidence from E7/E8):
   first), wired into `gate-fast` and CI.
 - [ ] T3 pytest-randomly: dev dep; full suite on a clean DB with 3 seeds; flakes reported on
   #89 with seeds; fix only trivial ones.
-- [ ] T4 `alembic check` trial on a clean DB: adopt (with a small `include_object` filter if
+- [ ] T4 **deferred to #194** by the owner (2026-09-29), out of scope for this feature.
+  `alembic check` trial on a clean DB: adopt (with a small `include_object` filter if
   needed) into `gate-full` and CI, or reject with evidence in #139.
 - [ ] T5 gitleaks in CI (docs/09:78): verify the action/binary needs no license for this
   personal repo; run it locally once over the history.
@@ -178,7 +185,7 @@ Issue #139 (evidence from E7/E8):
 - `just gate-lane main` stops at a broken middle commit and names it; history unchanged.
 - A naive `date.today()` in `server/src` fails `gate-fast` and CI with the rule's message.
 - Two worktrees can run `just gate …` at the same time without touching each other's DB.
-- CI runs ast-grep, gitleaks and whatever T4 adopted; nothing else in CI changes.
+- CI runs ast-grep and gitleaks; nothing else in CI changes.
 
 ## Review (RDD)
 - Boundary: branch point `9519e05`. Per work-unit commit; the parent gates first, then the
@@ -190,6 +197,14 @@ Issue #139 (evidence from E7/E8):
   acknowledged, `authority: burned`. The two WARNINGs (`R3-stale-ci-parity`,
   `R3-unescaped-worktree-path`) and the D-T1.3 drift are #193; the unescaped path and the doc drift
   are fixed in this session, and `R3-stale-ci-parity` is accepted until T2 lands D-T1.6 in this PR.
+- T2 is done. Round 1, lineage `review-43815f8285e2faaf`, base `af07168`: candidate 10 files /
+  249 lines, `high` risk (`shell_source` in `ci.yml`), four lenses (risk, resilience, readability,
+  reliability), correction budget 125. No correction opened; approved and acknowledged,
+  `authority: burned`. `R3-lane-node-modules`-class findings did not recur: risk reported none.
+  Six non-blocking WARNINGs, all informational: `R2-astgrep-wrong-working-directory`,
+  `R2-ci-gate-parity-ambiguous`, `R2-naive-time-comment-contradiction`,
+  `R3-blanket-timezone-ignore`, and `R3-no-naive-today-tz-none` / `R4-naive-now-tz-none` (the same
+  `datetime.now(tz=None)` gap from two lenses). They await a `review-follow-up` issue.
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
@@ -224,15 +239,7 @@ Issue #139 (evidence from E7/E8):
     suite once on a clean DB at epic close).
   - Known gap, closed in T2 by D-T1.6: the single-Alembic-head check is in `gate-fast` and not
     yet in CI, the one check the two did not share. T1 does not touch CI (the scope adds
-    ast-grep, gitleaks and whatever T4 adopts, and nothing else); T2 adds `alembic heads` to the
-    server job in the same work unit as the ast-grep scan, in the same PR. The RDD WARNING
-    `R3-stale-ci-parity` on the AGENTS.md sentence that already claims parity is therefore
-    accepted for this round and AGENTS.md is left as is: T2 makes the sentence true in the same
-    PR that ships the rest of the feature, and softening it now would only be true twice.
-
-  - Known gap, closed in T2 by D-T1.6: the single-Alembic-head check is in `gate-fast` and not
-    yet in CI, the one check the two did not share. T1 does not touch CI (the scope adds
-    ast-grep, gitleaks and whatever T4 adopts, and nothing else); T2 adds `alembic heads` to the
+    ast-grep and gitleaks, and nothing else); T2 adds `alembic heads` to the
     server job in the same work unit as the ast-grep scan, in the same PR. The RDD WARNING
     `R3-stale-ci-parity` on the AGENTS.md sentence that already claims parity is therefore
     accepted for this round and AGENTS.md is left as is: T2 makes the sentence true in the same
