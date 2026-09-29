@@ -1,6 +1,6 @@
 import type { Table } from 'dexie'
 import { db } from '../db/db'
-import type { ExtensionVisitRow, LogbookEntryRow, OutboxItem } from '../db/db'
+import type { ExtensionVisitRow, LogbookEntryRow, OutboxItem, SyncEntity } from '../db/db'
 import { getCursor, getDeviceId, setCursor } from '../db/meta'
 import { pullChanges, pushChanges, type SyncStopReason, SyncStoppedError } from './transport'
 import type { PullResponse, PushChange, PushResult } from './types'
@@ -97,6 +97,19 @@ async function applyResults(batch: OutboxItem[], results: PushResult[]): Promise
 }
 
 /**
+ * Whether the queued change is still the one the server answered about. An edit
+ * made while the request was in flight REPLACES the outbox item, and settling the
+ * newer one would drop an unsynced write (docs/06 §7, RNF-01). The key is the
+ * identity, not `client_updated_at`: two edits in one millisecond share one.
+ */
+async function isStillQueued(item: OutboxItem): Promise<boolean> {
+  // No key means the change cannot be proven identical, so it stays queued and
+  // is re-pushed: the server answers that with `duplicate` (ADR-0013).
+  const current = await db.outbox.where('id').equals(item.id).first()
+  return current !== undefined && current.key === item.key
+}
+
+/**
  * A rejected change keeps its place and its error (docs/06 §7: it stays on the
  * phone until the user fixes or discards it, never silently dropped). Only a new
  * edit, which replaces the item, or an explicit discard clears it.
@@ -107,6 +120,7 @@ async function markRejected<TRow extends LogbookEntryRow | ExtensionVisitRow>(
   error: string | null,
 ): Promise<void> {
   await db.transaction('rw', [table, db.outbox], async () => {
+    if (!(await isStillQueued(item))) return
     await db.outbox.where('id').equals(item.id).modify({ status: 'rejected', error })
     const row = await table.get(item.id)
     if (row === undefined) return
@@ -120,6 +134,8 @@ async function settle<TRow extends LogbookEntryRow | ExtensionVisitRow>(
   result: PushResult,
 ): Promise<void> {
   await db.transaction('rw', [table, db.outbox], async () => {
+    // A newer edit under this id is not what the server answered about.
+    if (!(await isStillQueued(item))) return
     // Every non-rejected outcome hands the change over to the server, so the
     // queued item goes away — including a conflict, whose winner is not ours.
     await db.outbox.where('id').equals(item.id).delete()
@@ -163,6 +179,15 @@ async function applyPage(page: PullResponse): Promise<number> {
     async () => {
       let applied = 0
       for (const change of page.changes) {
+        // The entity is DATA, not a type: the discriminated union is a promise
+        // about the wire, and an entity this client does not sync would fall
+        // into the `else` below and be written into the wrong table. Fail the
+        // page closed instead. The throw aborts this transaction, so the cursor
+        // does not advance and no row from this page is half-applied: a skipped
+        // change is a silent loss, and a cursor past it never brings it back.
+        if (!isKnownEntity(change.entity)) {
+          throw new SyncStoppedError('unavailable', null)
+        }
         // D7 (docs/06 §7 "Pull de un registro con cambio local pendiente"): a row
         // with a change in the outbox is never overwritten by a pull; the push
         // decides it. ANY queued change blocks, including a rejected one, since
@@ -196,4 +221,9 @@ async function applyPage(page: PullResponse): Promise<number> {
       return applied
     },
   )
+}
+
+/** The two entities this client syncs (docs/04 §Bitácora). */
+function isKnownEntity(entity: unknown): entity is SyncEntity {
+  return entity === 'logbook_entry' || entity === 'extension_visit'
 }

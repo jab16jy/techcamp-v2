@@ -171,7 +171,10 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
 - [ ] T8 Logbook screen (`features/logbook`): list from Dexie, new-entry `FormSheet` per `kind`
   (harvest with `sold_kg` / price, task with `labor_days`, link to a cached alert), "Guardado en el
   teléfono" state, conflict/rejected notices, `SyncIndicator` wired. First commit: regenerate
-  `schema.d.ts` (T3/T4 paths) and swap T7's hand-typed `lib/sync` transport to `apiClient`. `impeccable`, design frozen.
+  `schema.d.ts` (T3/T4 paths) and swap T7's hand-typed `lib/sync` transport to `apiClient`.
+  The shell calls `requestPersistentStorage()` once on start (ADR-0005) and starts the
+  synchronizer. Test notes from T7: fake-indexeddb needs `setImmediate` unfaked (explicit
+  `toFake` list); a union of two Dexie tables types `put()` as the intersection (dispatch per entity). `impeccable`, design frozen.
   ~550 → T8a list + sync state, T8b entry sheet, one session. Route: **AGY**.
 - [ ] T9 Visits screen (`features/visits`): new visit sheet from a farm (five Ley 1876 topics),
   offline, plus client photo compression and pending upload queue for entries and visits.
@@ -243,6 +246,56 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   integration 69 passed, static clean. **Order slip:** merged before its RDD; the lane RDD
   (`review-20cf11a1d3fa8cf3`, base `f242508`, covers `08dd5ef` + `bfd8209`, consent granted) runs
   now and any finding is fixed on integration.
+- T5 RDD `review-20cf11a1d3fa8cf3` → **approved**, acknowledged; #145 (export paging test WARNING
+  fixed by `10d0fff`, test-only, merged `84ac62d`; trailing-empty-page is a pre-existing
+  codebase convention in farms/alerts routers; inverted date range SUGGESTION stays).
+- T7b (`61f0d48` #144 fix, `e99e641` D13 guard, `92f439b` synchronizer run, `3f25562` triggers +
+  pendingCount; 1,212 lines): writer ran 10 mutations, all caught (found two false-green tests).
+  Parent gate: lint, typecheck clean; db+sync 5 files / 29 passed; build ok; 163.37 kB. OpenCode RDD
+  running (base `182420b`, consent granted in the pane by the parent under the standing grant).
+- T3 (owner asked why slow, 2026-09-28): `xhigh`, hardest unit, long debug of the D1 lock-ordering
+  test hanging, and no commit yet despite the brief; nudged to land functional commits, drop the
+  repro file and DBG prints, and make the ordering test deterministic with a timeout guard.
+- T7b RDD (OpenCode, consent granted by the parent under the standing grant): reviewer found
+  **CRITICAL R3-stale-push-result-settles-newer-write** (a push result settled by `id` alone
+  deleted an edit made while the request was in flight — RNF-01); fixed in the bounded correction
+  `d105968` (+62: settle only if the outbox auto-increment key is the one sent, inside the settling
+  transaction), validator approved, acknowledged. Known gap: no test proves the check is inside the
+  transaction (3/4 correction mutations caught). Parent gate on `d105968`: lint, typecheck, 31
+  passed. Three WARNINGs → [#147](https://github.com/jab16jy/techcamp-v2/issues/147) (invalid JSON
+  escapes as unhandled rejection; single-flight drops the 2 s follow-up; unknown pull entity written
+  into `extensionVisits` — fail-open, same lesson as T2), being fixed now by `e8-t7`, reviewed with
+  T8's first slice. T7 lane then merges into integration.
+- T3 landed `fef63b0` (push apply: D1 lock + savepoint per change) and `030528e` (`POST /sync/push`,
+  batch limit); concurrency tests commit pending.
+- T6 started (owner approved running it in parallel): OpenCode `e8-t6` high, lane `e8-t6`
+  (`feat/e8-t6-presign`, DB 5445), new modules only to avoid clashing with T3's ports/repositories.
+
+- T3 gate (parent, DB 5444) on `fef63b0`, `030528e`, `cf4973e` (1,485 + 642 + 112 lines; over the
+  ~650 forecast, 17 push-table behaviour tests): 94 passed, ruff, format (265), mypy (177),
+  lint-imports clean. Docs diff sent back before RDD: (1) `created_offline` hard-coded `True` on
+  insert breaks docs/11 "Uso offline" (the T7 client already sends `!navigator.onLine` in `data`,
+  docs/04 "data lleva los campos de logbook_entry"): take it from `data` on insert, never change it
+  on update; (2) `op: delete` still checks `crop_cycle_id`/`alert_id`, so a change rejected
+  `not_found` for them can never be deleted (D12 "no valida los campos", RNF-01): keep plot/org/role
+  checks, skip reference checks; (3) duplicated delete branch in `_apply_visit`. Writer judgment
+  call accepted: an unknown `kind` is that change's `rejected invalid`, not a batch `422` (D5).
+
+- T3 gate file: the first send pointed at a scratchpad file whose write had failed; the writer
+  stopped instead of guessing (correct). Findings re-sent as `e8-t3/.git-brief-e8-t3-gate.md`.
+- T7 #147 fixes `58fb730` (unknown pull entity fails closed, page aborts, cursor holds),
+  `27ce906` (non-JSON 2xx → `unavailable`; triggers go through one catching `startRun`),
+  `6d73169` (one follow-up run for a write during an in-flight run). Parent gate: lint, typecheck
+  clean; db+sync 5 files / 35 passed; build ok; 163.37 kB. Accepted: a page the client cannot
+  parse blocks the cursor (T8 should show "sync blocked"); `console.error` in `startRun`. Quality
+  issue sent back: the `startSynchronizer` JSDoc was left orphaned above `startRun`. Review of the
+  three fixes rides in T8's first slice (base `d105968`).
+- T6 `baa2545` deps boto3, `9efe910` presign, `0b19fd3` MinIO bucket init + S3 settings (1,339
+  lines incl. `uv.lock`). Parent gate (DB 5445): attachments tests 15 passed, ruff, format (270),
+  mypy (181), lint-imports clean. Accepted: validate before any query, 404 non-member / 403 role,
+  sign before insert, production S3 keys without defaults (503), `minio/mc:latest` with a pin-later
+  note. Gap sent back: the presigned PUT does not sign the length, so D8's 200 KB is only checked
+  on the declared `bytes`: sign `ContentLength` (or report if botocore cannot).
 
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
@@ -288,4 +341,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-T1 (schema) on AGY.
+(2026-09-28, session handoff) Integration `feat/e8-logbook` holds T0, T1, T2, T5 (69 logbook tests).
+1. T7 (`e8-t7`): gate the #147 fix commits → merge `feat/e8-t7-sync` into integration.
+2. T3 (`e8-t3`): wait for the concurrency-tests commit → parent gate (DB 5444) → go for OpenCode's
+   own RDD (base `a463a02`; the slice also covers T2's `432c74b`, `a73c1ba`) → merge. Expect an
+   add/add conflict on `logbook/application/ports.py` and `logbook/adapters/repositories.py`
+   (T3 branched before T5): combine both, like the T5 merge (`1783f20`).
+3. T6 (`e8-t6`): gate → go for its RDD → merge.
+4. Then T4 pull (after T3), T8 logbook screen (after T3/T4/T7; first commit regenerates
+   `schema.d.ts` and swaps the T7 transport to `apiClient`, calls `requestPersistentStorage()` on
+   start), T9 visits screen + photos, T10 close with the only full-suite run.

@@ -59,12 +59,26 @@ async function syncRequest(path: string, init: RequestInit): Promise<Response> {
   return response
 }
 
+/**
+ * The body of a successful response, or a stop. A 2xx is not proof of JSON: a
+ * proxy or a captive portal can answer 200 with an HTML page, and letting the
+ * parse error escape would bypass the defined `unavailable` outcome and reach
+ * the trigger call sites, which have no caller to catch it (#147).
+ */
+async function readJson<T>(response: Response): Promise<T> {
+  try {
+    return (await response.json()) as T
+  } catch {
+    throw new SyncStoppedError('unavailable', response.status)
+  }
+}
+
 export async function pushChanges(request: PushRequest): Promise<PushResponse> {
   const response = await syncRequest('/push', { method: 'POST', body: JSON.stringify(request) })
-  return (await response.json()) as PushResponse
+  return readJson<PushResponse>(response)
 }
 
 export async function pullChanges(since: number, limit: number): Promise<PullResponse> {
   const response = await syncRequest(`/pull?since=${since}&limit=${limit}`, { method: 'GET' })
-  return (await response.json()) as PullResponse
+  return readJson<PullResponse>(response)
 }
