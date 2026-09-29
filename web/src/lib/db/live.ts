@@ -1,6 +1,8 @@
 import { liveQuery } from 'dexie'
-import { useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
 import { db } from './db'
+import type { PhotoRow, SyncEntity } from './db'
+import { listPhotos } from './photos'
 
 /**
  * The number of changes still waiting to be pushed, live. This is the
@@ -47,4 +49,46 @@ export function subscribePendingCount(listener: Listener): () => void {
 /** `pendingCount` for a component. 0 on the server render, which never happens here. */
 export function usePendingCount(): number {
   return useSyncExternalStore(subscribePendingCount, getPendingCount, () => 0)
+}
+
+const NO_PHOTOS: PhotoRow[] = []
+
+/**
+ * The photos of one entry or visit, live (ADR-0018, E8 T9b).
+ *
+ * `parentId` is null while the sheet is filling a record that does not exist
+ * yet: its photos are staged in the component and stored once the parent has an
+ * id, and there is nothing to observe from the store until then.
+ *
+ * Read through `useSyncExternalStore` rather than state-in-an-effect, because
+ * the store is exactly what that hook is for: the subscription is Dexie's
+ * `liveQuery`, so a photo that the upload queue marks `uploaded` flips its
+ * thumbnail's state while the sheet is open, and the snapshot the hook reads is
+ * the last value the query published — never a copy this component has to
+ * re-synchronise. A failing read keeps the last known list on screen instead of
+ * emptying it: the user still sees the photos they took.
+ */
+export function usePhotos(entity: SyncEntity, parentId: string | null): PhotoRow[] {
+  const query = useMemo(
+    () => (parentId === null ? null : liveQuery(() => listPhotos(entity, parentId))),
+    [entity, parentId],
+  )
+  const rowsRef = useRef<PhotoRow[]>(NO_PHOTOS)
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (query === null) return () => {}
+      const subscription = query.subscribe({
+        next: (rows) => {
+          rowsRef.current = rows
+          onStoreChange()
+        },
+      })
+      return () => subscription.unsubscribe()
+    },
+    [query],
+  )
+  const getSnapshot = useCallback(() => rowsRef.current, [])
+
+  return useSyncExternalStore(subscribe, getSnapshot, () => NO_PHOTOS)
 }

@@ -20,10 +20,25 @@ export async function addPhoto(
   // Compression happens before any write: a photo that will not fit under the
   // ceiling must leave nothing behind, not a rejected row to clean up.
   const encoded = await compress(input.file)
+  return attachCompressedPhoto(input.entity, input.parentId, encoded)
+}
+
+/**
+ * Stores a photo that is ALREADY compressed against its parent.
+ *
+ * The sheets compress when the photo is chosen and stage the result until the
+ * record is saved, so that the stored bytes are the same ones the user was
+ * shown — re-encoding on save would be a second JPEG pass for nothing.
+ */
+export async function attachCompressedPhoto(
+  entity: SyncEntity,
+  parentId: string,
+  encoded: EncodedPhoto,
+): Promise<PhotoRow> {
   return savePhoto({
     id: uuidv7(),
-    entity: input.entity,
-    parent_id: input.parentId,
+    entity,
+    parent_id: parentId,
     data: encoded.data,
     content_type: encoded.content_type,
     bytes: encoded.bytes,
