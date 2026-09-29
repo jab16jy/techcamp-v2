@@ -205,23 +205,46 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   - [x] T9b photos + upload queue: lane `e8-t9b`, merged `f5e76d1` (#165 fixes `84ec7e2`,
     `bfd3f99`); RDD `review-eab43be4d320dde0` approved (CRITICALs R3-001/R3-002 fixed in the
     correction `a8e5bd9`). PUT sends the same bytes that were presigned (T6).
-- [ ] T10 Close: scenario-D server integration (same batch twice → one row, `duplicate`; stale
+- [x] T10 Close: scenario-D server integration (same batch twice → one row, `duplicate`; stale
   edit → `conflict_overwritten`), Vitest offline→online harvest with no duplicate, visit offline
   sync; the FULL server and web suites (the only full run in E8); acceptance ticked with evidence;
-  feature doc closed. ~250. Route: **AGY** + parent.
+  feature doc closed. ~250. Route: **OpenCode** (owner, 2026-09-29) + parent.
+  Done: lane `e8-t10`, merged `024d76d` (#142, #143 leftovers, #167 fixes); RDD
+  `review-e54d823a658510a7` approved. Full runs: server `1120 passed`, web `50 files / 334 passed`.
 
 Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 
 ## Acceptance criteria
-- [ ] Pushing the same change twice yields one row and `duplicate` the second time.
+- [x] Pushing the same change twice yields one row and `duplicate` the second time.
+  Evidence: `test_scenario_d.py::test_scenario_d_harvest_created_offline_syncs_once_and_the_retry_is_a_duplicate`,
+  `test_sync_api.py::test_a_pushed_entry_applies_and_the_same_batch_again_is_a_duplicate`.
 - [ ] Two devices editing one entry: the newer `client_updated_at` wins; the older push gets
   `conflict_overwritten` and the UI shows it.
-- [ ] A push committed after a later-sequenced one is still returned by pull (D1).
-- [ ] A harvest recorded offline in the web client is stored locally, syncs when online, and
-  appears once on the server.
-- [ ] An extension visit recorded offline syncs the same way; only technicians can push visits.
-- [ ] Every sync, visit and attachment path is org-isolated (`rejected`/404 across orgs).
-- [ ] All server and web checks green; commits by functionality; RDD per slice of whole commits.
+  Evidence (server + client state): `test_scenario_d.py::test_scenario_d_two_devices_the_newer_edit_wins_and_the_older_push_is_overwritten`
+  (two `device_id`s, #167) and `synchronizer.test.ts` "flags the row as conflict_overwritten…".
+  **Gap:** no test renders the "Sobrescrito en el servidor" notice (`LogbookItem.tsx:91`). The T10
+  writer's table cited `LogbookScreen.test.tsx`, but the parent found no assertion there, so the
+  criterion stays open until a UI test covers the notice.
+- [x] A push committed after a later-sequenced one is still returned by pull (D1).
+  Evidence: `test_sync_pull.py::test_d1_pull_returns_push_committed_after_concurrent_lock`; `test_push.py` D1 lock test (#160).
+- [x] A harvest recorded offline in the web client is stored locally, syncs when online, and
+  appears once on the server. Evidence: `scenarioD.test.ts` "scenario D: offline harvest" (the
+  retry after a lost answer goes through `syncOnce`, #167) and the server half in
+  `test_scenario_d.py`.
+- [x] An extension visit recorded offline syncs the same way; only technicians can push visits.
+  Evidence: `scenarioD.test.ts` "scenario D: offline extension visit";
+  `test_scenario_d.py::test_scenario_d_visit_recorded_offline_by_the_farm_technician_syncs_once`;
+  `test_sync_api.py::test_a_producer_pushing_a_visit_is_forbidden_over_http`.
+- [x] Every sync, visit and attachment path is org-isolated (`rejected`/404 across orgs).
+  Evidence: `test_sync_api.py` (`…another_org_is_not_found_over_http` ×2),
+  `test_sync_pull.py::test_entries_and_visits_merged_in_server_version_order_and_org_isolated`,
+  `test_visits_api.py::test_cross_org_isolation_per_endpoint`, `…non_member_returns_404`,
+  `test_attachments_presign.py::test_presign_for_a_parent_in_another_org_returns_404_and_writes_nothing`.
+- [x] All server and web checks green; commits by functionality; RDD per slice of whole commits.
+  Evidence: the full runs at `d6ba943` (server `1120 passed, 2 warnings in 522.14s`; web `Test Files
+  50 passed (50)`, `Tests 334 passed (334)`); static checks clean; 171.21 kB / 200 kB. After the
+  merge `024d76d`, integration tests/logbook `159 passed`, ruff, format (279), mypy (184),
+  lint-imports clean, web lib+logbook+visits 146 passed, build ok. Every lane was reviewed by RDD.
 
 ## Review (RDD)
 - Boundary: branch point `3120dac`; docs commits through `9d31e90` are passive (structural readback).
@@ -559,6 +582,16 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   two-device scenario uses one `device_id`) and R3-lost-response-bypasses-outbox (the lost-answer
   retry calls `pushChanges` directly instead of `syncOnce`). Being fixed now by `e8-t10`
   (test-only, `Refs #167`, no new round).
+- #167 fixes `a9ef489` (device B pushes as `phone-2`; RED shown by the writer) and `801ece1` (a
+  lost push answer is replayed by the next `syncOnce` from the outbox; RED `expected { status:
+  'synced' … } to deeply equal { status: 'stopped' … }`; mutation "apply twice" caught ×2). Parent
+  gate (DB 5447): test_scenario_d 3 passed; ruff, format, mypy, lint-imports clean; web lint,
+  typecheck clean, scenarioD 2 passed. Test-only → no new round. Accepted quality note: the
+  module-level `_PUSHED_DEVICES` list (cleared per test) records the device ids.
+  **T10 merged** `024d76d`. Integration (DB 5441): tests/logbook 159 passed; ruff, format (279),
+  mypy (184), lint-imports clean; web lint, typecheck clean, lib+logbook+visits 146 passed; build
+  ok; 171.21 kB. #142, #143, #167 closed. Left open: #145 and #160 (reasons above), and #166. The
+  `e8-t10` session is closed; its worktree and DB `techcamp-e8-db-t10` are removed.
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
@@ -606,11 +639,8 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-(2026-09-29, after the T9b merge) Integration `feat/e8-logbook` holds T0–T9 (tests/logbook 129
-passed at T8; web targeted 156 passed, 171.21 kB). Nothing of E8 is on `main` yet: push and stacked
-PRs need the owner's explicit go.
-1. T10 close (AGY + parent; own lane + DB): scenario-D server integration, Vitest offline→online
-   harvest with no duplicate, visit offline sync; the FULL server and web suites (the only full run
-   in E8); acceptance ticked with evidence; decide #142, #143, #145, #160 leftovers; file the
-   orphan-object cleanup follow-up (ADR-0018); close the feature doc.
-2. Delivery on the owner's go.
+(2026-09-29, after the T10 merge) Every task, T0–T10, is merged into `feat/e8-logbook` (`024d76d`);
+6 of 7 acceptance criteria are ticked with evidence. Open: the UI half of criterion 2 (no test
+renders the "Sobrescrito en el servidor" notice), a small test-only follow-up that is the owner's
+call. Nothing of E8 is on `main`: push and stacked-to-main chained PRs (~400 authored lines each,
+`chained-pr`, `work-unit-commits`) need the owner's explicit go.
