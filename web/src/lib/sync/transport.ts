@@ -1,4 +1,4 @@
-import { API_BASE_URL, expireSession, REQUEST_TIMEOUT_MS } from '../api/client'
+import { ApiError, apiClient } from '../api/client'
 import { getToken } from '../api/session'
 import type { PullResponse, PushRequest, PushResponse } from './types'
 
@@ -7,7 +7,7 @@ import type { PullResponse, PushRequest, PushResponse } from './types'
  * synced": the queued changes are still on the phone and the next run after the
  * user is back sends them (D11).
  */
-export type SyncStopReason = 'unauthorized' | 'unavailable'
+export type SyncStopReason = 'unauthorized' | 'unavailable' | 'unknown_entity'
 
 export class SyncStoppedError extends Error {
   readonly reason: SyncStopReason
@@ -21,64 +21,49 @@ export class SyncStoppedError extends Error {
   }
 }
 
-const SYNC_URL = `${API_BASE_URL}/api/v1/sync`
-
-/**
- * One `fetch` for both sync endpoints, carrying the same bearer token and the
- * same timeout as every other authenticated call, and signing the session out on
- * a 401 exactly like `apiClient` does. Kept in its own small file so T8 can
- * delete it in favour of the typed client once the schema has the paths.
- */
-async function syncRequest(path: string, init: RequestInit): Promise<Response> {
+export async function pushChanges(request: PushRequest): Promise<PushResponse> {
   const token = getToken()
-  // Signed out: there is no session to authenticate, and asking anyway would
-  // earn a 401 that signs out a session that is already gone.
   if (token === null) throw new SyncStoppedError('unauthorized', 401)
 
-  let response: Response
   try {
-    response = await fetch(`${SYNC_URL}${path}`, {
-      ...init,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    const { data, response } = await apiClient.POST('/api/v1/sync/push', {
+      body: request,
     })
-  } catch {
-    // No signal, DNS failure, timeout: none of them is the server's answer, and
-    // the queued changes must stay exactly as they are (D11).
+    if (!data) throw new SyncStoppedError('unavailable', response?.status ?? null)
+    return data
+  } catch (error) {
+    if (error instanceof SyncStoppedError) throw error
+    if (error instanceof ApiError) {
+      if (error.status === 401) {
+        throw new SyncStoppedError('unauthorized', 401)
+      }
+      throw new SyncStoppedError('unavailable', error.status)
+    }
+    // Network errors, timeouts, SyntaxError (non-JSON 2xx):
     throw new SyncStoppedError('unavailable', null)
   }
-
-  if (response.status === 401) {
-    // D11: the seminar profile has no refresh endpoint, so an expired token is
-    // gone for good until the user signs in again. Signing out never clears the
-    // local logbook, and the outbox is left untouched for the next run.
-    expireSession()
-    throw new SyncStoppedError('unauthorized', 401)
-  }
-  if (!response.ok) throw new SyncStoppedError('unavailable', response.status)
-  return response
-}
-
-/**
- * The body of a successful response, or a stop. A 2xx is not proof of JSON: a
- * proxy or a captive portal can answer 200 with an HTML page, and letting the
- * parse error escape would bypass the defined `unavailable` outcome and reach
- * the trigger call sites, which have no caller to catch it (#147).
- */
-async function readJson<T>(response: Response): Promise<T> {
-  try {
-    return (await response.json()) as T
-  } catch {
-    throw new SyncStoppedError('unavailable', response.status)
-  }
-}
-
-export async function pushChanges(request: PushRequest): Promise<PushResponse> {
-  const response = await syncRequest('/push', { method: 'POST', body: JSON.stringify(request) })
-  return readJson<PushResponse>(response)
 }
 
 export async function pullChanges(since: number, limit: number): Promise<PullResponse> {
-  const response = await syncRequest(`/pull?since=${since}&limit=${limit}`, { method: 'GET' })
-  return readJson<PullResponse>(response)
+  const token = getToken()
+  if (token === null) throw new SyncStoppedError('unauthorized', 401)
+
+  try {
+    const { data, response } = await apiClient.GET('/api/v1/sync/pull', {
+      params: {
+        query: { since, limit },
+      },
+    })
+    if (!data) throw new SyncStoppedError('unavailable', response?.status ?? null)
+    return data as PullResponse
+  } catch (error) {
+    if (error instanceof SyncStoppedError) throw error
+    if (error instanceof ApiError) {
+      if (error.status === 401) {
+        throw new SyncStoppedError('unauthorized', 401)
+      }
+      throw new SyncStoppedError('unavailable', error.status)
+    }
+    throw new SyncStoppedError('unavailable', null)
+  }
 }

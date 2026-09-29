@@ -45,12 +45,13 @@ function stubSyncApi(): { runs: () => number } {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = input instanceof Request ? input.url : String(input)
       if (!url.endsWith('/push')) {
         pulls += 1
         return json({ changes: [], next_since: 0, has_more: false })
       }
-      const request = JSON.parse(String(init?.body)) as { changes: { id: string }[] }
+      const raw = input instanceof Request ? await input.clone().text() : String(init?.body)
+      const request = JSON.parse(raw) as { changes: { id: string }[] }
       return json({ results: request.changes.map((change) => ({ id: change.id, status: 'applied', server_version: 1 })) })
     }),
   )
@@ -220,10 +221,12 @@ describe('startSynchronizer', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input).endsWith('/push')) {
+        const url = input instanceof Request ? input.url : String(input)
+        if (url.endsWith('/push')) {
           pushes += 1
           if (pushes === 1) await gate
-          const request = JSON.parse(String(init?.body)) as { changes: { id: string }[] }
+          const raw = input instanceof Request ? await input.clone().text() : String(init?.body)
+          const request = JSON.parse(raw) as { changes: { id: string }[] }
           return json({ results: request.changes.map((c) => ({ id: c.id, status: 'applied', server_version: 1 })) })
         }
         return json({ changes: [], next_since: 0, has_more: false })
@@ -280,12 +283,13 @@ describe('startSynchronizer', () => {
     // Replace the api for the next run with one that answers a broken page.
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) =>
-        new Response(
-          JSON.stringify(String(input).endsWith('/push') ? { results: [] } : { changes: 42, next_since: 0, has_more: false }),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input)
+        return new Response(
+          JSON.stringify(url.endsWith('/push') ? { results: [] } : { changes: 42, next_since: 0, has_more: false }),
           { status: 200 },
-        ),
-      ),
+        )
+      }),
     )
 
     window.dispatchEvent(new Event('online'))
@@ -315,6 +319,50 @@ describe('startSynchronizer', () => {
 
     // No run came from the event, the interval or the write after stopping.
     expect(api.runs()).toBe(1)
+  })
+
+  it('stopping while a run is in flight prevents any follow-up from starting, and a restart starts clean', async () => {
+    let gateResolve: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      gateResolve = resolve
+    })
+
+    let pushes = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input)
+        if (url.endsWith('/push')) {
+          pushes += 1
+          if (pushes === 1) await gate
+          return json({ results: [] })
+        }
+        return json({ changes: [], next_since: 0, has_more: false })
+      }),
+    )
+
+    await saveLogbookEntry(draft())
+    const stop = start()
+
+    // Trigger another run via online event (which requests a follow-up since run 1 is gated)
+    window.dispatchEvent(new Event('online'))
+
+    // Call stop while run 1 is still in flight
+    stop()
+
+    // Release gate for run 1 to finish
+    gateResolve()
+    await vi.advanceTimersByTimeAsync(0)
+    await flush()
+
+    // Follow-up must NOT have started after stop
+    expect(pushes).toBe(1)
+
+    // A restart starts clean
+    const cleanStop = start()
+    await vi.advanceTimersByTimeAsync(0)
+    await flush()
+    cleanStop()
   })
 })
 

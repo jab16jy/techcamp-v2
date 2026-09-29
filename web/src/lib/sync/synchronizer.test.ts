@@ -5,9 +5,10 @@ import { getCursor } from '../db/meta'
 import { saveLogbookEntry } from '../db/local'
 import { resetLocalDb } from '../db/testDb'
 import { uuidv7 } from '../db/ids'
-import { clearSession, setSession } from '../api/session'
+import { clearSession, getToken, setSession } from '../api/session'
 import type { LogbookEntryDraft } from '../db/local'
 import { syncOnce } from './synchronizer'
+import { getSyncState } from './syncState'
 import type { PullResponse, PushRequest } from './types'
 
 const ORG_ID = '018f0c2a-0000-7000-8000-0000000000aa'
@@ -50,9 +51,10 @@ function stubSyncApi(options: {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input)
+      const url = input instanceof Request ? input.url : String(input)
       if (url.endsWith('/push')) {
-        const request = JSON.parse(String(init?.body)) as PushRequest
+        const raw = input instanceof Request ? await input.clone().text() : String(init?.body)
+        const request = JSON.parse(raw) as PushRequest
         pushRequests.push(request)
         return (options.push ?? (() => json({ results: [] })))(request, pushIndex++)
       }
@@ -341,13 +343,11 @@ describe('syncOnce: pull', () => {
 
     const outcome = await syncOnce()
 
-    // Fail closed: the run stops and the cursor stays where it was, because
-    // skipping the change would lose it silently and advancing would never
-    // bring it back. The change before it is rolled back with the transaction.
-    expect(outcome).toEqual({ status: 'stopped', reason: 'unavailable' })
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unknown_entity' })
     expect(await getCursor()).toBe(0)
     expect(await db.logbookEntries.count()).toBe(0)
     expect(await db.extensionVisits.count()).toBe(0)
+    expect(getSyncState().syncStopped).toBe(true)
   })
 
   it('keeps a deleted row tombstoned when the server sends the delete', async () => {
@@ -393,6 +393,22 @@ describe('syncOnce: stopping without losing anything (D11)', () => {
     expect(await getCursor()).toBe(0)
     // No pull after a refused push: the run stops where it was.
     expect(pullQueries).toHaveLength(0)
+    expect(getToken()).toBeNull()
+    expect(navigations).toEqual(['/ingreso'])
+  })
+
+  it('expires the session and leaves outbox untouched when a pull returns 401', async () => {
+    stubSyncApi({
+      push: () => json({ results: [] }),
+      pull: () => new Response(null, { status: 401 }),
+    })
+
+    const outcome = await syncOnce()
+
+    expect(outcome).toEqual({ status: 'stopped', reason: 'unauthorized' })
+    expect(await db.outbox.count()).toBe(0)
+    expect(await getCursor()).toBe(0)
+    expect(getToken()).toBeNull()
     expect(navigations).toEqual(['/ingreso'])
   })
 

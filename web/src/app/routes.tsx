@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react'
 import type { RouteObject } from 'react-router'
-import { AppShell } from '../design-system/patterns/AppShell'
+import { AuthenticatedShell } from './AuthenticatedShell'
 import { SignInScreen } from '../features/auth/containers/SignInScreen'
 import { SignOutButton } from '../features/auth/components/SignOutButton'
 import { requireAuthLoader } from '../features/auth/guard'
@@ -9,7 +9,23 @@ import { NotificationsCard } from '../features/push/components/NotificationsCard
 import { useActiveOrgRole } from '../lib/api/me'
 import { PlaceholderPage } from './PlaceholderPage'
 
-// React.lazy keeps Dexie and visits out of the initial bundle (RNF-02 ≤ 200 kB).
+// React.lazy keeps Dexie and logbook/visits out of the initial bundle (RNF-02 ≤ 200 kB).
+// eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
+const LogbookScreen = lazy(() =>
+  import('../features/logbook/containers/LogbookScreen').then((module) => ({
+    default: module.LogbookScreen,
+  })),
+)
+
+// eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
+function BitacoraTab() {
+  return (
+    <Suspense fallback={null}>
+      <LogbookScreen />
+    </Suspense>
+  )
+}
+
 // eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
 const NewVisitSheet = lazy(() =>
   import('../features/visits/containers/NewVisitSheet').then((module) => ({
@@ -41,7 +57,7 @@ function PlotsTab() {
 const tabRoutes: RouteObject[] = [
   { index: true, element: <PlaceholderPage title="Inicio" /> },
   { path: 'alertas', element: <PlaceholderPage title="Alertas" /> },
-  { path: 'bitacora', element: <PlaceholderPage title="Bitácora" /> },
+  { path: 'bitacora', element: <BitacoraTab /> },
   { path: 'parcelas', element: <PlotsTab /> },
   {
     path: 'mas',
@@ -68,7 +84,7 @@ export function buildRoutes(devRoute: RouteObject | null): RouteObject[] {
   return [
     {
       path: '/',
-      Component: AppShell,
+      Component: AuthenticatedShell,
       loader: requireAuthLoader,
       children: devRoute ? [...tabRoutes, devRoute] : tabRoutes,
     },

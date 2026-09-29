@@ -6,10 +6,10 @@ export interface SyncIndicatorProps extends SyncStatusInput {
 }
 
 /** Connection honesty, printed as one text line: never a chrome badge. */
-export function SyncIndicator({ online, pendingCount, lastDataMinutesAgo, className }: SyncIndicatorProps) {
+export function SyncIndicator({ online, pendingCount, lastDataMinutesAgo, syncStopped, className }: SyncIndicatorProps) {
   return (
-    <p className={cn('text-sm', online ? 'text-text-muted' : 'text-offline', className)}>
-      {formatSyncStatus({ online, pendingCount, lastDataMinutesAgo })}
+    <p className={cn('text-sm', (!online || syncStopped) ? 'text-offline' : 'text-text-muted', className)}>
+      {formatSyncStatus({ online, pendingCount, lastDataMinutesAgo, syncStopped })}
     </p>
   )
 }
