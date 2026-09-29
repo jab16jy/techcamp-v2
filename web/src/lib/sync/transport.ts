@@ -80,8 +80,8 @@ export interface PresignPhotoRequest {
  * What `POST /attachments:presign` can answer, as the upload queue reads it.
  *
  * `parent_not_synced` is D8's `404` (the entry or visit is not visible yet),
- * `rejected` carries the `422` reason the user is shown, and `not_sent` is
- * everything that left no answer at all — the photo simply stays pending and
+ * `rejected` carries the refusal reason the user is shown, and `not_sent` is
+ * every answer that asks for a later try — the photo simply stays pending and
  * the next run presigns again. Only an expired session throws, because that
  * stops the whole run (D11) with nothing lost.
  */
@@ -101,32 +101,37 @@ export async function presignPhoto(
     const { data, response } = await apiClient.POST('/api/v1/attachments:presign', {
       body: request,
     })
-    if (!data) return classifyMissingPresign(response?.status ?? null)
-    return { status: 'signed', uploadUrl: data.upload_url, objectKey: data.object_key }
+    if (data) return { status: 'signed', uploadUrl: data.upload_url, objectKey: data.object_key }
+    return classifyPresign(response?.status ?? null, null)
   } catch (error) {
     if (error instanceof SyncStoppedError) throw error
     if (error instanceof ApiError) {
       if (error.status === 401) throw new SyncStoppedError('unauthorized', 401)
-      if (error.status === 404) return { status: 'parent_not_synced' }
-      // A 4xx is the server refusing this photo for good (D8: bytes too big, a
-      // content type it does not take), so the photo is marked failed with the
-      // reason instead of being retried forever.
-      if (error.status >= 400 && error.status < 500) {
-        return { status: 'rejected', reason: error.title }
-      }
-      return { status: 'not_sent' }
+      return classifyPresign(error.status, error.title)
     }
-    // Network errors and non-JSON answers.
+    // Network errors and non-JSON answers: no decision was reached.
     return { status: 'not_sent' }
   }
 }
 
-function classifyMissingPresign(status: number | null): PresignPhotoOutcome {
+/**
+ * The one place that reads a presign status, so every answer the client can get
+ * is classified once and the queue cannot meet the same status two ways.
+ *
+ * `408 Request Timeout` and `429 Too Many Requests` are the server asking for
+ * a later try, not refusing this photo: a throttled or slow phone must leave the
+ * photo pending for the next run, not fail it with a reason the user can do
+ * nothing about. Every other 4xx is a refusal that will not change on its own
+ * (docs/04 §Bitácora: 422 for the bytes or the content type, 403 for the role),
+ * so it becomes `failed` with the reason to show.
+ */
+function classifyPresign(status: number | null, reason: string | null): PresignPhotoOutcome {
+  // D8: the parent is not visible yet.
   if (status === 404) return { status: 'parent_not_synced' }
-  if (status !== null && status >= 400 && status < 500) {
-    return { status: 'rejected', reason: `presign failed with status ${status}` }
+  if (status === null || status >= 500 || status === 408 || status === 429) {
+    return { status: 'not_sent' }
   }
-  return { status: 'not_sent' }
+  return { status: 'rejected', reason: reason ?? `presign failed with status ${status}` }
 }
 
 /**

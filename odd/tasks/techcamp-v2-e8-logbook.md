@@ -484,6 +484,47 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   typecheck, logbook+visits+plots+lib+app 24 files / 177 passed, build, 171.19 kB. #163, #164
   closed; `e8-t8` session and worktree removed.
 
+- T9b started (owner go, 2026-09-29, "demostrar la evidencia"): lane `e8-t9b`
+  (`feat/e8-t9b-photos` from `fa7edf6`, web, CodeGraph index), OpenCode `e8-t9b` (Space Bunny,
+  variant as left in the pane: xhigh), brief `.git-brief-e8-T9b.md`: Dexie v2 `photos` table,
+  pure compression loop (≤ 200 KB, EXIF dropped by re-encode), upload queue after push/pull
+  (presign `bytes === blob.size`, PUT the same Blob; 404 → pending, 422 → failed, D11 on 401),
+  UI in both sheets; evidence section with mutation proof and stated jsdom limits.
+
+- 2026-09-29 Housekeeping: #144 and #147 closed (fixed and merged with T7, #147 fixes reviewed in
+  `review-539f27f2073c24b7`). Open with leftover non-blocking items: #142, #143, #145, #160 (decide
+  in T10). Session handoff for T9b + T10 written to `.git-brief-e8-handoff.md` and Engram
+  `e8/handoff`.
+
+- T9b (OpenCode `e8-t9b`): `18aec54` photos table + v2 upgrade (311), `5941721` refactor v2
+  declares only its changes (13), `0d6f846` compression ladder (337), `476d30b` upload queue (552),
+  `323a480` photo block in both sheets (684); 1,857 lines. Writer RED/GREEN per behavior; mutation
+  proofs caught (truncated and re-encoded body after presign, parent-not-synced guard, D7 guard);
+  impeccable detector `[]` on the 4 UI files; stated limits: no canvas in jsdom (`browser.ts`
+  untested, real EXIF removal unproven), no real MinIO PUT. Parent gate re-run in the lane: lint,
+  typecheck clean; vitest lib + logbook + visits + app + PhotoField 24 files / 150 passed; build
+  ok; size 171.21 kB. Docs diff OK (docs/04 Fotos, D7, D8, D11, D13, docs/06 §7 order, T6 same-bytes
+  PUT, ceiling `200 * 1024` = server `MAX_PHOTO_BYTES`). Deviations accepted: bytes stored as
+  `Uint8Array` (fake-indexeddb cannot clone a jsdom Blob), `test/setup.ts` object-URL stubs,
+  `PhotoField` in `design-system/patterns` (docs/07 "Entre features"; E1 primitives only). RDD
+  plan (parent, owner delegated): ONE round over `fa7edf6..323a480` run by OpenCode — gentle-ai
+  reviews base..HEAD only, so slicing would strand a bounded correction off the lane (T3 and T7b
+  precedent); go given 2026-09-29.
+- T9b RDD (OpenCode-run, consent granted in the pane): lineage `review-eab43be4d320dde0`, medium,
+  24 files / 1,860 lines, lens `review-reliability` → **approved** after the bounded correction,
+  acknowledged (`authority: burned`, target `sha256:7fedc670…`). Two CRITICALs, both deterministic
+  and introduced: R3-001 (a save while a photo was still compressing dropped the photo, RNF-01) and
+  R3-002 (a mid-loop attach failure re-attached already-stored photos on retry), fixed in
+  `a8e5bd9` (+76/−20; `processing` blocks submit, each photo leaves the staged list as it lands;
+  both fixes mutated back out and caught), validator approved. Parent gate on `a8e5bd9`: lint,
+  typecheck clean; 24 files / 152 passed; build ok; 171.21 kB. Two WARNINGs →
+  [#165](https://github.com/jab16jy/techcamp-v2/issues/165): R3-003 (every non-401/404 4xx from
+  presign fails the photo for good, so 408/429 should retry) and R3-004 (`usePhotos` can keep the
+  previous parent's rows when `parentId` becomes null). Both are in this task's code, so under the
+  OpenCode rule `e8-t9b` fixes both now, one commit each `Refs #165`.
+  Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
+  `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
