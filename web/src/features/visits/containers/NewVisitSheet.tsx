@@ -4,7 +4,7 @@ import { toast } from '../../../design-system/ui/toast'
 import { useMe } from '../../../lib/api/me'
 import { uuidv7 } from '../../../lib/db/ids'
 import { saveExtensionVisit, type ExtensionVisitDraft } from '../../../lib/db/local'
-import { todayInBogota } from '../components/topics'
+import { todayInBogota } from '../../../lib/date'
 import { VisitForm, type PlotOption } from '../components/VisitForm'
 
 export interface FarmContext {

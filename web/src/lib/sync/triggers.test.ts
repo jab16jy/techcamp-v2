@@ -320,6 +320,50 @@ describe('startSynchronizer', () => {
     // No run came from the event, the interval or the write after stopping.
     expect(api.runs()).toBe(1)
   })
+
+  it('stopping while a run is in flight prevents any follow-up from starting, and a restart starts clean', async () => {
+    let gateResolve: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      gateResolve = resolve
+    })
+
+    let pushes = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input)
+        if (url.endsWith('/push')) {
+          pushes += 1
+          if (pushes === 1) await gate
+          return json({ results: [] })
+        }
+        return json({ changes: [], next_since: 0, has_more: false })
+      }),
+    )
+
+    await saveLogbookEntry(draft())
+    const stop = start()
+
+    // Trigger another run via online event (which requests a follow-up since run 1 is gated)
+    window.dispatchEvent(new Event('online'))
+
+    // Call stop while run 1 is still in flight
+    stop()
+
+    // Release gate for run 1 to finish
+    gateResolve()
+    await vi.advanceTimersByTimeAsync(0)
+    await flush()
+
+    // Follow-up must NOT have started after stop
+    expect(pushes).toBe(1)
+
+    // A restart starts clean
+    const cleanStop = start()
+    await vi.advanceTimersByTimeAsync(0)
+    await flush()
+    cleanStop()
+  })
 })
 
 describe('pendingCount', () => {

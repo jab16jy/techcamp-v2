@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apiClient } from '../api/client'
-import { clearSession, setSession } from '../api/session'
+import { clearSession, getToken, setSession } from '../api/session'
 import { pullChanges, pushChanges, SyncStoppedError } from './transport'
 
 describe('transport through apiClient', () => {
@@ -73,5 +73,27 @@ describe('transport through apiClient', () => {
     )
     const valid = await pullChanges(0, 10)
     expect(valid).toEqual({ changes: [], next_since: 0, has_more: false })
+  })
+
+  it('proves D11: sync 401 through apiClient expires the session on push and pull', async () => {
+    // 1. Push 401 expires session
+    setSession('token-push-401', 'org-1')
+    expect(getToken()).toBe('token-push-401')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    await expect(pushChanges({ device_id: 'dev-1', changes: [] })).rejects.toMatchObject({
+      reason: 'unauthorized',
+      status: 401,
+    })
+    expect(getToken()).toBeNull()
+
+    // 2. Pull 401 expires session
+    setSession('token-pull-401', 'org-1')
+    expect(getToken()).toBe('token-pull-401')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    await expect(pullChanges(0, 10)).rejects.toMatchObject({
+      reason: 'unauthorized',
+      status: 401,
+    })
+    expect(getToken()).toBeNull()
   })
 })

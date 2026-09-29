@@ -148,6 +148,26 @@ export function LogbookEntryForm({
         {errors.occurredOn && <p role="alert" className="text-sm text-severity-critical">{errors.occurredOn}</p>}
       </label>
 
+      {/* Linked alert (if any open alerts for this plot) */}
+      {plotAlerts.length > 0 && (
+        <label className="flex flex-col gap-2 text-base" htmlFor="entry-alert">
+          Alerta relacionada (opcional)
+          <select
+            id="entry-alert"
+            className="flex h-12 w-full min-w-0 rounded-md border border-text/20 bg-surface-raised px-3 text-base text-text outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+            value={alertId ?? ''}
+            onChange={(e) => onAlertIdChange(e.target.value ? e.target.value : null)}
+          >
+            <option value="">Sin vincular a alerta</option>
+            {plotAlerts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.title}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
       {/* Kind-specific fields */}
       {kind === 'harvest' && (
         <>
@@ -157,7 +177,7 @@ export function LogbookEntryForm({
               id="entry-yield"
               type="number"
               step="any"
-              min="0.01"
+              min="0"
               value={yieldKg}
               onChange={(e) => onYieldKgChange(e.target.value)}
               placeholder="0.00"
@@ -205,7 +225,7 @@ export function LogbookEntryForm({
             id="entry-irrigation"
             type="number"
             step="any"
-            min="0.01"
+            min="0"
             value={irrigationMm}
             onChange={(e) => onIrrigationMmChange(e.target.value)}
             placeholder="0.00"
@@ -222,7 +242,7 @@ export function LogbookEntryForm({
             id="entry-labor"
             type="number"
             step="any"
-            min="0.01"
+            min="0"
             value={laborDays}
             onChange={(e) => onLaborDaysChange(e.target.value)}
             placeholder="0.00"
@@ -293,39 +313,63 @@ export function LogbookEntryForm({
         </label>
       )}
 
-      {/* Observation notes are required, others optional */}
+      {/* Observation with alert: losses fields per docs/03 */}
+      {kind === 'observation' && alertId && (
+        <>
+          <label className="flex flex-col gap-2 text-base" htmlFor="entry-cost">
+            Pérdidas estimadas (COP, opcional)
+            <Input
+              id="entry-cost"
+              type="number"
+              step="any"
+              min="0"
+              value={costCop}
+              onChange={(e) => onCostCopChange(e.target.value)}
+              placeholder="0"
+            />
+            {errors.costCop && <p role="alert" className="text-sm text-severity-critical">{errors.costCop}</p>}
+          </label>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-2 text-base" htmlFor="entry-quantity">
+              Cantidad perdida (opcional)
+              <Input
+                id="entry-quantity"
+                type="number"
+                step="any"
+                min="0"
+                value={quantity}
+                onChange={(e) => onQuantityChange(e.target.value)}
+                placeholder="0.00"
+              />
+              {errors.quantity && <p role="alert" className="text-sm text-severity-critical">{errors.quantity}</p>}
+            </label>
+            <label className="flex flex-col gap-2 text-base" htmlFor="entry-unit">
+              Unidad (opcional)
+              <Input
+                id="entry-unit"
+                type="text"
+                value={unit}
+                onChange={(e) => onUnitChange(e.target.value)}
+                placeholder="kg, bultos, L..."
+              />
+            </label>
+          </div>
+        </>
+      )}
+
+      {/* Notes / Observation: optional for all per docs/03 ("observation no exige campos") */}
       <label className="flex flex-col gap-2 text-base" htmlFor="entry-notes">
-        {kind === 'observation' ? 'Observación' : 'Notas (opcional)'}
+        {kind === 'observation' ? 'Observación (opcional)' : 'Notas (opcional)'}
         <Input
           id="entry-notes"
           type="text"
           value={notes}
           onChange={(e) => onNotesChange(e.target.value)}
           placeholder={kind === 'observation' ? 'Describe lo observado en campo...' : 'Detalles adicionales...'}
-          required={kind === 'observation'}
         />
         {errors.notes && <p role="alert" className="text-sm text-severity-critical">{errors.notes}</p>}
       </label>
-
-      {/* Linked alert (if any open alerts for this plot) */}
-      {plotAlerts.length > 0 && (
-        <label className="flex flex-col gap-2 text-base" htmlFor="entry-alert">
-          Alerta relacionada (opcional)
-          <select
-            id="entry-alert"
-            className="flex h-12 w-full min-w-0 rounded-md border border-text/20 bg-surface-raised px-3 text-base text-text outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
-            value={alertId ?? ''}
-            onChange={(e) => onAlertIdChange(e.target.value ? e.target.value : null)}
-          >
-            <option value="">Sin vincular a alerta</option>
-            {plotAlerts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.title}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
     </div>
   )
 }
