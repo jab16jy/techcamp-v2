@@ -5,27 +5,15 @@ name: CI
 on:
   pull_request:
 
-# One in-flight run per PR: a second push to the same PR cancels the first, so a review
-# round costs one run instead of one per commit, and a superseded run stops spending the
-# ~7 min server job. `github.workflow` keeps the group scoped to THIS workflow, which is
-# the current docs' own recommendation: a bare `github.ref` would cancel the runs of
-# every other workflow on the same ref. The PR number is the per-PR ref — for a
-# `pull_request` event `github.ref` is already `refs/pull/<n>/merge` — and it stays as
-# the fallback if a `push` trigger is ever added (D-T5b.1).
+# One in-flight run per PR: a second push to the same PR cancels the first. `github.workflow`
+# scopes the group to this workflow, the PR number to one PR (D-T5b.1).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Which jobs this PR needs at all. It always runs, it is the only place a changed file
-  # is classified, and nothing waits for it except the two filtered jobs.
-  #
-  # The filter is per JOB, never a workflow-level `on.pull_request.paths`, and the two
-  # facts that force that are both in the current docs: a workflow skipped by path
-  # filtering leaves its checks "Pending" and blocks a PR that requires them, while a job
-  # skipped by a job-level `if:` reports "Success" and satisfies the requirement. So
-  # `gitleaks` carries no `if:` and no `needs:` at all — always-on, and ungated by this
-  # job (D-T5b.1, D-T5b.5).
+  # Classifies the PR's changed files once, so `server` and `web` are filtered per job —
+  # never by a workflow-level `paths:`, which leaves checks pending (D-T5b.1, D-T5b.2).
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -34,8 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The same reason and the same depth as the gitleaks job: the diff is a range
-          # over history, and the merge base is what makes it the PR's own changes.
+          # A range over history: the merge base is what makes the diff the PR's own (D-T5b.2).
           fetch-depth: 0
       - id: filter
         env:
@@ -43,26 +30,14 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # GitHub builds a pull request's changed-file list from the three-dot diff
-          # (workflow syntax, "Git diff comparisons"), so this is the very list a
-          # `paths:` filter would have matched — and the very range `gitleaks` scans.
           merge_base=$(git merge-base "$PR_BASE" "$PR_HEAD")
           changed=$(git diff --name-only "$merge_base" "$PR_HEAD")
           echo "merge base: $merge_base"
           echo "changed files:"
           printf '%s\n' "$changed"
-          # The paths each job actually reads, and nothing wider.
-          #  - server: its own tree; `sgconfig.yml`, `rules/` and `rule-tests/`, which its
-          #    two ast-grep commands name from the repository root; the `justfile`, which
-          #    mirrors its check list; `infra/`, whose compose file and Postgres
-          #    extensions describe the database this same suite runs against locally, so
-          #    a divergence from this job's service image surfaces here and not in a
-          #    seminar; and `.github/workflows/`, which is what this job runs.
-          #  - web: its own tree and `.github/workflows/`. It reads nothing at the root.
-          # `.github/workflows/` is in both on purpose: the one change that can break a
-          # job's own steps must never be the change that skips that job (D-T5b.4).
-          # No `dorny/paths-filter` and no API call: the checkout already has the
-          # history these few `grep` lines read (D-T5b.2).
+          # The paths each job reads, nothing wider; `.github/workflows/` is in both: the
+          # change that can break a job's own steps must never skip it. Over the three-dot
+          # diff, so it is GitHub's own list; no paths-filter action (D-T5b.2, D-T5b.4, D-T5b.5).
           server_paths='^(server|infra|rules|rule-tests)/|^justfile$|^sgconfig\.yml$|^\.github/workflows/'
           web_paths='^web/|^\.github/workflows/'
           if printf '%s\n' "$changed" | grep -Eq "$server_paths"; then
@@ -77,14 +52,8 @@ jobs:
           fi
 
   server:
-    # Runs unless `changes` positively decided this PR touches nothing this job reads.
-    # Written that way on purpose: a skipped job reports "Success", so the plain
-    # `if: needs.changes.outputs.server == 'true'` would turn a `changes` job that itself
-    # failed — a checkout that could not fetch, a merge base that was not there — into a
-    # green PR with no server suite at all. This way anything the filter could not decide
-    # runs the full gate. `!cancelled()` and not `always()`, so a superseded run from
-    # `concurrency` still stops instead of starting a 7 min job nobody is waiting for
-    # (D-T5b.3).
+    # Fail-closed: only a successful `changes` saying "no" skips this, because a skipped
+    # job reports "Success"; `!cancelled()` still stops a superseded run (D-T5b.3).
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.server == 'true') }}
     needs: changes
     runs-on: ubuntu-latest
@@ -117,10 +86,7 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run lint-imports
-      # The one check `just gate-fast` had and CI did not (D-T1.6, Refs #193): a branched
-      # migration history is one `alembic heads` line per head, and only a merge revision
-      # repairs it. The same assertion as the recipe, spelled out because CI calls the
-      # tools directly and never `just`.
+      # The one check `gate-fast` had and CI did not; CI calls the tools, never `just` (D-T2.4).
       - name: single alembic head
         run: |
           heads=$(uv run alembic heads | wc -l)
@@ -129,10 +95,7 @@ jobs:
             uv run alembic heads >&2
             exit 1
           fi
-      # The rules in ../rules are the invariants a review used to catch by hand, and
-      # their tests fail the build when a rule stops reporting what it claims. The config
-      # is named explicitly on both lines, exactly as `just gate-fast` names it, so the
-      # two resolve the same file from the same working directory.
+      # Rules named from `server` with the config explicit, exactly as `gate-fast` (D-T2.7).
       - name: ast-grep rule tests
         run: uv run ast-grep test --config ../sgconfig.yml
       - name: ast-grep scan
@@ -161,19 +124,15 @@ jobs:
       - run: npm run build
       - run: npm run size
 
-  # docs/09:78 requires gitleaks in CI. The tool is MIT and needs no licence key on a
-  # personal account, so this runs the pinned binary instead of gitleaks/gitleaks-action
-  # (D-T5.1): the action is licensed by Gitleaks LLC, and it decides whether a key is
-  # needed by asking the GitHub API whether this account is an organization — a failed
-  # call there exits the job with "missing gitleaks license" on the one kind of account
-  # that needs no key at all.
+  # docs/09:78 requires gitleaks in CI: the pinned binary, not gitleaks/gitleaks-action
+  # (D-T5.1). Always-on, with no `if:` and no `needs:` (D-T5b.5).
   gitleaks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          # The scan is a range over history, so the merge ref a depth-1 checkout leaves
-          # behind is not enough to compute the merge base.
+          # A range over history, and the merge base is not computable from a depth-1 checkout
+          # (D-T5.2).
           fetch-depth: 0
       - name: gitleaks
         env:
@@ -187,30 +146,16 @@ jobs:
           release="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           curl -sSfL --retry 3 -o "$work/$archive" "$release/$archive"
-          # The release publishes one checksum per asset, so this runs the binary the
-          # release published rather than whatever the download returned.
+          # The release publishes one checksum per asset (D-T5.1).
           curl -sSfL --retry 3 -o "$work/checksums.txt" "$release/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
           expected=$(grep " $archive\$" "$work/checksums.txt" | cut -d' ' -f1)
           echo "$expected  $work/$archive" | sha256sum -c -
           tar -xzf "$work/$archive" -C "$work" gitleaks
-          # The merge base, not the base tip: only the commits this PR adds are judged as
-          # this PR's, so a commit that is already on main can never fail an unrelated PR
-          # (D-T5.2). Three walk flags, each one proven on a scratch branch:
-          #  - no --first-parent: it walks only the first-parent chain, so a lane merged
-          #    in through a second parent is never visited at all.
-          #  - no --no-merges: a conflict resolution exists in no other commit, so
-          #    dropping the merge drops a secret nobody else carries.
-          #  - --remerge-diff, not -m: -m diffs a merge against each parent, so merging
-          #    main in re-reports all of main. --remerge-diff diffs against git's own
-          #    re-merge, so only what the resolution wrote shows. Needs git 2.36 or newer,
-          #    which ubuntu-latest ships.
+          # merge-base(base, head)..head with --remerge-diff (D-T5.2, D-T5.4), git 2.36+:
+          # a second-parent lane and a conflict resolution are read, main is not re-reported.
           scan_from=$(git merge-base "$PR_BASE" "$PR_HEAD")
-          # The default rules read three non-secrets in web test fixtures as keys, all on
-          # main and so outside this range: a sensor metric name assigned to a `channel_key`
-          # field, and a VAPID public key. The first is described rather than pasted here
-          # because writing the assignment out re-arms the rule on this very file — it did,
-          # in the commit that added this job. A new finding is a line-scoped
-          # `# gitleaks:allow` on the line that trips it, never a blanket allowlist of the
-          # test tree.
+          # Four non-secrets on main are outside this range. A new finding is a line-scoped
+          # `# gitleaks:allow`, never a blanket allowlist — and prose here can re-arm the rule
+          # itself, which is how the sensor metric name is named instead of pasted (D-T5.3).
           "$work/gitleaks" git --no-banner -v --redact \
             --log-opts="--remerge-diff $scan_from..$PR_HEAD"
