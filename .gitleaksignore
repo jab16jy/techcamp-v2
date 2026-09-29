@@ -1,0 +1,4 @@
+# Two `generic-api-key` false positives: commit 65b273e quoted the sensor-metric
+# assignment verbatim in prose to document the false positive, re-arming the rule.
+65b273eb000c790dad5701fc998aaf2235317cb1:odd/tasks/techcamp-v2-dev-tooling.md:generic-api-key:376
+65b273eb000c790dad5701fc998aaf2235317cb1:.github/workflows/ci.yml:generic-api-key:118
