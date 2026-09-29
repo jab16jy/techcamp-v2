@@ -171,14 +171,13 @@ export class TechcampDb extends Dexie {
     })
     // Photos (ADR-0018, E8 T9b). Dexie adds the table and keeps every v1 row:
     // an upgrade that dropped a phone's unsynced logbook would break RNF-01.
-    // `status` is what the upload queue selects; `[entity+parent_id]` is the one
-    // lookup the two sheets make, and it is answered by an index instead of a
-    // scan of every photo on the phone.
+    // Only `photos` is declared, Dexie's own way: a version states what it
+    // CHANGES, and repeating the v1 lines would make a later edit to one of
+    // them silently alter (and empty) an existing table instead of applying
+    // to the next version. `status` is what the upload queue selects;
+    // `[entity+parent_id]` is the one lookup the two sheets make, answered by
+    // an index instead of a scan of every photo on the phone.
     this.version(2).stores({
-      logbookEntries: 'id, plot_id, occurred_on, syncState',
-      extensionVisits: 'id, farm_id, visited_on, syncState',
-      outbox: '++key, id, status',
-      meta: 'key',
       photos: 'id, [entity+parent_id], status',
     })
   }
