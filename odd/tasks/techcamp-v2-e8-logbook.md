@@ -218,13 +218,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
 - [x] Pushing the same change twice yields one row and `duplicate` the second time.
   Evidence: `test_scenario_d.py::test_scenario_d_harvest_created_offline_syncs_once_and_the_retry_is_a_duplicate`,
   `test_sync_api.py::test_a_pushed_entry_applies_and_the_same_batch_again_is_a_duplicate`.
-- [ ] Two devices editing one entry: the newer `client_updated_at` wins; the older push gets
+- [x] Two devices editing one entry: the newer `client_updated_at` wins; the older push gets
   `conflict_overwritten` and the UI shows it.
   Evidence (server + client state): `test_scenario_d.py::test_scenario_d_two_devices_the_newer_edit_wins_and_the_older_push_is_overwritten`
   (two `device_id`s, #167) and `synchronizer.test.ts` "flags the row as conflict_overwritten…".
-  **Gap:** no test renders the "Sobrescrito en el servidor" notice (`LogbookItem.tsx:91`). The T10
-  writer's table cited `LogbookScreen.test.tsx`, but the parent found no assertion there, so the
-  criterion stays open until a UI test covers the notice.
+  UI: `LogbookScreen.test.tsx` "shows an entry with conflict_overwritten as Sobrescrito en el
+  servidor with no actions to fix" (T10b `b359300`, merged `69d9880`). The T10 writer's table had
+  cited that file before any such assertion existed, and the parent caught it at the gate.
 - [x] A push committed after a later-sequenced one is still returned by pull (D1).
   Evidence: `test_sync_pull.py::test_d1_pull_returns_push_committed_after_concurrent_lock`; `test_push.py` D1 lock test (#160).
 - [x] A harvest recorded offline in the web client is stored locally, syncs when online, and
@@ -599,6 +599,11 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   `conflict_overwritten` entry and asserts "Sobrescrito en el servidor". Negatives: no
   "Guardado en el teléfono" and no "Corregir"/"Descartar". RED comes from removing the notice block.
   Test-only, so the parent gates it with no RDD round.
+- T10b (AGY) `b359300` test(logbook): the conflict notice (38 test lines, 0 prod). RED from the
+  mutation: `TestingLibraryElementError: Unable to find an element with the text: /Sobrescrito en
+  el servidor/`; GREEN 4 passed. Parent gate in the lane: lint, typecheck exit 0, LogbookScreen
+  4 passed. Test-only → no RDD. **Merged** `69d9880`; integration lint, typecheck clean,
+  features/logbook 13 passed. `e8-t10b` session is closed and its worktree removed.
   Integration stop hook (2026-09-29): selectorless STATUS on `e8-logbook` →
   `applicability: "unrelated"` (reviewed lane merges + docs over `main`), not started.
 
@@ -646,8 +651,7 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   brief now mandates the CLI and lists the commands as report evidence.
 
 ## Next step
-(2026-09-29, after the T10 merge) Every task, T0–T10, is merged into `feat/e8-logbook` (`024d76d`);
-6 of 7 acceptance criteria are ticked with evidence. Open: the UI half of criterion 2 (no test
-renders the "Sobrescrito en el servidor" notice), a small test-only follow-up that is the owner's
-call. Nothing of E8 is on `main`: push and stacked-to-main chained PRs (~400 authored lines each,
-`chained-pr`, `work-unit-commits`) need the owner's explicit go.
+(2026-09-29, E8 closed) All tasks T0–T10 (+T10b) are merged into `feat/e8-logbook` (`69d9880`), and all 7
+acceptance criteria are ticked with evidence. Open follow-ups outside E8: #145, #160, #166. Nothing
+of E8 is on `main`: push and stacked-to-main chained PRs (~400 authored lines each, `chained-pr`,
+`work-unit-commits`) wait for the owner's explicit go.
