@@ -33,6 +33,16 @@ if TYPE_CHECKING:  # the fixture types live in the conftest, which pytest owns
 pytestmark = pytest.mark.anyio
 
 
+_PUSHED_DEVICES: list[str] = []
+"""The `device_id` of every push of the running test, in order.
+
+docs/06 §7's "dos dispositivos editan la misma entrada" is about two phones,
+not one phone racing itself, so the scenario records what it sends and asserts
+it: a scenario that quietly collapses to one device would stop proving the
+distinct-device boundary (#167).
+"""
+
+
 def _client() -> TestClient:
     return TestClient(app, base_url="http://testserver/api/v1")
 
@@ -89,12 +99,17 @@ def _visit_payload(
 
 
 def _push(
-    env: SyncEnv, changes: list[dict[str, Any]], *, role: str = "producer"
+    env: SyncEnv,
+    changes: list[dict[str, Any]],
+    *,
+    role: str = "producer",
+    device: str = "phone-1",
 ) -> list[dict[str, Any]]:
+    _PUSHED_DEVICES.append(device)
     with _client() as client:
         response = client.post(
             "/sync/push",
-            json={"device_id": "phone-1", "changes": changes},
+            json={"device_id": device, "changes": changes},
             headers=_auth(env, role),
         )
     assert response.status_code == 200, response.text
@@ -162,21 +177,24 @@ async def test_scenario_d_two_devices_the_newer_edit_wins_and_the_older_push_is_
     """
     entry_id = uuid7()
     created = _entry_payload(entry_id, env.mine.plot_id, env.now, notes="creada por A")
-    device_b = _entry_payload(
+    edit_from_b = _entry_payload(
         entry_id, env.mine.plot_id, env.now + timedelta(hours=1), notes="editada por B"
     )
-    device_a_stale = _entry_payload(
+    stale_from_a = _entry_payload(
         entry_id, env.mine.plot_id, env.now + timedelta(minutes=30), notes="corregida por A"
     )
+    _PUSHED_DEVICES.clear()
 
-    assert _push(env, [created])[0]["status"] == "applied"
-    newer = _push(env, [device_b])[0]
-    older = _push(env, [device_a_stale])[0]
+    assert _push(env, [created], device="phone-a")[0]["status"] == "applied"
+    newer = _push(env, [edit_from_b], device="phone-b")[0]
+    older = _push(env, [stale_from_a], device="phone-a")[0]
     returned = [c for c in _pull(env) if c["id"] == str(entry_id)]
 
     assert newer["status"] == "applied"
     assert older["status"] == "conflict_overwritten"
     assert older["server_version"] == newer["server_version"]
+    # A's create, B's edit, A's stale edit: two devices, not one.
+    assert _PUSHED_DEVICES == ["phone-a", "phone-b", "phone-a"]
     assert len(returned) == 1
     assert returned[0]["data"]["notes"] == "editada por B"
     assert returned[0]["data"]["notes"] != "corregida por A"
