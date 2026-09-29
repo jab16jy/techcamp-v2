@@ -1,7 +1,8 @@
 import type { Table } from 'dexie'
 import { db } from '../db/db'
-import type { ExtensionVisitRow, LogbookEntryRow, OutboxItem, SyncEntity } from '../db/db'
+import type { ExtensionVisitData, ExtensionVisitRow, LogbookEntryData, LogbookEntryRow, OutboxItem, SyncEntity } from '../db/db'
 import { getCursor, getDeviceId, setCursor } from '../db/meta'
+import { recordSyncOutcome } from './syncState'
 import { pullChanges, pushChanges, type SyncStopReason, SyncStoppedError } from './transport'
 import type { PullResponse, PushChange, PushResult } from './types'
 
@@ -35,11 +36,17 @@ async function run(): Promise<SyncOutcome> {
   try {
     const pushed = await pushPending()
     const pulled = await pullMissing()
-    return { status: 'synced', pushed, pulled }
+    const outcome: SyncOutcome = { status: 'synced', pushed, pulled }
+    recordSyncOutcome(outcome)
+    return outcome
   } catch (error) {
     // A stopped run is a distinct outcome, never a silent success: the caller
     // has to be able to tell "nothing to do" from "we could not ask" (D11).
-    if (error instanceof SyncStoppedError) return { status: 'stopped', reason: error.reason }
+    if (error instanceof SyncStoppedError) {
+      const outcome: SyncOutcome = { status: 'stopped', reason: error.reason }
+      recordSyncOutcome(outcome)
+      return outcome
+    }
     throw error
   }
 }
@@ -65,11 +72,20 @@ async function pushPending(): Promise<number> {
 }
 
 function toPushChange(item: OutboxItem): PushChange {
+  if (item.entity === 'logbook_entry') {
+    return {
+      id: item.id,
+      entity: 'logbook_entry',
+      op: item.op,
+      data: item.data as LogbookEntryData,
+      client_updated_at: item.client_updated_at,
+    }
+  }
   return {
     id: item.id,
-    entity: item.entity,
+    entity: 'extension_visit',
     op: item.op,
-    data: item.data,
+    data: item.data as ExtensionVisitData,
     client_updated_at: item.client_updated_at,
   }
 }
