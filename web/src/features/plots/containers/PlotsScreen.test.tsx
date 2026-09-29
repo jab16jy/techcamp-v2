@@ -258,4 +258,58 @@ describe('PlotsScreen', () => {
     ).toBeInTheDocument()
     expect(screen.getAllByText('Lote Norte')).toHaveLength(2)
   })
+
+  it('shows the "Registrar visita" action for technician and NOT for owner/producer/viewer', async () => {
+    setSession('token-abc', 'org-1')
+
+    function mockRequests(role: string) {
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = requestUrl(input as Request)
+        if (url.includes('/me')) {
+          return jsonResponse({
+            id: 'user-1',
+            phone: '3001234567',
+            email: null,
+            full_name: 'Carlos Tecnico',
+            memberships: [{ org_id: 'org-1', role }],
+          })
+        }
+        if (url.includes('/farms/farm-1/plots')) return jsonResponse([])
+        if (url.includes('/farms?org_id=org-1')) {
+          return jsonResponse({
+            items: [{ id: 'farm-1', org_id: 'org-1', name: 'Finca La Esperanza' }],
+            next_cursor: null,
+          })
+        }
+        throw new Error(`unexpected request: ${url}`)
+      })
+    }
+
+    // Role = technician: action is visible
+    mockRequests('technician')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <PlotsScreen callerRole="technician" />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Finca La Esperanza')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Registrar visita' })).toBeInTheDocument()
+    unmount()
+
+    // Negative assertions for other roles: owner, producer, viewer, and default undefined
+    for (const nonTechRole of ['owner', 'producer', 'viewer']) {
+      mockRequests(nonTechRole)
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const { unmount: unmountOther } = render(
+        <QueryClientProvider client={qc}>
+          <PlotsScreen callerRole={nonTechRole} />
+        </QueryClientProvider>,
+      )
+      await waitFor(() => expect(screen.getByText('Finca La Esperanza')).toBeInTheDocument())
+      expect(screen.queryByRole('button', { name: 'Registrar visita' })).not.toBeInTheDocument()
+      unmountOther()
+    }
+  })
 })
