@@ -1,8 +1,8 @@
 name: CI
 
+# Pull requests only: every change reaches main through a PR whose checks already ran,
+# so re-running the suites on the merge push to main only spends Actions minutes.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 jobs:
