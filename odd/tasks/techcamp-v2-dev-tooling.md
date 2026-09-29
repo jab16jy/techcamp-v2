@@ -127,6 +127,13 @@ Issue #139 (evidence from E7/E8):
   needed) into `gate-full` and CI, or reject with evidence in #139.
 - [ ] T5 gitleaks in CI (docs/09:78): verify the action/binary needs no license for this
   personal repo; run it locally once over the history.
+- [ ] T5b CI cost: `concurrency` (group per workflow + PR ref, `cancel-in-progress: true`) on
+  every PR workflow; per-JOB path filter (never workflow-level `paths:`, which leaves required
+  checks pending): server job on `server/**`, `infra/**`, `.github/workflows/**`; web job on
+  `web/**`, `.github/workflows/**`; ast-grep and gitleaks always. Skipped jobs must report
+  success. Evidence: a web-only and a docs-only change skip the server job (act or a draft PR
+  run, owner go needed for a push). Data: last 40 PRs, 24 server-only, 13 web-only; server
+  job ~7 min, web ~2 min; repo private (2000 min/month free plan).
 - [ ] T6 Close: `just gate-full` on a clean DB, CI ↔ justfile check list diff, feature doc
   progress, #139 comment with results.
 
