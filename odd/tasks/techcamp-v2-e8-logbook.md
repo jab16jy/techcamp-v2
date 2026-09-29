@@ -462,6 +462,13 @@ Forecast total ≈ 4,130 authored lines (≈ 10–11 RDD slices, ~9 PRs).
   linked to an alert carries `quantity`/`unit`/`cost_cop` as losses (dropped today); identical
   input/cost branches; `todayInBogota` duplicated with `features/visits` → one helper in `lib/`.
 
+- T8 `f5b1451` fix(logbook): validation aligned with docs/03 D10 (amounts `>= 0`, observation
+  requires nothing, observation + alert sends `quantity`/`unit`/`cost_cop` losses, one input/cost
+  branch, shared `lib/date.ts` `todayInBogota`); the run was cut by a session restart mid-checks
+  and resumed. Gate: lint, typecheck clean; logbook+visits+lib+app 16 files / 109 passed; build;
+  170.97 kB. T8 RDD (parent-run, consent granted): lineage `review-0646e53ffbede472`, base
+  `39eb6b9`, lens `review-reliability`, running.
+
 ## Progress / evidence
 - 2026-09-28 Parent (Claude Opus 5.5): worktree `e8-logbook` on `feat/e8-logbook` from
   `feat/e7-alerts@3120dac`; test DB `techcamp-e8-db` on 5441; CodeGraph index initialised. Docs
