@@ -77,3 +77,46 @@ jobs:
       - run: npm test -- --run
       - run: npm run build
       - run: npm run size
+
+  # docs/09:78 requires gitleaks in CI. The tool is MIT and needs no licence key on a
+  # personal account, so this runs the pinned binary instead of gitleaks/gitleaks-action
+  # (D-T5.1): the action is licensed by Gitleaks LLC, and it decides whether a key is
+  # needed by asking the GitHub API whether this account is an organization — a failed
+  # call there exits the job with "missing gitleaks license" on the one kind of account
+  # that needs no key at all.
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The scan is a range over history, so the merge ref a depth-1 checkout leaves
+          # behind is not enough to compute the merge base.
+          fetch-depth: 0
+      - name: gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$work"
+          release="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL --retry 3 -o "$work/$archive" "$release/$archive"
+          # The release publishes one checksum per asset, so this runs the binary the
+          # release published rather than whatever the download returned.
+          curl -sSfL --retry 3 -o "$work/checksums.txt" "$release/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          expected=$(grep " $archive\$" "$work/checksums.txt" | cut -d' ' -f1)
+          echo "$expected  $work/$archive" | sha256sum -c -
+          tar -xzf "$work/$archive" -C "$work" gitleaks
+          # The merge base, not the base tip: only the commits this PR adds are judged as
+          # this PR's, so a commit that is already on main can never fail an unrelated PR
+          # (D-T5.2).
+          scan_from=$(git merge-base "$PR_BASE" "$PR_HEAD")
+          # The default rules read three non-secrets in web test fixtures as keys, all on
+          # main and so outside this range: `channel_key: 'soil_moisture_20cm'` (a sensor
+          # metric name) and a VAPID public key. A new one is a line-scoped
+          # `# gitleaks:allow`, never a blanket allowlist of the test tree.
+          "$work/gitleaks" git --no-banner -v --redact \
+            --log-opts="--no-merges --first-parent $scan_from..$PR_HEAD"

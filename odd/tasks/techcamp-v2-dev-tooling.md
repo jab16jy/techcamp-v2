@@ -172,6 +172,41 @@ Issue #139 (evidence from E7/E8):
   justfile and in CI alike, because a rule's `files` and `ignores` resolve against the config file
   and not against the working directory (R2-astgrep-wrong-working-directory).
 
+- D-T5.1 CI runs the pinned **gitleaks binary**, not `gitleaks/gitleaks-action`, even though
+  the action needs no licence key on this personal account (its own README: "If you are
+  scanning repos that belong to a personal account, then no license key is required";
+  `gh repo view` confirms `jab16jy/techcamp-v2` is PRIVATE under a `User` owner). Two reasons
+  the action was not used anyway. The action is licensed by Gitleaks LLC and stopped being MIT
+  at v2.0.0, while the tool it wraps is MIT; every other CI tool here is permissive, and a
+  proprietary wrapper buys nothing docs/09:78 asks for. And the action decides whether a key
+  is needed by calling `GET /users/{username}`: on `type == "User"` it proceeds, but the
+  `.catch` on that request leaves `shouldValidate` true and `process.exit(1)` prints "missing
+  gitleaks license" — so one transient API failure fails the job on precisely the kind of
+  account that needs no key, and no input turns that off. The binary is also the same scanner
+  the local history run used, so the evidence below and the CI gate are one tool. The
+  `gitleaks` job verifies the release checksum before executing it, because the step downloads
+  and runs a release asset; a version pin alone would not catch a tampered download.
+  Rejected: the action, for the two reasons above, and a version pin without the checksum.
+- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha`, **not** the
+  `base^..head` range the action uses. On this branch the action's shape covers 15 commits
+  where the PR has 11: `base^` plus the four commits main gained after the merge base, so a
+  commit already on main is judged as part of the PR. A secret that reached main would then
+  fail every unrelated PR opened against it — the E8 PR #182 shape, judging a commit against
+  something other than its own tree. `fetch-depth: 0` is what makes the merge base computable
+  from a PR checkout. Verified on the real history: `base^..HEAD` = 15 commits,
+  `merge-base..HEAD` = 11, matching `git rev-list --count HEAD` since the branch point.
+- D-T5.3 gitleaks is CI-only and does **not** join `gate-fast`. `gate-fast` has no PR range,
+  so the only shape it could use is a whole-history scan, and that fails on this repository
+  today: 4 findings, all non-secrets, exit 1 (the evidence is in Progress). Hosting it would
+  need a baseline file or an allowlist — a new artifact and new policy, to make a check pass —
+  and `gate-lane` runs `gate-fast` on every commit of a lane, so it would put a 7.9 MB network
+  download in the path of every commit checked, in the one recipe documented as needing no
+  network. The cost is not time: cold download + verify + extract + scan measured 2.35 s. The
+  feature doc's Scope only ever promised the CI step, and its acceptance criterion names CI.
+  The four historical findings need no `.gitleaksignore` or baseline precisely because the
+  range scan never walks them; a new one is a line-scoped `# gitleaks:allow`, never a blanket
+  allowlist of the test tree, the same rule D-T2.6 states for ast-grep.
+
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
   Alembic head), `gate *paths`, `gate-full`, `gate-lane base`. AGENTS.md Commands + the
@@ -184,7 +219,7 @@ Issue #139 (evidence from E7/E8):
 - [ ] T4 **deferred to #194** by the owner (2026-09-29), out of scope for this feature.
   `alembic check` trial on a clean DB: adopt (with a small `include_object` filter if
   needed) into `gate-full` and CI, or reject with evidence in #139.
-- [ ] T5 gitleaks in CI (docs/09:78): verify the action/binary needs no license for this
+- [x] T5 gitleaks in CI (docs/09:78): verify the action/binary needs no license for this
   personal repo; run it locally once over the history.
 - [ ] T5b CI cost: `concurrency` (group per workflow + PR ref, `cancel-in-progress: true`) on
   every PR workflow; per-JOB path filter (never workflow-level `paths:`, which leaves required
@@ -316,8 +351,62 @@ Issue #139 (evidence from E7/E8):
     in a scratch module is reported, and `datetime.datetime.now(UTC)`, `datetime.now(tz=UTC)` and
     `datetime.date(2026, 9, 29)` stay unreported. Every scratch edit was reverted.
 
+  - 2026-09-29 T5: a `gitleaks` job alongside `server` and `web` — no Postgres service, no
+    uv/node setup — running the pinned binary 8.30.1 with the release checksum verified, over
+    the commits the PR adds. `ci.yml` and `AGENTS.md` are the only two files touched, no new
+    project dependency, and nothing else in CI changed.
+  - **Licence, verified, not remembered.** gitleaks itself is MIT (`LICENSE`, 2019 Zachary
+    Rice). `gitleaks-action` v2+ is not: "Since v2.0.0 of Gitleaks-Action, the license has
+    changed from MIT to a license", © Gitleaks LLC. `GITLEAKS_LICENSE` is "required for
+    organizations, not required for user accounts", and `gh repo view` reports this repo
+    PRIVATE with a `User` owner, so the free path is real. D-T5.1 records why the binary was
+    chosen anyway, the decisive part being the action's own source: `src/index.js` sets
+    `shouldValidate = false` only inside the `type === "User"` branch of a
+    `GET /users/{username}` call, and its `.catch` leaves it `true` and calls
+    `process.exit(1)` with "missing gitleaks license".
+  - **History scan, the STOP check — clean.** `gitleaks git -v --redact .` over HEAD:
+    `499 commits scanned`, 5.16 MB, 426 ms, **4 findings**, exit 1. `499` is every non-merge
+    commit in HEAD's ancestry, and it is the whole history for this purpose: the other 161 are
+    merge commits, which gitleaks skips by default because a merge's diff is the branch commits
+    it brings together, each already scanned on its own. All four findings are non-secrets,
+    read by the `generic-api-key` rule:
+    - `web/src/features/nodes/api/nodesApi.test.tsx:32`,
+      `web/src/features/nodes/containers/CalibrationSheet.test.tsx:15` and
+      `web/src/features/nodes/containers/NodeDetailSheet.test.tsx:30` — all the literal
+      `channel_key: 'soil_moisture_20cm'`, a sensor metric name, which the rule sees because
+      the identifier ends in `_key`;
+    - `web/src/features/push/push.test.ts:7` — a VAPID **public** key, which is published to
+      the push service by design and is not a secret.
+    So: no real secret in history, no history rewrite, not a STOP. The sibling literals
+    `token-abc`, `mqtt-secret` and `rotated-secret` in the same files are not reported
+    (below the rule's entropy floor), which is the useful contrast — the four findings are
+    the rule over-firing on a metric name, not a missed detection.
+  - **Range green / red, both on real history, no scratch commits.** The `run` block was
+    extracted from `ci.yml` with `yaml.safe_load` and executed as CI would run it, with
+    `RUNNER_TEMP`, `GITLEAKS_VERSION`, `PR_BASE` and `PR_HEAD` set.
+    - GREEN: `PR_BASE=main`, `PR_HEAD=HEAD` → checksum "La suma coincide", `11 commits
+      scanned`, `no leaks found`, **exit 0**.
+    - RED: a one-commit PR (`PR_BASE=e4dd324^`, `PR_HEAD=e4dd324`, the commit that added the
+      two test fixtures) → `leaks found: 2`, **exit 1**. The build fails on a leak.
+    - Tamper control: one byte appended to the downloaded archive → `La suma no coincide`,
+      **exit 1** before `tar` runs, so the checksum is a real gate and not decoration.
+  - `actionlint` 1.7.12 on `ci.yml`: exit 0, no findings. Its `shellcheck` rule is **skipped
+    silently** when shellcheck is not on `PATH` (first run reported `Rule "shellcheck" was
+    disabled`), so shellcheck 0.11.0 was installed outside the repo and the run repeated:
+    `actionlint -verbose` no longer reports the rule disabled, and the extracted script is
+    clean at `--severity=style -s bash` (exit 0). Positive control on a scratch workflow (a
+    missing `fi`) is reported, so the rule is live rather than merely enabled.
+  - `just gate-fast` → exit 0, all nine static steps (seven server, `eslint`, `tsc`). Nothing
+    in this task touches the recipes; the run confirms the tree.
+  - Not run here, by design: a live Actions run. The brief forbids a push without the owner's
+    go, so the job's first real execution is the parent's gate on the PR.
+
 ## Next step
 T2 committed and its review follow-ups fixed; the T2 round is closed (lineage
 `review-43815f8285e2faaf`, approved, `authority: burned`). T3 (pytest-randomly) is owned by a
 separate session on `feat/dev-tooling-t3` in the `dev-tooling-t3` worktree — this lane does not
-touch it. After T3, this lane resumes at T5 (gitleaks in CI), then T5b and T6.
+touch it. T5 (gitleaks in CI) is committed and awaits the parent's gate; its RDD round comes
+after that go. This lane resumes at T5b (`concurrency` plus per-JOB path filters), then T6. Two
+things T5b inherits: the `gitleaks` job reads `github.event.pull_request.base.sha` and
+`head.sha`, so a path filter must not skip it, and a skipped job must report success for
+required checks.
