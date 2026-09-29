@@ -61,3 +61,46 @@ def vapid_subject() -> str:
     """The VAPID `sub` claim: how a push service reaches the operator about a
     delivery it could not make. RFC 8292 wants a `mailto:` or an `https:` URI."""
     return os.environ.get("TECHCAMP_VAPID_SUBJECT", "mailto:notificaciones@techcamp.local")
+
+
+def s3_public_url() -> str:
+    """The object storage URL the BROWSER uploads to (ADR-0018, D8).
+
+    Not the in-network one: the presigned URL is signed for whoever uses it, and
+    that is the farmer's phone. In the seminar profile that is the MinIO
+    container published on localhost (ADR-0021).
+    """
+    return os.environ.get("TECHCAMP_S3_PUBLIC_URL", "http://localhost:9000")
+
+
+def s3_bucket() -> str:
+    """The bucket holding logbook photos, separate from model artifacts and
+    Postgres backups, which share the same service (ADR-0018)."""
+    return os.environ.get("TECHCAMP_S3_BUCKET", "logbook-photos")
+
+
+def s3_access_key() -> str | None:
+    """The access key that signs photo uploads, or `None` when there is none.
+
+    The seminar default is the MinIO root user already committed in
+    `infra/compose.yaml` for a local emulator nobody authenticates (ADR-0021);
+    in production there is deliberately no default, because a committed default
+    would be a live credential in the repository (docs/09 §Seguridad, "Secretos").
+    An unset key in production is a channel nobody can upload through, which the
+    presign dependency reports as 503 rather than inventing credentials.
+    """
+    default = "techcamp" if is_seminar_profile() else None
+    return os.environ.get("TECHCAMP_S3_ACCESS_KEY") or default
+
+
+def s3_secret_key() -> str | None:
+    """The secret half of `s3_access_key()`, with the same profile rule."""
+    default = "techcamp123" if is_seminar_profile() else None
+    return os.environ.get("TECHCAMP_S3_SECRET_KEY") or default
+
+
+def s3_region() -> str:
+    """The region the signature is made for. SigV4 signs a region even when the
+    store is a local emulator, and `us-east-1` is the one every S3-compatible
+    provider accepts as its default (ADR-0018)."""
+    return os.environ.get("TECHCAMP_S3_REGION", "us-east-1")
