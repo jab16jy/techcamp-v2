@@ -122,6 +122,13 @@ behavior change. Pytest for domain and application; domain tests are pure. Test 
 ports for external I/O (LLM, Open-Meteo). Org isolation tests per docs/09. FAO-56 numeric examples
 cover irrigation math. Vitest for web units; Playwright for e2e and scenarios arrives with E16.
 
+Server tests run in a random order (`pytest-randomly`, #139), so a test that only passes
+because of the sequence it happens to run in cannot hide. The seed is printed in the header
+(`Using --randomly-seed=101`): reproduce a failure with `uv run pytest --randomly-seed=101`
+for that same order, or `--randomly-seed=last` to reuse the previous run's. `-p no:randomly`
+pins the file order while debugging one test, and `--randomly-dont-reorganize` keeps the
+order without dropping the per-test `random.seed()` reset.
+
 ## Workflow
 
 - Organic Driven Development: one feature doc per epic at `odd/tasks/<feature>.md`, in the build
