@@ -137,11 +137,14 @@ Issue #139 (evidence from E7/E8):
   A naive `now()` is either **no argument at all or an explicit `None` timezone** (keyword or
   positional), because `tz=None` returns a naive datetime and is the way to reach the same defect
   while looking deliberate; a call with a real timezone is valid and needs no `not` clause, since
-  each pattern matches the exact shape rather than a prefix. Recorded limit: an aliased import
-  (`from datetime import datetime as dt`) is a different name and is not matched; a metavariable
-  form (`$X.today()`) would cover the qualified chain and the aliases together but would also
-  flag any domain method named `today()`, so the precise shapes stand. The rule test documents
-  what is covered and what is not.
+  each pattern matches the exact shape rather than a prefix. The one recorded limit is an aliased
+  import (`from datetime import datetime as dt`, then `dt.now()`), which is a different name and
+  is not matched; it is accepted because every datetime import in `server/src` and
+  `server/tests` is either `import datetime` or a plain `from datetime import ...` (checked
+  2026-09-29), and it is written in the rule's own `notes`, where a developer editing the rule
+  reads it. A metavariable form (`$X.today()`) would cover the aliases too but would also flag
+  any domain method named `today()`, so the precise shapes stand. The rule test documents what is
+  covered and what is not.
 - D-T2.6 The rule has **no `ignores` entry**. `shared/dates.py` is where the timezone is owned
   and it never needed an exemption: its only read is `datetime.now(UTC)`, which is aware, and the
   naive value it handles arrives as an argument (`now.replace(tzinfo=UTC)`), not as a call. The
@@ -226,7 +229,10 @@ Issue #139 (evidence from E7/E8):
   as an argument, and a file-level ignore shielded every naive read a future edit put there — the
   rule's `notes` now say that and point at a line-scoped `# ast-grep-ignore` instead), and
   `R3-no-naive-today-tz-none` / `R4-naive-now-tz-none` (the same gap from two lenses: four
-  patterns added for `tz=None` and a positional `None`, under both import styles).
+  patterns added for `tz=None` and a positional `None`, under both import styles). The rule's
+  remaining limit — an aliased `datetime` import is not matched — is written in the rule's own
+  `notes` with the evidence that the repository imports no alias, so it lives where the next
+  person editing the rule will read it rather than only in this doc.
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree

@@ -18,6 +18,12 @@ notes: |
   every naive read a future edit put in that file, which is the opposite of the
   invariant. If a line ever has a genuine reason, suppress that line and not the file,
   with `# ast-grep-ignore` on it.
+
+  Known limit, accepted: an aliased import (`from datetime import datetime as dt`, then
+  `dt.now()`) is a different name and is not matched. Every datetime import in
+  `server/src` and `server/tests` is either `import datetime` or a plain
+  `from datetime import ...`, checked 2026-09-29, so the name the patterns match is the
+  name the code uses. Revisit if an alias ever appears.
 files:
   - server/src/**/*.py
 rule:
