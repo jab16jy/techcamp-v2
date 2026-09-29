@@ -43,6 +43,12 @@ describe('formatSyncStatus', () => {
       formatSyncStatus({ online: true, pendingCount: 1, lastDataMinutesAgo: null }),
     ).toBe('1 por subir · sin datos')
   })
+
+  it('includes sincronización detenida when sync is stopped', () => {
+    expect(
+      formatSyncStatus({ online: true, pendingCount: 1, lastDataMinutesAgo: 5, syncStopped: true }),
+    ).toBe('sincronización detenida · 1 por subir · dato de hace 5 min')
+  })
 })
 
 describe('minutesSince', () => {
