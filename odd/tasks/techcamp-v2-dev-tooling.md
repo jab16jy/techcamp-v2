@@ -187,25 +187,35 @@ Issue #139 (evidence from E7/E8):
   `gitleaks` job verifies the release checksum before executing it, because the step downloads
   and runs a release asset; a version pin alone would not catch a tampered download.
   Rejected: the action, for the two reasons above, and a version pin without the checksum.
-- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha` with `--no-merges` and
-  deliberately **no** `--first-parent`, on both halves of the decision.
+- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha` with `-m`, and with
+  neither `--first-parent` nor `--no-merges`. The three git-walk facts, each a silent hole that
+  was proven on a scratch branch rather than reasoned about (the evidence is in Progress):
   - *The merge base, not `base^..head`* (the shape gitleaks-action uses). On this branch
     `base^..head` covers 15 commits where the PR has 12: `base^` plus the commits main gained
     after the merge base, so a commit already on main is judged as part of the PR. A secret
     that reached main would then fail every unrelated PR opened against it — the E8 PR #182
     shape, judging a commit against something other than its own tree. `fetch-depth: 0` is
     what makes the merge base computable from a PR checkout.
-  - *No `--first-parent`*, because this repository merges parallel lane branches into the
-    epic branch (`feat/dev-tooling-t3` merges into `feat/dev-tooling`). `--first-parent` walks
-    only the first-parent chain, so a lane arriving through a merge's second parent is never
-    visited, and `--no-merges` then drops the very merge commit that would have reached it: the
-    whole lane escapes the scan, silently. The first cut of this job carried `--first-parent`
-    on the reasoning that it "keeps the walk narrow". Proven wrong on a scratch branch (the
-    evidence is in Progress): the current shape reported `0 commits scanned` and exit 0 for a
-    PR whose lane carried a flagged string, and the same command without it reported the
-    finding and exit 1. Nothing is lost by dropping it, because the merge base — not
-    `--first-parent` — is what excludes main: on this branch all 12 commits in
-    `merge-base..HEAD` are feature commits and 0 of them are ancestors of main.
+  - *No `--first-parent`*, because this repository merges parallel lane branches into the epic
+    branch (`feat/dev-tooling-t3` merges into `feat/dev-tooling`). It walks only the
+    first-parent chain, so a lane arriving through a merge's second parent is never visited:
+    proven as `0 commits scanned` and exit 0 for a PR whose lane carried a flagged string.
+    Nothing is lost by dropping it, because the merge base — not `--first-parent` — is what
+    excludes main: on this branch all 12 commits in `merge-base..HEAD` are feature commits and
+    0 of them are ancestors of main.
+  - *No `--no-merges`, and `-m` instead.* This is the same hole from the other side, and the
+    first cut of this job walked straight into it: `--no-merges` came from gitleaks-action
+    along with the reasoning that a merge's diff only repeats the branch commits. That is
+    false for a **conflict resolution** — the resolved lines exist in no other commit, so
+    dropping the merge drops a credential nobody else carries. Two CRITICAL findings, one from
+    the risk lens and one from the resilience lens, reported it independently. Removing
+    `--no-merges` alone is **not** the fix: `git log -p` emits no diff at all for a merge
+    commit, so the corrected-looking command still reported `no leaks found` over a branch
+    whose only secret lived in a conflict resolution. `-m` emits the merge's diff against each
+    parent, which is what actually reaches the resolved lines. Proved: `--no-merges` → 3
+    commits scanned, no leaks; no merge flag → 3 commits scanned, no leaks; `-m` → 4 commits
+    scanned, 2 leaks, exit 1. The duplicated finding is `-m` reporting the same line as added
+    against each of the two parents, which is noise in the log and not a defect in the gate.
 - D-T5.3 gitleaks is CI-only and does **not** join `gate-fast`. `gate-fast` has no PR range,
   so the only shape it could use is a whole-history scan, and that fails on this repository
   today: 4 findings, all non-secrets, exit 1 (the evidence is in Progress). Hosting it would
@@ -441,6 +451,29 @@ Issue #139 (evidence from E7/E8):
     `# gitleaks:allow` was verified as the working alternative (honoured in a `.md` file too) and
     deliberately not used here, because the next person editing that prose would have to know to
     re-add it.
+  - **`--no-merges` was a second, opposite hole, and the RDD round caught it.** After the
+    `--first-parent` fix, the T5 RDD round (lineage `review-095ab09de7d1a0a3`, four lenses)
+    returned two CRITICAL findings from two lenses independently — `R1-001` (risk) and
+    `R4-001` (resilience), both `deterministic`, both `introduced` — with the same root cause
+    from opposite directions: `--no-merges`, inherited from gitleaks-action, drops the merge
+    commit, so a credential that exists only in a **conflict resolution** is never scanned. The
+    action's own rationale for the flag is that a merge's diff merely repeats the branch
+    commits, which is false for a resolution. Proof on a scratch worktree
+    (`/tmp/opencode/t5-proof2`, removed afterwards): two branches edit the same line, the merge
+    conflicts, and the resolution writes a flagged value, so the string exists in **no**
+    non-merge commit of that branch — `git log -S … --no-merges HEAD` lists none of the
+    scratch commits.
+    - `--no-merges` (what shipped): `3 commits scanned`, `no leaks found`, **exit 0**. Missed.
+    - no merge flag at all (the fix that looks right): `3 commits scanned`, `no leaks found`,
+      **exit 0**. Still missed — `git log -p` emits no diff for a merge commit at all, so
+      removing the flag walks the merge and reads nothing. This is the trap: the obvious
+      correction is not a correction.
+    - `-m`: `4 commits scanned`, `2 leaks found`, **exit 1**. The resolution is read, because
+      `-m` emits the merge's diff against each parent. The same line is reported once per
+      parent, which is log noise and not a gate defect.
+    The lesson is the same one the `--first-parent` fix carries: neither hole was visible by
+    reading the command, and both were visible in one scratch run. Reasoning about a git walk
+    is not evidence; a merge on a scratch branch is.
   - `actionlint` 1.7.12 on `ci.yml`: exit 0, no findings. Its `shellcheck` rule is **skipped
     silently** when shellcheck is not on `PATH` (first run reported `Rule "shellcheck" was
     disabled`), so shellcheck 0.11.0 was installed outside the repo and the run repeated:

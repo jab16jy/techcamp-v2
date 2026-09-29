@@ -112,11 +112,19 @@ jobs:
           tar -xzf "$work/$archive" -C "$work" gitleaks
           # The merge base, not the base tip: only the commits this PR adds are judged as
           # this PR's, so a commit that is already on main can never fail an unrelated PR
-          # (D-T5.2). Deliberately no --first-parent: this repository merges parallel lane
-          # branches into the epic branch, and --first-parent walks only the first-parent
-          # chain, so a lane merged through a second parent would never be visited at all
-          # while --no-merges drops the merge commit that reached it. The merge base already
-          # excludes main, so --first-parent buys nothing here and costs a whole lane.
+          # (D-T5.2). Three git-walk facts below, and each of them was a silent hole once,
+          # found by proving it on a scratch branch rather than by reasoning about it.
+          #  - no --first-parent: this repository merges parallel lane branches into the
+          #    epic branch, and it walks only the first-parent chain, so a lane that
+          #    arrived through a merge's second parent was never visited at all. The merge
+          #    base already excludes main, so the flag buys nothing and costs a whole lane.
+          #  - no --no-merges: the same class of hole from the other side. The usual
+          #    reason to drop merges is that their diff repeats the branch commits, and
+          #    that is false for a conflict resolution: the resolved lines exist in no
+          #    other commit, so dropping the merge drops a secret nobody else carries.
+          #  - -m: without it `git log -p` emits no diff at all for a merge commit, so
+          #    merely removing --no-merges walks the merge and reads nothing. -m emits the
+          #    merge's diff against each parent, which is what reaches the resolution.
           scan_from=$(git merge-base "$PR_BASE" "$PR_HEAD")
           # The default rules read three non-secrets in web test fixtures as keys, all on
           # main and so outside this range: a sensor metric name assigned to a `channel_key`
@@ -126,4 +134,4 @@ jobs:
           # `# gitleaks:allow` on the line that trips it, never a blanket allowlist of the
           # test tree.
           "$work/gitleaks" git --no-banner -v --redact \
-            --log-opts="--no-merges $scan_from..$PR_HEAD"
+            --log-opts="-m $scan_from..$PR_HEAD"
