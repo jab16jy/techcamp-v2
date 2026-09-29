@@ -102,21 +102,24 @@ function NewEntrySheetModal({
       const hasSold = soldKg.trim().length > 0
       const hasPrice = salePriceCopPerKg.trim().length > 0
 
-      if (hasSold && !hasPrice) {
-        nextErrors.salePriceCopPerKg = 'Debes indicar el precio de venta si registras cantidad vendida.'
-      } else if (!hasSold && hasPrice) {
-        nextErrors.soldKg = 'Debes indicar la cantidad vendida si registras precio de venta.'
-      } else if (hasSold && hasPrice) {
+      if (hasSold) {
         const numSold = Number(soldKg)
-        const numPrice = Number(salePriceCopPerKg)
         if (Number.isNaN(numSold) || numSold < 0) {
           nextErrors.soldKg = 'La cantidad vendida debe ser mayor o igual a 0.'
+        } else if (!Number.isNaN(numYield) && numSold > numYield) {
+          nextErrors.soldKg = 'La cantidad vendida no puede superar el rendimiento.'
         }
+        if (!hasPrice) {
+          nextErrors.salePriceCopPerKg = 'Debes indicar el precio de venta si registras cantidad vendida.'
+        }
+      }
+      if (hasPrice) {
+        const numPrice = Number(salePriceCopPerKg)
         if (Number.isNaN(numPrice) || numPrice < 0) {
           nextErrors.salePriceCopPerKg = 'El precio debe ser mayor o igual a 0.'
         }
-        if (!Number.isNaN(numYield) && !Number.isNaN(numSold) && numSold > numYield) {
-          nextErrors.soldKg = 'La cantidad vendida no puede superar el rendimiento.'
+        if (!hasSold) {
+          nextErrors.soldKg = 'Debes indicar la cantidad vendida si registras precio de venta.'
         }
       }
     } else if (kind === 'irrigation') {
@@ -266,7 +269,10 @@ function NewEntrySheetModal({
           setErrors((prev) => ({ ...prev, costCop: null }))
         }}
         quantity={quantity}
-        onQuantityChange={setQuantity}
+        onQuantityChange={(val) => {
+          setQuantity(val)
+          setErrors((prev) => ({ ...prev, quantity: null }))
+        }}
         unit={unit}
         onUnitChange={setUnit}
         notes={notes}

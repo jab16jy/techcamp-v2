@@ -268,4 +268,47 @@ describe('NewEntrySheet', () => {
     expect(row.quantity).toBe(15)
     expect(row.unit).toBe('kg')
   })
+
+  it('editing quantity clears its field error', async () => {
+    const alert = { id: '018f0c2a-0000-7000-8000-0000000000ff', plot_id: PLOTS[0].id, title: 'Alerta de plaga' }
+    renderSheet({ alerts: [alert] })
+
+    fireEvent.change(screen.getByLabelText(/Parcela/i), { target: { value: PLOTS[0].id } })
+    fireEvent.change(screen.getByLabelText(/Tipo de registro/i), { target: { value: 'observation' } })
+
+    const alertSelect = screen.getByLabelText(/Alerta relacionada/i)
+    fireEvent.change(alertSelect, { target: { value: alert.id } })
+
+    // Set invalid negative quantity
+    const qtyInput = screen.getByLabelText(/Cantidad/i)
+    fireEvent.change(qtyInput, { target: { value: '-5' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    expect(await screen.findByText(/La cantidad perdida debe ser mayor o igual a 0/i)).toBeInTheDocument()
+
+    // Editing quantity should clear the field error
+    fireEvent.change(qtyInput, { target: { value: '10' } })
+    expect(screen.queryByText(/La cantidad perdida debe ser mayor o igual a 0/i)).toBeNull()
+  })
+
+  it('validates an invalid sold_kg even when the price is missing', async () => {
+    renderSheet()
+
+    fireEvent.change(screen.getByLabelText(/Parcela/i), { target: { value: PLOTS[0].id } })
+    fireEvent.change(screen.getByLabelText(/Tipo de registro/i), { target: { value: 'harvest' } })
+
+    const yieldInput = screen.getByLabelText(/Rendimiento \(kg\)/i)
+    fireEvent.change(yieldInput, { target: { value: '100' } })
+
+    // Invalid soldKg exceeding yieldKg, with no price provided
+    const soldInput = screen.getByLabelText(/Cantidad vendida \(kg\)/i)
+    fireEvent.change(soldInput, { target: { value: '150' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    expect(await screen.findByText(/La cantidad vendida no puede superar el rendimiento/i)).toBeInTheDocument()
+    expect(screen.getByText(/Debes indicar el precio de venta si registras cantidad vendida/i)).toBeInTheDocument()
+    expect(await db.logbookEntries.count()).toBe(0)
+  })
 })
