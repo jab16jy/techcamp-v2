@@ -3,14 +3,15 @@
 Docs: docs/03, docs/04, ADR-0013, D3-D5, D10.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
 from techcamp.identity.domain.models import Role
 from techcamp.logbook.domain.errors import (
-    ForbiddenRoleError,
     InsufficientRoleError,
     InvalidEntryError,
     NaiveDatetimeError,
@@ -490,9 +491,12 @@ def test_ensure_can_sync_logbook_entry_roles() -> None:
     for role in [Role.OWNER, Role.TECHNICIAN, Role.PRODUCER]:
         ensure_can_sync(SyncEntity.LOGBOOK_ENTRY, role)
 
-    # Viewer rejected
-    with pytest.raises((InsufficientRoleError, ForbiddenRoleError)):
+    # Viewer rejected, with the exact exception and its role/entity (#143):
+    # a `pytest.raises` union would also pass on a bare ForbiddenRoleError.
+    with pytest.raises(InsufficientRoleError) as excinfo:
         ensure_can_sync(SyncEntity.LOGBOOK_ENTRY, Role.VIEWER)
+    assert excinfo.value.role == Role.VIEWER
+    assert excinfo.value.entity == SyncEntity.LOGBOOK_ENTRY
 
 
 def test_ensure_can_sync_extension_visit_roles() -> None:
@@ -500,36 +504,74 @@ def test_ensure_can_sync_extension_visit_roles() -> None:
     # Technician allowed
     ensure_can_sync(SyncEntity.EXTENSION_VISIT, Role.TECHNICIAN)
 
-    # Other roles rejected
+    # Other roles rejected, with the exact exception and its role/entity (#143).
     for role in [Role.OWNER, Role.PRODUCER, Role.VIEWER]:
-        with pytest.raises((InsufficientRoleError, ForbiddenRoleError)):
+        with pytest.raises(InsufficientRoleError) as excinfo:
             ensure_can_sync(SyncEntity.EXTENSION_VISIT, role)
+        assert excinfo.value.role == role
+        assert excinfo.value.entity == SyncEntity.EXTENSION_VISIT
 
 
-def test_numeric_amounts_reject_non_finite_values() -> None:
-    """R3 (issue #143): non-finite Decimal values (NaN, Infinity) raise InvalidEntryError."""
-    # NaN rejected
-    nan_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("NaN"))
-    with pytest.raises(InvalidEntryError, match="finite|NaN"):
-        ensure_valid_entry(nan_fields)
+_NON_FINITE_AMOUNTS = (
+    Decimal("NaN"),
+    Decimal("Infinity"),
+    Decimal("-Infinity"),
+    Decimal("sNaN"),
+)
 
-    # Infinity rejected
-    inf_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("Infinity"))
-    with pytest.raises(InvalidEntryError, match="finite|Infinity"):
-        ensure_valid_entry(inf_fields)
+_AMOUNT_FIELDS: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("quantity", {"kind": LogbookKind.OBSERVATION}),
+    ("cost_cop", {"kind": LogbookKind.COST, "cost_cop": Decimal("1")}),
+    ("yield_kg", {"kind": LogbookKind.HARVEST, "yield_kg": Decimal("100")}),
+    (
+        "sold_kg",
+        {
+            "kind": LogbookKind.HARVEST,
+            "yield_kg": Decimal("100"),
+            "sold_kg": Decimal("10"),
+            "sale_price_cop_per_kg": Decimal("1000"),
+        },
+    ),
+    (
+        "sale_price_cop_per_kg",
+        {
+            "kind": LogbookKind.HARVEST,
+            "yield_kg": Decimal("100"),
+            "sold_kg": Decimal("10"),
+            "sale_price_cop_per_kg": Decimal("1000"),
+        },
+    ),
+    ("labor_days", {"kind": LogbookKind.TASK, "labor_days": Decimal("1")}),
+    ("irrigation_mm", {"kind": LogbookKind.IRRIGATION, "irrigation_mm": Decimal("1")}),
+)
 
-    # -Infinity rejected
-    neg_inf_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("-Infinity"))
-    with pytest.raises(InvalidEntryError, match="finite|Infinity"):
-        ensure_valid_entry(neg_inf_fields)
 
-    # Negative assertion: finite value is accepted
-    finite_fields = LogbookEntryFields(kind=LogbookKind.HARVEST, yield_kg=Decimal("100.0"))
-    ensure_valid_entry(finite_fields)
-    assert finite_fields.yield_kg is not None and finite_fields.yield_kg.is_finite()
+@pytest.mark.parametrize("value", _NON_FINITE_AMOUNTS)
+@pytest.mark.parametrize(
+    ("field", "base"), _AMOUNT_FIELDS, ids=[name for name, _ in _AMOUNT_FIELDS]
+)
+def test_numeric_amounts_reject_non_finite_values(
+    field: str, base: dict[str, Any], value: Decimal
+) -> None:
+    """R3 (issue #143): every amount field rejects every non-finite Decimal.
+
+    The narrow version only tried `yield_kg` with NaN/Infinity; a field left
+    out of the finite check, or `Decimal('sNaN')` slipping through it, stayed
+    invisible. Each case also proves the finite counterpart is still accepted.
+    """
+    fields = replace(LogbookEntryFields(**base), **{field: value})
+
+    with pytest.raises(InvalidEntryError, match="finite"):
+        ensure_valid_entry(fields)
+
+    # Negative assertion: the same field with a finite value still passes.
+    finite = replace(LogbookEntryFields(**base), **{field: Decimal("12.5")})
+    ensure_valid_entry(finite)
 
 
 def test_ensure_can_sync_refuses_unknown_entity() -> None:
     """R3 (issue #143): an entity outside the mapping fails closed via InsufficientRoleError."""
-    with pytest.raises(InsufficientRoleError):
+    with pytest.raises(InsufficientRoleError) as excinfo:
         ensure_can_sync("unknown_entity", Role.OWNER)  # type: ignore[arg-type]
+    assert excinfo.value.role == Role.OWNER
+    assert excinfo.value.entity == "unknown_entity"
