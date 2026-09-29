@@ -15,6 +15,7 @@ from techcamp.logbook.domain.errors import (
 from techcamp.logbook.domain.models import (
     EXPORT_ROLES,
     ExtensionVisit,
+    LogbookEntry,
     ensure_can_export_visits,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "AttachmentParentNotFoundError",
     "ExtensionVisit",
     "InvalidAttachmentError",
+    "LogbookEntry",
     "PhotoContentType",
     "VisitExportForbiddenError",
     "ensure_can_export_visits",

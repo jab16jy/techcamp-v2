@@ -279,3 +279,30 @@ class ExtensionVisit:
     client_updated_at: datetime
     server_version: int
     deleted_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LogbookEntry:
+    """Offline logbook entry entity (docs/03:216-238; docs/06 §7)."""
+
+    id: UUID
+    org_id: UUID
+    plot_id: UUID
+    crop_cycle_id: UUID | None
+    kind: str
+    occurred_on: date
+    quantity: Decimal | None
+    unit: str | None
+    cost_cop: Decimal | None
+    yield_kg: Decimal | None
+    sold_kg: Decimal | None
+    sale_price_cop_per_kg: Decimal | None
+    labor_days: Decimal | None
+    irrigation_mm: Decimal | None
+    alert_id: UUID | None
+    notes: str | None
+    created_by: UUID
+    created_offline: bool
+    client_updated_at: datetime
+    server_version: int
+    deleted_at: datetime | None = None
