@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from './db'
+import type { PhotoBytes } from './db'
 import { listPhotos, removePhoto, savePhoto } from './photos'
 import { resetLocalDb } from './testDb'
 
@@ -8,7 +9,7 @@ const ENTRY_ID = '018f0c2a-0000-7000-8000-0000000000bb'
 const VISIT_ID = '018f0c2a-0000-7000-8000-0000000000cc'
 
 /** The compressed photo the store holds: three bytes of a JPEG. */
-function photoBytes(): Uint8Array {
+function photoBytes(): PhotoBytes {
   return new Uint8Array([1, 2, 3])
 }
 

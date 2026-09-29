@@ -9,6 +9,8 @@
  * with a fake encoder. `browser.ts` is the thin adapter that owns the canvas.
  */
 
+import type { PhotoBytes } from '../db/db'
+
 /** ADR-0018 / docs/04 §Bitácora: the ceiling the API enforces with `422`. */
 export const PHOTO_MAX_BYTES = 200 * 1024
 
@@ -38,7 +40,7 @@ export const ENCODE_STEPS: readonly EncodeStep[] = [
 ]
 
 export interface EncodedPhoto {
-  data: Uint8Array
+  data: PhotoBytes
   content_type: PhotoContentType
   /** Always `data.byteLength`, never a number typed twice. */
   bytes: number
@@ -51,7 +53,7 @@ export interface EncodedPhoto {
  * URL signs that number as `Content-Length` (T6): the two can only agree if
  * one is computed from the other.
  */
-export function encodedPhoto(data: Uint8Array, contentType: PhotoContentType): EncodedPhoto {
+export function encodedPhoto(data: PhotoBytes, contentType: PhotoContentType): EncodedPhoto {
   return { data, content_type: contentType, bytes: data.byteLength }
 }
 

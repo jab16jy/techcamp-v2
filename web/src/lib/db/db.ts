@@ -114,6 +114,16 @@ export interface MetaRow {
 export type PhotoStatus = 'pending' | 'uploaded' | 'failed'
 
 /**
+ * The compressed bytes of a photo, in a plain buffer.
+ *
+ * The parameter is what lets `new Blob([data])` typecheck under strict mode
+ * (TypeScript 5.7 types `Uint8Array` over `ArrayBufferLike`, and a
+ * `BlobPart` is an `ArrayBufferView<ArrayBuffer>`), and it is exactly what
+ * IndexedDB gives back: a copy in the database's own buffer.
+ */
+export type PhotoBytes = Uint8Array<ArrayBuffer>
+
+/**
  * One photo waiting to reach object storage, stored on the phone only.
  *
  * It is never a row in the outbox: ADR-0018 keeps the bytes out of the API
@@ -135,7 +145,7 @@ export interface PhotoRow {
   id: string
   entity: SyncEntity
   parent_id: string
-  data: Uint8Array | null
+  data: PhotoBytes | null
   content_type: string
   bytes: number
   status: PhotoStatus
