@@ -209,9 +209,11 @@ gate-full: db-reset gate-fast
 #
 # Each commit is checked out in a detached temporary worktree, so the lane's own tree
 # never moves and no commit is rewritten: the shas this prints are the shas the branch
-# has. The lane's installed dev dependencies are shared (uv builds the temporary
-# worktree's own .venv from its cache; the temporary web/ borrows node_modules by
-# symlink), and `gate-fast` is static, so no database is involved.
+# has. Every checkout is checked against its own dependency graph: uv builds that
+# commit's own .venv from its own uv.lock, and `web/node_modules` is installed for a
+# commit that changed the lockfile instead of borrowed from the lane, so no commit is
+# judged against another commit's dependencies. `gate-fast` is static, so no database
+# is involved.
 
 # Static checks on every commit of the lane, oldest first, stopping at the first failure.
 [group: 'gate']
@@ -219,10 +221,6 @@ gate-lane base="main":
     #!/usr/bin/env bash
     set -euo pipefail
     lane_root="{{_worktree}}"
-    if [ ! -d "$lane_root/web/node_modules" ]; then
-      echo "web/node_modules is missing; run 'npm ci' in web/ before gating a lane" >&2
-      exit 1
-    fi
     shas=$(git -C "$lane_root" rev-list --reverse "{{base}}..HEAD")
     if [ -z "$shas" ]; then
       echo "no commits in {{base}}..HEAD; nothing to gate"
@@ -240,7 +238,22 @@ gate-lane base="main":
         echo "$sha predates the justfile; gate a lane from the commit that added it" >&2
         exit 1
       fi
-      ln -s "$lane_root/web/node_modules" "$checkout/web/node_modules"
+      # The server side is already per commit: `uv run` builds the checkout's own .venv
+      # from that commit's own uv.lock. web/node_modules is not, and a commit that
+      # changed the lockfile would be judged against the lane's dependency graph — the
+      # same shape as E8 PR #182, where a commit was gated against something other than
+      # its own tree. So it is borrowed only while the two agree on the lockfile, and
+      # installed when they do not.
+      if cmp -s "$lane_root/web/package-lock.json" "$checkout/web/package-lock.json"; then
+        if [ ! -d "$lane_root/web/node_modules" ]; then
+          echo "web/node_modules is missing; run 'npm ci' in web/ before gating a lane" >&2
+          exit 1
+        fi
+        ln -s "$lane_root/web/node_modules" "$checkout/web/node_modules"
+      else
+        echo "    web/package-lock.json differs here; installing this commit's dependencies"
+        (cd "$checkout/web" && npm ci)
+      fi
       # --working-directory alone is not enough: `just --help` documents it as
       # "use <WORKING_DIRECTORY> as working directory. --justfile must also be set".
       status=0
