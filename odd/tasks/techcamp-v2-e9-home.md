@@ -172,10 +172,12 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   Done: lane `e9-t1` (`2b55d8e`, `3a844d6`, `7715922`, fixes `b330661` #205, `e8ef7fa` #206);
   RDD `review-45f333b518029f99`, `review-057f840b7b4b286f`, `review-3b831cc84ee3f4ae` approved;
   #207 open (owner: no more rounds).
-- [ ] T2 `home` module + `GET /plots/{plot_id}/status`: skeleton, import-linter contract entry,
+- [x] T2 `home` module + `GET /plots/{plot_id}/status`: skeleton, import-linter contract entry,
   use case composing T1 + existing facades, null rules (D-T0.2/4/6), router, API tests (irrigated,
   rainfed, no cycle, no readings, no recommendation, stale weather) + isolation. ~550. Route:
   **OpenCode, high** (composition over six modules; the payload contract is the E9 core).
+  Done: lane `e9-t2` (`747daff`, `554d090`, fix `f5d8f0a`); RDD `review-6118d3c213c1854c`
+  approved, no findings.
 - [ ] T3 `GET /me/tray`: use case (D-T0.8 order), router, tests (multi-org technician, not
   assigned → `[]`, critical first, never-visited first) + isolation. ~300. Route: **AGY**.
 - [x] T4 Web offline cache: `chore(deps)` persistence packages (via `find-docs`), persister
@@ -317,6 +319,24 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   2026-09-30: no more fix rounds, findings stay in the issue. Round-3 WARNING "soil moisture
   mixes depths" is taken by T2 (D-T2.1); "future sowing contract" is already in docs/04 on
   `feat/e9-home`. Lane merged into `feat/e9-home` (see Tasks).
+- 2026-09-30 Owner: lanes that depend on T2 in anything wait for it (T3 held; its worktree
+  `e9-t3` exists at `8e05144`, no agent). Cleanup (owner): T1 DB + worktree, T4 worktree, the
+  merged `dev-tooling` worktree and branch removed; lane branches kept (RDD lineages).
+- 2026-09-30 Integration RDD after the T4 merge (owner granted): `review-1259758590d44a8f`
+  approved, 1 SUGGESTION (multi-org tray queries untested) → #210.
+- 2026-09-30 T2 (OpenCode `e9-t2`, high) → `747daff` feat(home) use case (prod 514 / tests 853)
+  and `554d090` feat(home) router (prod 291 / tests 308); 1,967 lines vs ~550 forecast (fixtures
+  across nine tables). RED `ModuleNotFoundError techcamp.home`, then `assert 404 == 401`; GREEN
+  13 → 22 passed; CodeGraph MCP ×5; other modules' suites run (no regressions). Parent gate: 22
+  passed, gate-fast clean, gate-lane exit 0, imports facade-only. Rulings: `plot` as a compact
+  `PlotSummary` (no polygon) ACCEPTED, written into docs/04 §Estado; `water_balance` = last of
+  30 days REJECTED (docs/04: yesterday's or null) → fixed by the same session, then its RDD.
+  Fix `f5d8f0a` (+44/−2): yesterday's row or null, RED "3-day-old balance → null". Parent gate:
+  23 passed, gate-lane exit 0. RDD (OpenCode; consent relayed in the pane, owner chose "Review"):
+  `review-6118d3c213c1854c` approved, zero findings (target covered T0+T1+T2 from the branch
+  point). Writer note, not a finding: `/status` resolves plot access four times (the reused
+  facade queries each check it) — SQL round trips, not HTTP; revisit in T7 if latency shows it.
+  Lane merged into `feat/e9-home`; session closed.
 
 ## Next step
 Wait for T1 (AGY) and T4 (OpenCode) reports → parent gate on each sha (targeted tests +
