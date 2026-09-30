@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
 from uuid import UUID
 
 from techcamp.farms.application.manage_plots import resolve_plot_access
@@ -155,7 +154,7 @@ async def query_plot_water_balance(
 
 def crop_stage_for_day(
     stages: Sequence[StageLike],
-    sown_on: date | Any,
+    sown_on: date,
     day: date,
 ) -> tuple[str | None, int]:
     """Growth stage key and 1-based cycle day for a cycle on a given day (D-T0.6).
@@ -164,8 +163,7 @@ def crop_stage_for_day(
     day_of_cycle is (day - sown_on).days + 1.
     stage_key is None when the crop has no Kc stages (InvalidCropStagesError).
     """
-    actual_sown_on: date = getattr(sown_on, "sown_on", sown_on)
-    day_of_cycle = (day - actual_sown_on).days + 1
+    day_of_cycle = (day - sown_on).days + 1
     if day_of_cycle < 1 or not stages:
         return None, day_of_cycle
     try:

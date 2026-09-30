@@ -100,7 +100,6 @@ async def test_query_latest_plot_readings_success_and_missing_is_none(
     # soil_moisture returns newest reading within 24h
     assert res["soil_moisture"] is not None
     assert res["soil_moisture"].value == 28.5
-    assert res["soil_moisture"].ts == now - timedelta(hours=1)
     assert res["soil_moisture"].time == now - timedelta(hours=1)
 
     # air_temp has no reading -> None (never 0)
@@ -161,7 +160,7 @@ async def test_query_latest_plot_readings_filters_out_of_range_and_older_than_24
     # Must return the valid reading at now - 10h, NOT the out-of-range or >24h one
     assert res["soil_moisture"] is not None
     assert res["soil_moisture"].value == 22.0
-    assert res["soil_moisture"].ts == now - timedelta(hours=10)
+    assert res["soil_moisture"].time == now - timedelta(hours=10)
 
 
 async def test_query_latest_plot_readings_org_isolation(

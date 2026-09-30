@@ -8,16 +8,16 @@ from techcamp.telemetry.application.get_node_health import (
     get_plot_nodes_health,
 )
 from techcamp.telemetry.application.query_readings import (
-    LatestMetricReading,
     ReadingSeries,
     query_latest_plot_readings,
     query_plot_readings,
 )
+from techcamp.telemetry.domain.models import ReadingPoint
 
 __all__ = [
-    "LatestMetricReading",
     "NodeHealth",
     "PlotNodeHealth",
+    "ReadingPoint",
     "ReadingSeries",
     "compute_node_completeness",
     "get_node_health",

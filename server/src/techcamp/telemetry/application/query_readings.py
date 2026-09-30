@@ -68,16 +68,6 @@ async def query_plot_readings(
     return series
 
 
-@dataclass(frozen=True, slots=True)
-class LatestMetricReading:
-    value: float
-    ts: datetime
-
-    @property
-    def time(self) -> datetime:
-        return self.ts
-
-
 async def query_latest_plot_readings(
     *,
     plot_id: UUID,
@@ -85,7 +75,7 @@ async def query_latest_plot_readings(
     metrics: Sequence[str],
     now: datetime,
     readings: ReadingRepository,
-) -> dict[str, LatestMetricReading | None]:
+) -> dict[str, ReadingPoint | None]:
     """Newest valid raw reading per metric for a plot within [now - 24h, now] (D-T0.4).
 
     Quality bit 2 (out of range) and uncalibrated values are excluded.
@@ -97,11 +87,4 @@ async def query_latest_plot_readings(
         metrics=metrics,
         now=now,
     )
-    return {
-        metric: (
-            LatestMetricReading(value=found[metric].value, ts=found[metric].time)
-            if metric in found
-            else None
-        )
-        for metric in metrics
-    }
+    return {metric: found.get(metric) for metric in metrics}
