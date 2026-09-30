@@ -31,7 +31,10 @@ jobs:
         run: |
           set -euo pipefail
           merge_base=$(git merge-base "$PR_BASE" "$PR_HEAD")
-          changed=$(git diff --name-only "$merge_base" "$PR_HEAD")
+          # `quotePath=false`: git C-quotes a path with non-ASCII bytes by default, and the
+          # quoted form no longer starts with a tree prefix, which would skip a suite this PR
+          # does touch (R4-CHANGES-QUOTED-PATH, Refs #196).
+          changed=$(git -c core.quotePath=false diff --name-only "$merge_base" "$PR_HEAD")
           echo "merge base: $merge_base"
           echo "changed files:"
           printf '%s\n' "$changed"
