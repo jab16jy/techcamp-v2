@@ -430,3 +430,63 @@ def test_unauthenticated_request_returns_401(
     resp = client.get("/me/tray")
     assert resp.status_code == 401
     assert resp.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_farm_open_alerts_ordered_critical_first_then_newest(
+    db_session: AsyncSession,
+) -> None:
+    """docs/04 §Visitas: open_alerts in tray ordered critical first, then newest.
+
+    Test with one farm having two plots and at least three open alerts:
+    - a warning newer than a critical
+    - two of the same severity (warning) with different opened_at
+    """
+    env = await make_env(db_session)
+    tech = env.user_id
+    farm_id = await add_farm(
+        db_session, org_id=env.org_id, name="Farm Alert Order", technician_id=tech
+    )
+    plot_1 = await add_plot(db_session, org_id=env.org_id, farm_id=farm_id, name="Plot 1")
+    plot_2 = await add_plot(db_session, org_id=env.org_id, farm_id=farm_id, name="Plot 2")
+
+    # Alert A: warning on plot 1, opened 1 hour ago (newest)
+    alert_warn_newer = await add_alert(
+        db_session,
+        env,
+        severity="warning",
+        rule_code="heat_stress",
+        plot_id=plot_1,
+        farm_id=farm_id,
+        at=NOW - timedelta(hours=1),
+    )
+    # Alert B: critical on plot 2, opened 3 hours ago (older than warning)
+    alert_crit_older = await add_alert(
+        db_session,
+        env,
+        severity="critical",
+        rule_code="water_stress",
+        plot_id=plot_2,
+        farm_id=farm_id,
+        at=NOW - timedelta(hours=3),
+    )
+    # Alert C: warning on plot 2, opened 5 hours ago (oldest warning)
+    alert_warn_older = await add_alert(
+        db_session,
+        env,
+        severity="warning",
+        rule_code="drought_risk",
+        plot_id=plot_2,
+        farm_id=farm_id,
+        at=NOW - timedelta(hours=5),
+    )
+
+    tray = await build_technician_tray(user_id=tech, **tray_repos(db_session))
+    assert len(tray) == 1
+    farm_item = tray[0]
+    alert_ids = [a.id for a in farm_item.open_alerts]
+
+    # Order must be: critical first, then newest warning, then older warning
+    assert alert_ids == [alert_crit_older, alert_warn_newer, alert_warn_older]
+
+    # Negative assertion: warning cannot precede critical despite being newer
+    assert alert_ids[0] != alert_warn_newer

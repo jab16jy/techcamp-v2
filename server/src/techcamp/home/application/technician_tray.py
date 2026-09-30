@@ -47,6 +47,17 @@ class TechnicianTrayItem:
     last_visit_on: date | None
 
 
+def _alert_sort_key(alert: OpenAlert) -> tuple[int, float, UUID]:
+    """Sort key for each farm's open alerts (docs/04 §Visitas; D-T0.8; Refs #211):
+
+    1. Critical first (0 before 1)
+    2. Newest opened_at first (-timestamp)
+    3. Alert id asc (tiebreaker)
+    """
+    severity_rank = 0 if alert.severity == "critical" else 1
+    return (severity_rank, -alert.opened_at.timestamp(), alert.id)
+
+
 def _tray_sort_key(item: TechnicianTrayItem) -> tuple[int, int, int, date, str, UUID]:
     """Sort key for D-T0.8 order:
 
@@ -134,6 +145,9 @@ async def build_technician_tray(
                         resolution_note=alert.resolution_note,
                     )
                 )
+
+    for farm_alerts in alerts_by_farm.values():
+        farm_alerts.sort(key=_alert_sort_key)
 
     # ONE call for last visit dates (D-T0.8)
     farm_ids = [farm.id for farm in technician_farms]
