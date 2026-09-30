@@ -17,6 +17,23 @@ const LogbookScreen = lazy(() =>
   })),
 )
 
+// eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
+const PlotStatusScreen = lazy(() =>
+  import('../features/plot-status/containers/PlotStatusScreen').then((module) => ({
+    default: module.PlotStatusScreen,
+  })),
+)
+
+/** Inicio tab wrapper: the plot status screen, loaded on demand (E9 T5, docs/07 §Mapa de pantallas). */
+// eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
+function InicioTab() {
+  return (
+    <Suspense fallback={null}>
+      <PlotStatusScreen />
+    </Suspense>
+  )
+}
+
 // eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
 function BitacoraTab() {
   return (
@@ -55,7 +72,7 @@ function PlotsTab() {
 }
 
 const tabRoutes: RouteObject[] = [
-  { index: true, element: <PlaceholderPage title="Inicio" /> },
+  { index: true, element: <InicioTab /> },
   { path: 'alertas', element: <PlaceholderPage title="Alertas" /> },
   { path: 'bitacora', element: <BitacoraTab /> },
   { path: 'parcelas', element: <PlotsTab /> },

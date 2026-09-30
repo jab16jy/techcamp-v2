@@ -1,10 +1,17 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../../../lib/api/client'
+import { useFarms, usePlotsByFarm, type FarmView, type PlotView } from '../../../lib/api/farms'
 import type { components } from '../../../lib/api/schema'
 import type { GeoJsonPolygon } from '../polygon'
 
-export type FarmView = components['schemas']['FarmView']
-export type PlotView = components['schemas']['PlotView']
+// The farm and plot list queries moved to `lib/api/farms.ts` in E9 T5: the home
+// screen resolves the active plot through them, and docs/07 §Estructura forbids
+// one feature importing another. Re-exported here so this feature's own
+// importers are unchanged.
+export { useFarms, usePlotsByFarm }
+export type { FarmView, PlotView }
+export type { FarmsPage } from '../../../lib/api/farms'
+
 export type IrrigationSystem = components['schemas']['IrrigationSystem']
 export type GeoJsonPoint = components['schemas']['GeoJSONPoint']
 export type SoilProfileView = components['schemas']['SoilProfileView']
@@ -13,57 +20,6 @@ export type CropView = components['schemas']['CropView']
 export type CropCycleView = components['schemas']['CropCycleView']
 export type CropCycleCreateRequest = components['schemas']['CropCycleCreateRequest']
 export type CropCyclePatchRequest = components['schemas']['CropCyclePatchRequest']
-
-export interface FarmsPage {
-  farms: FarmView[]
-  /** True when `GET /farms`'s `next_cursor` was non-null (#21 round 10: don't
-   * silently drop farms past the first page). Paging through them is out of
-   * this task's scope — T8/T9 own the fuller plots UI. */
-  hasMore: boolean
-}
-
-/** docs/04-api.md: `GET /farms?org_id= → Page<Farm>`. */
-async function fetchFarmsPage(orgId: string): Promise<FarmsPage> {
-  const { data, error } = await apiClient.GET('/api/v1/farms', {
-    params: { query: { org_id: orgId } },
-  })
-  if (error) throw error
-  if (!data) throw new Error('empty response from /farms')
-  return { farms: data.items, hasMore: data.next_cursor !== null }
-}
-
-/** The org's farms (first page). `orgId === null` (no org chosen yet) never fetches. */
-export function useFarms(orgId: string | null) {
-  return useQuery({
-    queryKey: ['farms', orgId],
-    queryFn: () => fetchFarmsPage(orgId as string),
-    enabled: orgId !== null,
-  })
-}
-
-/** docs/04-api.md: `GET /farms/{farm_id}/plots → Plot[]`. */
-async function fetchPlots(farmId: string): Promise<PlotView[]> {
-  const { data, error } = await apiClient.GET('/api/v1/farms/{farm_id}/plots', {
-    params: { path: { farm_id: farmId } },
-  })
-  if (error) throw error
-  if (!data) throw new Error('empty response from /farms/{farm_id}/plots')
-  return data
-}
-
-/**
- * One query per farm (`useQueries`, not a combined `Promise.all`): a single
- * farm's plots failing to load degrades that farm only, instead of blanking
- * the whole list (#21 round 10). Returned in the same order as `farmIds`.
- */
-export function usePlotsByFarm(farmIds: string[]) {
-  return useQueries({
-    queries: farmIds.map((farmId) => ({
-      queryKey: ['plots', farmId],
-      queryFn: () => fetchPlots(farmId),
-    })),
-  })
-}
 
 export interface CreateFarmInput {
   name: string

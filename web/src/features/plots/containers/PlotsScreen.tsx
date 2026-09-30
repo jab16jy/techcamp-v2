@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
 import { MapIcon } from '../../../design-system/ui/icons'
 import { Button } from '../../../design-system/ui/button'
+import { setActivePlotId } from '../../../lib/api/activePlot'
 import { describeApiError } from '../../../lib/api/errorCopy'
 import { useOrgId } from '../../../lib/api/session'
 import type { Role } from '../../../lib/api/me'
@@ -39,6 +40,16 @@ export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScr
   const plotsByFarmId = new Map<string, PlotView[]>(
     farmIds.map((id, index) => [id, plotsQueries[index]?.data ?? []]),
   )
+
+  /**
+   * Opening a plot here makes it the active one (D-T0.7, docs/07 Inicio item 1:
+   * "la última que el usuario abrió en ese dispositivo"), so Inicio answers for
+   * the plot the user was just looking at.
+   */
+  const selectPlot = (plot: PlotView) => {
+    if (orgId) setActivePlotId(orgId, plot.id)
+    setSelectedPlot(plot)
+  }
 
   return (
     <div className="px-0 pt-6">
@@ -94,7 +105,7 @@ export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScr
               }))}
               onAddPlot={setCreatingPlotForFarmId}
               onAddVisit={isTechnician ? setVisitingFarm : undefined}
-              onSelectPlot={setSelectedPlot}
+              onSelectPlot={selectPlot}
             />
             {farmsQuery.data.hasMore && (
               <p className="px-4 text-base text-text-muted">
