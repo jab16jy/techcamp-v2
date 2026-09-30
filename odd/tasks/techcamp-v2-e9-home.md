@@ -99,6 +99,13 @@ critical path (E0→…→E6→E9→E15) and unblocks E15.
 - Commits follow functionality (deps → shape → behavior); ~700 authored lines is a guide, not a
   cap. RDD per slice of whole commits as they land.
 - Delivery: stacked-to-main chained PRs (~400 authored lines), after the owner's word.
+- Dev tooling (#139, AGENTS.md §Commands): parent gate per slice = `just gate <touched tests>`
+  (gate-fast: ruff, format, mypy, lint-imports, one Alembic head, ast-grep; eslint, tsc) on the
+  lane's own DB; `just gate-lane feat/e9-home` on each lane before merging it and on
+  `feat/e9-home` before slicing PRs; `just gate-full` once in T7. Random test order
+  (`pytest-randomly`): reproduce with `--randomly-seed`. A review finding seen twice becomes an
+  ast-grep rule (`rules/<id>.yml` + `rule-tests/<id>-test.yml`). CI mirrors gate-full plus
+  gitleaks.
 
 ## Decisions (approved by the owner 2026-09-30; written into docs/00, 04, 05, 07 and AGENTS.md by T0)
 - **D-T0.1 Where `/status` and `/me/tray` live:** a new read-only module `home` (screaming name:
@@ -141,6 +148,12 @@ critical path (E0→…→E6→E9→E15) and unblocks E15.
   unchanged and the web writes the "why" from it (it already carries `forecast_rain_7d_mm`, the
   7-day rain the rainfed card shows, docs/07). No second presentation format on the server.
 
+- **D-T2.1 Soil moisture on the home** (parent, from T1 round-3 WARNING, #207): `latest.soil_moisture_pct`
+  comes from the plot's representative sensors (docs/06 §5, the same rule irrigation and
+  `water_stress` use: one near Zr/2 or the mean of two in the root zone); without a representative
+  sensor, the newest valid reading of any depth. Keeps the home and the recommendation on the same
+  evidence when it exists, and still shows a value for plots without one.
+
 ## Open questions
 - None beyond the decisions above.
 
@@ -151,11 +164,14 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   §Bandeja, NodeHealth), docs/05 (module graph + D-note), docs/07 (active plot, home by role,
   offline cache); glossary only if a new term appears. ~90. Route: parent inline (mechanical doc
   units, already understood).
-- [ ] T1 Facade queries (server, existing modules, each with its org filter and tests): latest
+- [x] T1 Facade queries (server, existing modules, each with its org filter and tests): latest
   valid reading per metric (`telemetry`), node health for a plot (`telemetry`), farms of a
   technician across orgs (`farms`), open alerts for plots (`alerts`, D-T0.3), stage as of a day
   (`irrigation.application`), last visit per farm (`logbook`). ~400 → T1a telemetry + farms,
   T1b alerts + irrigation + logbook, one session. Route: **AGY** (small queries over known repos).
+  Done: lane `e9-t1` (`2b55d8e`, `3a844d6`, `7715922`, fixes `b330661` #205, `e8ef7fa` #206);
+  RDD `review-45f333b518029f99`, `review-057f840b7b4b286f`, `review-3b831cc84ee3f4ae` approved;
+  #207 open (owner: no more rounds).
 - [ ] T2 `home` module + `GET /plots/{plot_id}/status`: skeleton, import-linter contract entry,
   use case composing T1 + existing facades, null rules (D-T0.2/4/6), router, API tests (irrigated,
   rainfed, no cycle, no readings, no recommendation, stale weather) + isolation. ~550. Route:
@@ -227,6 +243,60 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
     `feat/e9-t1-facades`, DB `techcamp-db-e9-t1-2237016153` on 61153, own CodeGraph index.
   - Lane W / T4: OpenCode `e9-t4`, worktree `e9-t4`, branch `feat/e9-t4-cache`, web only, own
     index.
+- 2026-09-30 T4 (OpenCode `e9-t4`, xhigh) → `95a27f7` chore(deps) persist-client +
+  async-storage-persister 5.103.2 (48 lines, lockfile; 5.104 needs a core bump, pinned to the
+  resolved core) and `f8a0ef3` feat(web) persisted cache (prod 148 / tests 204). Writer evidence:
+  RED `queryClient.test.ts` TypeError reading 'persistClient' ×4, `db.upgrade.test.ts` reading
+  'count' (no v3); GREEN 5+2 passed; ctx7 `@tanstack/query` v5; CodeGraph ×3 (+ grep in
+  node_modules). Writer also ran the full web suite (51 files / 340 passed) against the brief;
+  noted. Parent gate: `just gate web/src/lib/api web/src/lib/db` 55 + 16 passed, gate-fast clean;
+  `just gate-lane feat/e9-home` exit 0 on both commits; build ok; size 172.92 / 200 kB; Dexie still
+  a lazy chunk. Docs diff: matches docs/07 row + D-T0.10 (Dexie v3 added, v1/v2 untouched; opt-in
+  `meta.persist`; org-first keys documented; 7 d; wipe on `clearSession`, which `expireSession`
+  also runs). Accepted writer calls: hand-written `CACHE_BUSTER`, `queryClient.clear()` on
+  sign-out, no mutation dehydration. Parent wrote the buster/opt-in/sign-out rule into docs/07.
+  RDD (OpenCode, after the parent's go): consent envelope relayed in the pane, owner chose
+  "Review this change"; lineage `review-8312b6a4a9787be9`, one lens `review-reliability`,
+  approved, authority burned. Target base = branch point, so it also covered the T0 docs. One
+  non-blocking WARNING (R3, `session.ts:82-83`): sign-out fire-and-forgets the persisted-cache
+  wipe; a reload/kill in that window leaves the previous user's cache. Touches T4's own code and
+  a security invariant → issue #204 and fixed now by the same session (restore fails closed
+  without a session token), `Refs #204`.
+  Fix `72b4362` (+55/−2, `Refs #204`): the storage adapter's `getItem` (the persister's only
+  read path) deletes the row and returns null without a session token; test removes the token
+  directly to reproduce the kill window, with a token-present control. Parent gate: 56 + 16
+  passed, gate-lane exit 0, size 172.92 kB. RDD on the fix candidate: OpenCode, after the go.
+- 2026-09-30 T1 (AGY `e9-t1`, Gemini 3.8 Flash high) → `2b55d8e` feat(telemetry,farms) T1a
+  (652 lines) and `3a844d6` feat(alerts,irrigation,logbook) T1b (554 lines); tests ≈ 820 of
+  1,206. Writer evidence: RED `ImportError … list_open_alerts_for_plots` (+ `crop_stage_for_day`,
+  `get_latest_visit_dates`); GREEN 7 (T1b) + 6/4 (T1a); CodeGraph MCP ×11. Report cited
+  endpoints that do not exist (`/api/v1/home/state`); commits cite docs correctly. Parent gate:
+  `just gate` on the five `test_home_queries.py` + `test_stream_api.py` → 4+2+2+3+2+6 passed,
+  gate-fast clean. Docs diff: D-T0.3 (state <> resolved, critical first, newest), D-T0.4
+  (DISTINCT ON metric, 24 h, bit 2, non-null), D-T0.5 (shared `compute_node_completeness`),
+  D-T0.6, D-T0.8 (technician ∧ org IN, grouped max `visited_on`, deleted excluded) match. Quality
+  issues sent back (fix now, one commit): `sown_on: date | Any` + `getattr` duck-typing;
+  `LatestMetricReading` duplicating `ReadingPoint`; empty-input guard duplicated in use case and
+  repository. Then the parent runs RDD (AGY has none).
+  Fix `7715922` refactor (+7/−33): `sown_on: date`, `ReadingPoint` reused, guards only in the
+  repositories. AGY's second report still named doc sections that do not exist ("§Estado del
+  lote"); corrected in the next brief. Parent gate: 19 passed, gate-lane `feat/e9-home` exit 0 on
+  all three commits. RDD (parent; standing grant for feature candidates): lineage
+  `review-45f333b518029f99`, lens `review-reliability`, approved, authority burned. Findings
+  (non-blocking) → #205, all fixed now by AGY (AGY rule): WARNING untested InvalidCropStages
+  fallback + future sowing branch; SUGGESTION tray tiebreak by id; SUGGESTION silent 500-node cap.
+  Fix `b330661` (+127/−13, `Refs #205`): name+id order, paging through `list_for_org` (ascending
+  id cursor, verified), stage fallback via the domain error. Parent gate: 22 passed, gate-lane
+  exit 0. RDD round 2 (fix candidate, owner granted): `review-057f840b7b4b286f` approved → #206:
+  WARNING future sowing gave `day_of_cycle` −4 (docs gap: parent added to docs/04 §Estado
+  "siembra posterior a hoy → `day_of_cycle` y `stage` son `null`", D-T0.6 extended); SUGGESTION
+  `DISTINCT ON` tiebreak by sensor id — both fixed now by AGY; SUGGESTION duplicate
+  invalid-stages test left in #206 (test-only loop cap).
+  Fix `e8ef7fa` (+52/−8, `Refs #206`). Parent gate: 23 passed, gate-lane exit 0. RDD round 3
+  (owner granted): `review-3b831cc84ee3f4ae` approved → #207 (2 WARNING, 2 SUGGESTION). Owner
+  2026-09-30: no more fix rounds, findings stay in the issue. Round-3 WARNING "soil moisture
+  mixes depths" is taken by T2 (D-T2.1); "future sowing contract" is already in docs/04 on
+  `feat/e9-home`. Lane merged into `feat/e9-home` (see Tasks).
 
 ## Next step
 Wait for T1 (AGY) and T4 (OpenCode) reports → parent gate on each sha (targeted tests +
