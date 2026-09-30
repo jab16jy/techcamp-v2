@@ -178,19 +178,24 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   **OpenCode, high** (composition over six modules; the payload contract is the E9 core).
   Done: lane `e9-t2` (`747daff`, `554d090`, fix `f5d8f0a`); RDD `review-6118d3c213c1854c`
   approved, no findings.
-- [ ] T3 `GET /me/tray`: use case (D-T0.8 order), router, tests (multi-org technician, not
+- [x] T3 `GET /me/tray`: use case (D-T0.8 order), router, tests (multi-org technician, not
   assigned → `[]`, critical first, never-visited first) + isolation. ~300. Route: **AGY**.
+  Done: lane `e9-t3` (`816e8fc`, fix `fc7b8e1` #211); RDD `review-226db8cc0b4e155b` approved;
+  merged `871a1fd`; #211 open (2 SUGGESTIONs).
 - [x] T4 Web offline cache: `chore(deps)` persistence packages (via `find-docs`), persister
   wiring in `queryClient`, org-scoped keys, max age, bundle check, Vitest (restore from IndexedDB
   with `fake-indexeddb`). ~200. Route: **OpenCode, high** (new dependency, cache semantics).
   Done: lane `e9-t4` (`95a27f7`, `f8a0ef3`, fixes `72b4362` #204, `dd7bf26` RDD correction,
   `3cf97a1` token digest); RDD `review-8312b6a4a9787be9`, `review-7c429333286981ab` approved;
   #209 open.
-- [ ] T5 Home screen (`features/plot-status/`): regenerate `schema.d.ts`, `usePlotStatus`, active
+- [x] T5 Home screen (`features/plot-status/`): regenerate `schema.d.ts`, `usePlotStatus`, active
   plot (D-T0.7), decision card irrigated/rainfed with the "why", open alerts, soil moisture + 3-day
   forecast, sync + nodes, SSE invalidation, offline banner; `impeccable`, design frozen; Vitest
   per state. ~650 → T5a data + decision card, T5b alerts/weather/nodes/SSE, one session. Route:
   **OpenCode, high** (the most important screen, many states).
+  Done: lane `e9-t5` (`83dff58`, `3024c7e`, `cb045d8`, fixes `d15a5db`, `6974e02`); RDD
+  `review-b990eca43bc32d62` escalated, owner merged on the parent's verification; merged
+  `aae1508`; #212 open.
 - [ ] T6 Technician tray (`features/visits/`): `useTray`, farm rows (existing primitives), order
   from the server, last visit, `NewVisitSheet` entry, Inicio → tray for `technician` (D-T0.9),
   route test. ~350. Route: **AGY**.
@@ -345,6 +350,66 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   - T5: OpenCode `e9-t5` (high), worktree `e9-t5`, web only; `impeccable`, design frozen; T5a
     (schema regen + decision card + active plot) then T5b on the parent's go.
 
+- 2026-09-30 Parent session 2 (Claude Opus 5.5) resumed from the handoff. The AGY `e9-t3` pane
+  was closed by accident mid-task; the same conversation was resumed in a new pane
+  (`agy --conversation <id>`) and continued from its last step.
+- 2026-09-30 T5a blocked: T2's `home` router reused `PlotView`, `CropView`, `NodeHealthView`
+  (farms/telemetry own them), so FastAPI emitted module-qualified OpenAPI names and the web lost
+  the plain types. Parent fix on `feat/e9-home`, `f7bd9a9` (+35): views renamed
+  `PlotSummaryView`, `CycleCropView`, `PlotNodeHealthView`; new test
+  `server/tests/test_openapi_schema_names.py`. RED `assert ['techcamp__f...deHealthView'] == []`,
+  GREEN 1 + 23 (`just gate server/tests/test_openapi_schema_names.py server/tests/home`). RDD on
+  the whole branch failed with `lens_context_budget_exceeded` (`review-a872e9e965ddb8df`, no
+  authority created); scoped to `f7bd9a9`, owner chose "Skip this time"
+  (`review-d0364dcf9dfc1520` declined). The T5 writer was told not to touch the server.
+- 2026-09-30 T3 (AGY `e9-t3`) → `816e8fc` feat(home) `GET /me/tray` (prod 252 / tests 536).
+  Writer evidence: RED/GREEN `just gate server/tests/home` 31 passed; CodeGraph ×9; multi-org
+  path proven end to end (#210). Parent gate: diff read against docs/04 §Visitas y bandeja and
+  docs/05 D-T0.1; `just gate server/tests/home` 31 passed, gate-fast clean, gate-lane exit 0.
+  Ruling: `farm` as a compact `FarmSummary` (no geometry, no technician) ACCEPTED, written into
+  docs/04 §Bandeja. RDD (parent, standing grant, scoped `--base-ref 4894315 --committed-only`):
+  `review-226db8cc0b4e155b`, lens `review-reliability`, approved, authority burned. 3
+  non-blocking findings → rule 3+ → #211: WARNING (per-farm alert order unproved) fixed now,
+  SUGGESTIONs (plot N+1 per farm, tiebreak coverage) filed.
+  Fix `fc7b8e1` (+74, `Refs #211`): explicit per-farm sort (critical, newest, id); new test with
+  one farm, two plots, three alerts, exact id order plus a negative assertion. The test passed
+  before the fix (the upstream query already orders), so it pins the behavior, not the sort line.
+  Parent read the diff; gate 32 passed, gate-lane exit 0. Merged `871a1fd`; post-merge
+  `just gate server/tests/home server/tests/test_openapi_schema_names.py` 32 + 1 passed.
+  Integration candidate on `feat/e9-home` relayed, owner chose "Skip this time"
+  (`review-1eb74c6fc408543e`). T3 DB, worktree and pane removed; branch kept.
+- 2026-09-30 T5a (OpenCode `e9-t5`) → `83dff58` chore(web) schema regen (222 generated) and
+  `3024c7e` feat(web) decision card (prod 723 / tests 951). RED 4 files unresolved imports;
+  GREEN 54 then 178. Parent gate: diff read against docs/07 Inicio items 1–2, ADR-0023, D-T0.7,
+  D-T0.10; E1 primitives only (`PressableStatusBand`, `EmptyState`, `Button`); `just gate` on
+  plot-status, lib/api, plots, routes, App → 46+66+57+7+2 passed; gate-lane exit 0; size
+  173.88/200 kB. Rulings ACCEPTED (written into docs/07 item 2): rainfed band from today's
+  rationale (stress above RAW, watch at RAW); the "why" is evidence, not the decision again;
+  unknown `kind` or `irrigate` without depth → "Aún no hay recomendación para hoy". Quality issue
+  sent into T5b: offline cold start (the home waited for farm/plot lists that are not persisted).
+  `impeccable`: loaded at session start (OpenCode log), but T5a's report showed no checks → the
+  writer ran them for T5b (craft-floor, operate, harden, clarify; see its report).
+- 2026-09-30 T5b → `cb045d8` feat(web) items 3–5, SSE, OfflineBanner, offline fix (prod 569 /
+  tests 643). RED `Failed to resolve import "./statusCopy"`; offline RED "resolves the remembered
+  plot without waiting for the lists" showed only "Cargando parcelas…". The writer's RDD first
+  froze the whole branch (74 paths); parent ruling: selectors go on STATUS
+  (`--base-ref f7bd9a9 --committed-only`), the returned START runs unchanged → 22 web files.
+  RDD `review-b990eca43bc32d62` (owner granted in the pane): R3 CRITICAL (one farm's failed plot
+  list blanked the whole home) → bounded correction `d15a5db` (prod +28/−14, tests +35); the validator accepted the fix
+  and rejected the correction for a regression (a later farm's plot shown while the first still
+  loaded) → state escalated. The writer fixed the regression in `6974e02` (prod +12/−1, tests +51) outside the
+  correction. Parent read the final `useActivePlot` (failed farm = final, use the rest; pending
+  farm = no default yet; remembered plot answers at once; 404 forgets it); gate 81+66+57+7+2
+  passed, gate-lane exit 0 on all 5 commits, size 174.09 kB. Owner: merge on the parent's
+  verification, no further round. Merged `aae1508`; post-merge gate same 213 passed. Findings →
+  #212 (the default is remembered after a transient partial failure; `formatPercent` uses `.`
+  while `es-CO` uses `,`). T5 pane and worktree removed (web only, no DB); branch kept.
+- 2026-09-30 Docs (parent): docs/04 §Bandeja `farm` shape; docs/07 Inicio item 1 (remembered plot
+  without the lists, 404 forgets it, partial farm failure) and item 2 (rainfed band, the why,
+  unknown kind).
+
 ## Next step
-Gate T3 (parent runs its RDD) and T5a/T5b (OpenCode runs its own); merge each; then T6 (tray
-screen, needs T3 + T4) and T7 (close: simulator integration, by-hand seminar run, gate-full).
+T6 (tray screen, AGY; needs T3 + T4, both merged): brief `e9-t6.md` (docs/07 "Bandeja del
+técnico", D-T0.9 technician Inicio → tray, `NewVisitSheet` entry, persisted `[orgId, 'tray']`,
+bump `CACHE_BUSTER`, regenerate `schema.d.ts` for `/me/tray`). Then T7 (close: simulator
+integration, by-hand seminar run, gate-full once).
