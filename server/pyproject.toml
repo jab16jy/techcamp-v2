@@ -107,4 +107,5 @@ containers = [
     "techcamp.risk",
     "techcamp.metrics",
     "techcamp.assistant",
+    "techcamp.home",
 ]
