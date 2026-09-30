@@ -7,6 +7,7 @@ enforces, not a telemetry-specific reimplementation.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
@@ -65,3 +66,25 @@ async def query_plot_readings(
                 ReadingSeries(sensor_id=sensor.id, depth_cm=sensor.depth_cm, points=points)
             )
     return series
+
+
+async def query_latest_plot_readings(
+    *,
+    plot_id: UUID,
+    org_id: UUID,
+    metrics: Sequence[str],
+    now: datetime,
+    readings: ReadingRepository,
+) -> dict[str, ReadingPoint | None]:
+    """Newest valid raw reading per metric for a plot within [now - 24h, now] (D-T0.4).
+
+    Quality bit 2 (out of range) and uncalibrated values are excluded.
+    Metrics without a valid reading in the window map to None (never 0).
+    """
+    found = await readings.query_latest_valid_by_metric(
+        plot_id=plot_id,
+        org_id=org_id,
+        metrics=metrics,
+        now=now,
+    )
+    return {metric: found.get(metric) for metric in metrics}

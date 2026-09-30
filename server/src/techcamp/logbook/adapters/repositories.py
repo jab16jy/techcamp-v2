@@ -13,7 +13,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.engine import Row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -420,3 +420,25 @@ class SqlAlchemyExtensionVisitRepository:
             stmt.order_by(ExtensionVisitRow.id.desc()).limit(limit)
         )
         return [_visit_from_row(row) for row in result.scalars()]
+
+    async def get_latest_visit_dates_for_farms(
+        self,
+        farm_ids: Sequence[UUID],
+        org_ids: Sequence[UUID],
+    ) -> dict[UUID, date]:
+        if not farm_ids or not org_ids:
+            return {}
+        stmt = (
+            select(
+                ExtensionVisitRow.farm_id,
+                func.max(ExtensionVisitRow.visited_on).label("last_visited_on"),
+            )
+            .where(
+                ExtensionVisitRow.farm_id.in_(farm_ids),
+                ExtensionVisitRow.org_id.in_(org_ids),
+                ExtensionVisitRow.deleted_at.is_(None),
+            )
+            .group_by(ExtensionVisitRow.farm_id)
+        )
+        result = await self._session.execute(stmt)
+        return {row.farm_id: row.last_visited_on for row in result}

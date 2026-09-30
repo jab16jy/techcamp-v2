@@ -92,6 +92,17 @@ class AlertRepository(Protocol):
         cursor, the same convention the other routers use)."""
         ...
 
+    async def list_open_for_plots(
+        self,
+        plot_ids: Sequence[UUID],
+        org_ids: Sequence[UUID],
+    ) -> list[Alert]:
+        """Open and acknowledged alerts for plot_ids within org_ids (D-T0.3).
+
+        Ordered critical first, then newest first.
+        """
+        ...
+
     async def get_target_context(
         self, *, plot_id: UUID | None, node_id: UUID | None
     ) -> AlertTarget:

@@ -171,6 +171,17 @@ class SqlAlchemyFarmRepository:
         assert farm is not None
         return farm
 
+    async def list_for_technician(self, technician_id: UUID, org_ids: Sequence[UUID]) -> list[Farm]:
+        if not org_ids:
+            return []
+        stmt = (
+            select(*_FARM_COLUMNS)
+            .where(FarmRow.technician_id == technician_id, FarmRow.org_id.in_(org_ids))
+            .order_by(FarmRow.name, FarmRow.id)
+        )
+        result = await self._session.execute(stmt)
+        return [_farm_from_row(row) for row in result]
+
 
 class SqlAlchemyPlotRepository:
     def __init__(self, session: AsyncSession) -> None:

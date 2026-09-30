@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -549,6 +549,36 @@ class SqlAlchemyReadingRepository:
         self, sensor_id: int, *, start: datetime, end: datetime
     ) -> list[ReadingPoint]:
         return await self._query_aggregate("reading_daily", sensor_id, start=start, end=end)
+
+    async def query_latest_valid_by_metric(
+        self,
+        plot_id: UUID,
+        org_id: UUID,
+        *,
+        metrics: Sequence[str],
+        now: datetime,
+    ) -> dict[str, ReadingPoint]:
+        if not metrics:
+            return {}
+        start = now - timedelta(hours=24)
+        stmt = (
+            select(SensorRow.metric, ReadingRow.time, ReadingRow.value)
+            .distinct(SensorRow.metric)
+            .join(SensorRow, SensorRow.id == ReadingRow.sensor_id)
+            .join(NodeRow, NodeRow.id == SensorRow.node_id)
+            .where(
+                NodeRow.plot_id == plot_id,
+                NodeRow.org_id == org_id,
+                SensorRow.metric.in_(metrics),
+                ReadingRow.time >= start,
+                ReadingRow.time <= now,
+                ReadingRow.value.is_not(None),
+                ReadingRow.quality.bitwise_and(int(ReadingQuality.OUT_OF_RANGE)) == 0,
+            )
+            .order_by(SensorRow.metric, ReadingRow.time.desc(), SensorRow.id)
+        )
+        result = await self._session.execute(stmt)
+        return {row.metric: ReadingPoint(time=row.time, value=row.value) for row in result}
 
 
 class SqlAlchemyPlotEventsNotifier:

@@ -10,6 +10,7 @@ user action takes the alert's own farm instead (D15).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -229,3 +230,16 @@ async def _managed_alert(
     assert alert.org_id is not None, "a stored alert carries its org_id"
     ensure_can_manage_alert(roles_by_org[alert.org_id])
     return alert
+
+
+async def list_open_alerts_for_plots(
+    *,
+    plot_ids: Sequence[UUID],
+    org_ids: Sequence[UUID],
+    alerts: AlertRepository,
+) -> list[Alert]:
+    """Open and acknowledged alerts for plot_ids within org_ids (D-T0.3).
+
+    Ordered critical first, then newest first.
+    """
+    return await alerts.list_open_for_plots(plot_ids=plot_ids, org_ids=org_ids)

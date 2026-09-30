@@ -8,6 +8,7 @@ owner and technician write, producer and viewer read only
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 from uuid import UUID
@@ -98,3 +99,13 @@ async def update_farm(
     return await farms.update(
         farm_id, farm.org_id, name=merged.name, technician_id=merged.technician_id
     )
+
+
+async def list_farms_for_technician(
+    *,
+    technician_id: UUID,
+    org_ids: Sequence[UUID],
+    farms: FarmRepository,
+) -> list[Farm]:
+    """Farms assigned to `technician_id` across `org_ids`, ordered by name (D-T0.8)."""
+    return await farms.list_for_technician(technician_id, org_ids)
