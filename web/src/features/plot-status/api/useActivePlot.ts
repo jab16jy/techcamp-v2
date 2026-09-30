@@ -63,7 +63,18 @@ export function useActivePlot(): ActivePlotState {
    */
   const plots: PlotView[] = farmIds.flatMap((_, index) => plotsQueries[index]?.data ?? [])
   const remembered = rememberedPlotId === null ? undefined : plots.find((p) => p.id === rememberedPlotId)
-  const defaultPlot = plots[0]
+
+  /**
+   * A default is only chosen from a list that can no longer change its order.
+   *
+   * A farm that FAILED is final, so the farms that answered are enough. A farm
+   * still PENDING is not: resolving now would put a later farm's plot on screen
+   * and then replace it when the first farm answers — a wrong-farm decision card,
+   * an extra `/status` request, and two writes to the remembered plot. So while
+   * anything is still loading there is no default yet.
+   */
+  const listsFinal = farmsQuery.isSuccess && !listsPending
+  const defaultPlot = listsFinal ? plots[0] : undefined
 
   // A remembered plot answers while the lists are still loading or incomplete,
   // and keeps answering once they arrive containing it.

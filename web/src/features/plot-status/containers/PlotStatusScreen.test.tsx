@@ -707,6 +707,9 @@ describe('PlotStatusScreen', () => {
       expect(screen.queryByText('Cargando parcelas…')).not.toBeInTheDocument()
     })
 
+  })
+
+  describe('partial list failure (one farm unreachable)', () => {
     it('answers for a farm that loaded when another farm fails (R3, #21 round 10)', async () => {
       // Farm 1 answers, farm 2 does not. The degradation `usePlotsByFarm` exists
       // for must reach the home too: one farm's failure is not a blank home.
@@ -740,6 +743,54 @@ describe('PlotStatusScreen', () => {
       expect(
         screen.queryByText('No se pudieron cargar las parcelas'),
       ).not.toBeInTheDocument()
+    })
+
+    it('waits for a farm still loading instead of answering for a later farm (R3 regression)', async () => {
+      // Farm 1's plots never arrive and nothing is remembered. The documented
+      // default is the first plot of the FIRST farm, so farm 2's plot must not
+      // be shown and then replaced when farm 1 lands.
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = requestUrl(input as Request)
+        if (url.includes('/stream')) return new Promise<Response>(() => {})
+        if (url.includes('/farms/farm-1/plots')) return new Promise<Response>(() => {})
+        if (url.includes('/farms/farm-2/plots')) {
+          return jsonResponse([
+            { id: 'plot-2', farm_id: 'farm-2', name: 'Lote Del Segundo', area_ha: 1, irrigation_system: 'drip' },
+          ])
+        }
+        return jsonResponse({
+          items: [
+            { id: 'farm-1', org_id: 'org-1', name: 'Finca Uno' },
+            { id: 'farm-2', org_id: 'org-1', name: 'Finca Dos' },
+          ],
+          next_cursor: null,
+        })
+      })
+
+      renderScreen()
+
+      // Negative: the later farm's plot is never the answer while the first is
+      // still loading, so nothing about it reaches the screen or the store.
+      // Wait until farm 2 HAS answered, otherwise this passes by watching the
+      // screen before the second farm's plots ever arrive.
+      await waitFor(() =>
+        expect(
+          vi.mocked(fetch).mock.calls.some((call) =>
+            requestUrl(call[0] as Request).includes('/farms/farm-2/plots'),
+          ),
+        ).toBe(true),
+      )
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      })
+      expect(screen.getByText('Cargando parcelas…')).toBeInTheDocument()
+      expect(screen.queryByText(/Lote Del Segundo/)).not.toBeInTheDocument()
+      expect(
+        vi.mocked(fetch).mock.calls.some((call) =>
+          requestUrl(call[0] as Request).includes('/plots/plot-2/status'),
+        ),
+      ).toBe(false)
+      expect(getActivePlotId('org-1')).toBeNull()
     })
 
     it('remembers the default plot, so the next offline open has one to ask for', async () => {
