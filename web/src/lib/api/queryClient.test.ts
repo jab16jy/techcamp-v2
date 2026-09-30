@@ -195,6 +195,36 @@ describe('persisted query cache (docs/07 §Flujo de datos y offline)', () => {
     expect(await db.queryCache.get(PERSIST_CACHE_KEY)).toBeUndefined()
   })
 
+  it('never stores the raw session token beside the cache', async () => {
+    const before = newClient()
+    before.setQueryData(STATUS_KEY, STATUS)
+    await persistQueryClientSave({ ...persistOptions, queryClient: before })
+
+    const row = await db.queryCache.get(PERSIST_CACHE_KEY)
+    if (row === undefined) throw new Error('nothing was persisted')
+
+    // The WHOLE stored value, not just the cache text: the row is the one place
+    // a second long-lived copy of a bearer credential could hide, and sign-out
+    // wipes this cache so the phone stops holding the previous user's secrets.
+    expect(row.value).not.toContain(TOKEN)
+    // Bound to that session still, by a digest rather than by the secret.
+    const stored = unwrap(row.value)
+    expect(stored.session).not.toBe(TOKEN)
+    expect(stored.session).toMatch(/^[0-9a-f]{64}$/)
+
+    // The control: a digest still restores its own session.
+    const same = restoredClient()
+    await persistQueryClientRestore({ ...persistOptions, queryClient: same })
+    expect(same.getQueryData(STATUS_KEY)).toEqual(STATUS)
+
+    // And the negative: a different user still gets nothing.
+    setSession('token-of-another-user', ORG_ID)
+    const other = restoredClient()
+    await persistQueryClientRestore({ ...persistOptions, queryClient: other })
+    expect(other.getQueryData(STATUS_KEY)).toBeUndefined()
+    expect(await db.queryCache.get(PERSIST_CACHE_KEY)).toBeUndefined()
+  })
+
   it('neither restores nor keeps a cache another session wrote', async () => {
     const before = newClient()
     before.setQueryData(STATUS_KEY, STATUS)

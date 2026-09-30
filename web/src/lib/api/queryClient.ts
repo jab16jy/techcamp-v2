@@ -48,14 +48,33 @@ export const PERSIST_CACHE_KEY = 'techcamp.query-cache'
 /**
  * What one `queryCache` row holds: the persister's opaque JSON bound to the
  * session that wrote it. A row is the previous session's data the moment the
- * next user signs in, so the token it was written under is stored beside it and
- * checked on every read.
+ * next user signs in, so the session it was written under is stored beside it
+ * and checked on every read.
  */
 interface PersistedCacheRow {
-  /** The token of the session that wrote the row. */
+  /** Hex SHA-256 of the session token — never the token itself. */
   session: string
   /** The persister's own JSON: its envelope and dehydrated state, opaque here. */
   cache: string
+}
+
+/**
+ * Hex SHA-256 of a session token.
+ *
+ * Binding a row to its session is a comparison, and a comparison never needs the
+ * token back — only something derived from it. Storing the token itself would
+ * put a second long-lived copy of a bearer credential in IndexedDB, which is
+ * precisely what the sign-out wipe exists to stop: the phone must not keep the
+ * previous user's secrets. A digest authorizes exactly its own row and nothing
+ * else, and one that leaked is not a credential anyone can present.
+ *
+ * `crypto.subtle` needs a secure context, which a PWA already requires to
+ * install and run; where it is missing the digest rejects, the adapter's `catch`
+ * absorbs it, and the cache simply does not persist.
+ */
+async function tokenDigest(token: string): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 /** Anything this store did not write — an older format, a torn write — is no cache. */
@@ -105,7 +124,7 @@ const dexieStorage = {
       const row = await db.queryCache.get(key)
       if (row === undefined) return null
       const parsed = parseRow(row.value)
-      if (parsed === null || parsed.session !== token) {
+      if (parsed === null || parsed.session !== (await tokenDigest(token))) {
         await db.queryCache.delete(key)
         return null
       }
@@ -124,7 +143,7 @@ const dexieStorage = {
       // Nothing to restore for a session that does not exist, and a row no one
       // could read is a row nobody should write.
       if (token === null) return
-      const row: PersistedCacheRow = { session: token, cache: value }
+      const row: PersistedCacheRow = { session: await tokenDigest(token), cache: value }
       await db.queryCache.put({ key, value: JSON.stringify(row) })
     } catch {
       /* a cache that cannot be written is a cache that is not persisted */
