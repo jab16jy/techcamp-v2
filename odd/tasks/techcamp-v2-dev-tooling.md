@@ -171,6 +171,13 @@ Issue #139 (evidence from E7/E8):
   `../sgconfig.yml` explicitly rather than relying on ast-grep's upward search for it, in the
   justfile and in CI alike, because a rule's `files` and `ignores` resolve against the config file
   and not against the working directory (R2-astgrep-wrong-working-directory).
+- D-T3.1 A random seed is a **session** knob, not a property of a test. `--randomly-seed=N` runs
+  the whole session in that order, and it is the only knob that proves anything about order
+  dependence. The two debugging flags are not interchangeable, which is the part worth writing
+  down: `-p no:randomly` disables the plugin entirely and therefore also drops the per-test
+  `random.seed()` reset, so code that relies on that reset changes behaviour under it;
+  `--randomly-dont-reorganize` keeps the per-test reset and only pins the file order. Reach for
+  the second while debugging one test and the first only when the plugin itself is in question.
 
 - D-T5.1 CI runs the pinned **gitleaks binary**, not `gitleaks/gitleaks-action`, even though
   the action needs no licence key on this personal account (its own README: "If you are
@@ -253,6 +260,76 @@ Issue #139 (evidence from E7/E8):
   range scan never walks them; a new one is a line-scoped `# gitleaks:allow`, never a blanket
   allowlist of the test tree, the same rule D-T2.6 states for ast-grep.
 
+- D-T5b.1 The path filter is **per job**, never a workflow-level `on.pull_request.paths`, and
+  the two halves of that are both in the current GitHub docs rather than in memory. A
+  *workflow* skipped by path filtering leaves its checks "Pending", and a PR that requires
+  them is blocked from merging; a *job* skipped by a job-level `if:` reports "Success" and
+  does not block the merge, even as a required check. So the same filter is safe at job
+  level and fatal at workflow level, and `gitleaks` therefore carries no `if:` at all. A
+  fact that shapes how much this decision is worth today: **this repository has no required
+  status checks and cannot configure any** — `gh api …/branches/main/protection` answers
+  `403 "Upgrade to GitHub Pro or make this repository public to enable this feature"`, so
+  branch protection with required checks is a paid-plan feature for a private repo. The
+  check contract is therefore advisory on this plan, and this shape is what keeps it
+  satisfiable the day the plan or the visibility changes. The workflow-level claim is the
+  reason the shape is *not* merely convenient: the moment someone moves this filter up to
+  `on:`, a docs-only PR has no green server check at all and, on a plan that does enforce
+  checks, that PR can never merge.
+- D-T5b.2 The changed-file list is computed by a `changes` job with
+  `git diff --name-only "$(git merge-base base head)" head`, not `dorny/paths-filter` and
+  not a `GET /pulls/N/files` call. Three reasons, and the range is the load-bearing one:
+  GitHub itself builds a PR's changed-file list from the **three-dot** diff
+  (workflow syntax, "Git diff comparisons"), so the merge base is the same list a `paths:`
+  filter would have matched, and it is the very range the `gitleaks` job already scans
+  (D-T5.2) — one notion of "the commits this PR adds" in the file, not two. The checkout
+  that the diff needs is `fetch-depth: 0`, the same shape the `gitleaks` job already uses
+  for the same reason. And Ponytail: the whole classifier is two `grep -Eq` lines over a
+  diff the runner has already fetched, so a third-party action (and its own supply chain
+  and its own release cadence) buys nothing, in a repository whose only third-party actions
+  are `astral-sh/setup-uv` and `actions/setup-node`. The cost is one extra always-on job of
+  a checkout and a diff, and the two filtered jobs now start after it instead of in
+  parallel.
+- D-T5b.3 Both conditions are written **fail-closed**:
+  `if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.<job> == 'true') }}`
+  — "run unless the filter positively decided this job is not needed". The plain
+  `if: needs.changes.outputs.server == 'true'` is the shape everyone writes, and it is a
+  fail-open trap here, because the same "a skipped job reports Success" fact that makes
+  the filter legal also means a `changes` job that itself failed — a checkout that could
+  not fetch, a merge base that was not in the history — turns the server suite into a
+  *skipped* job, which is a green check that ran nothing. Written this way, anything the
+  filter could not decide runs the full gate, which is the same default the ast-grep rules
+  and the gitleaks tamper control take elsewhere in this feature. `!cancelled()` rather than
+  `always()` because the docs name it as the alternative that still respects cancellation:
+  with `cancel-in-progress: true` a superseded run must stop, not start a 7 min suite
+  nobody is waiting for. Rejected: an always-on aggregate gate job that needs all three and
+  fails when a needed job was skipped — it closes the same hole, and costs a fifth job, a
+  fifth required-check name, and a real design question this repository has no answer to
+  yet (it cannot even configure required checks, D-T5b.1).
+- D-T5b.4 ast-grep **stays in the server job**. Under this filter the question does not
+  arise, and the reason is structural: every file an ast-grep rule can be changed in is
+  already in the server job's list — `sgconfig.yml`, `rules/**`, `rule-tests/**` (the rule
+  tests and their snapshots) — and the only tree any rule governs today is `server/src`,
+  which is `server/**`. So no edit to a rule, its test or its config can skip the job that
+  runs `ast-grep test` and `ast-grep scan`. A separate always-on ast-grep job would put a
+  `uv sync` and two rule runs in the path of every docs-only PR to check a rule that
+  provably did not change. Recorded limit, to be honoured in the work unit that hits it: a
+  future rule governing a tree outside the server job's paths must either move to the job
+  that owns that tree or extend the filter in the same commit. The `rules/+docs` line of
+  the evidence table is that case on real history (`780b46b`, a commit that changed
+  `rules/no-naive-today.yml` and the feature doc and nothing else): the server job runs.
+- D-T5b.5 The `gitleaks` job is **not touched at all** — the T5b diff is pure insertions
+  (`git diff --stat`: `ci.yml | 83 +++`, 0 deletions) and adds no `if:`, no `needs:` and no
+  step to that job, so always-on, `--remerge-diff` over `merge-base(base, head)..head`, the
+  checksum gate and `.gitleaksignore` are unchanged by construction rather than by review.
+  `concurrency` is workflow-level, not job-level, which is also why it cannot gate it. The
+  `infra/**` entry in the server list is the one path that is not a file the server job
+  reads, and it is deliberate: `infra/compose.yaml` and `infra/postgres/init-extensions.sql`
+  describe the database the same pytest suite runs against locally, so a divergence between
+  that file and the CI service image is a change that must be gated by the job that would
+  notice it. The `justfile` entry is the same argument: CI mirrors its check list, so a
+  justfile change is a change to what CI is supposed to run. Rejected: `infra/**` on the
+  web job (nothing there is read by anything web) and a workflow-level `paths:` (D-T5b.1).
+
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
   Alembic head), `gate *paths`, `gate-full`, `gate-lane base`. AGENTS.md Commands + the
@@ -260,22 +337,32 @@ Issue #139 (evidence from E7/E8):
   one broken commit (in a scratch branch, deleted after).
 - [x] T2 ast-grep: pinned dev dep, `sgconfig.yml`, rule `no-naive-today` + rule tests (RED
   first), wired into `gate-fast` and CI.
-- [ ] T3 pytest-randomly: dev dep; full suite on a clean DB with 3 seeds; flakes reported on
+- [x] T3 pytest-randomly: dev dep; full suite on a clean DB with 3 seeds; flakes reported on
   #89 with seeds; fix only trivial ones.
 - [ ] T4 **deferred to #194** by the owner (2026-09-29), out of scope for this feature.
   `alembic check` trial on a clean DB: adopt (with a small `include_object` filter if
   needed) into `gate-full` and CI, or reject with evidence in #139.
 - [x] T5 gitleaks in CI (docs/09:78): verify the action/binary needs no license for this
   personal repo; run it locally once over the history.
-- [ ] T5b CI cost: `concurrency` (group per workflow + PR ref, `cancel-in-progress: true`) on
+- [x] T5b CI cost: `concurrency` (group per workflow + PR ref, `cancel-in-progress: true`) on
   every PR workflow; per-JOB path filter (never workflow-level `paths:`, which leaves required
   checks pending): server job on `server/**`, `infra/**`, `.github/workflows/**`; web job on
   `web/**`, `.github/workflows/**`; ast-grep and gitleaks always. Skipped jobs must report
   success. Evidence: a web-only and a docs-only change skip the server job (act or a draft PR
   run, owner go needed for a push). Data: last 40 PRs, 24 server-only, 13 web-only; server
-  job ~7 min, web ~2 min; repo private (2000 min/month free plan).
+  job ~7 min, web ~2 min; repo private (2000 min/month free plan). Landed as a `changes` job
+  plus a fail-closed `if:` on `server` and `web`; `gitleaks` and `changes` are unconditional
+  (D-T5b.1 … D-T5b.5). Evidence is the extracted filter run on real history plus actionlint;
+  no live Actions run, which needs a push (D-T5b.2, Progress).
 - [ ] T6 Close: `just gate-full` on a clean DB, CI ↔ justfile check list diff, feature doc
-  progress, #139 comment with results.
+  progress, #139 comment with results. Plus, as its own `docs(agents)` commit (owner decision
+  2026-09-29): trim AGENTS.md with the `writing-for-agents` skill from ~164 to ~100-110 lines —
+  the ast-grep paragraph becomes one line stating WHEN to add a rule ("When a review catches the
+  same mistake a second time, encode it as an ast-grep rule: `rules/<id>.yml` plus
+  `rule-tests/<id>-test.yml` with valid and invalid cases"); the CI paragraph becomes one line
+  (CI = `gate-fast` + the full suites + gitleaks, and gitleaks is CI-only); one line per just
+  recipe; Layout keeps only the non-derivable facts; the review-findings bullets go 3 → 2. The
+  docs table, Architecture rules and Testing sections stay.
 
 ## Acceptance criteria
 - `just gate server/tests/logbook` runs static checks plus only those tests, against this
@@ -314,6 +401,38 @@ Issue #139 (evidence from E7/E8):
   remaining limit — an aliased `datetime` import is not matched — is written in the rule's own
   `notes` with the evidence that the repository imports no alias, so it lives where the next
   person editing the rule will read it rather than only in this doc.
+- T3 is done, in its own lane (`feat/dev-tooling-t3` in the `dev-tooling-t3` worktree, a separate
+  session) and merged into this branch at `822489a`. Round 1, lineage `review-7c760a6cbca01a44`,
+  `high` risk (a `subprocess` call in the test), four lenses, **zero findings**; approved and
+  acknowledged, `authority: burned`.
+- T5 took two rounds and three parent-gated corrections, which is the record worth keeping: every
+  one of them was a hole in the *git walk*, and none was visible by reading the command.
+  - Round 1, lineage `review-095ab09de7d1a0a3`, base `780b46b`: 3 files / 200 lines, `high` risk
+    (`shell_source` in `ci.yml`), four lenses, correction budget 100. Two CRITICALs from two
+    lenses independently — `R1-001` (risk) and `R4-001` (resilience), both `deterministic`, both
+    `introduced` — with one root cause: `--no-merges`, inherited from gitleaks-action, drops a
+    merge commit, so a credential that exists only in a **conflict resolution** is never scanned.
+    Fixed in the single bounded correction `2cc0d0a` (`-m`). Approved and acknowledged,
+    `authority: burned`. Two non-blocking advisories survived as informational:
+    `R2-PR-EVENT-SCOPE` (no explicit event guard, so a future `push` would pass empty base/head)
+    and `R2-DUPLICATED-POLICY-RATIONALE` (the licence rationale duplicated in doc and YAML).
+  - Round 2, lineage `review-c0c0c311c59ce08f`, base `2cc0d0a`: the correction only, 2 files / 90
+    lines, `high` risk, budget 45. One CRITICAL, `R1-001` (risk, `deterministic`, `worsened`),
+    claiming `--remerge-diff` opens a bypass for credentials added manually during an otherwise
+    clean merge. **Refuted, not fixed**: the bounded correction `f660ab1` was spent on evidence
+    in D-T5.5, with no change to `ci.yml`. The re-merge diff is the merge result against git's
+    own automatic re-merge, so merge-unique content necessarily differs from it and shows up; both
+    plausible shapes measure `1 leak` / exit 1. The parent reproduced the clean-merge case
+    independently and agreed. Approved and acknowledged, `authority: burned`, with `R1-001`
+    carried as a non-blocking advisory.
+  - The parent gate rejected two of my own corrections before the round ever saw them: the
+    `--first-parent` flag (a lane merged through a second parent was never visited, fixed in
+    `dab375d`) and `-m` (it re-reports main when main is merged into an epic branch, replaced by
+    `--remerge-diff` in `3596e06`). Both were proven on a scratch branch, both scratch
+    worktrees removed afterwards.
+  - `5b2993d` (`.gitleaksignore`, the two `65b273e` prose fingerprints) is part of the T5 slice
+    and was parent-gated: the parent re-ran the exact scan over `merge-base(main, HEAD)..HEAD`
+    and got no leaks, with `gate-fast` exit 0.
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
@@ -530,13 +649,141 @@ Issue #139 (evidence from E7/E8):
     in this task touches the recipes; the run confirms the tree.
   - Not run here, by design: a live Actions run. The brief forbids a push without the owner's
     go, so the job's first real execution is the parent's gate on the PR.
+  - T5 closed: the parent gate passed on `5b2993d` (their own run: `gitleaks --remerge-diff` over
+    `merge-base(main, HEAD)..HEAD` → no leaks, `gate-fast` exit 0), and the T3 lane was merged in
+    as `822489a` (clean, no conflicts). After that merge, on the merged branch: `uv lock --check`
+    OK, `gate-fast` exit 0, `gitleaks` over 19 commits **including the real lane merge** → no
+    leaks, and `just gate server/tests/simulator` → 34 passed. That last run is the one that
+    matters for T5b: the lane merge is a real two-parent merge in this repository's history, and
+    the committed scan shape walks it and stays green.
+- 2026-09-29 T3: `pytest-randomly` in the server dev group, in its own lane and session
+  (`feat/dev-tooling-t3` in the `dev-tooling-t3` worktree), merged into this branch at `822489a`.
+  Two commits: `b79b5a0` `fix(test)` and `5e9b374` `build`.
+  - `b79b5a0` `fix(test)`: a baseline-scoped assertion in `server/tests/simulator/test_provision.py`.
+    RED first — the assertion failed under `--randomly-seed=101` before the fix.
+  - `5e9b374` `build`: `pytest-randomly>=5.0.0` as the dev dependency, plus the AGENTS.md
+    Testing note.
+  - Three full seeded runs on a clean database: seeds **101, 202 and 7**, `1120 passed` each, no
+    failures on any of them.
+  - Four failures appeared only on an **abandoned** database, and did not reproduce on a clean
+    one. They are filed as unreproduced in #89
+    (https://github.com/jab16jy/techcamp-v2/issues/89#issuecomment-5899715148), together with the
+    real gap they pointed at: a test that writes without `db_session` gets no teardown. That gap
+    is #89's own scope and is not fixed here — the finding is that the seeded runs are clean, so
+    this feature does not own it.
+  - D-T3.1: a seed is a **session knob**, not a test annotation. `-p no:randomly` also drops the
+    per-test `random.seed()` reset, while `--randomly-dont-reorganize` keeps that reset and only
+    pins the file order, so the latter is the one to reach for while debugging a single test.
+  - RDD lineage `review-7c760a6cbca01a44`, `high` risk (a `subprocess` call in the test), four
+    lenses, **zero findings**; approved and acknowledged, `authority: burned`.
+
+- 2026-09-29 T5b: `concurrency` at workflow level (one in-flight run per PR, `cancel-in-progress:
+  true`), a `changes` job that classifies the PR's changed files once, and a fail-closed `if:` on
+  `server` and `web`. `ci.yml` is the only CI file, and the diff is **pure insertions**:
+  `ci.yml | 83 ++++`, 0 deletions — the `gitleaks` job gained no `if:`, no `needs:` and no step,
+  so T5's walk is unchanged by construction (D-T5b.5).
+  - **The three inherited constraints, each checked against the current docs and this file:**
+    - *gitleaks always-on.* `yaml.safe_load` of the edited shape: `gitleaks` has neither `if`
+      nor `needs`, and neither has `changes`, so both run on every PR; the filter is expressed
+      only as the two `if:` lines. A `paths:` filter would have skipped the whole workflow and
+      left its check "Pending" (docs).
+    - *a skipped job reports success.* Same docs, opposite clause: a job skipped by a job-level
+      `if:` reports "Success" and does not block the merge. That is what makes this shape legal
+      and it is also what made the conditions fail-closed rather than plain (D-T5b.3).
+    - *the lane merge stays green.* The commit does not touch the scan walk, and the walk over
+      the range that contains the real two-parent merge `822489a` is green — the gitleaks lines
+      below.
+  - **The filter step, extracted from `ci.yml` with `yaml.safe_load` and executed as CI runs
+    it** (`PR_BASE`/`PR_HEAD`/`GITHUB_OUTPUT` set), against real ranges from this history, not a
+    hand-written file list. `server_paths` and `web_paths` are the two regexes in the job:
+    | range (real commits) | files it touches | `server` | `web` |
+    |---|---|---|---|
+    | `0608681^..0608681` | `web/**` only (E8 PR #187) | skip | run |
+    | `0078e40^..0078e40` | `server/**` only | run | skip |
+    | `0d6b96f^..0d6b96f` | `odd/tasks/**` only (docs) | skip | skip |
+    | `00becf1^..00becf1` | `.github/workflows/ci.yml` only | run | run |
+    | `001e7cb^..001e7cb` | `justfile` only (T1's RDD correction) | run | skip |
+    | `780b46b^..780b46b` | `rules/no-naive-today.yml` + the feature doc | run | skip |
+    | `main..HEAD` | the whole feature branch | run | run |
+    | `main..main` | nothing | skip | skip, exit 0 |
+    Every row exited 0. The last row matters for the `set -euo pipefail`: an empty diff must
+    not fail the step, and it does not, because the `grep -Eq` that finds nothing is the
+    condition of an `if`, not a command. The two middle rows are the ones a naive filter gets
+    wrong: the justfile is how CI's check list is written down, and a rule file is the whole
+    ast-grep surface — under `server/**` and `web/**` alone, both would have skipped every job.
+  - **Docs, from ctx7 (`/websites/github_en_actions`), not memory.** `concurrency` group and
+    `cancel-in-progress: true`, including the docs' own reason for putting `github.workflow` in
+    the group (a bare `github.ref` would cancel other workflows' runs on the same ref);
+    `jobs.<job_id>.if` and "a job that is skipped will report its status as 'Success' … even if
+    it is a required check" against the workflow-level "checks … will remain in a 'Pending'
+    state … blocked from merging"; `needs.<job_id>.outputs` and `needs.<job_id>.result`
+    (success/failure/cancelled/skipped); and `!cancelled()` as the recommended alternative to
+    `always()` so a superseded run still stops. One gap, named: **ctx7 had no recipe for the
+    changes-job pattern itself** (how to publish a job output and read it in a later job's
+    `if:`), so that one came from the official workflow-syntax reference, `jobs.<job_id>.outputs`
+    and `jobs.<job_id>.needs`.
+  - **A fact that limits how much the check contract is worth today:** `gh api
+    repos/jab16jy/techcamp-v2/branches/main/protection` answers `403 "Upgrade to GitHub Pro or
+    make this repository public to enable this feature"`. This repository has **no required
+    status checks and cannot configure any** on its plan, so the filter's real effect today is
+    Actions minutes, and the "skipped reports success" property is what keeps the shape valid
+    when that changes (D-T5b.1). It is also why no aggregate gate job was added (D-T5b.3).
+  - `actionlint` 1.7.12 on `ci.yml`: `Found 0 parse errors`, `total 0 errors`, exit 0, with
+    shellcheck 0.11.0 on `PATH` so its rule ran rather than being silently disabled (it is
+    absent from the verbose output only when the binary is missing). The extracted step linted
+    directly is clean at `--severity=style -s bash` (exit 0), and the positive control (the same
+    script with one `fi` deleted) is reported — `SC1046`, `SC1073`, `SC1047`, exit 1 — so the
+    rule is live and not merely enabled. The `pyflakes` rule is disabled because no step in this
+    workflow is Python, which is the same advisory T5 recorded.
+  - `just gate-fast` → exit 0, all nine static steps (seven server, `eslint`, `tsc`).
+  - gitleaks, before this commit: the T5 step re-extracted from the edited `ci.yml` with
+    `yaml.safe_load` and run as CI runs it (`RUNNER_TEMP`, `GITLEAKS_VERSION`, `PR_BASE=main`,
+    `PR_HEAD=HEAD`) → checksum "La suma coincide", gitleaks `20 commits scanned`,
+    **`no leaks found`**, exit 0. That range is `9519e05..HEAD`, which `git rev-list` counts as
+    21 commits and which contains the real two-parent merge `822489a`; the one-commit gap
+    between git's count and gitleaks' printed one is that merge commit, the same accounting T5
+    recorded (499 scanned of 660 reachable, the rest merges). The claim that the walk reaches a
+    lane merged through a second parent is T5's, proven on a scratch worktree and refuted once
+    (D-T5.2, D-T5.5); this task does not touch the walk, and the diff proves it — 0 deletions
+    inside the `gitleaks` job.
+  - `gitleaks dir` over the exact bytes this commit is about to add — `ci.yml` and this file,
+    copied to a scratch directory so nothing else was in the scan — 75 KB, **`no leaks found`**,
+    exit 0. That is the check that matters here: `65b273e` documented a `generic-api-key` false
+    positive by pasting the assignment into prose, in this very file, and a comment can re-arm a
+    rule the same way. `.gitleaksignore` is **not touched** (still the two line-scoped `65b273e`
+    fingerprints) and no `# gitleaks:allow` was added anywhere. The post-commit re-run, the one
+    that includes this commit, is the parent gate's step, as it was for T5.
+  - Not done here, and why: no live Actions run and no `act` run — `act` is not installed on
+    this host, and a live run needs a push, which needs the owner's go (the brief forbids it).
+    The parts a live run would add are the two `if:` expressions themselves, whose semantics
+    (`needs.*.result`, `!cancelled()`, skipped → Success) are documented behaviour and not
+    locally testable; the classifier they call has been executed directly instead.
+  - `AGENTS.md` deliberately **not** touched. Its CI paragraph is still literally true — the
+    server job still runs the same checks, the gitleaks job still scans the commits the PR adds
+    — but it does not mention the filter or the `changes` job, and T6's checklist already
+    rewrites that paragraph into one line, so the sentence is T6's to write rather than a
+    second commit fighting over the same paragraph.
 
 ## Next step
-T2 committed and its review follow-ups fixed; the T2 round is closed (lineage
-`review-43815f8285e2faaf`, approved, `authority: burned`). T3 (pytest-randomly) is owned by a
-separate session on `feat/dev-tooling-t3` in the `dev-tooling-t3` worktree — this lane does not
-touch it. T5 (gitleaks in CI) is committed and awaits the parent's gate; its RDD round comes
-after that go. This lane resumes at T5b (`concurrency` plus per-JOB path filters), then T6. Two
-things T5b inherits: the `gitleaks` job reads `github.event.pull_request.base.sha` and
-`head.sha`, so a path filter must not skip it, and a skipped job must report success for
-required checks.
+T1, T2, T3, T5 and T5b are done and merged into this branch (T3 as `822489a`), with their review
+rounds closed, approved and acknowledged. T4 is deferred to #194 by the owner and is out of this
+feature's scope. What is left is **T6**.
+
+T6 closes the feature, and it inherits four things from T5b:
+- the CI ↔ justfile parity sentence in `AGENTS.md` now has to account for a filter: the check
+  **list** is still exactly `gate-fast`'s seven server checks plus the full suites, but a
+  docs-only PR runs neither suite, so the sentence has to say "the list" and not "the run"
+  (D-T5b.1, and the reason the trim rewrites that whole paragraph into one line).
+- `ci.yml` gained a fourth job. `changes` is unconditional and cheap, `gitleaks` is
+  unconditional by contract, and `server`/`web` are the only filtered ones — that is the shape
+  T6's check-list diff should diff against, and the `changes` job's `git diff` is not a check
+  `gate-fast` mirrors (D-T5b.2).
+- a **skipped** CI job is a passed check, so `just gate-full` at close still has to be the run
+  that proves the full suites locally: a green PR is not evidence that a suite passed, only
+  that the filter did not skip it.
+- this repository has no required status checks and cannot configure any on its current plan
+  (D-T5b.1), so CI is advisory here. If the owner ever needs CI to block a merge, the plan or
+  the repository visibility has to change first, and the job names become required checks —
+  which is exactly why the filter is per job and `gitleaks` is always-on.
+
+Then the #139 comment with the results, and the AGENTS.md trim as its own `docs(agents)` commit.

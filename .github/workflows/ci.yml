@@ -5,8 +5,88 @@ name: CI
 on:
   pull_request:
 
+# One in-flight run per PR: a second push to the same PR cancels the first, so a review
+# round costs one run instead of one per commit, and a superseded run stops spending the
+# ~7 min server job. `github.workflow` keeps the group scoped to THIS workflow, which is
+# the current docs' own recommendation: a bare `github.ref` would cancel the runs of
+# every other workflow on the same ref. The PR number is the per-PR ref — for a
+# `pull_request` event `github.ref` is already `refs/pull/<n>/merge` — and it stays as
+# the fallback if a `push` trigger is ever added (D-T5b.1).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Which jobs this PR needs at all. It always runs, it is the only place a changed file
+  # is classified, and nothing waits for it except the two filtered jobs.
+  #
+  # The filter is per JOB, never a workflow-level `on.pull_request.paths`, and the two
+  # facts that force that are both in the current docs: a workflow skipped by path
+  # filtering leaves its checks "Pending" and blocks a PR that requires them, while a job
+  # skipped by a job-level `if:` reports "Success" and satisfies the requirement. So
+  # `gitleaks` carries no `if:` and no `needs:` at all — always-on, and ungated by this
+  # job (D-T5b.1, D-T5b.5).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The same reason and the same depth as the gitleaks job: the diff is a range
+          # over history, and the merge base is what makes it the PR's own changes.
+          fetch-depth: 0
+      - id: filter
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # GitHub builds a pull request's changed-file list from the three-dot diff
+          # (workflow syntax, "Git diff comparisons"), so this is the very list a
+          # `paths:` filter would have matched — and the very range `gitleaks` scans.
+          merge_base=$(git merge-base "$PR_BASE" "$PR_HEAD")
+          changed=$(git diff --name-only "$merge_base" "$PR_HEAD")
+          echo "merge base: $merge_base"
+          echo "changed files:"
+          printf '%s\n' "$changed"
+          # The paths each job actually reads, and nothing wider.
+          #  - server: its own tree; `sgconfig.yml`, `rules/` and `rule-tests/`, which its
+          #    two ast-grep commands name from the repository root; the `justfile`, which
+          #    mirrors its check list; `infra/`, whose compose file and Postgres
+          #    extensions describe the database this same suite runs against locally, so
+          #    a divergence from this job's service image surfaces here and not in a
+          #    seminar; and `.github/workflows/`, which is what this job runs.
+          #  - web: its own tree and `.github/workflows/`. It reads nothing at the root.
+          # `.github/workflows/` is in both on purpose: the one change that can break a
+          # job's own steps must never be the change that skips that job (D-T5b.4).
+          # No `dorny/paths-filter` and no API call: the checkout already has the
+          # history these few `grep` lines read (D-T5b.2).
+          server_paths='^(server|infra|rules|rule-tests)/|^justfile$|^sgconfig\.yml$|^\.github/workflows/'
+          web_paths='^web/|^\.github/workflows/'
+          if printf '%s\n' "$changed" | grep -Eq "$server_paths"; then
+            echo "server=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "server=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$changed" | grep -Eq "$web_paths"; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "web=false" >> "$GITHUB_OUTPUT"
+          fi
+
   server:
+    # Runs unless `changes` positively decided this PR touches nothing this job reads.
+    # Written that way on purpose: a skipped job reports "Success", so the plain
+    # `if: needs.changes.outputs.server == 'true'` would turn a `changes` job that itself
+    # failed — a checkout that could not fetch, a merge base that was not there — into a
+    # green PR with no server suite at all. This way anything the filter could not decide
+    # runs the full gate. `!cancelled()` and not `always()`, so a superseded run from
+    # `concurrency` still stops instead of starting a 7 min job nobody is waiting for
+    # (D-T5b.3).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.server == 'true') }}
+    needs: changes
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,6 +140,9 @@ jobs:
       - run: uv run pytest
 
   web:
+    # The same condition as `server`, and the same reason (D-T5b.3).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.web == 'true') }}
+    needs: changes
     runs-on: ubuntu-latest
     defaults:
       run:
