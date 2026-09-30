@@ -1,11 +1,13 @@
 import { lazy, Suspense } from 'react'
-import type { RouteObject } from 'react-router'
+import { Link, type RouteObject } from 'react-router'
 import { AuthenticatedShell } from './AuthenticatedShell'
 import { SignInScreen } from '../features/auth/containers/SignInScreen'
 import { SignOutButton } from '../features/auth/components/SignOutButton'
 import { requireAuthLoader } from '../features/auth/guard'
 import { PlotsScreen } from '../features/plots/containers/PlotsScreen'
 import { NotificationsCard } from '../features/push/components/NotificationsCard'
+import { buttonVariants } from '../design-system/ui/button'
+import { cn } from '../design-system/ui/utils'
 import { useActiveOrgRole } from '../lib/api/me'
 import { PlaceholderPage } from './PlaceholderPage'
 
@@ -24,11 +26,46 @@ const PlotStatusScreen = lazy(() =>
   })),
 )
 
-/** Inicio tab wrapper: the plot status screen, loaded on demand (E9 T5, docs/07 §Mapa de pantallas). */
+// eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
+const TrayScreen = lazy(() =>
+  import('../features/visits/containers/TrayScreen').then((module) => ({
+    default: module.TrayScreen,
+  })),
+)
+
+/**
+ * Inicio tab wrapper: renders TrayScreen when the caller has the technician role
+ * in the active organization, and PlotStatusScreen for any other role (D-T0.9, docs/07).
+ */
 // eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
 function InicioTab() {
+  const role = useActiveOrgRole()
   return (
     <Suspense fallback={null}>
+      {role === 'technician' ? <TrayScreen /> : <PlotStatusScreen />}
+    </Suspense>
+  )
+}
+
+/**
+ * Estado child route (D-T6.1): renders PlotStatusScreen with a link back to Inicio
+ * ("Volver a la bandeja"), so tapping a plot from the technician tray opens its status.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- route wrapper lives with routes
+function EstadoRoute() {
+  return (
+    <Suspense fallback={null}>
+      <div className="px-4 pt-4">
+        <Link
+          to="/"
+          className={cn(
+            buttonVariants({ variant: 'ghost' }),
+            'gap-1 px-2 text-text-muted hover:text-text',
+          )}
+        >
+          ← Volver a la bandeja
+        </Link>
+      </div>
       <PlotStatusScreen />
     </Suspense>
   )
@@ -73,6 +110,7 @@ function PlotsTab() {
 
 const tabRoutes: RouteObject[] = [
   { index: true, element: <InicioTab /> },
+  { path: 'estado', element: <EstadoRoute /> },
   { path: 'alertas', element: <PlaceholderPage title="Alertas" /> },
   { path: 'bitacora', element: <BitacoraTab /> },
   { path: 'parcelas', element: <PlotsTab /> },

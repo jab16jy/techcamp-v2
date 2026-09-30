@@ -8,6 +8,9 @@ import { clearSession, setSession } from '../lib/api/session'
 import { getSyncState, recordSyncOutcome } from '../lib/sync/syncState'
 import { buildRoutes } from './routes'
 
+import { screen } from '@testing-library/react'
+import { saveMeSeed } from '../lib/api/me'
+
 describe('buildRoutes', () => {
   it('excludes the dev-only catalog route when none is supplied', () => {
     const routes = buildRoutes(null)
@@ -21,11 +24,127 @@ describe('buildRoutes', () => {
     expect(routes[0].children?.some((route) => route.path === 'dev/ui')).toBe(true)
   })
 
-  it('always includes the five tabs at the root', () => {
+  it('includes the five tabs and the estado route at the root', () => {
     const routes = buildRoutes(null)
 
     expect(routes[0].path).toBe('/')
-    expect(routes[0].children?.length).toBe(5)
+    expect(routes[0].children?.some((route) => route.index === true)).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'estado')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'alertas')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'bitacora')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'parcelas')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'mas')).toBe(true)
+    expect(routes[0].children?.length).toBe(6)
+  })
+})
+
+describe('role-based routing and /estado', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof Request
+              ? input.url
+              : String(input)
+        if (url.includes('/api/v1/me/tray')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.includes('/api/v1/farms')) {
+          return new Response(JSON.stringify({ items: [], next_cursor: null }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+  })
+
+  afterEach(() => {
+    clearSession()
+    localStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  it('renders technician tray on Inicio for technician role', async () => {
+    setSession('token-tech', 'org-1')
+    saveMeSeed('token-tech', {
+      id: 'tech-1',
+      phone: '+573001234567',
+      email: null,
+      full_name: 'Técnico',
+      memberships: [{ org_id: 'org-1', role: 'technician' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Bandeja del técnico' })).toBeInTheDocument(),
+    )
+    // Negative assertion: PlotStatusScreen is not shown for technician on Inicio
+    expect(screen.queryByText('Sin parcelas')).toBeNull()
+  })
+
+  it('renders PlotStatusScreen on Inicio for producer or owner role', async () => {
+    setSession('token-prod', 'org-1')
+    saveMeSeed('token-prod', {
+      id: 'prod-1',
+      phone: '+573001234568',
+      email: null,
+      full_name: 'Productor',
+      memberships: [{ org_id: 'org-1', role: 'producer' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Sin parcelas')).toBeInTheDocument())
+    // Negative assertion: TrayScreen is not shown for producer
+    expect(screen.queryByRole('heading', { name: 'Bandeja del técnico' })).toBeNull()
+  })
+
+  it('renders /estado with PlotStatusScreen and a way back to Inicio ("Volver a la bandeja")', async () => {
+    setSession('token-tech', 'org-1')
+    saveMeSeed('token-tech', {
+      id: 'tech-1',
+      phone: '+573001234567',
+      email: null,
+      full_name: 'Técnico',
+      memberships: [{ org_id: 'org-1', role: 'technician' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/estado'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText(/Volver a la bandeja/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Sin parcelas')).toBeInTheDocument())
+    // Negative assertion: TrayScreen is not on /estado
+    expect(screen.queryByRole('heading', { name: 'Bandeja del técnico' })).toBeNull()
   })
 })
 
