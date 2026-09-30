@@ -728,6 +728,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/tray": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Technician Tray
+         * @description docs/04 §Visitas de extensión y bandeja del técnico: `GET /me/tray`.
+         *
+         *     Returns farms assigned to the caller across all memberships (D-T0.8).
+         *     Ordered: critical alerts desc, open alerts desc, last_visit_on asc (null first),
+         *     farm name, farm id. Returns [] for any caller with no assigned farms (200, never 403).
+         */
+        get: operations["get_technician_tray_api_v1_me_tray_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dev/auth/otp": {
         parameters: {
             query?: never;
@@ -1303,6 +1327,26 @@ export interface components {
             name?: string | null;
             /** Technician Id */
             technician_id?: string | null;
+        };
+        /**
+         * FarmSummaryView
+         * @description The docs/04 `farm` field in `/me/tray`: compact summary with no geometry.
+         */
+        FarmSummaryView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /** Name */
+            name: string;
+            /** Municipality Code */
+            municipality_code: string;
         };
         /** FarmView */
         FarmView: {
@@ -2127,6 +2171,17 @@ export interface components {
              * @default bearer
              */
             token_type: string;
+        };
+        /**
+         * TrayItemView
+         * @description One item in the technician tray response (docs/04 §Visitas; D-T0.8).
+         */
+        TrayItemView: {
+            farm: components["schemas"]["FarmSummaryView"];
+            /** Open Alerts */
+            open_alerts: components["schemas"]["OpenAlertView"][];
+            /** Last Visit On */
+            last_visit_on: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -3595,6 +3650,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlotStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_technician_tray_api_v1_me_tray_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrayItemView"][];
                 };
             };
             /** @description Validation Error */
