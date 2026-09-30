@@ -31,7 +31,7 @@ const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
  * the bundle): bump it in the same work unit as the change that invalidates
  * the cache, or that build keeps showing the old shape.
  */
-const CACHE_BUSTER = '1'
+const CACHE_BUSTER = '2'
 
 /** The one row this app's persister owns. */
 export const PERSIST_CACHE_KEY = 'techcamp.query-cache'
