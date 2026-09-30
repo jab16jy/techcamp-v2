@@ -100,7 +100,7 @@ critical path (E0→…→E6→E9→E15) and unblocks E15.
   cap. RDD per slice of whole commits as they land.
 - Delivery: stacked-to-main chained PRs (~400 authored lines), after the owner's word.
 
-## Decisions (PROPOSED 2026-09-30, awaiting the owner; T0 writes the approved ones into docs)
+## Decisions (approved by the owner 2026-09-30; written into docs/00, 04, 05, 07 and AGENTS.md by T0)
 - **D-T0.1 Where `/status` and `/me/tray` live:** a new read-only module `home` (screaming name:
   the screen it serves). It depends on the `application` facades of `farms`, `telemetry`,
   `weather`, `irrigation`, `alerts`, `logbook`; nothing depends on it. docs/05 gets the node, the
@@ -113,14 +113,15 @@ critical path (E0→…→E6→E9→E15) and unblocks E15.
   docs/03 index "Alertas abiertas de la organización"; sorted critical first, then newest.
 - **D-T0.4 `latest`:** per metric, the newest valid raw reading of the plot within the last 24 h;
   a metric with none is `null` (never `0`); `at` is the time of the newest value returned, `null`
-  if all are `null`. The UI shows freshness from `at` (`formatFreshness`).
+  if all are `null`. The UI shows freshness from `at` (`formatFreshness`). Same rule in T0 for
+  `water_balance` (last consolidated day, `null` if none) and `recommendation` (today's, `null`).
 - **D-T0.5 `NodeHealth` item:** `{ node_id, status, last_seen_at, completeness_24h }`, the
   `/nodes/{id}/health` fields that are real today (battery/RSSI stay out until a node reports
   them); docs/04 gets the shape.
 - **D-T0.6 `active_cycle`:** `null` without an active cycle; `stage` is the stage key
   (`initial|development|mid|late`) or `null` when the crop has no Kc stages (`kc_source = none`);
-  `day_of_cycle` counts from `sown_on` as day 1 in America/Bogota, as in the daily balance. The
-  web maps keys to Spanish labels.
+  `day_of_cycle` is today's cycle day (America/Bogota) with `sown_on` as day 1. The web maps keys
+  to Spanish labels.
 - **D-T0.7 Active plot on the home:** the last plot the user opened, stored per org on the device;
   default the first plot of the first farm (API order); no plots → `EmptyState` pointing to
   Parcelas. docs/07 gets the rule.
@@ -132,8 +133,13 @@ critical path (E0→…→E6→E9→E15) and unblocks E15.
   first and the plot status of any farm is one tap away; other roles see the plot status.
 - **D-T0.10 Offline:** the TanStack cache is persisted in IndexedDB (docs/07) with the query key
   scoped by org; `/status` and `/me/tray` are persisted, max age 7 days; the screen shows the
-  cached time with `OfflineBanner`. The library and storage adapter are chosen with `find-docs`
-  in T4 (bundle budget 200 KB, today 171 KB).
+  cached time with `OfflineBanner`. Storage is Dexie, as docs/07 §Flujo de datos already draws
+  (`q -- persistencia de caché --> dx`); the persister package is chosen with `find-docs` in T4
+  (bundle budget 200 KB, today 171 KB).
+- **D-T0.11 `recommendation.rationale` in `/status`** (parent, found in T0): docs/04 called it a
+  summarised `rationale[]` list with no shape. `/status` returns the stored `rationale` object
+  unchanged and the web writes the "why" from it (it already carries `forecast_rain_7d_mm`, the
+  7-day rain the rainfed card shows, docs/07). No second presentation format on the server.
 
 ## Open questions
 - None beyond the decisions above.
@@ -141,7 +147,7 @@ critical path (E0→…→E6→E9→E15) and unblocks E15.
 ## Tasks
 Forecasts are authored lines (prod + tests). Route = writer and reason.
 
-- [ ] T0 Docs first (parent inline, `domain-modeling`): approved D-T0.x into docs/04 (§Estado,
+- [x] T0 Docs first (parent inline, `domain-modeling`): approved D-T0.x into docs/04 (§Estado,
   §Bandeja, NodeHealth), docs/05 (module graph + D-note), docs/07 (active plot, home by role,
   offline cache); glossary only if a new term appears. ~90. Route: parent inline (mechanical doc
   units, already understood).
@@ -205,7 +211,14 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   §Estado, §Visitas y bandeja, §Nodos; docs/05 §Módulos and dependency rules; docs/07 §Datos
   offline, §Mapa de pantallas, Inicio, Bandeja; docs/10 E9 row; docs/03 alert states and indexes.
   Code map: one read-only mapper (CodeGraph), findings folded into Scope/Constraints.
+- 2026-09-30 Owner approved D-T0.1–D-T0.10 ("sure, continue").
+- 2026-09-30 T0 (parent inline, `domain-modeling`): docs/04 §Estado (nullable fields + rule table,
+  D-T0.2–6, D-T0.11), §Bandeja (D-T0.8); docs/05 graph node `home` + 6 edges + D-T0.1 note;
+  docs/07 offline cache (D-T0.10), active plot (D-T0.7), tray order/one tap (D-T0.9); glossary
+  `Bandeja del técnico` (`tray`), `Alerta abierta`; AGENTS.md Layout lists `home`. No ADR (not
+  hard to reverse; D-note precedent D14/D25). Anchors `05#módulos-c4-nivel-3`,
+  `04#estado-de-la-parcela-pantalla-principal`, `04#visitas-de-extensión-y-bandeja-del-técnico`
+  resolve. Review: passive documentation → structural readback.
 
 ## Next step
-Owner approves or edits D-T0.1–D-T0.10; then T0 (docs), then launch Lane S (T1, AGY) and Lane W
-(T4, OpenCode) in Herdr.
+Launch Lane S (T1, AGY, worktree `e9-t1`) and Lane W (T4, OpenCode, worktree `e9-t4`) in Herdr.
