@@ -50,9 +50,11 @@ jobs:
             exit 1
           fi
       # The rules in ../rules are the invariants a review used to catch by hand, and
-      # their tests fail the build when a rule stops reporting what it claims.
+      # their tests fail the build when a rule stops reporting what it claims. The config
+      # is named explicitly on both lines, exactly as `just gate-fast` names it, so the
+      # two resolve the same file from the same working directory.
       - name: ast-grep rule tests
-        run: uv run ast-grep test
+        run: uv run ast-grep test --config ../sgconfig.yml
       - name: ast-grep scan
         run: uv run ast-grep scan --config ../sgconfig.yml
       - run: uv run pytest

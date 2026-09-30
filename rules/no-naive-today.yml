@@ -10,23 +10,39 @@ notes: |
   The product operates in one local timezone, America/Bogota (docs/04-api.md:63-75,
   docs/06 §5, docs/10-dag.md:156). A naive read is UTC on one host and local time on
   another, which is the regression RDD caught in E7 and again in E8.
+
+  There is deliberately no `ignores` entry. `shared/dates.py` is where the timezone is
+  owned, and it needed no exemption: its only read is `datetime.now(UTC)`, which is
+  aware, and the naive value it does handle arrives as an argument
+  (`now.replace(tzinfo=UTC)`), not as a call. A file-level exemption would have shielded
+  every naive read a future edit put in that file, which is the opposite of the
+  invariant. If a line ever has a genuine reason, suppress that line and not the file,
+  with `# ast-grep-ignore` on it.
+
+  Known limit, accepted: an aliased import (`from datetime import datetime as dt`, then
+  `dt.now()`) is a different name and is not matched. Every datetime import in
+  `server/src` and `server/tests` is either `import datetime` or a plain
+  `from datetime import ...`, checked 2026-09-29, so the name the patterns match is the
+  name the code uses. Revisit if an alias ever appears.
 files:
   - server/src/**/*.py
-ignores:
-  # This module is where the timezone is owned: it is the one place allowed to read a
-  # naive value on purpose, because it attaches UTC to it on the next line.
-  - server/src/techcamp/shared/dates.py
 rule:
   any:
     # `from datetime import date, datetime`, the import style most of the repository uses.
     - pattern: date.today()
     - pattern: datetime.utcnow()
-    # No arguments at all: a call with any timezone is aware, so the shape with
-    # parentheses and nothing inside is exactly the naive read.
+    # Two shapes of the same defect, and both are naive: no argument at all, and an
+    # explicit `None` timezone (keyword or positional), which reads as aware in review
+    # but is not. A call with a real timezone stays valid, and no `not` clause is needed:
+    # these patterns match the exact shape, not a prefix of it.
     - pattern: datetime.now()
+    - pattern: datetime.now(tz=None)
+    - pattern: datetime.now(None)
     # `import datetime`, the other half of the repository's style. These are not
     # redundant: the member chain is a segment longer, so the patterns above cannot see
     # them at all, and a naive read under this import is the same defect.
     - pattern: datetime.date.today()
     - pattern: datetime.datetime.utcnow()
     - pattern: datetime.datetime.now()
+    - pattern: datetime.datetime.now(tz=None)
+    - pattern: datetime.datetime.now(None)

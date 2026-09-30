@@ -18,6 +18,18 @@ snapshots:
       style: primary
       start: 6
       end: 29
+  now = datetime.datetime.now(None):
+    labels:
+    - source: datetime.datetime.now(None)
+      style: primary
+      start: 6
+      end: 33
+  now = datetime.datetime.now(tz=None):
+    labels:
+    - source: datetime.datetime.now(tz=None)
+      style: primary
+      start: 6
+      end: 36
   now = datetime.datetime.utcnow():
     labels:
     - source: datetime.datetime.utcnow()
@@ -30,6 +42,18 @@ snapshots:
       style: primary
       start: 6
       end: 20
+  now = datetime.now(None):
+    labels:
+    - source: datetime.now(None)
+      style: primary
+      start: 6
+      end: 24
+  now = datetime.now(tz=None):
+    labels:
+    - source: datetime.now(tz=None)
+      style: primary
+      start: 6
+      end: 27
   now = datetime.utcnow():
     labels:
     - source: datetime.utcnow()

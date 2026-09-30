@@ -31,3 +31,10 @@ invalid:
   - day = datetime.date.today()
   - now = datetime.datetime.now()
   - now = datetime.datetime.utcnow()
+  # An explicit `None` timezone is the same naive read as no argument at all, and it is
+  # the way to reach it without looking like the naive one: keyword or positional, under
+  # either import style.
+  - now = datetime.now(tz=None)
+  - now = datetime.now(None)
+  - now = datetime.datetime.now(tz=None)
+  - now = datetime.datetime.now(None)

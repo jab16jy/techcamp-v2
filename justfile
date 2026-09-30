@@ -145,9 +145,12 @@ gate-fast:
       exit 1
     fi
     # The rules in ../rules are the invariants a review used to catch by hand
-    # (docs/06 §5's America/Bogota day, caught in E7 and again in E8). The config sits at
-    # the repository root and its paths are relative to it, so it is named explicitly and
-    # the scan covers the whole tree, web/ included, whatever a rule names.
+    # (docs/06 §5's America/Bogota day, caught in E7 and again in E8). They live at the
+    # repository root while the tools run in the server project, so both name the config
+    # explicitly and identically: a rule's paths resolve against the config file, not the
+    # cwd, and the scan therefore covers the whole tree whatever a rule names. CI runs the
+    # same two lines, so the rules and their tests are gated in the same places.
+    echo "--- ast-grep test"; uv run ast-grep test --config ../sgconfig.yml
     echo "--- ast-grep scan"; uv run ast-grep scan --config ../sgconfig.yml
     cd "$_worktree/web"
     echo "--- eslint";           npm run lint
