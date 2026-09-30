@@ -218,7 +218,17 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   `Bandeja del técnico` (`tray`), `Alerta abierta`; AGENTS.md Layout lists `home`. No ADR (not
   hard to reverse; D-note precedent D14/D25). Anchors `05#módulos-c4-nivel-3`,
   `04#estado-de-la-parcela-pantalla-principal`, `04#visitas-de-extensión-y-bandeja-del-técnico`
-  resolve. Review: passive documentation → structural readback.
+  resolve. Commits `cbfc136` (docs) + `9bb6ea6` (feature doc). RDD: assess medium (AGENTS.md
+  counts as executable), consent relayed, owner chose "Skip this time" → declined for this
+  candidate (lineage `review-f3e5df3a235b7e4c`); plan commit `baa4d60` approved passive
+  (`review-b9f85f76f8085141`).
+- 2026-09-30 Lanes launched in Herdr (briefs: common + per lane, session scratchpad):
+  - Lane S / T1: AGY `e9-t1` (Gemini 3.8 Flash high), worktree `e9-t1`, branch
+    `feat/e9-t1-facades`, DB `techcamp-db-e9-t1-2237016153` on 61153, own CodeGraph index.
+  - Lane W / T4: OpenCode `e9-t4`, worktree `e9-t4`, branch `feat/e9-t4-cache`, web only, own
+    index.
 
 ## Next step
-Launch Lane S (T1, AGY, worktree `e9-t1`) and Lane W (T4, OpenCode, worktree `e9-t4`) in Herdr.
+Wait for T1 (AGY) and T4 (OpenCode) reports → parent gate on each sha (targeted tests +
+`just gate-fast` + docs diff) → RDD (parent runs AGY's; OpenCode runs its own after "go") → merge
+into `feat/e9-home` → T2 (OpenCode) in a fresh session.
