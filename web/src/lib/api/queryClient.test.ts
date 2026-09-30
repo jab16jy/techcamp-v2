@@ -33,10 +33,25 @@ const STATUS_KEY = [ORG_ID, 'status']
 const ME_KEY = ['me', 'token-abc']
 const STATUS = { plot_id: '018f0c2a-0000-7000-8000-0000000000bb', moisture_pct: 41 }
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+const TOKEN = 'token-abc'
 
 /** `session.ts`'s own `TOKEN_KEY`, which it keeps private; a test has to write it
  * directly to reproduce the window it cannot offer an API for. */
 const TOKEN_KEY = 'techcamp.token'
+
+/** The row wraps the persister's JSON in the session that wrote it, so a test
+ * that reads or rewrites the envelope has to unwrap it the way `getItem` does. */
+function unwrap(value: string): { session: string; cache: string } {
+  return JSON.parse(value) as { session: string; cache: string }
+}
+
+function envelopeOf(value: string): Record<string, unknown> {
+  return JSON.parse(unwrap(value).cache) as Record<string, unknown>
+}
+
+function rewrap(value: string, cache: Record<string, unknown>): string {
+  return JSON.stringify({ session: unwrap(value).session, cache: JSON.stringify(cache) })
+}
 
 /** A second client, the way a phone that closed the app comes back. */
 function newClient(): QueryClient {
@@ -45,23 +60,23 @@ function newClient(): QueryClient {
   return client
 }
 
-/** What actually landed on disk, or null when nothing did. */
+/** What actually landed on disk, or nothing when nothing did. */
 async function persistedKeys(): Promise<unknown[]> {
   const row = await db.queryCache.get(PERSIST_CACHE_KEY)
   if (row === undefined) return []
-  const persisted = JSON.parse(row.value) as {
+  const { clientState } = envelopeOf(row.value) as {
     clientState: { queries: { queryKey: unknown }[] }
   }
-  return persisted.clientState.queries.map((query) => query.queryKey)
+  return clientState.queries.map((query) => query.queryKey)
 }
 
 async function agedPersistedRow(ageMs: number): Promise<void> {
   const row = await db.queryCache.get(PERSIST_CACHE_KEY)
   if (row === undefined) throw new Error('nothing was persisted')
-  const persisted = JSON.parse(row.value) as Record<string, unknown>
+  const envelope = envelopeOf(row.value)
   await db.queryCache.put({
     key: PERSIST_CACHE_KEY,
-    value: JSON.stringify({ ...persisted, timestamp: Date.now() - ageMs }),
+    value: rewrap(row.value, { ...envelope, timestamp: Date.now() - ageMs }),
   })
 }
 
@@ -69,10 +84,9 @@ async function agedPersistedRow(ageMs: number): Promise<void> {
 async function rewritePersistedEnvelope(patch: { buster?: string }): Promise<void> {
   const row = await db.queryCache.get(PERSIST_CACHE_KEY)
   if (row === undefined) throw new Error('nothing was persisted')
-  const persisted = JSON.parse(row.value) as Record<string, unknown>
   await db.queryCache.put({
     key: PERSIST_CACHE_KEY,
-    value: JSON.stringify({ ...persisted, ...patch }),
+    value: rewrap(row.value, { ...envelopeOf(row.value), ...patch }),
   })
 }
 
@@ -87,7 +101,7 @@ beforeEach(async () => {
   // is restored for whoever holds a session, so no test may rely on there
   // being none.
   localStorage.removeItem(TOKEN_KEY)
-  setSession('token-abc', ORG_ID)
+  setSession(TOKEN, ORG_ID)
 })
 
 describe('persisted query cache (docs/07 §Flujo de datos y offline)', () => {
@@ -115,9 +129,13 @@ describe('persisted query cache (docs/07 §Flujo de datos y offline)', () => {
 
     expect(await persistedKeys()).toEqual([STATUS_KEY])
     // Auth data (the `me` seed) must never reach the disk, so its text is
-    // absent from the serialized row, not just un-parsed.
+    // absent from the persisted cache, not just un-parsed. Read through the
+    // wrapper: `row.value` does carry the token, because binding the row to
+    // the session that wrote it is exactly what the wrapper is for.
     const row = await db.queryCache.get(PERSIST_CACHE_KEY)
-    expect(row?.value).not.toContain('token-abc')
+    const cache = row === undefined ? '' : unwrap(row.value).cache
+    expect(cache).not.toContain('token-abc')
+    expect(cache).not.toContain('user-1')
   })
 
   it('restores an entry inside the seven days and drops an older one', async () => {
@@ -174,6 +192,29 @@ describe('persisted query cache (docs/07 §Flujo de datos y offline)', () => {
     await persistQueryClientRestore({ ...persistOptions, queryClient: signedOut })
 
     expect(signedOut.getQueryData(STATUS_KEY)).toBeUndefined()
+    expect(await db.queryCache.get(PERSIST_CACHE_KEY)).toBeUndefined()
+  })
+
+  it('neither restores nor keeps a cache another session wrote', async () => {
+    const before = newClient()
+    before.setQueryData(STATUS_KEY, STATUS)
+    await persistQueryClientSave({ ...persistOptions, queryClient: before })
+
+    // The control, same setup and the same session: the cache restores.
+    const owner = restoredClient()
+    await persistQueryClientRestore({ ...persistOptions, queryClient: owner })
+    expect(owner.getQueryData(STATUS_KEY)).toEqual(STATUS)
+
+    // A shared phone: the OS killed the wipe, and a DIFFERENT user signed in.
+    // Their token is a valid token, so only the session the row was written
+    // under can say no. Org-scoped keys do not help here — a technician and a
+    // producer sharing one device are in the same org, so the keys match.
+    setSession('token-of-another-user', ORG_ID)
+
+    const other = restoredClient()
+    await persistQueryClientRestore({ ...persistOptions, queryClient: other })
+
+    expect(other.getQueryData(STATUS_KEY)).toBeUndefined()
     expect(await db.queryCache.get(PERSIST_CACHE_KEY)).toBeUndefined()
   })
 

@@ -45,19 +45,51 @@ export const PERSIST_CACHE_KEY = 'techcamp.query-cache'
  * phone with storage disabled or full must still get a working app, just one
  * whose cache does not survive a reload.
  */
+/**
+ * What one `queryCache` row holds: the persister's opaque JSON bound to the
+ * session that wrote it. A row is the previous session's data the moment the
+ * next user signs in, so the token it was written under is stored beside it and
+ * checked on every read.
+ */
+interface PersistedCacheRow {
+  /** The token of the session that wrote the row. */
+  session: string
+  /** The persister's own JSON: its envelope and dehydrated state, opaque here. */
+  cache: string
+}
+
+/** Anything this store did not write — an older format, a torn write — is no cache. */
+function parseRow(raw: string): PersistedCacheRow | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<PersistedCacheRow>
+    if (typeof parsed?.session !== 'string' || typeof parsed?.cache !== 'string') return null
+    return { session: parsed.session, cache: parsed.cache }
+  } catch {
+    return null
+  }
+}
+
 const dexieStorage = {
   /**
    * The single read path: `createAsyncStoragePersister`'s `restoreClient` calls
    * this and nothing else reads the row, so gating here gates every restore.
    *
-   * Without a session token it erases the row and restores nothing (#204).
-   * `clearSession()` already deletes it, but it deletes it on a promise nobody
-   * awaits: if the OS kills the tab — the normal way a PWA on a shared phone
-   * closes — the token is gone from storage while the previous session's plot
-   * status is still on disk, and the next cold start restored it. Restoring
-   * into a signed-out app is never correct, so this fails closed: the decision
-   * is "no token, no cache", and the deletion is the same one the kill
-   * interrupted, retried on the next start.
+   * It fails closed twice, because the cache outlives the session that wrote
+   * it. `clearSession()` deletes the row on a promise nobody awaits, so a row
+   * can survive its session — the OS killing a PWA on a shared phone is the
+   * normal way that happens — and two things must then be true:
+   *
+   * - No token, no restore: the row is erased and nothing comes back (#204).
+   * - The right token, and only the right token: a row written by a different
+   *   session is erased rather than handed over. This is the shared-phone case
+   *   #204 left open — a new sign-in on the same device would otherwise have
+   *   authorized the previous user's cache. Org-scoped keys do not close it:
+   *   a technician and a producer sharing one phone are in the SAME org, so the
+   *   keys match and the previous user's plot status renders for the new one.
+   *
+   * Both erasures are the one the killed process skipped, retried on the next
+   * start. This app issues the token once per sign-in (no refresh; an expired
+   * token ends the session), so a different token is always a different user.
    */
   getItem: async (key: string): Promise<string | null> => {
     try {
@@ -65,20 +97,35 @@ const dexieStorage = {
         import('../db/db'),
         import('./session'),
       ])
-      if (getToken() === null) {
+      const token = getToken()
+      if (token === null) {
         await db.queryCache.delete(key)
         return null
       }
       const row = await db.queryCache.get(key)
-      return row?.value ?? null
+      if (row === undefined) return null
+      const parsed = parseRow(row.value)
+      if (parsed === null || parsed.session !== token) {
+        await db.queryCache.delete(key)
+        return null
+      }
+      return parsed.cache
     } catch {
       return null
     }
   },
   setItem: async (key: string, value: string): Promise<void> => {
     try {
-      const { db } = await import('../db/db')
-      await db.queryCache.put({ key, value })
+      const [{ db }, { getToken }] = await Promise.all([
+        import('../db/db'),
+        import('./session'),
+      ])
+      const token = getToken()
+      // Nothing to restore for a session that does not exist, and a row no one
+      // could read is a row nobody should write.
+      if (token === null) return
+      const row: PersistedCacheRow = { session: token, cache: value }
+      await db.queryCache.put({ key, value: JSON.stringify(row) })
     } catch {
       /* a cache that cannot be written is a cache that is not persisted */
     }
