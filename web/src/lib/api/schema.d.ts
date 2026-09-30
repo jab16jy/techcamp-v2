@@ -705,6 +705,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plots/{plot_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plot Status
+         * @description docs/04 §Estado: `GET /plots/{plot_id}/status`, the whole home screen in
+         *     one request. A plot that does not exist or belongs to another organization
+         *     answers 404 "Plot not found" (docs/09-cuellos-de-botella.md#seguridad);
+         *     everything missing inside a plot the caller may see is `null`, never a zero.
+         */
+        get: operations["get_plot_status_api_v1_plots__plot_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dev/auth/otp": {
         parameters: {
             query?: never;
@@ -817,6 +840,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActiveCycleView */
+        ActiveCycleView: {
+            crop: components["schemas"]["CycleCropView"];
+            /** Stage */
+            stage: string | null;
+            /** Day Of Cycle */
+            day_of_cycle: number | null;
+        };
         /** AlertPage */
         AlertPage: {
             /** Items */
@@ -1064,6 +1095,15 @@ export interface components {
             kc_source: string;
             /** Stages */
             stages: components["schemas"]["CropStageView"][];
+        };
+        /** CycleCropView */
+        CycleCropView: {
+            /** Id */
+            id: number;
+            /** Code */
+            code: string;
+            /** Name Es */
+            name_es: string;
         };
         /** ExtensionVisitChangeBody */
         ExtensionVisitChangeBody: {
@@ -1359,6 +1399,21 @@ export interface components {
          * @enum {string}
          */
         IrrigationSystem: "none" | "drip" | "sprinkler" | "gravity";
+        /**
+         * LatestView
+         * @description A metric without a valid reading in the last 24 h is `null`, never 0;
+         *     `at` is the time of the newest value returned (D-T0.4).
+         */
+        LatestView: {
+            /** Soil Moisture Pct */
+            soil_moisture_pct: number | null;
+            /** Air Temp C */
+            air_temp_c: number | null;
+            /** Air Rh Pct */
+            air_rh_pct: number | null;
+            /** At */
+            at: string | null;
+        };
         /** LogbookEntryChangeBody */
         LogbookEntryChangeBody: {
             /**
@@ -1645,6 +1700,51 @@ export interface components {
             last_seen_at: string | null;
             status: components["schemas"]["NodeStatus"];
         };
+        /** OpenAlertView */
+        OpenAlertView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Rule Id
+             * Format: uuid
+             */
+            rule_id: string;
+            /** Rule Code */
+            rule_code: string;
+            /** Plot Id */
+            plot_id: string | null;
+            /** Node Id */
+            node_id: string | null;
+            /** State */
+            state: string;
+            /** Severity */
+            severity: string;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Acknowledged At */
+            acknowledged_at: string | null;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Escalated At */
+            escalated_at: string | null;
+            /** Resolution Note */
+            resolution_note: string | null;
+        };
         /** OtpRequest */
         OtpRequest: {
             /** Phone */
@@ -1723,6 +1823,23 @@ export interface components {
             /** System Flow Lph */
             system_flow_lph?: number | null;
         };
+        /**
+         * PlotNodeHealthView
+         * @description `battery_v` and `rssi` stay out until a node reports them (D-T0.5).
+         */
+        PlotNodeHealthView: {
+            /**
+             * Node Id
+             * Format: uuid
+             */
+            node_id: string;
+            /** Status */
+            status: string;
+            /** Last Seen At */
+            last_seen_at: string | null;
+            /** Completeness 24H */
+            completeness_24h: number | null;
+        };
         /** PlotPatchRequest */
         PlotPatchRequest: {
             /** Name */
@@ -1733,6 +1850,50 @@ export interface components {
             irrigation_efficiency?: number | null;
             /** System Flow Lph */
             system_flow_lph?: number | null;
+        };
+        /** PlotStatusView */
+        PlotStatusView: {
+            plot: components["schemas"]["PlotSummaryView"];
+            active_cycle: components["schemas"]["ActiveCycleView"] | null;
+            latest: components["schemas"]["LatestView"];
+            water_balance: components["schemas"]["WaterBalanceView"] | null;
+            recommendation: components["schemas"]["RecommendationView"] | null;
+            /** Open Alerts */
+            open_alerts: components["schemas"]["OpenAlertView"][];
+            /** Weather Next 3D */
+            weather_next_3d: components["schemas"]["WeatherDayView"][];
+            /** Nodes */
+            nodes: components["schemas"]["PlotNodeHealthView"][];
+            /** Digital Adoption Index */
+            digital_adoption_index?: null;
+        };
+        /**
+         * PlotSummaryView
+         * @description The plot's own identity and its irrigation system, which is what the
+         *     home screen renders (D-T0.7's active plot, ADR-0023's rainfed variant).
+         */
+        PlotSummaryView: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Farm Id
+             * Format: uuid
+             */
+            farm_id: string;
+            /** Name */
+            name: string;
+            /** Area Ha */
+            area_ha: number;
+            /** Irrigation System */
+            irrigation_system: string;
         };
         /** PlotView */
         PlotView: {
@@ -1875,6 +2036,21 @@ export interface components {
             /** Series */
             series: components["schemas"]["ReadingSeriesView"][];
         };
+        /** RecommendationView */
+        RecommendationView: {
+            /** Kind */
+            kind: string;
+            /** Depth Mm */
+            depth_mm: number | null;
+            /** Duration Min */
+            duration_min: number | null;
+            /** Advice */
+            advice?: string[];
+            /** Rationale */
+            rationale?: {
+                [key: string]: unknown;
+            };
+        };
         /** SensorView */
         SensorView: {
             /** Id */
@@ -1993,6 +2169,19 @@ export interface components {
             soil_moisture_obs_pct?: number | null;
             /** Assimilation K */
             assimilation_k: number;
+            /** Stress Moisture Pct */
+            stress_moisture_pct: number;
+            /** Status */
+            status: string;
+        };
+        /** WaterBalanceView */
+        WaterBalanceView: {
+            /** Depletion Mm */
+            depletion_mm: number;
+            /** Taw Mm */
+            taw_mm: number;
+            /** Raw Mm */
+            raw_mm: number;
             /** Stress Moisture Pct */
             stress_moisture_pct: number;
             /** Status */
@@ -3373,6 +3562,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PresignResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plot_status_api_v1_plots__plot_id__status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlotStatusView"];
                 };
             };
             /** @description Validation Error */
