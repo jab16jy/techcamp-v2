@@ -48,6 +48,10 @@ class FarmRepository(Protocol):
         self, farm_id: UUID, org_id: UUID, *, name: str, technician_id: UUID | None
     ) -> Farm: ...
 
+    async def list_for_technician(
+        self, technician_id: UUID, org_ids: Sequence[UUID]
+    ) -> list[Farm]: ...
+
 
 class PlotRepository(Protocol):
     async def get_by_id(self, plot_id: UUID) -> Plot | None:

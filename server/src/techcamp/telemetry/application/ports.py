@@ -168,6 +168,21 @@ class ReadingRepository(Protocol):
         (docs/04-api.md:92-93, `resolution=day`)."""
         ...
 
+    async def query_latest_valid_by_metric(
+        self,
+        plot_id: UUID,
+        org_id: UUID,
+        *,
+        metrics: Sequence[str],
+        now: datetime,
+    ) -> dict[str, ReadingPoint]:
+        """Newest valid raw reading per metric for a plot within [now - 24h, now].
+
+        Excludes out-of-range readings (quality bit 2) and uncalibrated values.
+        Org-scoped through node.org_id.
+        """
+        ...
+
 
 class PlotEventsPort(Protocol):
     async def publish(
