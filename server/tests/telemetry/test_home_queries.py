@@ -205,6 +205,49 @@ async def test_query_latest_plot_readings_org_isolation(
     assert res_a["soil_moisture"].value == 25.0
 
 
+async def test_query_latest_plot_readings_deterministic_tiebreak_at_same_timestamp(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id = await _make_org_and_plot(db_session, "Finca Tiebreak")
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_1 = await _make_sensor(db_session, node_id, channel_key="sm_10")
+    sensor_2 = await _make_sensor(db_session, node_id, channel_key="sm_20")
+    assert sensor_1 < sensor_2
+
+    now = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
+    same_time = now - timedelta(hours=1)
+
+    # Insert readings for both sensors at the exact same timestamp
+    await _insert_reading(
+        db_session,
+        sensor_2,
+        at=same_time,
+        raw_value=20.0,
+        value=20.0,
+    )
+    await _insert_reading(
+        db_session,
+        sensor_1,
+        at=same_time,
+        raw_value=10.0,
+        value=10.0,
+    )
+
+    repo = SqlAlchemyReadingRepository(db_session)
+
+    # DISTINCT ON (SensorRow.metric) with tiebreak by SensorRow.id picks sensor_1 deterministically
+    for _ in range(2):
+        res = await query_latest_plot_readings(
+            plot_id=cast_uuid(plot_id),
+            org_id=cast_uuid(org_id),
+            metrics=["soil_moisture"],
+            now=now,
+            readings=repo,
+        )
+        assert res["soil_moisture"] is not None
+        assert res["soil_moisture"].value == 10.0
+
+
 async def test_get_plot_nodes_health_filters_by_plot_and_org(
     db_session: AsyncSession,
 ) -> None:

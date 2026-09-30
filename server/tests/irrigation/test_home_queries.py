@@ -58,7 +58,7 @@ def test_crop_stage_for_day_with_invalid_stages_returns_none_with_cycle_day() ->
     assert stage is None
 
 
-def test_crop_stage_for_day_future_sowing_returns_none_and_non_positive_cycle_day() -> None:
+def test_crop_stage_for_day_future_sowing_returns_none_for_both() -> None:
     stages = [
         DummyStage(stage="initial", length_days=20),
         DummyStage(stage="development", length_days=30),
@@ -66,7 +66,7 @@ def test_crop_stage_for_day_future_sowing_returns_none_and_non_positive_cycle_da
     sown_on = date(2026, 10, 5)
     day = date(2026, 9, 30)
 
-    # Future sowing: (day - sown_on).days + 1 = -5 + 1 = -4 < 1 -> stage is None
+    # Future sowing: day < sown_on -> both stage and day_of_cycle are None
     stage, day_of_cycle = crop_stage_for_day(stages, sown_on=sown_on, day=day)
     assert stage is None
-    assert day_of_cycle == -4
+    assert day_of_cycle is None

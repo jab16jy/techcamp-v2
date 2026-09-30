@@ -575,7 +575,7 @@ class SqlAlchemyReadingRepository:
                 ReadingRow.value.is_not(None),
                 ReadingRow.quality.bitwise_and(int(ReadingQuality.OUT_OF_RANGE)) == 0,
             )
-            .order_by(SensorRow.metric, ReadingRow.time.desc())
+            .order_by(SensorRow.metric, ReadingRow.time.desc(), SensorRow.id)
         )
         result = await self._session.execute(stmt)
         return {row.metric: ReadingPoint(time=row.time, value=row.value) for row in result}
