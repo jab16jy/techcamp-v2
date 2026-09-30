@@ -9,6 +9,7 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Organización | `organization` | Cooperativa, asociación, programa o productor individual. Es la unidad de permisos: todo dato pertenece a una organización. |
 | Finca | `farm` | Predio de un productor. Tiene ubicación, municipio y un técnico asignado (`technician_id`). |
 | Visita de extensión | `extension_visit` | Visita del técnico a una finca, y opcionalmente a una parcela: temas tratados según los cinco aspectos del enfoque de extensión de la Ley 1876, recomendaciones, compromisos y fotos. Se registra sin conexión, como la bitácora. |
+| Bandeja del técnico | `tray` | Lo que el técnico ve al abrir la app: sus fincas asignadas, con las alertas abiertas de cada una y la fecha de la última visita. |
 | Parcela / lote | `plot` | Área cultivable con polígono dentro de una finca. Es la unidad de decisión: riego, alertas y métricas se calculan por parcela. |
 | Sistema de riego | `irrigation_system` | Cómo se riega la parcela: `drip` (goteo), `sprinkler` (aspersión), `gravity` (gravedad) o `none`. Con un sistema, la parcela tiene su eficiencia (`irrigation_efficiency`) y su caudal. |
 | Parcela de secano | `irrigation_system = none` | Parcela sin sistema de riego: el cultivo depende solo de la lluvia. Tiene balance hídrico, pero recibe una recomendación de secano en vez de una lámina. |
@@ -56,6 +57,7 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 |---|---|---|
 | Regla de alerta | `alert_rule` | Condición sobre variables (umbral, duración, histéresis) que abre una alerta. |
 | Alerta | `alert` | Instancia de una regla que se cumplió en una parcela o un nodo. Estados: `open`, `acknowledged`, `resolved`. |
+| Alerta abierta | `state <> 'resolved'` | Alerta que todavía pide atención: abierta o reconocida. Reconocerla no la cierra. |
 | Recomendación | `recommendation` | Acción sugerida con su justificación: regar X mm, aplicar un preventivo, revisar un nodo. |
 | Recomendación de secano | `rainfed` | Tipo (`kind`) de la recomendación hídrica diaria de una parcela de secano: déficit frente a RAW, lluvia pronosticada y consejos de manejo (`advice`), sin lámina ni minutos. |
 | Riesgo climático | `risk_prediction` | Probabilidad calibrada de un evento (inundación o sequía) en un horizonte, con severidad. |

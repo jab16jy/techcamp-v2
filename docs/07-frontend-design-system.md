@@ -99,7 +99,7 @@ flowchart LR
 | Dato | Estrategia |
 |---|---|
 | Shell de la app (JS, CSS, íconos) | Precache del Service Worker: abre sin red |
-| Estado de parcela, alertas, clima | TanStack Query con caché persistida en IndexedDB: offline se ve el último estado con su hora |
+| Estado de parcela, alertas, clima | TanStack Query con caché persistida en IndexedDB (Dexie): offline se ve el último estado con su hora. Las claves de consulta llevan la organización y la caché persistida vence a los 7 días |
 | Bitácora y visitas de extensión | **Local primero**: se escribe en Dexie y el sincronizador la sube ([06 §7](06-diseno-detallado.md#7-sincronización-offline-de-la-bitácora)) |
 | Eventos en vivo | SSE invalida o actualiza las consultas afectadas |
 | Teselas del mapa | Caché en tiempo de ejecución (las últimas vistas); mapas offline completos quedan diferidos (RF-18) |
@@ -134,13 +134,13 @@ flowchart TB
 
 **Inicio (pantalla más importante):**
 
-1. Parcela activa y cultivo con su etapa ("Maíz · día 42 · desarrollo").
+1. Parcela activa y cultivo con su etapa ("Maíz · día 42 · desarrollo"). La parcela activa es la última que el usuario abrió en ese dispositivo, guardada por organización en el store de UI; si no hay, la primera parcela de la primera finca. Sin parcelas, un `EmptyState` lleva a Parcelas.
 2. Tarjeta de decisión: **"Hoy: regar 12 mm (≈ 40 min)"** o **"Hoy no necesita riego"**, con el porqué a un toque. En una parcela de secano no muestra lámina ni minutos, sino el déficit (**"Al cultivo le faltan 80 mm: está en estrés"**), la lluvia esperada en 7 días y el consejo del día (**"Cubra el suelo con rastrojo para conservar la humedad"**) ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)).
 3. Alertas abiertas.
 4. Humedad de suelo actual con su hora y el pronóstico de 3 días.
 5. Estado de sincronización y de los nodos.
 
-**Bandeja del técnico.** Con el rol `technician`, el inicio abre su bandeja: las fincas asignadas (`farm.technician_id`) ordenadas por alertas abiertas, las críticas primero, con la fecha de la última visita. Desde una finca registra la visita de extensión (temas según la Ley 1876, recomendaciones, compromisos y fotos), también sin conexión (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
+**Bandeja del técnico.** Con el rol `technician`, el inicio abre su bandeja: las fincas asignadas (`farm.technician_id`) ordenadas por alertas abiertas, las críticas primero, con la fecha de la última visita. El orden lo da `GET /me/tray` ([04](04-api.md#visitas-de-extensión-y-bandeja-del-técnico)). El estado de cualquier parcela de sus fincas queda a un toque. Desde una finca registra la visita de extensión (temas según la Ley 1876, recomendaciones, compromisos y fotos), también sin conexión (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
 
 ## Presupuestos y calidad
 

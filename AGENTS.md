@@ -46,7 +46,7 @@ TimescaleDB and pgvector ([ADR-0003](docs/adr/0003-postgres-unico.md)); Mosquitt
 
 - `server/src/techcamp/<module>/{domain,application,adapters}` for `identity`, `farms`,
   `telemetry`, `weather`, `irrigation`, `alerts`, `notifications`, `logbook`, `risk`, `metrics`,
-  `assistant`; cross-cutting code in `shared/`. `server/tests/` mirrors modules.
+  `assistant`, `home` (read-only composition, docs/05 D-T0.1); cross-cutting code in `shared/`. `server/tests/` mirrors modules.
 - `web/src/design-system/` tokens and primitives, `web/src/app/` screens.
 - `rules/` + `rule-tests/`: ast-grep invariants (`sgconfig.yml`); `ml/` has its own deps;
   `odd/tasks/` feature docs.
