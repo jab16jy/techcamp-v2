@@ -138,6 +138,16 @@ async def test_query_latest_plot_readings_filters_out_of_range_and_older_than_24
         quality=int(ReadingQuality.OUT_OF_RANGE),
     )
 
+    # Newest reading at now - 30 min but UNCALIBRATED (value NULL) -> must be ignored (D-T0.4)
+    await _insert_reading(
+        db_session,
+        sensor_sm,
+        at=now - timedelta(minutes=30),
+        raw_value=512.0,
+        value=None,
+        quality=0,
+    )
+
     # Even older reading at now - 25 hours (> 24h) -> must be ignored!
     await _insert_reading(
         db_session,
