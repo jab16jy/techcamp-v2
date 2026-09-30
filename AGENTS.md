@@ -107,8 +107,10 @@ CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`, an
 checks in the same order. Its server job is `gate-fast`'s seven server checks — `ruff check`,
 `ruff format --check`, `mypy`, `lint-imports`, one Alembic head, `ast-grep test`, `ast-grep scan`
 — plus the full pytest run. Its web job is `gate-fast`'s `lint` and `typecheck` plus the full
-vitest run, the build and the size budget. No check exists in one place and not the other.
-Green locally means green in CI.
+vitest run, the build and the size budget. Its `gitleaks` job scans the commits the PR adds
+(docs/09:78) and is CI-only by design, because a `gate-fast` that downloaded a release binary
+would put the network in the path of every commit a lane checks. No check `gate-fast` and CI
+both run exists in one place and not the other. Green locally means green in CI.
 
 ## Architecture rules
 

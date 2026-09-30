@@ -172,6 +172,87 @@ Issue #139 (evidence from E7/E8):
   justfile and in CI alike, because a rule's `files` and `ignores` resolve against the config file
   and not against the working directory (R2-astgrep-wrong-working-directory).
 
+- D-T5.1 CI runs the pinned **gitleaks binary**, not `gitleaks/gitleaks-action`, even though
+  the action needs no licence key on this personal account (its own README: "If you are
+  scanning repos that belong to a personal account, then no license key is required";
+  `gh repo view` confirms `jab16jy/techcamp-v2` is PRIVATE under a `User` owner). Two reasons
+  the action was not used anyway. The action is licensed by Gitleaks LLC and stopped being MIT
+  at v2.0.0, while the tool it wraps is MIT; every other CI tool here is permissive, and a
+  proprietary wrapper buys nothing docs/09:78 asks for. And the action decides whether a key
+  is needed by calling `GET /users/{username}`: on `type == "User"` it proceeds, but the
+  `.catch` on that request leaves `shouldValidate` true and `process.exit(1)` prints "missing
+  gitleaks license" — so one transient API failure fails the job on precisely the kind of
+  account that needs no key, and no input turns that off. The binary is also the same scanner
+  the local history run used, so the evidence below and the CI gate are one tool. The
+  `gitleaks` job verifies the release checksum before executing it, because the step downloads
+  and runs a release asset; a version pin alone would not catch a tampered download.
+  Rejected: the action, for the two reasons above, and a version pin without the checksum.
+- D-T5.2 The scan range is `merge-base(base.sha, head.sha)..head.sha`, with neither
+  `--first-parent` nor `--no-merges`, and the merge diff comes from D-T5.4's `--remerge-diff`.
+  Each fact below was proven on a scratch branch rather than reasoned about (the evidence is in
+  Progress):
+  - *The merge base, not `base^..head`* (the shape gitleaks-action uses). On this branch
+    `base^..head` covers 15 commits where the PR has 12: `base^` plus the commits main gained
+    after the merge base, so a commit already on main is judged as part of the PR. A secret
+    that reached main would then fail every unrelated PR opened against it — the E8 PR #182
+    shape, judging a commit against something other than its own tree. `fetch-depth: 0` is
+    what makes the merge base computable from a PR checkout.
+  - *No `--first-parent`*, because this repository merges parallel lane branches into the epic
+    branch (`feat/dev-tooling-t3` merges into `feat/dev-tooling`). It walks only the
+    first-parent chain, so a lane arriving through a merge's second parent is never visited:
+    proven as `0 commits scanned` and exit 0 for a PR whose lane carried a flagged string.
+    Nothing is lost by dropping it, because the merge base — not `--first-parent` — is what
+    excludes main: on this branch all 12 commits in `merge-base..HEAD` are feature commits and
+    0 of them are ancestors of main.
+  - *No `--no-merges`*, which came from gitleaks-action with the reasoning that a merge's diff
+    only repeats the branch commits. That is false for a **conflict resolution**: the resolved
+    lines exist in no other commit, so dropping the merge drops a credential nobody else
+    carries. Two CRITICAL findings, one from the risk lens and one from the resilience lens,
+    reported it independently, and it is proven as `0 leaks` over a branch whose only secret
+    lived in a resolution. Note the other half of that trap: with no merge flag at all,
+    `git log -p` emits **no diff** for a merge commit, so a merge is walked and read as empty.
+    Reaching a resolution needs a flag that emits a merge diff, which is D-T5.4's job.
+- D-T5.4 The merge diff is `--remerge-diff`, **not** `-m`, and `-m` was a regression the parent
+  gate caught on 2cc0d0a. `-m` diffs a merge against **each** parent, so the diff against the
+  feature parent carries all of main's content; this repository merges main into an epic branch
+  before slicing chained PRs, so a clean merge of main re-reported main's own findings and the
+  gate failed on content already on main — the E8 PR #182 shape again, one layer over.
+  `--remerge-diff` diffs the merge against git's own automatic re-merge, so what shows is
+  exactly what the resolution wrote and main is not re-reported. It needs git 2.36 or newer,
+  which `ubuntu-latest` ships, and ci.yml names the floor because a runner that did not would
+  fail the walk rather than skip it. Rejected: `-m` (re-reports main; also duplicates one
+  finding per parent, so the same resolution logs twice where `--remerge-diff` logs once), and
+  `--first-parent` on its own (D-T5.2's second bullet: it hides a whole lane).
+- D-T5.5 `--remerge-diff` does **not** open the bypass the R1-001 finding of round
+  `review-c0c0c311c59ce08f` claimed, and the flag stays. The claim was that credentials added
+  manually during an **otherwise clean** merge commit escape the scan. They do not, and the
+  reason is structural rather than incidental: the re-merge diff is *the merge result against
+  git's own automatic re-merge of the two parents*, so any content unique to the merge commit
+  necessarily differs from what the automatic merge would have produced, and therefore appears
+  in the diff. Content can only fail to show if the automatic merge would have written the same
+  thing, which means a parent already carried it and it is not new. Measured on a scratch
+  worktree (removed afterwards), each case a real clean merge of main with the credential added
+  by hand while merging, existing in no non-merge commit:
+  - a **new file added during the clean merge** → `1 leak`, **exit 1**;
+  - an **append to a file the feature side owns** → `1 leak`, **exit 1**, with
+    `git log -1 --remerge-diff` printing the added line as an explicit `+` addition.
+  For contrast on the same cases `--no-merges --first-parent` and `--cc` both report
+  `no leaks found` (exit 0), and `-m` reports 4 — the shape that catches the manual edit but
+  also re-reports main. The parent reproduced the clean-merge case independently and agreed
+  R1-001 is false. This entry is the correction the round's single bounded budget was spent on:
+  evidence, with no change to `ci.yml`.
+- D-T5.3 gitleaks is CI-only and does **not** join `gate-fast`. `gate-fast` has no PR range,
+  so the only shape it could use is a whole-history scan, and that fails on this repository
+  today: 4 findings, all non-secrets, exit 1 (the evidence is in Progress). Hosting it would
+  need a baseline file or an allowlist — a new artifact and new policy, to make a check pass —
+  and `gate-lane` runs `gate-fast` on every commit of a lane, so it would put a 7.9 MB network
+  download in the path of every commit checked, in the one recipe documented as needing no
+  network. The cost is not time: cold download + verify + extract + scan measured 2.35 s. The
+  feature doc's Scope only ever promised the CI step, and its acceptance criterion names CI.
+  The four historical findings need no `.gitleaksignore` or baseline precisely because the
+  range scan never walks them; a new one is a line-scoped `# gitleaks:allow`, never a blanket
+  allowlist of the test tree, the same rule D-T2.6 states for ast-grep.
+
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
   Alembic head), `gate *paths`, `gate-full`, `gate-lane base`. AGENTS.md Commands + the
@@ -184,7 +265,7 @@ Issue #139 (evidence from E7/E8):
 - [ ] T4 **deferred to #194** by the owner (2026-09-29), out of scope for this feature.
   `alembic check` trial on a clean DB: adopt (with a small `include_object` filter if
   needed) into `gate-full` and CI, or reject with evidence in #139.
-- [ ] T5 gitleaks in CI (docs/09:78): verify the action/binary needs no license for this
+- [x] T5 gitleaks in CI (docs/09:78): verify the action/binary needs no license for this
   personal repo; run it locally once over the history.
 - [ ] T5b CI cost: `concurrency` (group per workflow + PR ref, `cancel-in-progress: true`) on
   every PR workflow; per-JOB path filter (never workflow-level `paths:`, which leaves required
@@ -316,8 +397,146 @@ Issue #139 (evidence from E7/E8):
     in a scratch module is reported, and `datetime.datetime.now(UTC)`, `datetime.now(tz=UTC)` and
     `datetime.date(2026, 9, 29)` stay unreported. Every scratch edit was reverted.
 
+  - 2026-09-29 T5: a `gitleaks` job alongside `server` and `web` — no Postgres service, no
+    uv/node setup — running the pinned binary 8.30.1 with the release checksum verified, over
+    the commits the PR adds. `ci.yml` and `AGENTS.md` are the only two files touched, no new
+    project dependency, and nothing else in CI changed.
+  - **Licence, verified, not remembered.** gitleaks itself is MIT (`LICENSE`, 2019 Zachary
+    Rice). `gitleaks-action` v2+ is not: "Since v2.0.0 of Gitleaks-Action, the license has
+    changed from MIT to a license", © Gitleaks LLC. `GITLEAKS_LICENSE` is "required for
+    organizations, not required for user accounts", and `gh repo view` reports this repo
+    PRIVATE with a `User` owner, so the free path is real. D-T5.1 records why the binary was
+    chosen anyway, the decisive part being the action's own source: `src/index.js` sets
+    `shouldValidate = false` only inside the `type === "User"` branch of a
+    `GET /users/{username}` call, and its `.catch` leaves it `true` and calls
+    `process.exit(1)` with "missing gitleaks license".
+  - **History scan, the STOP check — clean.** `gitleaks git -v --redact .` over HEAD:
+    `499 commits scanned`, 5.16 MB, 426 ms, **4 findings**, exit 1. `499` is every non-merge
+    commit in HEAD's ancestry, and it is the whole history for this purpose: the other 161 are
+    merge commits, which gitleaks skips by default because a merge's diff is the branch commits
+    it brings together, each already scanned on its own. All four findings are non-secrets,
+    read by the `generic-api-key` rule:
+    - `web/src/features/nodes/api/nodesApi.test.tsx:32`,
+      `web/src/features/nodes/containers/CalibrationSheet.test.tsx:15` and
+      `web/src/features/nodes/containers/NodeDetailSheet.test.tsx:30` — all the same
+      assignment of the sensor metric name `soil_moisture_20cm` to a `channel_key` field,
+      which the rule reads as a key because the identifier ends in `_key`. The literal is
+      spelled out here in pieces on purpose: writing the assignment as one line, the way these
+      three commits do, re-arms `generic-api-key` on this file, which is exactly what happened
+      in 65b273e (see the `--first-parent` entry below and ci.yml's own comment);
+    - `web/src/features/push/push.test.ts:7` — a VAPID **public** key, which is published to
+      the push service by design and is not a secret.
+    So: no real secret in history, no history rewrite, not a STOP. The sibling literals
+    `token-abc`, `mqtt-secret` and `rotated-secret` in the same files are not reported
+    (below the rule's entropy floor), which is the useful contrast — the four findings are
+    the rule over-firing on a metric name, not a missed detection.
+  - **Range green / red, both on real history, no scratch commits.** The `run` block was
+    extracted from `ci.yml` with `yaml.safe_load` and executed as CI would run it, with
+    `RUNNER_TEMP`, `GITLEAKS_VERSION`, `PR_BASE` and `PR_HEAD` set.
+    - GREEN: `PR_BASE=main`, `PR_HEAD=HEAD` → checksum "La suma coincide", `11 commits
+      scanned`, `no leaks found`, **exit 0**.
+    - RED: a one-commit PR (`PR_BASE=e4dd324^`, `PR_HEAD=e4dd324`, the commit that added the
+      two test fixtures) → `leaks found: 2`, **exit 1**. The build fails on a leak.
+    - Tamper control: one byte appended to the downloaded archive → `La suma no coincide`,
+      **exit 1** before `tar` runs, so the checksum is a real gate and not decoration.
+  - **`--first-parent` was a real hole, found by the parent gate on 65b273e, and fixed.** The
+    first cut of this job passed `--no-merges --first-parent`. This repository merges parallel
+    lane branches into the epic branch, so on the final PR `--first-parent` walks only the
+    first-parent chain and never visits a lane that arrived through a merge's second parent,
+    while `--no-merges` drops the merge commit that would have reached it. Proof on a scratch
+    worktree at `/tmp/opencode/t5-proof` (removed afterwards, with both scratch branches):
+    `scratch/t5-epic` off `main`, a side branch `scratch/t5-lane` carrying one flagged string,
+    merged `--no-ff` so the epic tip is a real 2-parent merge commit (first parent = main tip
+    `9519e05`, second parent = the lane commit).
+    - A) the shape that shipped in 65b273e, `--no-merges --first-parent`: `0 commits
+      scanned`, `no leaks found`, **exit 0**. The lane's finding was invisible.
+    - B) `--no-merges` only: `1 commits scanned`, `leaks found: 1`,
+      `generic-api-key` in the lane's file, **exit 1**. The lane is scanned and the build fails.
+    - The git-level reason, so the shape of the hole is unambiguous: the range holds 1
+      reachable non-merge commit, and `--first-parent` reduces it to 0.
+    - Nothing is lost by dropping it, because the merge base is what excludes main. On the real
+      branch, `git rev-list --no-merges merge-base..HEAD` is exactly the 12 feature commits and
+      0 of them are ancestors of main.
+    - The payload is the same sensor-metric assignment the repository's history already trips
+      `generic-api-key` on, so the proof's only variable is range reachability. Two earlier
+      payloads were tried and **discarded because gitleaks did not report them**: the AWS
+      documented example keys are allowlisted by the default config (`AKIAIOSFODNN7EXAMPLE` is
+      not a finding), and a `DATABASE_PASSWORD` candidate that a loop over `gitleaks stdin` exit
+      codes appeared to flag was, on isolated re-test, not flagged at all. A payload assumed to
+      be detected is not evidence; this one is observed. The literal is named in pieces here
+      for the reason given below.
+  - **65b273e would have failed its own job, and the range fix is what exposed it.** Widening
+    the range from `--first-parent` to the full merge-base range immediately reported 2 leaks on
+    this branch, and both were in 65b273e: the feature doc and the job's own YAML comment had
+    quoted the `channel_key` assignment verbatim in prose to document the false positive, so
+    documenting it re-armed `generic-api-key` on those two files. Two facts worth keeping: a
+    detector does not care that a secret-shaped string is inside a sentence, and a comment
+    that explains a false positive can *become* one. Both lines now name the metric name and the
+    field separately instead of pasting the assignment, and ci.yml says why. The line-scoped
+    `# gitleaks:allow` was verified as the working alternative (honoured in a `.md` file too) and
+    deliberately not used here, because the next person editing that prose would have to know to
+    re-add it.
+  - **`--no-merges` was a second, opposite hole, and the RDD round caught it.** After the
+    `--first-parent` fix, the T5 RDD round (lineage `review-095ab09de7d1a0a3`, four lenses)
+    returned two CRITICAL findings from two lenses independently — `R1-001` (risk) and
+    `R4-001` (resilience), both `deterministic`, both `introduced` — with the same root cause
+    from opposite directions: `--no-merges`, inherited from gitleaks-action, drops the merge
+    commit, so a credential that exists only in a **conflict resolution** is never scanned. The
+    action's own rationale for the flag is that a merge's diff merely repeats the branch
+    commits, which is false for a resolution. Proof on a scratch worktree
+    (`/tmp/opencode/t5-proof2`, removed afterwards): two branches edit the same line, the merge
+    conflicts, and the resolution writes a flagged value, so the string exists in **no**
+    non-merge commit of that branch — `git log -S … --no-merges HEAD` lists none of the
+    scratch commits.
+    - `--no-merges` (what shipped): `3 commits scanned`, `no leaks found`, **exit 0**. Missed.
+    - no merge flag at all (the fix that looks right): `3 commits scanned`, `no leaks found`,
+      **exit 0**. Still missed — `git log -p` emits no diff for a merge commit at all, so
+      removing the flag walks the merge and reads nothing. This is the trap: the obvious
+      correction is not a correction.
+    - `-m`: `4 commits scanned`, `2 leaks found`, **exit 1**. The resolution is read, but this
+      flag was itself the next regression — see the D-T5.4 entry below. The final flag is
+      `--remerge-diff`, which reports the same resolution as **1** leak, once, because there is
+      one diff instead of one per parent.
+    The lesson is the same one the `--first-parent` fix carries: neither hole was visible by
+    reading the command, and both were visible in one scratch run. Reasoning about a git walk
+    is not evidence; a merge on a scratch branch is.
+  - **`-m` was a third hole, caught by the parent gate on 2cc0d0a.** `-m` was the fix for the
+    conflict-resolution hole and it broke the other half of the problem. It diffs a merge
+    against **each** parent, so the diff against the feature parent carries all of main's
+    content, and this repository merges main into an epic branch before slicing chained PRs.
+    The parent proved it and I reproduced it before changing anything: branch from `e4dd324^`,
+    two feature commits, then `e4dd324` (the commit that added the fixtures) merged in as
+    "main"; over `merge-base(e4dd324, HEAD)..HEAD`, `-m` reported `2 leaks` in main's own
+    `CalibrationSheet.test.tsx` and `NodeDetailSheet.test.tsx` and exited 1 — the gate failing
+    on content already on main, the E8 PR #182 shape one layer over.
+  - **The final flag is `--remerge-diff`**, which diffs the merge against git's own automatic
+    re-merge, so only what the resolution wrote shows. All four cases on one scratch worktree
+    (`/tmp/opencode/t5-proof3`, removed afterwards with every scratch branch):
+    | case | required | `--remerge-diff` |
+    |---|---|---|
+    | clean merge of main | no false positive | `no leaks found`, exit 0 |
+    | conflict resolution writing a flagged value | caught | `1 leak`, exit 1 |
+    | second-parent lane carrying a secret | caught | `1 leak`, exit 1 |
+    | `--no-merges --first-parent` | shows both original holes | `no leaks found`, exit 0 |
+    On the conflict case the three flags read `--no-merges` 0 leaks, `-m` 2 leaks,
+    `--remerge-diff` 1 leak. It needs git 2.36 or newer, and ci.yml names that floor.
+  - `actionlint` 1.7.12 on `ci.yml`: exit 0, no findings. Its `shellcheck` rule is **skipped
+    silently** when shellcheck is not on `PATH` (first run reported `Rule "shellcheck" was
+    disabled`), so shellcheck 0.11.0 was installed outside the repo and the run repeated:
+    `actionlint -verbose` no longer reports the rule disabled, and the extracted script is
+    clean at `--severity=style -s bash` (exit 0). Positive control on a scratch workflow (a
+    missing `fi`) is reported, so the rule is live rather than merely enabled.
+  - `just gate-fast` → exit 0, all nine static steps (seven server, `eslint`, `tsc`). Nothing
+    in this task touches the recipes; the run confirms the tree.
+  - Not run here, by design: a live Actions run. The brief forbids a push without the owner's
+    go, so the job's first real execution is the parent's gate on the PR.
+
 ## Next step
 T2 committed and its review follow-ups fixed; the T2 round is closed (lineage
 `review-43815f8285e2faaf`, approved, `authority: burned`). T3 (pytest-randomly) is owned by a
 separate session on `feat/dev-tooling-t3` in the `dev-tooling-t3` worktree — this lane does not
-touch it. After T3, this lane resumes at T5 (gitleaks in CI), then T5b and T6.
+touch it. T5 (gitleaks in CI) is committed and awaits the parent's gate; its RDD round comes
+after that go. This lane resumes at T5b (`concurrency` plus per-JOB path filters), then T6. Two
+things T5b inherits: the `gitleaks` job reads `github.event.pull_request.base.sha` and
+`head.sha`, so a path filter must not skip it, and a skipped job must report success for
+required checks.
