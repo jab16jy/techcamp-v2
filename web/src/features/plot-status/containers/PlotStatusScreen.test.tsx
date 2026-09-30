@@ -707,6 +707,41 @@ describe('PlotStatusScreen', () => {
       expect(screen.queryByText('Cargando parcelas…')).not.toBeInTheDocument()
     })
 
+    it('answers for a farm that loaded when another farm fails (R3, #21 round 10)', async () => {
+      // Farm 1 answers, farm 2 does not. The degradation `usePlotsByFarm` exists
+      // for must reach the home too: one farm's failure is not a blank home.
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = requestUrl(input as Request)
+        if (url.includes('/stream')) return new Promise<Response>(() => {})
+        if (url.includes('/farms/farm-2/plots')) {
+          return jsonResponse({ type: 'about:blank', title: 'Server error', status: 500 }, 500)
+        }
+        if (url.includes('/farms/farm-1/plots')) {
+          return jsonResponse([
+            { id: 'plot-1', farm_id: 'farm-1', name: 'Lote Norte', area_ha: 1.5, irrigation_system: 'drip' },
+          ])
+        }
+        if (url.includes('/plots/plot-1/status')) return jsonResponse(plotStatus())
+        return jsonResponse({
+          items: [
+            { id: 'farm-1', org_id: 'org-1', name: 'Finca Uno' },
+            { id: 'farm-2', org_id: 'org-1', name: 'Finca Dos' },
+          ],
+          next_cursor: null,
+        })
+      })
+
+      renderScreen()
+
+      await waitFor(() => expect(screen.getByText('Hoy: regar 12 mm (≈ 40 min)')).toBeInTheDocument())
+      expect(screen.getByRole('heading', { name: 'Lote Norte' })).toBeInTheDocument()
+      // Negative: the failed farm does not become a whole-screen error, and the
+      // farm that answered is not discarded.
+      expect(
+        screen.queryByText('No se pudieron cargar las parcelas'),
+      ).not.toBeInTheDocument()
+    })
+
     it('remembers the default plot, so the next offline open has one to ask for', async () => {
       mockRequests({ 'plot-1': plotStatus() })
 

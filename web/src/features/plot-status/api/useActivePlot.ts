@@ -43,20 +43,31 @@ export function useActivePlot(): ActivePlotState {
     for (const query of plotsQueries) void query.refetch()
   }
 
-  const listsFailed = farmsQuery.isError || plotsQueries.some((query) => query.isError)
-  const listsSettled =
-    farmsQuery.isSuccess && !listsFailed && !plotsQueries.some((query) => query.isPending)
+  const anyFarmFailed = plotsQueries.some((query) => query.isError)
+  const listsPending =
+    !farmsQuery.isSuccess || plotsQueries.some((query) => query.isPending)
+  /**
+   * Only a list that arrived whole can prove a remembered plot is gone. A
+   * pending or failed farm leaves the picture incomplete, and a remembered plot
+   * stays the answer.
+   */
+  const listsComplete = farmsQuery.isSuccess && !anyFarmFailed && !listsPending
 
-  // Farms in API order, each farm's plots in API order: the documented default.
-  const plots: PlotView[] = listsSettled
-    ? farmIds.flatMap((_, index) => plotsQueries[index]?.data ?? [])
-    : []
+  /**
+   * Farms in API order, each farm's plots in API order: the documented default.
+   *
+   * The farms that did load are used even when another farm's failed, the same
+   * degradation `usePlotsByFarm` exists for (#21 round 10): one farm's plots not
+   * loading must not discard the farms that answered, and on this screen it used
+   * to blank the whole home.
+   */
+  const plots: PlotView[] = farmIds.flatMap((_, index) => plotsQueries[index]?.data ?? [])
   const remembered = rememberedPlotId === null ? undefined : plots.find((p) => p.id === rememberedPlotId)
   const defaultPlot = plots[0]
 
-  // A remembered plot answers while the lists are still loading, and keeps
-  // answering once they arrive containing it.
-  const usingRemembered = rememberedPlotId !== null && (!listsSettled || remembered !== undefined)
+  // A remembered plot answers while the lists are still loading or incomplete,
+  // and keeps answering once they arrive containing it.
+  const usingRemembered = rememberedPlotId !== null && (!listsComplete || remembered !== undefined)
   const resolvedPlotId = usingRemembered ? rememberedPlotId : defaultPlot?.id
   const resolvedPlotName = usingRemembered ? (remembered?.name ?? null) : (defaultPlot?.name ?? null)
   // Keyed on primitives so the object is stable across renders: a fresh object
@@ -84,12 +95,15 @@ export function useActivePlot(): ActivePlotState {
 
   if (orgId === null) return { kind: 'no-org' }
   if (resolved !== undefined) return { kind: 'ready', ...resolved }
-  if (listsFailed) {
+  if (farmsQuery.isError) return { kind: 'error', error: farmsQuery.error, retry }
+  if (listsPending) return { kind: 'loading' }
+  // Nothing resolved, so no farm's plots loaded at all. A farm that failed is
+  // the reason there is nothing to show, and the screen says so with a retry.
+  if (anyFarmFailed) {
     const failed = plotsQueries.find((query) => query.isError)
-    return { kind: 'error', error: farmsQuery.isError ? farmsQuery.error : failed?.error, retry }
+    return { kind: 'error', error: failed?.error, retry }
   }
-  if (!listsSettled) return { kind: 'loading' }
-  // The lists answered and the organization has no plot to show.
+  // The lists answered whole and the organization has no plot to show.
   return { kind: 'no-plots' }
 }
 
