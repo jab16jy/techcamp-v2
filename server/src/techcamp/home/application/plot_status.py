@@ -114,6 +114,14 @@ class LatestReadings:
 
 @dataclass(frozen=True, slots=True)
 class WaterBalanceSummary:
+    """Yesterday's consolidated balance.
+
+    docs/04 §Estado: "El último balance diario consolidado (el de ayer); `null`
+    si no hay." The payload carries no `day` of its own, so serving an older
+    row would present a stale depletion and its `status` as today's truth — a
+    plot whose job has not run answers `null` instead.
+    """
+
     depletion_mm: float
     taw_mm: float
     raw_mm: float
@@ -200,6 +208,7 @@ async def build_plot_status(
     )
     today = local_today(now)
     window_start = now - LATEST_WINDOW
+    yesterday = today - timedelta(days=1)
 
     latest = await _latest(
         plot_id=plot.id,
@@ -216,6 +225,8 @@ async def build_plot_status(
     balances = await query_plot_water_balance(
         user_id=user_id,
         plot_id=plot.id,
+        from_day=yesterday,
+        to_day=yesterday,
         now=now,
         plots=plots,
         water_balances=water_balances,
@@ -251,8 +262,7 @@ async def build_plot_status(
         ),
         active_cycle=await _active_cycle(plot_id=plot.id, today=today, cycles=cycles, crops=crops),
         latest=latest,
-        # Ascending by day, so the last row is the last consolidated one.
-        water_balance=None if not balances else _water_balance(balances[-1]),
+        water_balance=None if not balances else _water_balance(balances[0]),
         recommendation=recommendation,
         open_alerts=[
             OpenAlert(
