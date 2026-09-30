@@ -18,7 +18,7 @@ from techcamp.telemetry.application import (
     get_plot_nodes_health,
     query_latest_plot_readings,
 )
-from techcamp.telemetry.domain.models import NodeStatus, ReadingQuality
+from techcamp.telemetry.domain.models import Node, NodeStatus, NodeTransport, ReadingQuality
 
 from .test_repositories import _make_node, _make_org_and_plot, _make_sensor
 
@@ -277,6 +277,59 @@ async def test_get_plot_nodes_health_filters_by_plot_and_org(
         now=now,
     )
     assert empty_for_other_org == []
+
+
+class _FakePagingNodeRepo:
+    def __init__(self, all_nodes: list[Node]) -> None:
+        self.all_nodes = sorted(all_nodes, key=lambda n: n.id)
+        self.calls: list[UUID | None] = []
+
+    async def list_for_org(
+        self,
+        org_id: UUID,
+        *,
+        plot_id: UUID | None = None,
+        status: NodeStatus | None = None,
+        limit: int = 50,
+        cursor: UUID | None = None,
+    ) -> list[Node]:
+        self.calls.append(cursor)
+        candidates = [n for n in self.all_nodes if cursor is None or n.id > cursor]
+        # Real repos enforce page limit (max 50)
+        return candidates[: min(limit, 50)]
+
+    async def count_readings_since(self, node_id: UUID, org_id: UUID, since: datetime) -> int:
+        return 5
+
+
+async def test_get_plot_nodes_health_no_silent_cap_pages_through_all_nodes() -> None:
+    org_id = uuid7()
+    plot_id = uuid7()
+    nodes_data = [
+        Node(
+            id=uuid7(),
+            org_id=org_id,
+            plot_id=plot_id,
+            transport=NodeTransport.WIFI,
+            dev_eui=f"{i:016x}",
+            claim_code=f"CODE-{i}",
+            credential_hash="hash",
+            firmware="v1",
+            interval_s=300,
+            claimed_at=datetime.now(UTC),
+            last_seen_at=datetime.now(UTC),
+            status=NodeStatus.ONLINE,
+        )
+        for i in range(60)
+    ]
+    repo = _FakePagingNodeRepo(nodes_data)
+    result = await get_plot_nodes_health(
+        plot_id=plot_id,
+        org_id=org_id,
+        nodes=repo,  # type: ignore[arg-type]
+    )
+    assert len(repo.calls) > 1
+    assert len(result) == 60
 
 
 def cast_uuid(val: object) -> UUID:

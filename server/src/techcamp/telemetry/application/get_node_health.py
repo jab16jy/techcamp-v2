@@ -17,10 +17,9 @@ from uuid import UUID
 from techcamp.identity.application.ports import MembershipRepository
 from techcamp.telemetry.application.manage_nodes import resolve_node_access
 from techcamp.telemetry.application.ports import NodeRepository
-from techcamp.telemetry.domain.models import NodeStatus
+from techcamp.telemetry.domain.models import Node, NodeStatus
 
 _COMPLETENESS_WINDOW = timedelta(hours=24)
-_MAX_NODES_PER_PLOT = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,11 +92,20 @@ async def get_plot_nodes_health(
 ) -> list[PlotNodeHealth]:
     """Health of every claimed node of a plot (docs/04 §Estado; D-T0.5).
 
-    Org-scoped through NodeRepository.list_for_org.
+    Org-scoped through NodeRepository.list_for_org, paged without truncation.
     """
     reference_now = now or datetime.now(UTC)
-    node_list = await nodes.list_for_org(org_id, plot_id=plot_id, limit=_MAX_NODES_PER_PLOT)
+    node_list: list[Node] = []
+    cursor: UUID | None = None
+    while True:
+        page = await nodes.list_for_org(org_id, plot_id=plot_id, limit=50, cursor=cursor)
+        node_list.extend(page)
+        if len(page) < 50:
+            break
+        cursor = page[-1].id
+
     result: list[PlotNodeHealth] = []
+    # ponytail: one count query per node; batch it if a plot ever has dozens of nodes
     for node in node_list:
         completeness = await compute_node_completeness(
             node_id=node.id,

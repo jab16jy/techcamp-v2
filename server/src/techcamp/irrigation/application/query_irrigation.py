@@ -164,7 +164,7 @@ def crop_stage_for_day(
     stage_key is None when the crop has no Kc stages (InvalidCropStagesError).
     """
     day_of_cycle = (day - sown_on).days + 1
-    if day_of_cycle < 1 or not stages:
+    if day_of_cycle < 1:
         return None, day_of_cycle
     try:
         stage_key = stage_for_cycle_day(stages, day_of_cycle)

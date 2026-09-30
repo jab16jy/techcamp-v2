@@ -177,7 +177,7 @@ class SqlAlchemyFarmRepository:
         stmt = (
             select(*_FARM_COLUMNS)
             .where(FarmRow.technician_id == technician_id, FarmRow.org_id.in_(org_ids))
-            .order_by(FarmRow.name)
+            .order_by(FarmRow.name, FarmRow.id)
         )
         result = await self._session.execute(stmt)
         return [_farm_from_row(row) for row in result]
