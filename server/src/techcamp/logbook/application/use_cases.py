@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from uuid import UUID
 
@@ -67,3 +68,18 @@ async def list_org_visits(
         limit=limit,
         cursor=cursor,
     )
+
+
+async def get_latest_visit_dates(
+    *,
+    farm_ids: Sequence[UUID],
+    org_ids: Sequence[UUID],
+    visits: ExtensionVisitRepository,
+) -> dict[UUID, date]:
+    """Last visit date per farm for a set of farms within a set of orgs (docs/04 §Visitas; D-T0.8).
+
+    Farms without visits are absent from the returned dictionary.
+    """
+    if not farm_ids or not org_ids:
+        return {}
+    return await visits.get_latest_visit_dates_for_farms(farm_ids=farm_ids, org_ids=org_ids)

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Row, func, or_, select, text, update
+from sqlalchemy import CursorResult, Row, case, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -151,6 +151,30 @@ class SqlAlchemyAlertRepository:
         if cursor is not None:
             stmt = stmt.where(AlertRow.id < cursor)
         result = await self._session.execute(stmt.order_by(AlertRow.id.desc()).limit(limit))
+        return [_alert_from_row(row) for row in result]
+
+    async def list_open_for_plots(
+        self,
+        plot_ids: Sequence[UUID],
+        org_ids: Sequence[UUID],
+    ) -> list[Alert]:
+        if not plot_ids or not org_ids:
+            return []
+        stmt = (
+            select(*_ALERT_COLUMNS, _RULE_CODE)
+            .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
+            .where(
+                AlertRow.plot_id.in_(plot_ids),
+                AlertRow.org_id.in_(org_ids),
+                AlertRow.state != AlertState.RESOLVED.value,
+            )
+            .order_by(
+                case((AlertRow.severity == Severity.CRITICAL.value, 0), else_=1),
+                AlertRow.opened_at.desc(),
+                AlertRow.id.desc(),
+            )
+        )
+        result = await self._session.execute(stmt)
         return [_alert_from_row(row) for row in result]
 
     async def get_target_context(

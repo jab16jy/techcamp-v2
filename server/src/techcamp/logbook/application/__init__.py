@@ -12,7 +12,11 @@ from techcamp.logbook.application.pull import (
     PullPage,
     pull_changes,
 )
-from techcamp.logbook.application.use_cases import list_farm_visits, list_org_visits
+from techcamp.logbook.application.use_cases import (
+    get_latest_visit_dates,
+    list_farm_visits,
+    list_org_visits,
+)
 
 __all__ = [
     "AttachmentRepository",
@@ -23,6 +27,7 @@ __all__ = [
     "Presigner",
     "PullChangeItem",
     "PullPage",
+    "get_latest_visit_dates",
     "list_farm_visits",
     "list_org_visits",
     "presign_photo",
