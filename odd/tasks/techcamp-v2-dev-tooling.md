@@ -320,14 +320,10 @@ Issue #139 (evidence from E7/E8):
 - D-T5b.5 The `gitleaks` job's **executable configuration is not touched at all** — no `if:`,
   no `needs:` and no step is added, removed or reordered, so always-on, `--remerge-diff` over
   `merge-base(base, head)..head`, the checksum gate and `.gitleaksignore` are unchanged by
-  construction rather than by review. Stated per commit and not as a slice total, because a
-  slice number is a claim that expires on the next commit and two lenses of the T5b round
-  (`R2-misleading-pure-insertion-note`, `R3-1`) caught exactly that: the first version of this
-  entry said "the T5b diff is pure insertions, `ci.yml | 83 +++`, 0 deletions", which was true
-  of `7e568e4` and false of the slice the moment the comment trim `bada5e2` landed. The facts
-  that hold, per commit: `7e568e4` adds the filter (ci.yml `+83 −0`), `bada5e2` rewrites
-  comments only (ci.yml `+22 −77`, including inside this job), `5286447` changes one `git diff`
-  flag in the `changes` job (ci.yml `+4 −1`). `concurrency` is workflow-level, not job-level,
+  construction rather than by review. The per-commit diffs are recorded once, in Progress
+  (T5b): a slice total expires on the next commit, which is what `R2-misleading-pure-insertion-note`
+  and `R3-1` caught, and restating them here is how they drifted (`R2-duplicated-commit-audit`).
+  `concurrency` is workflow-level, not job-level,
   which is also why it cannot gate this job. The `infra/**` entry in the server list is the one
   path that is not a file the server job reads, and it is deliberate: `infra/compose.yaml` and
   `infra/postgres/init-extensions.sql` describe the database the same pytest suite runs against
@@ -363,7 +359,7 @@ Issue #139 (evidence from E7/E8):
   plus a fail-closed `if:` on `server` and `web`; `gitleaks` and `changes` are unconditional
   (D-T5b.1 … D-T5b.5). Evidence is the extracted filter run on real history plus actionlint;
   no live Actions run, which needs a push (D-T5b.2, Progress).
-- [ ] T6 Close: `just gate-full` on a clean DB, CI ↔ justfile check list diff, feature doc
+- [x] T6 Close: `just gate-full` on a clean DB, CI ↔ justfile check list diff, feature doc
   progress, #139 comment with results. Plus, as its own `docs(agents)` commit (owner decision
   2026-09-29): trim AGENTS.md with the `writing-for-agents` skill from ~164 to ~100-110 lines —
   the ast-grep paragraph becomes one line stating WHEN to add a rule ("When a review catches the
@@ -759,7 +755,7 @@ Issue #139 (evidence from E7/E8):
     `high` risk, four lenses, approved and acknowledged; six advisories in #196). Two of them
     were a stale audit record of my own — D-T5b.5 and the entry below claimed "pure insertions,
     0 deletions", true of `7e568e4` and false of the slice the moment the comment trim landed;
-    both are now stated per commit, and why a slice total is the wrong unit is part of D-T5b.5.
+    the per-commit diffs now live only in the Progress entry above.
     A third was the T5b checklist line, which claimed ast-grep was always-on while ast-grep sits
     inside the filtered server job. The one that was a **defect** was
     `R4-CHANGES-QUOTED-PATH`: `git diff --name-only` C-quotes a path with non-ASCII bytes, so a
@@ -799,26 +795,25 @@ Issue #139 (evidence from E7/E8):
     rewrites that paragraph into one line, so the sentence is T6's to write rather than a
     second commit fighting over the same paragraph.
 
+- 2026-09-29 T6 (parent, Claude Code Opus, owner decision): the close.
+  - `just gate-full` on `d7ca754`, database recreated clean: exit 0 in 8:10. pytest `1120 passed`
+    under `--randomly-seed=857729464` (a fourth order after T3's 101, 202 and 7), vitest
+    `50 files, 335 passed`, `vite build` ok, size `171.21 kB` gzipped of a `200 kB` budget. The
+    commits after it (`4b611c1`, this doc) change no code.
+  - CI ↔ justfile: the `server` job runs `gate-fast`'s seven server checks in the same order plus
+    `uv run pytest`; the `web` job runs `lint`, `typecheck`, `vitest --run`, `build`, `size`, which
+    is `gate-full`'s web half. `changes` (the path classifier) and `gitleaks` are CI-only by
+    design (D-T5b.2, D-T5.1). No check runs in one place and not the other.
+  - AGENTS.md trimmed in `4b611c1`, 171 → 128 lines with the `writing-for-agents` skill: one line
+    per recipe, the ast-grep paragraph replaced by the rule for WHEN to add a rule, the CI
+    paragraph by one line, the three review-findings bullets by one. The target of ~100-110 was
+    not met on purpose: the owner docs table, Architecture rules and Testing stay whole.
+  - `R2-duplicated-commit-audit` (T5b fix round, SUGGESTION): the T5b per-commit diffs now live
+    only in the T5b Progress entry; D-T5b.5 points there.
+
 ## Next step
-T1, T2, T3, T5 and T5b are done and merged into this branch (T3 as `822489a`), with their review
-rounds closed, approved and acknowledged. T4 is deferred to #194 by the owner and is out of this
-feature's scope. What is left is **T6**.
-
-T6 closes the feature, and it inherits four things from T5b:
-- the CI ↔ justfile parity sentence in `AGENTS.md` now has to account for a filter: the check
-  **list** is still exactly `gate-fast`'s seven server checks plus the full suites, but a
-  docs-only PR runs neither suite, so the sentence has to say "the list" and not "the run"
-  (D-T5b.1, and the reason the trim rewrites that whole paragraph into one line).
-- `ci.yml` gained a fourth job. `changes` is unconditional and cheap, `gitleaks` is
-  unconditional by contract, and `server`/`web` are the only filtered ones — that is the shape
-  T6's check-list diff should diff against, and the `changes` job's `git diff` is not a check
-  `gate-fast` mirrors (D-T5b.2).
-- a **skipped** CI job is a passed check, so `just gate-full` at close still has to be the run
-  that proves the full suites locally: a green PR is not evidence that a suite passed, only
-  that the filter did not skip it.
-- this repository has no required status checks and cannot configure any on its current plan
-  (D-T5b.1), so CI is advisory here. If the owner ever needs CI to block a merge, the plan or
-  the repository visibility has to change first, and the job names become required checks —
-  which is exactly why the filter is per job and `gitleaks` is always-on.
-
-Then the #139 comment with the results, and the AGENTS.md trim as its own `docs(agents)` commit.
+All tasks done (T4 deferred to #194). The branch is ready for delivery: stacked-to-main chained PRs
+of about 400 authored lines, cut with `just gate-lane` per slice. Push, PRs and merge wait for the
+owner's go. After the merge: remove the `dev-tooling-t3` worktree, branch and database, and this
+worktree's database. Open follow-ups: #89 (test isolation without `db_session`), #192, #194, #196
+(two accepted advisories).
