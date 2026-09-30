@@ -46,9 +46,29 @@ export const PERSIST_CACHE_KEY = 'techcamp.query-cache'
  * whose cache does not survive a reload.
  */
 const dexieStorage = {
+  /**
+   * The single read path: `createAsyncStoragePersister`'s `restoreClient` calls
+   * this and nothing else reads the row, so gating here gates every restore.
+   *
+   * Without a session token it erases the row and restores nothing (#204).
+   * `clearSession()` already deletes it, but it deletes it on a promise nobody
+   * awaits: if the OS kills the tab — the normal way a PWA on a shared phone
+   * closes — the token is gone from storage while the previous session's plot
+   * status is still on disk, and the next cold start restored it. Restoring
+   * into a signed-out app is never correct, so this fails closed: the decision
+   * is "no token, no cache", and the deletion is the same one the kill
+   * interrupted, retried on the next start.
+   */
   getItem: async (key: string): Promise<string | null> => {
     try {
-      const { db } = await import('../db/db')
+      const [{ db }, { getToken }] = await Promise.all([
+        import('../db/db'),
+        import('./session'),
+      ])
+      if (getToken() === null) {
+        await db.queryCache.delete(key)
+        return null
+      }
       const row = await db.queryCache.get(key)
       return row?.value ?? null
     } catch {

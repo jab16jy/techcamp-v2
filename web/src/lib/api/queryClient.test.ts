@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../db/db'
 import { resetLocalDb } from '../db/testDb'
 import { PERSIST_CACHE_KEY, persistOptions, queryClient } from './queryClient'
-import { clearSession } from './session'
+import { clearSession, setSession } from './session'
 
 /**
  * The persisted cache of docs/07 §Flujo de datos y offline ("TanStack Query
@@ -33,6 +33,10 @@ const STATUS_KEY = [ORG_ID, 'status']
 const ME_KEY = ['me', 'token-abc']
 const STATUS = { plot_id: '018f0c2a-0000-7000-8000-0000000000bb', moisture_pct: 41 }
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+
+/** `session.ts`'s own `TOKEN_KEY`, which it keeps private; a test has to write it
+ * directly to reproduce the window it cannot offer an API for. */
+const TOKEN_KEY = 'techcamp.token'
 
 /** A second client, the way a phone that closed the app comes back. */
 function newClient(): QueryClient {
@@ -79,6 +83,11 @@ function restoredClient(): QueryClient {
 beforeEach(async () => {
   await resetLocalDb()
   queryClient.clear()
+  // A signed-in phone is the state every restore below starts from: the cache
+  // is restored for whoever holds a session, so no test may rely on there
+  // being none.
+  localStorage.removeItem(TOKEN_KEY)
+  setSession('token-abc', ORG_ID)
 })
 
 describe('persisted query cache (docs/07 §Flujo de datos y offline)', () => {
@@ -141,6 +150,30 @@ describe('persisted query cache (docs/07 §Flujo de datos y offline)', () => {
     await persistQueryClientRestore({ ...persistOptions, queryClient: after })
 
     expect(after.getQueryData(STATUS_KEY)).toBeUndefined()
+    expect(await db.queryCache.get(PERSIST_CACHE_KEY)).toBeUndefined()
+  })
+
+  it('neither restores nor keeps a persisted cache when no session token exists', async () => {
+    const before = newClient()
+    before.setQueryData(STATUS_KEY, STATUS)
+    await persistQueryClientSave({ ...persistOptions, queryClient: before })
+
+    // The control, same setup: with the session's own token present, the cache
+    // restores. Only the token differs between this and the restore below.
+    const signedIn = restoredClient()
+    await persistQueryClientRestore({ ...persistOptions, queryClient: signedIn })
+    expect(signedIn.getQueryData(STATUS_KEY)).toEqual(STATUS)
+
+    // The window `clearSession` opens (#204): the token is gone from storage
+    // but the process died before its fire-and-forget delete landed. Removing
+    // the key alone reproduces it exactly — calling `clearSession()` here would
+    // race its own wipe and could pass without the fix.
+    localStorage.removeItem(TOKEN_KEY)
+
+    const signedOut = restoredClient()
+    await persistQueryClientRestore({ ...persistOptions, queryClient: signedOut })
+
+    expect(signedOut.getQueryData(STATUS_KEY)).toBeUndefined()
     expect(await db.queryCache.get(PERSIST_CACHE_KEY)).toBeUndefined()
   })
 
