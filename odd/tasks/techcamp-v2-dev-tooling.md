@@ -103,23 +103,58 @@ Issue #139 (evidence from E7/E8):
   interpolate `{{_worktree}}` inside a backtick string, so a backtick hashed the literal text
   `{{_worktree}}` and every worktree resolved to the same container and port. Found by running
   `db-info` from a second path, not by reading the docs.
-- D-T1.3 `gate-lane` checks each commit out in a detached temporary worktree and shares the lane's
-  `web/node_modules` by symlink (uv builds each checkout's `.venv` from its cache); no commit is
-  rewritten and the lane's tree never moves, so the shas it prints are the branch's shas. Rejected:
-  `git rebase -x` (rewrites shas) and checking out in place (leaves the tree on another commit when
-  the run stops at a failure).
+- D-T1.3 `gate-lane` checks each commit out in a detached temporary worktree and judges it against
+  its own dependency graph: uv builds that commit's own `.venv` from its own `uv.lock`, and
+  `web/node_modules` is symlinked from the lane root only while the two agree on
+  `web/package-lock.json`, installed with `npm ci` in the checkout when they do not. Symlinking it
+  unconditionally was `R3-lane-node-modules`, fixed in the RDD correction `001e7cb`: a borrowed
+  graph is E8 PR #182's shape, a commit gated against something other than its own tree. No commit
+  is rewritten and the lane's tree never moves, so the shas it prints are the branch's shas.
+  Rejected: `git rebase -x` (rewrites shas) and checking out in place (leaves the tree on another
+  commit when the run stops at a failure).
 - D-T1.4 `gate` exports a `DATABASE_URL` derived from this worktree and ignores an inherited one: a
   URL left in the environment by another checkout would point these tests at a database another
   worktree migrates and drops. The escape hatch is running pytest directly.
 - D-T1.5 `just --working-directory` must be paired with `--justfile` (`just --help`, 1.58.0); the
   ctx7 quick reference shows `-d` alone. Caught by the gate-lane evidence run, not by a doc.
+- D-T1.6 The single-Alembic-head check joins the CI server job, in T2 (owner call, 2026-09-29).
+  T2 already edits `ci.yml` for the ast-grep scan, so the head check lands in that work unit and
+  T1 does not touch CI. Until T2 lands, `gate-fast` is the only place the check runs; after it,
+  CI and `gate-fast` list the same static checks.
+- D-T2.1 The dev dependency is `ast-grep-cli`: it ships the `ast-grep` binary as a wheel script,
+  while `ast-grep-py` is the library binding and installs no executable. The venv also gets an
+  `sg` from the same wheel, while `sg` in a shell is the system switch-group command, so every
+  recipe and CI step calls `ast-grep` and never `sg`. The version is frozen by `uv.lock`
+  (0.45.3) like every other dev dependency and CI syncs with `uv sync --locked`; an exact `==` pin
+  would diverge from the file's own convention without adding reproducibility the lock does not
+  already give.
+- D-T2.2 `no-naive-today` covers the three shapes the docs forbid — `date.today()`, a zero-argument
+  `datetime.now()` and `datetime.utcnow()` — under **both** import styles this repository uses:
+  `from datetime import date, datetime` and the module-qualified `import datetime`, where the same
+  three are `datetime.date.today()`, `datetime.datetime.now()` and `datetime.datetime.utcnow()`.
+  The qualified spellings are not redundant with the direct ones: the member chain is a segment
+  longer, so a direct pattern cannot see them, and 14 files in `server/src` use `import datetime`.
+  The rule is scoped with `files: server/src/**/*.py` and `ignores:
+  server/src/techcamp/shared/dates.py`, the one module allowed a naive read because it attaches
+  UTC to it on the next line. Recorded limit: `datetime.now(tz=None)` is an explicit naive read
+  that the zero-argument pattern does not match; a metavariable form (`$X.today()`) would catch
+  the qualified chain too but would also flag any domain method named `today()`, so the precise
+  shapes stand. The rule test documents what is covered and what is not.
+- D-T2.3 The scan is one command, run from `server/` in both places: `uv run ast-grep scan
+  --config ../sgconfig.yml`. Rule paths are relative to the config file, not the cwd, so the scan
+  covers the whole tree whatever a rule names, and CI's server job (whose working directory is
+  `server`) runs the identical line. CI also runs `uv run ast-grep test`, so a rule that stops
+  reporting what it claims fails the build instead of passing silently.
+- D-T2.4 D-T1.6 lands with T2: the CI server job asserts exactly one Alembic head, spelled out as
+  the recipe spells it, because CI calls the tools directly and never `just`. That closes
+  `R3-stale-ci-parity` (#193) without touching the AGENTS.md sentence, which is now true.
 
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
   Alembic head), `gate *paths`, `gate-full`, `gate-lane base`. AGENTS.md Commands + the
   `D-Tx.n` convention in Workflow. Evidence: each recipe run, `gate-lane` over a range with
   one broken commit (in a scratch branch, deleted after).
-- [ ] T2 ast-grep: pinned dev dep, `sgconfig.yml`, rule `no-naive-today` + rule tests (RED
+- [x] T2 ast-grep: pinned dev dep, `sgconfig.yml`, rule `no-naive-today` + rule tests (RED
   first), wired into `gate-fast` and CI.
 - [ ] T3 pytest-randomly: dev dep; full suite on a clean DB with 3 seeds; flakes reported on
   #89 with seeds; fix only trivial ones.
@@ -149,6 +184,12 @@ Issue #139 (evidence from E7/E8):
 - Boundary: branch point `9519e05`. Per work-unit commit; the parent gates first, then the
   OpenCode session runs RDD. Non-blocking findings go to one issue per round
   (`review-follow-up`, `area:*`, `type:*`).
+- T1 is done. Round 1, lineage `review-429366d35a8ea6b3`: candidate `9519e05..HEAD` (3 files, 485
+  lines, `medium`), one lens (`review-reliability`), one correction budget. One CRITICAL,
+  `R3-lane-node-modules`, fixed in the single bounded correction `001e7cb`; approved and
+  acknowledged, `authority: burned`. The two WARNINGs (`R3-stale-ci-parity`,
+  `R3-unescaped-worktree-path`) and the D-T1.3 drift are #193; the unescaped path and the doc drift
+  are fixed in this session, and `R3-stale-ci-parity` is accepted until T2 lands D-T1.6 in this PR.
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
@@ -181,11 +222,55 @@ Issue #139 (evidence from E7/E8):
   temporary worktrees were removed after.
   - Not run here: `gate-full`'s full pytest/vitest/build/size (T3 and T6 by design, the full
     suite once on a clean DB at epic close).
-  - Known gap for T6's diff: the single-Alembic-head check is in `gate-fast` and not yet in CI,
-    which is the one check the two do not share. T1 does not touch CI (the scope adds ast-grep,
-    gitleaks and whatever T4 adopts, and nothing else), so the decision is T6's: add
-    `alembic heads` to the server job, or move the check out of `gate-fast`.
+  - Known gap, closed in T2 by D-T1.6: the single-Alembic-head check is in `gate-fast` and not
+    yet in CI, the one check the two did not share. T1 does not touch CI (the scope adds
+    ast-grep, gitleaks and whatever T4 adopts, and nothing else); T2 adds `alembic heads` to the
+    server job in the same work unit as the ast-grep scan, in the same PR. The RDD WARNING
+    `R3-stale-ci-parity` on the AGENTS.md sentence that already claims parity is therefore
+    accepted for this round and AGENTS.md is left as is: T2 makes the sentence true in the same
+    PR that ships the rest of the feature, and softening it now would only be true twice.
+
+  - Known gap, closed in T2 by D-T1.6: the single-Alembic-head check is in `gate-fast` and not
+    yet in CI, the one check the two did not share. T1 does not touch CI (the scope adds
+    ast-grep, gitleaks and whatever T4 adopts, and nothing else); T2 adds `alembic heads` to the
+    server job in the same work unit as the ast-grep scan, in the same PR. The RDD WARNING
+    `R3-stale-ci-parity` on the AGENTS.md sentence that already claims parity is therefore
+    accepted for this round and AGENTS.md is left as is: T2 makes the sentence true in the same
+    PR that ships the rest of the feature, and softening it now would only be true twice.
+- 2026-09-29 T2: `ast-grep-cli` in the server dev group (locked at 0.45.3), `sgconfig.yml` at the
+  root, `rules/no-naive-today.yml`, `rule-tests/no-naive-today-test.yml` with its generated
+  snapshot, the scan in `gate-fast` and in the CI server job, the rule tests in CI, and D-T1.6's
+  single-Alembic-head assertion in the same job. One commit, so CI and `gate-fast` list the same
+  checks at every commit of the lane.
+  - RED, rule matching only `date.today()`: `[Missing] Expect rule no-naive-today to report
+    issues, but none found in: now = datetime.now()` and the same for `datetime.utcnow()`;
+    `FAIL no-naive-today  ......WMM` / `test failed. 0 passed; 1 failed` (exit 4). The first RED
+    was structural: `Error: Cannot read rule directory .../rules` (exit 6).
+  - GREEN: `PASS no-naive-today  .........` / `test result: ok. 1 passed; 0 failed` (exit 0). The
+    first all-three-shapes run failed with `Test failed due to mismatching snapshots`, so the
+    baseline was generated with `ast-grep test --update-all` and committed.
+  - Six `valid` cases (including `datetime.now(UTC)`, `datetime.now(tz=UTC)`,
+    `datetime.now(BOGOTA_TZ)` and `local_today(...)`) and three `invalid` ones.
+  - Negative controls: a scratch `date.today()` in `server/src` is reported from the repo root and
+    from `server/ --config ../sgconfig.yml` alike, and `just gate-fast` then exits 1 with the
+    rule's message; the same read inside `server/src/techcamp/shared/dates.py` is not reported
+    (file held the violation at line 34 while the scan exited 0), which is what `ignores` is for.
+    Both scratch edits were reverted and `git status` confirmed the tree.
+  - The existing tree is clean under the rule: 30-odd `datetime.now(UTC)` calls and zero
+    `date.today()`, zero-arg `datetime.now()` or `datetime.utcnow()` in `server/src`.
+  - Second cycle, the parent's probe before the review: the rule reported `date.today()` but not
+    `datetime.datetime.now()`, because a direct pattern cannot match a longer member chain. 14
+    files in `server/src` use `import datetime`, so the gap was half the repository's style. RED
+    after adding the three qualified invalid cases and the aware qualified valid ones:
+    `FAIL no-naive-today  .............MMM` with `[Missing] Expect rule no-naive-today to report
+    issues, but none found in: day = datetime.date.today()` and the same for
+    `datetime.datetime.now()` and `datetime.datetime.utcnow()`; `0 passed; 1 failed` (exit 4).
+    GREEN after the three extra patterns and a refreshed snapshot: `PASS no-naive-today
+    ................` (16 cases), `1 passed; 0 failed`. The repo scan stayed clean, the probe now
+    reports both shapes (`2 error(s) found`), and `datetime.datetime.now(UTC)` /
+    `datetime.date(2026, 9, 29)` stay unreported.
 
 ## Next step
-T1 committed; the parent gates the sha and the RDD review runs for it. Next task: T2 (ast-grep
-`no-naive-today` + rule tests), after the parent's go.
+T2 committed; the parent gates the sha, then the RDD review runs for the slice. Next task: T3
+(pytest-randomly: dev dep, full suite on a clean DB with 3 seeds, flakes on #89), after the
+parent's go.

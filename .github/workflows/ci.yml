@@ -37,6 +37,24 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run lint-imports
+      # The one check `just gate-fast` had and CI did not (D-T1.6, Refs #193): a branched
+      # migration history is one `alembic heads` line per head, and only a merge revision
+      # repairs it. The same assertion as the recipe, spelled out because CI calls the
+      # tools directly and never `just`.
+      - name: single alembic head
+        run: |
+          heads=$(uv run alembic heads | wc -l)
+          if [ "$heads" -ne 1 ]; then
+            echo "expected exactly 1 Alembic head, found $heads:" >&2
+            uv run alembic heads >&2
+            exit 1
+          fi
+      # The rules in ../rules are the invariants a review used to catch by hand, and
+      # their tests fail the build when a rule stops reporting what it claims.
+      - name: ast-grep rule tests
+        run: uv run ast-grep test
+      - name: ast-grep scan
+        run: uv run ast-grep scan --config ../sgconfig.yml
       - run: uv run pytest
 
   web:

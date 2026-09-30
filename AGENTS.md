@@ -49,6 +49,8 @@ TimescaleDB and pgvector ([ADR-0003](docs/adr/0003-postgres-unico.md)); Mosquitt
   `assistant`; cross-cutting code in `shared/`; app entry `main.py`.
 - `server/migrations/` Alembic; `server/tests/` mirrors modules.
 - `web/src/design-system/` tokens and primitives, `web/src/app/` screens.
+- `sgconfig.yml` with `rules/` (one executable invariant per file) and `rule-tests/` (its valid and
+  invalid cases).
 - `infra/` Compose and Mosquitto; `ml/` offline training with its own deps; `odd/tasks/` feature
   docs.
 
@@ -79,7 +81,8 @@ Gates (`just`, from the repo root). `just` is a system tool, not a project depen
   share a database. `just db-info` prints the container, the port and the `DATABASE_URL` the
   recipes export.
 - `just gate-fast`: the static checks only — server `ruff check`, `ruff format --check`, `mypy`,
-  `lint-imports` and a single Alembic head; web `lint`, `typecheck`. No database, no tests.
+  `lint-imports`, a single Alembic head and `ast-grep scan`; web `lint`, `typecheck`. No database,
+  no tests.
 - `just gate <paths…>`: `gate-fast` plus exactly the tests you name. `server/…` runs pytest (the
   `server/` prefix is stripped), `web/…` runs `vitest --run`, any other path adds nothing.
   Node ids pass through: `just gate server/tests/irrigation/test_x.py::test_y`. No paths means
@@ -90,8 +93,15 @@ Gates (`just`, from the repo root). `just` is a system tool, not a project depen
   the first failure and naming its sha (the E8 PR #182 lesson). Each commit is checked out in a
   detached temporary worktree, so the lane's own tree never moves and no commit is rewritten.
 
-CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`, and runs the same
-checks plus `ruff format --check` and the size budget; green locally means green in CI.
+Rules: `sgconfig.yml` at the root, one file per rule in `rules/`, and its test in
+`rule-tests/<id>-test.yml` with a `valid` and an `invalid` case each — a rule that has never seen
+a failing case proves nothing. `uv run ast-grep test` (from `server/`) proves the rules and their
+snapshots, `uv run ast-grep scan --config ../sgconfig.yml` applies them; a rule reaches CI through
+`just gate-fast`. A new rule is a new file plus its test, not an edit to an existing one.
+
+CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`: the same static
+checks as `gate-fast`, plus the full pytest and vitest runs, the web build and the size budget.
+Green locally means green in CI.
 
 ## Architecture rules
 
