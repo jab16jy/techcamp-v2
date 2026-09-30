@@ -46,71 +46,37 @@ TimescaleDB and pgvector ([ADR-0003](docs/adr/0003-postgres-unico.md)); Mosquitt
 
 - `server/src/techcamp/<module>/{domain,application,adapters}` for `identity`, `farms`,
   `telemetry`, `weather`, `irrigation`, `alerts`, `notifications`, `logbook`, `risk`, `metrics`,
-  `assistant`; cross-cutting code in `shared/`; app entry `main.py`.
-- `server/migrations/` Alembic; `server/tests/` mirrors modules.
+  `assistant`; cross-cutting code in `shared/`. `server/tests/` mirrors modules.
 - `web/src/design-system/` tokens and primitives, `web/src/app/` screens.
-- `sgconfig.yml` with `rules/` (one executable invariant per file) and `rule-tests/` (its valid and
-  invalid cases).
-- `infra/` Compose and Mosquitto; `ml/` offline training with its own deps; `odd/tasks/` feature
-  docs.
+- `rules/` + `rule-tests/`: ast-grep invariants (`sgconfig.yml`); `ml/` has its own deps;
+  `odd/tasks/` feature docs.
 
 ## Commands
 
-Server (run in `server/`). Tests hit a real Postgres: `just db-up` (below) starts the one this
-worktree owns and the gate recipes export its `DATABASE_URL`; running `pytest` directly falls
-back to `postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp` (`shared/config.py`),
-the seminar stack's database. The session fixture migrates to head and downgrades after.
+Gates run from the repo root with `just` (a system tool: `uv tool install rust-just`). Use them
+instead of assembling checks by hand:
 
-- `uv run pytest` · one test: `uv run pytest tests/identity/test_x.py::test_name`
-- `uv run ruff check` · `uv run ruff format` · `uv run mypy` · `uv run lint-imports`
+- `just db-up` · `db-down` · `db-reset` · `db-info`: this worktree's own Postgres, so parallel
+  worktrees never share a database. The gate recipes export its `DATABASE_URL`.
+- `just gate-fast`: static checks only (ruff, format, mypy, lint-imports, one Alembic head,
+  ast-grep; eslint, tsc).
+- `just gate <paths…>`: `gate-fast` plus exactly the tests named, `server/…` or `web/…`, node ids
+  included. No paths = no tests.
+- `just gate-full`: clean database, then everything CI runs. Once, at epic close.
+- `just gate-lane <base>`: `gate-fast` on every commit of `base..HEAD`. Run it before slicing a
+  lane into PRs; gating only HEAD misses a middle commit that breaks.
 
-Web (run in `web/`):
+Direct tools: `uv run pytest tests/<module>/test_x.py::test_name` in `server/` (a bare `pytest`
+falls back to the seminar stack's database on 5432); `npm test -- --run <file>` in `web/`
+(`npm test` alone is watch mode). Infra: `podman-compose -f infra/compose.yaml --profile seminar
+up`.
 
-- `npm run dev` · `npm run lint` · `npm run typecheck` · `npm run build` · `npm run size`
-- `npm test` is Vitest watch mode; one run: `npm test -- --run`; one file:
-  `npm test -- --run src/App.test.tsx`
+When a review catches the same mistake a second time, encode it as an ast-grep rule:
+`rules/<id>.yml` plus `rule-tests/<id>-test.yml` with valid and invalid cases. Silence one line
+with `# ast-grep-ignore`, never a whole file.
 
-Infra: `podman-compose -f infra/compose.yaml --profile seminar up` (Docker: `docker compose`).
-
-Gates (`just`, from the repo root). `just` is a system tool, not a project dependency:
-`uv tool install rust-just` (or `cargo install just`, or brew).
-
-- `just db-up` · `db-down` · `db-reset`: this worktree's own Postgres
-  (`docker.io/timescale/timescaledb-ha:pg16`, with the extensions `infra/compose.yaml` mounts),
-  on a container name and port derived from the worktree directory, so parallel worktrees never
-  share a database. `just db-info` prints the container, the port and the `DATABASE_URL` the
-  recipes export.
-- `just gate-fast`: the static checks only — server `ruff check`, `ruff format --check`, `mypy`,
-  `lint-imports`, a single Alembic head, `ast-grep test` and `ast-grep scan`; web `lint`,
-  `typecheck`. No database, no tests.
-- `just gate <paths…>`: `gate-fast` plus exactly the tests you name. `server/…` runs pytest (the
-  `server/` prefix is stripped), `web/…` runs `vitest --run`, any other path adds nothing.
-  Node ids pass through: `just gate server/tests/irrigation/test_x.py::test_y`. No paths means
-  the static checks only — the full suite is `gate-full`, taken on purpose.
-- `just gate-full`: the epic-close run. Recreates this worktree's database clean, then
-  `gate-fast`, full pytest, full vitest, web `build` and `size`.
-- `just gate-lane <base>`: `gate-fast` on every commit in `base..HEAD`, oldest first, stopping at
-  the first failure and naming its sha (the E8 PR #182 lesson). Each commit is checked out in a
-  detached temporary worktree, so the lane's own tree never moves and no commit is rewritten.
-
-Rules: `sgconfig.yml` at the root, one file per rule in `rules/`, and its test in
-`rule-tests/<id>-test.yml` with a `valid` and an `invalid` case each — a rule that has never seen
-a failing case proves nothing. Both commands run from `server/` and name the config explicitly,
-because a rule's paths resolve against the config file rather than the working directory:
-`uv run ast-grep test --config ../sgconfig.yml` proves the rules and their snapshots,
-`uv run ast-grep scan --config ../sgconfig.yml` applies them. Prefer a line-scoped
-`# ast-grep-ignore` over exempting a whole file in a rule's `ignores`: a file that "obviously
-needs it" is exactly the file whose next naive read goes unnoticed. A new rule is a new file plus
-its test, not an edit to an existing one.
-
-CI (`.github/workflows/ci.yml`) calls the tools directly, not through `just`, and runs the same
-checks in the same order. Its server job is `gate-fast`'s seven server checks — `ruff check`,
-`ruff format --check`, `mypy`, `lint-imports`, one Alembic head, `ast-grep test`, `ast-grep scan`
-— plus the full pytest run. Its web job is `gate-fast`'s `lint` and `typecheck` plus the full
-vitest run, the build and the size budget. Its `gitleaks` job scans the commits the PR adds
-(docs/09:78) and is CI-only by design, because a `gate-fast` that downloaded a release binary
-would put the network in the path of every commit a lane checks. No check `gate-fast` and CI
-both run exists in one place and not the other. Green locally means green in CI.
+CI = `gate-full`'s checks, each job skipped when the PR touches none of its paths, plus
+`gitleaks` (CI-only, always on). Green `gate-full` means green CI, secrets aside.
 
 ## Architecture rules
 
@@ -131,12 +97,8 @@ behavior change. Pytest for domain and application; domain tests are pure. Test 
 ports for external I/O (LLM, Open-Meteo). Org isolation tests per docs/09. FAO-56 numeric examples
 cover irrigation math. Vitest for web units; Playwright for e2e and scenarios arrives with E16.
 
-Server tests run in a random order (`pytest-randomly`, #139), so a test that only passes
-because of the sequence it happens to run in cannot hide. The seed is printed in the header
-(`Using --randomly-seed=101`): reproduce a failure with `uv run pytest --randomly-seed=101`
-for that same order, or `--randomly-seed=last` to reuse the previous run's. `-p no:randomly`
-pins the file order while debugging one test, and `--randomly-dont-reorganize` keeps the
-order without dropping the per-test `random.seed()` reset.
+Server tests run in a random order (`pytest-randomly`). Reproduce a failure with the seed from
+the header: `uv run pytest --randomly-seed=<n>`.
 
 ## Workflow
 
@@ -146,16 +108,11 @@ order without dropping the per-test `random.seed()` reset.
   bare `D24` collides the moment two branches work in parallel — three branches reused D24–D29 in
   E7 — so the task is part of the id.
 - Conventional Commits, no AI attribution. Work-unit commits, receipt-driven review per commit.
-- Blocking review findings are fixed immediately, in the review's bounded correction, before the
-  next task.
-- Non-blocking review findings (WARNING, SUGGESTION) go to the GitHub issue tracker and are fixed
-  later, not in an immediate fix task: one issue per epic review round, labels
-  `review-follow-up`, `epic:eN`, `area:*`, `type:*`, linked from the feature doc's "Review (RDD)"
-  section and referenced (`Refs #N`) by the fixing commit.
-- Exception: when a review round has more than 2–3 non-blocking findings, fix the most important
-  ones (the WARNINGs that affect the code the task is building) inside the current task, as their
-  own work-unit commit with `Refs #N`, and leave the rest in the issue, noting there which were
-  fixed.
+- Review findings: blocking ones are fixed in the review's bounded correction, before the next
+  task. Non-blocking ones go to one GitHub issue per review round (`review-follow-up`,
+  `epic:eN`, `area:*`, `type:*`), linked from the feature doc's "Review (RDD)"; fix the WARNINGs
+  that touch the task's own code now, in their own commit with `Refs #N`, and note in the issue
+  what was fixed.
 - Delivery: stacked-to-main chained PRs of about 400 authored lines, merged in order.
 - Skills: the Agent Teams Lite registry `.atl/skill-registry.md` (local, gitignored; rebuild with
   `gentle-ai skill-registry refresh`) is the skill index. Delegators pick matching skills there

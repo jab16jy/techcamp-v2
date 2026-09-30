@@ -317,18 +317,21 @@ Issue #139 (evidence from E7/E8):
   that owns that tree or extend the filter in the same commit. The `rules/+docs` line of
   the evidence table is that case on real history (`780b46b`, a commit that changed
   `rules/no-naive-today.yml` and the feature doc and nothing else): the server job runs.
-- D-T5b.5 The `gitleaks` job is **not touched at all** — the T5b diff is pure insertions
-  (`git diff --stat`: `ci.yml | 83 +++`, 0 deletions) and adds no `if:`, no `needs:` and no
-  step to that job, so always-on, `--remerge-diff` over `merge-base(base, head)..head`, the
-  checksum gate and `.gitleaksignore` are unchanged by construction rather than by review.
-  `concurrency` is workflow-level, not job-level, which is also why it cannot gate it. The
-  `infra/**` entry in the server list is the one path that is not a file the server job
-  reads, and it is deliberate: `infra/compose.yaml` and `infra/postgres/init-extensions.sql`
-  describe the database the same pytest suite runs against locally, so a divergence between
-  that file and the CI service image is a change that must be gated by the job that would
-  notice it. The `justfile` entry is the same argument: CI mirrors its check list, so a
-  justfile change is a change to what CI is supposed to run. Rejected: `infra/**` on the
-  web job (nothing there is read by anything web) and a workflow-level `paths:` (D-T5b.1).
+- D-T5b.5 The `gitleaks` job's **executable configuration is not touched at all** — no `if:`,
+  no `needs:` and no step is added, removed or reordered, so always-on, `--remerge-diff` over
+  `merge-base(base, head)..head`, the checksum gate and `.gitleaksignore` are unchanged by
+  construction rather than by review. The per-commit diffs are recorded once, in Progress
+  (T5b): a slice total expires on the next commit, which is what `R2-misleading-pure-insertion-note`
+  and `R3-1` caught, and restating them here is how they drifted (`R2-duplicated-commit-audit`).
+  `concurrency` is workflow-level, not job-level,
+  which is also why it cannot gate this job. The `infra/**` entry in the server list is the one
+  path that is not a file the server job reads, and it is deliberate: `infra/compose.yaml` and
+  `infra/postgres/init-extensions.sql` describe the database the same pytest suite runs against
+  locally, so a divergence between that file and the CI service image is a change that must be
+  gated by the job that would notice it. The `justfile` entry is the same argument: CI mirrors its
+  check list, so a justfile change is a change to what CI is supposed to run. Rejected:
+  `infra/**` on the web job (nothing there is read by anything web) and a workflow-level `paths:`
+  (D-T5b.1).
 
 ## Tasks
 - [x] T1 `justfile`: `db-up`/`db-down`/`db-reset` per worktree, `gate-fast` (incl. single
@@ -347,14 +350,16 @@ Issue #139 (evidence from E7/E8):
 - [x] T5b CI cost: `concurrency` (group per workflow + PR ref, `cancel-in-progress: true`) on
   every PR workflow; per-JOB path filter (never workflow-level `paths:`, which leaves required
   checks pending): server job on `server/**`, `infra/**`, `.github/workflows/**`; web job on
-  `web/**`, `.github/workflows/**`; ast-grep and gitleaks always. Skipped jobs must report
+  `web/**`, `.github/workflows/**`; `gitleaks` always. ast-grep is not an always-on job: it
+  lives inside the conditionally skipped server job and is covered because every file a rule can
+  change in is in that job's list (D-T5b.4). Skipped jobs must report
   success. Evidence: a web-only and a docs-only change skip the server job (act or a draft PR
   run, owner go needed for a push). Data: last 40 PRs, 24 server-only, 13 web-only; server
   job ~7 min, web ~2 min; repo private (2000 min/month free plan). Landed as a `changes` job
   plus a fail-closed `if:` on `server` and `web`; `gitleaks` and `changes` are unconditional
   (D-T5b.1 … D-T5b.5). Evidence is the extracted filter run on real history plus actionlint;
   no live Actions run, which needs a push (D-T5b.2, Progress).
-- [ ] T6 Close: `just gate-full` on a clean DB, CI ↔ justfile check list diff, feature doc
+- [x] T6 Close: `just gate-full` on a clean DB, CI ↔ justfile check list diff, feature doc
   progress, #139 comment with results. Plus, as its own `docs(agents)` commit (owner decision
   2026-09-29): trim AGENTS.md with the `writing-for-agents` skill from ~164 to ~100-110 lines —
   the ast-grep paragraph becomes one line stating WHEN to add a rule ("When a review catches the
@@ -433,6 +438,15 @@ Issue #139 (evidence from E7/E8):
   - `5b2993d` (`.gitleaksignore`, the two `65b273e` prose fingerprints) is part of the T5 slice
     and was parent-gated: the parent re-ran the exact scan over `merge-base(main, HEAD)..HEAD`
     and got no leaks, with `gate-fast` exit 0.
+- T5b, in three commits on this branch: `7e568e4` (the filter), `bada5e2` (comments only, the
+  parent gate's quality fix) and `5286447` (the round's one real fix). Round 1, lineage
+  `review-e8279d4fcb8cbf96`, base `6d03c54`: 2 files / 300 lines, `high` risk (`shell_source` in
+  `ci.yml`), four lenses, correction budget 150. **Approved on the last admitted event**,
+  acknowledged, `authority: burned`. Risk reported **zero** findings. No correction was opened
+  and the round offered none; the six advisories are #196, four fixed here (`R4-CHANGES-QUOTED-PATH`
+  in `5286447`; `R2-misleading-pure-insertion-note` and `R3-1` — the same stale audit record from
+  two lenses — and `R2-ast-grep-checklist` in this commit) and two accepted there with their
+  reasons (`R4-CONCURRENCY-PR-RERUN`, `R3-2`).
 
 ## Progress / evidence
 - 2026-09-29 T0: research done (Engram #290), scope approved by the owner, worktree
@@ -679,9 +693,10 @@ Issue #139 (evidence from E7/E8):
 
 - 2026-09-29 T5b: `concurrency` at workflow level (one in-flight run per PR, `cancel-in-progress:
   true`), a `changes` job that classifies the PR's changed files once, and a fail-closed `if:` on
-  `server` and `web`. `ci.yml` is the only CI file, and the diff is **pure insertions**:
-  `ci.yml | 83 ++++`, 0 deletions — the `gitleaks` job gained no `if:`, no `needs:` and no step,
-  so T5's walk is unchanged by construction (D-T5b.5).
+  `server` and `web`. `ci.yml` is the only CI file. The `gitleaks` job gained no `if:`, no
+  `needs:` and no step, so T5's walk is unchanged by construction (D-T5b.5); the per-commit
+  diffs are `7e568e4` `+83 −0` (the filter), `bada5e2` `+22 −77` (comments only, including in
+  the gitleaks job) and `5286447` `+4 −1` (one `git diff` flag).
   - **The three inherited constraints, each checked against the current docs and this file:**
     - *gitleaks always-on.* `yaml.safe_load` of the edited shape: `gitleaks` has neither `if`
       nor `needs`, and neither has `changes`, so both run on every PR; the filter is expressed
@@ -736,6 +751,22 @@ Issue #139 (evidence from E7/E8):
     rule is live and not merely enabled. The `pyflakes` rule is disabled because no step in this
     workflow is Python, which is the same advisory T5 recorded.
   - `just gate-fast` → exit 0, all nine static steps (seven server, `eslint`, `tsc`).
+  - **T5b RDD round, and the one real bug it found** (`review-e8279d4fcb8cbf96`, base `6d03c54`,
+    `high` risk, four lenses, approved and acknowledged; six advisories in #196). Two of them
+    were a stale audit record of my own — D-T5b.5 and the entry below claimed "pure insertions,
+    0 deletions", true of `7e568e4` and false of the slice the moment the comment trim landed;
+    the per-commit diffs now live only in the Progress entry above.
+    A third was the T5b checklist line, which claimed ast-grep was always-on while ast-grep sits
+    inside the filtered server job. The one that was a **defect** was
+    `R4-CHANGES-QUOTED-PATH`: `git diff --name-only` C-quotes a path with non-ASCII bytes, so a
+    web-only PR whose file name is not ASCII produced `web=false` and the web suite was silently
+    skipped. RED, on a scratch branch whose single commit adds `web/src/café-metric.tsx`: the
+    committed classifier answers `server=false web=false` where `web=true` is the truth, exit 0
+    — the failure mode is a skipped job, which reports "Success", so nothing else would have
+    caught it. GREEN with `-c core.quotePath=false` in `5286447`: `web=true` on the same range,
+    and the six ASCII ranges answer identically before and after. Both runs used the classifier
+    extracted from `ci.yml` with `yaml.safe_load`. The other two advisories are accepted in #196
+    with their reasons.
   - gitleaks, before this commit: the T5 step re-extracted from the edited `ci.yml` with
     `yaml.safe_load` and run as CI runs it (`RUNNER_TEMP`, `GITLEAKS_VERSION`, `PR_BASE=main`,
     `PR_HEAD=HEAD`) → checksum "La suma coincide", gitleaks `20 commits scanned`,
@@ -744,8 +775,8 @@ Issue #139 (evidence from E7/E8):
     between git's count and gitleaks' printed one is that merge commit, the same accounting T5
     recorded (499 scanned of 660 reachable, the rest merges). The claim that the walk reaches a
     lane merged through a second parent is T5's, proven on a scratch worktree and refuted once
-    (D-T5.2, D-T5.5); this task does not touch the walk, and the diff proves it — 0 deletions
-    inside the `gitleaks` job.
+    (D-T5.2, D-T5.5); this task does not touch the walk, and the per-commit diffs prove it
+    (`bada5e2` rewrote comments in that job, `5286447` is the `changes` job).
   - `gitleaks dir` over the exact bytes this commit is about to add — `ci.yml` and this file,
     copied to a scratch directory so nothing else was in the scan — 75 KB, **`no leaks found`**,
     exit 0. That is the check that matters here: `65b273e` documented a `generic-api-key` false
@@ -764,26 +795,25 @@ Issue #139 (evidence from E7/E8):
     rewrites that paragraph into one line, so the sentence is T6's to write rather than a
     second commit fighting over the same paragraph.
 
+- 2026-09-29 T6 (parent, Claude Code Opus, owner decision): the close.
+  - `just gate-full` on `d7ca754`, database recreated clean: exit 0 in 8:10. pytest `1120 passed`
+    under `--randomly-seed=857729464` (a fourth order after T3's 101, 202 and 7), vitest
+    `50 files, 335 passed`, `vite build` ok, size `171.21 kB` gzipped of a `200 kB` budget. The
+    commits after it (`4b611c1`, this doc) change no code.
+  - CI ↔ justfile: the `server` job runs `gate-fast`'s seven server checks in the same order plus
+    `uv run pytest`; the `web` job runs `lint`, `typecheck`, `vitest --run`, `build`, `size`, which
+    is `gate-full`'s web half. `changes` (the path classifier) and `gitleaks` are CI-only by
+    design (D-T5b.2, D-T5.1). No check runs in one place and not the other.
+  - AGENTS.md trimmed in `4b611c1`, 171 → 128 lines with the `writing-for-agents` skill: one line
+    per recipe, the ast-grep paragraph replaced by the rule for WHEN to add a rule, the CI
+    paragraph by one line, the three review-findings bullets by one. The target of ~100-110 was
+    not met on purpose: the owner docs table, Architecture rules and Testing stay whole.
+  - `R2-duplicated-commit-audit` (T5b fix round, SUGGESTION): the T5b per-commit diffs now live
+    only in the T5b Progress entry; D-T5b.5 points there.
+
 ## Next step
-T1, T2, T3, T5 and T5b are done and merged into this branch (T3 as `822489a`), with their review
-rounds closed, approved and acknowledged. T4 is deferred to #194 by the owner and is out of this
-feature's scope. What is left is **T6**.
-
-T6 closes the feature, and it inherits four things from T5b:
-- the CI ↔ justfile parity sentence in `AGENTS.md` now has to account for a filter: the check
-  **list** is still exactly `gate-fast`'s seven server checks plus the full suites, but a
-  docs-only PR runs neither suite, so the sentence has to say "the list" and not "the run"
-  (D-T5b.1, and the reason the trim rewrites that whole paragraph into one line).
-- `ci.yml` gained a fourth job. `changes` is unconditional and cheap, `gitleaks` is
-  unconditional by contract, and `server`/`web` are the only filtered ones — that is the shape
-  T6's check-list diff should diff against, and the `changes` job's `git diff` is not a check
-  `gate-fast` mirrors (D-T5b.2).
-- a **skipped** CI job is a passed check, so `just gate-full` at close still has to be the run
-  that proves the full suites locally: a green PR is not evidence that a suite passed, only
-  that the filter did not skip it.
-- this repository has no required status checks and cannot configure any on its current plan
-  (D-T5b.1), so CI is advisory here. If the owner ever needs CI to block a merge, the plan or
-  the repository visibility has to change first, and the job names become required checks —
-  which is exactly why the filter is per job and `gitleaks` is always-on.
-
-Then the #139 comment with the results, and the AGENTS.md trim as its own `docs(agents)` commit.
+All tasks done (T4 deferred to #194). The branch is ready for delivery: stacked-to-main chained PRs
+of about 400 authored lines, cut with `just gate-lane` per slice. Push, PRs and merge wait for the
+owner's go. After the merge: remove the `dev-tooling-t3` worktree, branch and database, and this
+worktree's database. Open follow-ups: #89 (test isolation without `db_session`), #192, #194, #196
+(two accepted advisories).
