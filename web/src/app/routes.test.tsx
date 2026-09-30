@@ -8,6 +8,9 @@ import { clearSession, setSession } from '../lib/api/session'
 import { getSyncState, recordSyncOutcome } from '../lib/sync/syncState'
 import { buildRoutes } from './routes'
 
+import { screen } from '@testing-library/react'
+import { saveMeSeed } from '../lib/api/me'
+
 describe('buildRoutes', () => {
   it('excludes the dev-only catalog route when none is supplied', () => {
     const routes = buildRoutes(null)
@@ -21,11 +24,214 @@ describe('buildRoutes', () => {
     expect(routes[0].children?.some((route) => route.path === 'dev/ui')).toBe(true)
   })
 
-  it('always includes the five tabs at the root', () => {
+  it('includes the five tabs and the estado route at the root', () => {
     const routes = buildRoutes(null)
 
     expect(routes[0].path).toBe('/')
-    expect(routes[0].children?.length).toBe(5)
+    expect(routes[0].children?.some((route) => route.index === true)).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'estado')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'alertas')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'bitacora')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'parcelas')).toBe(true)
+    expect(routes[0].children?.some((route) => route.path === 'mas')).toBe(true)
+    expect(routes[0].children?.length).toBe(6)
+  })
+})
+
+describe('role-based routing and /estado', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input) => {
+        const url =
+          typeof input === 'string'
+            ? input
+            : input instanceof Request
+              ? input.url
+              : String(input)
+        if (url.includes('/api/v1/me/tray')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.includes('/api/v1/farms')) {
+          return new Response(JSON.stringify({ items: [], next_cursor: null }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+  })
+
+  afterEach(() => {
+    clearSession()
+    localStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  it('renders technician tray on Inicio for technician role', async () => {
+    setSession('token-tech', 'org-1')
+    saveMeSeed('token-tech', {
+      id: 'tech-1',
+      phone: '+573001234567',
+      email: null,
+      full_name: 'Técnico',
+      memberships: [{ org_id: 'org-1', role: 'technician' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Bandeja del técnico' })).toBeInTheDocument(),
+    )
+    // Negative assertion: PlotStatusScreen is not shown for technician on Inicio
+    expect(screen.queryByText('Sin parcelas')).toBeNull()
+  })
+
+  it('renders PlotStatusScreen on Inicio for producer or owner role', async () => {
+    setSession('token-prod', 'org-1')
+    saveMeSeed('token-prod', {
+      id: 'prod-1',
+      phone: '+573001234568',
+      email: null,
+      full_name: 'Productor',
+      memberships: [{ org_id: 'org-1', role: 'producer' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Sin parcelas')).toBeInTheDocument())
+    // Negative assertion: TrayScreen is not shown for producer
+    expect(screen.queryByRole('heading', { name: 'Bandeja del técnico' })).toBeNull()
+  })
+
+  it('renders /estado with PlotStatusScreen and a way back to Inicio ("Volver a la bandeja")', async () => {
+    setSession('token-tech', 'org-1')
+    saveMeSeed('token-tech', {
+      id: 'tech-1',
+      phone: '+573001234567',
+      email: null,
+      full_name: 'Técnico',
+      memberships: [{ org_id: 'org-1', role: 'technician' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/estado'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    const backLink = await screen.findByRole('link', { name: /Volver a la bandeja/i })
+    expect(backLink).toBeInTheDocument()
+    // Negative assertion: no unicode glyph '←' used as an icon
+    expect(backLink.textContent).not.toContain('←')
+
+    await waitFor(() => expect(screen.getByText('Sin parcelas')).toBeInTheDocument())
+    // Negative assertion: TrayScreen is not on /estado
+    expect(screen.queryByRole('heading', { name: 'Bandeja del técnico' })).toBeNull()
+  })
+
+  it('renders neither screen and makes no /status or /farms request while /me is pending; resolving as technician shows the tray', async () => {
+    setSession('token-tech', 'org-1')
+    // No saveMeSeed: first sign-in before /me data arrives
+
+    let resolveMe!: (value: Response) => void
+    const mePromise = new Promise<Response>((resolve) => {
+      resolveMe = resolve
+    })
+
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof Request ? input.url : String(input)
+      if (url.includes('/api/v1/me/tray')) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.includes('/api/v1/me')) {
+        return mePromise
+      }
+      if (url.includes('/api/v1/farms')) {
+        return new Response(JSON.stringify({ items: [], next_cursor: null }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    // Allow lazy imports to settle while /me is still pending
+    await new Promise((r) => setTimeout(r, 50))
+
+    // While /me is pending: neither screen is rendered
+    expect(screen.queryByRole('heading', { name: 'Bandeja del técnico' })).toBeNull()
+    expect(screen.queryByText('Sin parcelas')).toBeNull()
+    expect(screen.queryByText('Cargando parcelas…')).toBeNull()
+
+    // Negative assertions: makes NO /status or /farms requests while /me is pending
+    const requestedUrls = fetchMock.mock.calls.map((call) =>
+      typeof call[0] === 'string'
+        ? call[0]
+        : call[0] instanceof Request
+          ? call[0].url
+          : String(call[0]),
+    )
+    expect(requestedUrls.some((u) => u.includes('/status'))).toBe(false)
+    expect(requestedUrls.some((u) => u.includes('/farms'))).toBe(false)
+
+    // Resolve /me as technician
+    resolveMe(
+      new Response(
+        JSON.stringify({
+          id: 'tech-1',
+          phone: '+573001234567',
+          email: null,
+          full_name: 'Técnico',
+          memberships: [{ org_id: 'org-1', role: 'technician' }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+
+    // Resolving as technician shows the tray
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Bandeja del técnico' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('Sin parcelas')).toBeNull()
   })
 })
 
