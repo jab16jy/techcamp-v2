@@ -154,6 +154,12 @@ critical path (E0→…→E6→E9→E15) and unblocks E15.
   sensor, the newest valid reading of any depth. Keeps the home and the recommendation on the same
   evidence when it exists, and still shows a value for plots without one.
 
+- **D-T6.1 One tap from the tray to a plot of another org** (owner, 2026-09-30): the tray spans
+  all the technician's orgs, but the plot status screen works in the active org. Tapping a plot
+  makes the farm's org the active one (`setOrgId`), makes the plot the active plot, and opens its
+  status, with a way back to the tray. Rejected: tap only within the active org (breaks "one tap"
+  for the other orgs' farms). Written into docs/07 "Bandeja del técnico".
+
 ## Open questions
 - None beyond the decisions above.
 
