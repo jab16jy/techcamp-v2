@@ -31,6 +31,7 @@ from techcamp.farms.adapters.orm import (
 from techcamp.farms.adapters.repositories import (
     SqlAlchemyCropCycleRepository,
     SqlAlchemyCropRepository,
+    SqlAlchemyFarmRepository,
     SqlAlchemyPlotRepository,
     SqlAlchemySoilProfileRepository,
 )
@@ -44,6 +45,8 @@ from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyIrrigationRecommendationRepository,
     SqlAlchemyWaterBalanceRepository,
 )
+from techcamp.logbook.adapters.orm import ExtensionVisitRow
+from techcamp.logbook.adapters.repositories import SqlAlchemyExtensionVisitRepository
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import CalibrationRow, NodeRow, ReadingRow, SensorRow
 from techcamp.telemetry.adapters.repositories import (
@@ -83,6 +86,8 @@ async def make_env(
     *,
     name: str = "Finca Home",
     irrigation_system: str = "drip",
+    role: str = "producer",
+    technician_id: UUID | None = None,
 ) -> HomeEnv:
     """An org, a member, a farm and one plot. `irrigation_system='none'` is
     the rainfed plot of ADR-0023 (and carries no efficiency nor flow)."""
@@ -93,7 +98,7 @@ async def make_env(
     # flush cannot order rows across them, so each step lands on its own: the
     # same order `tests/alerts/test_api.py` builds its org in.
     await session.commit()
-    session.add(MembershipRow(org_id=org_id, user_id=user_id, role="producer"))
+    session.add(MembershipRow(org_id=org_id, user_id=user_id, role=role))
     await session.commit()
     session.add(
         FarmRow(
@@ -102,6 +107,7 @@ async def make_env(
             name=name,
             municipality_code="47001",
             location=POINT,
+            technician_id=technician_id,
         )
     )
     session.add(
@@ -141,6 +147,90 @@ def repos(session: AsyncSession) -> dict[str, Any]:
         "weather": SqlAlchemyWeatherRepository(session),
         "alerts": SqlAlchemyAlertRepository(session),
     }
+
+
+def tray_repos(session: AsyncSession) -> dict[str, Any]:
+    """The repositories `build_technician_tray` takes, built on one session."""
+    return {
+        "memberships": SqlAlchemyMembershipRepository(session),
+        "farms": SqlAlchemyFarmRepository(session),
+        "plots": SqlAlchemyPlotRepository(session),
+        "alerts": SqlAlchemyAlertRepository(session),
+        "visits": SqlAlchemyExtensionVisitRepository(session),
+    }
+
+
+async def add_farm(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    name: str,
+    technician_id: UUID | None = None,
+    municipality_code: str = "47001",
+) -> UUID:
+    farm_id = uuid7()
+    session.add(
+        FarmRow(
+            id=farm_id,
+            org_id=org_id,
+            name=name,
+            municipality_code=municipality_code,
+            location=POINT,
+            technician_id=technician_id,
+        )
+    )
+    await session.commit()
+    return farm_id
+
+
+async def add_plot(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    farm_id: UUID,
+    name: str = "Lote Extra",
+    irrigation_system: str = "drip",
+) -> UUID:
+    plot_id = uuid7()
+    session.add(
+        PlotRow(
+            id=plot_id,
+            org_id=org_id,
+            farm_id=farm_id,
+            name=name,
+            boundary=BOUNDARY,
+            irrigation_system=irrigation_system,
+        )
+    )
+    await session.commit()
+    return plot_id
+
+
+async def add_visit(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    farm_id: UUID,
+    technician_id: UUID,
+    visited_on: date,
+    deleted: bool = False,
+) -> UUID:
+    visit_id = uuid7()
+    session.add(
+        ExtensionVisitRow(
+            id=visit_id,
+            org_id=org_id,
+            farm_id=farm_id,
+            plot_id=None,
+            technician_id=technician_id,
+            visited_on=visited_on,
+            topics=["natural_resources"],
+            client_updated_at=NOW,
+            deleted_at=NOW if deleted else None,
+        )
+    )
+    await session.commit()
+    return visit_id
 
 
 async def add_node(
@@ -381,6 +471,9 @@ async def add_alert(
     rule_code: str = "water_stress",
     resolve: bool = False,
     at: datetime | None = None,
+    plot_id: UUID | None = None,
+    farm_id: UUID | None = None,
+    org_id: UUID | None = None,
 ) -> UUID:
     """One alert through the real `open_alert` use case, so `rule_id` always
     references a seeded rule (`list_open_for_plots` joins `alert_rule`).
@@ -405,20 +498,23 @@ async def add_alert(
         crop_id=row.crop_id,
     )
     opened_at = at if at is not None else NOW - timedelta(hours=2)
+    target_plot_id = plot_id if plot_id is not None else env.plot_id
+    target_farm_id = farm_id if farm_id is not None else env.farm_id
+    target_org_id = org_id if org_id is not None else env.org_id
     alerts = SqlAlchemyAlertRepository(session)
     alert = await open_alert(
         rule=rule,
         at=opened_at,
         alerts=alerts,
-        plot_id=env.plot_id,
+        plot_id=target_plot_id,
         evidence={"depletion_mm": 50.0},
         severity=Severity(severity),
     )
     if resolve:
         await resolve_automatically(
             alert_id=alert.id,
-            org_id=env.org_id,
-            farm_id=env.farm_id,
+            org_id=target_org_id,
+            farm_id=target_farm_id,
             at=opened_at + timedelta(minutes=5),
             alerts=alerts,
         )
