@@ -7,8 +7,9 @@ import { requireAuthLoader } from '../features/auth/guard'
 import { PlotsScreen } from '../features/plots/containers/PlotsScreen'
 import { NotificationsCard } from '../features/push/components/NotificationsCard'
 import { buttonVariants } from '../design-system/ui/button'
+import { ChevronDownIcon } from '../design-system/ui/icons'
 import { cn } from '../design-system/ui/utils'
-import { useActiveOrgRole } from '../lib/api/me'
+import { useActiveOrgRole, useMe } from '../lib/api/me'
 import { PlaceholderPage } from './PlaceholderPage'
 
 // React.lazy keeps Dexie and logbook/visits out of the initial bundle (RNF-02 ≤ 200 kB).
@@ -36,10 +37,18 @@ const TrayScreen = lazy(() =>
 /**
  * Inicio tab wrapper: renders TrayScreen when the caller has the technician role
  * in the active organization, and PlotStatusScreen for any other role (D-T0.9, docs/07).
+ * While the /me query is pending (no data yet), renders null to prevent flashing
+ * PlotStatusScreen and firing its queries for technicians.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
 function InicioTab() {
+  const meQuery = useMe()
   const role = useActiveOrgRole()
+
+  if (meQuery.isLoading) {
+    return null
+  }
+
   return (
     <Suspense fallback={null}>
       {role === 'technician' ? <TrayScreen /> : <PlotStatusScreen />}
@@ -63,7 +72,8 @@ function EstadoRoute() {
             'gap-1 px-2 text-text-muted hover:text-text',
           )}
         >
-          ← Volver a la bandeja
+          <ChevronDownIcon className="size-5 rotate-90" aria-hidden="true" />
+          Volver a la bandeja
         </Link>
       </div>
       <PlotStatusScreen />
