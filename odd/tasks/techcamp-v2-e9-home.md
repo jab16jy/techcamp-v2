@@ -337,8 +337,14 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   point). Writer note, not a finding: `/status` resolves plot access four times (the reused
   facade queries each check it) — SQL round trips, not HTTP; revisit in T7 if latency shows it.
   Lane merged into `feat/e9-home`; session closed.
+- 2026-09-30 T2 merged (`4894315`), post-merge `just gate server/tests/home` 23 passed; T2 DB and
+  worktree removed. T3 and T5 launched in parallel (disjoint: server `home` tray vs web
+  `features/plot-status`):
+  - T3: AGY `e9-t3` (Gemini 3.8 Flash high), worktree `e9-t3` recreated from `4894315`, DB
+    `techcamp-db-e9-t3-631551574`; must prove #210's multi-org path end to end.
+  - T5: OpenCode `e9-t5` (high), worktree `e9-t5`, web only; `impeccable`, design frozen; T5a
+    (schema regen + decision card + active plot) then T5b on the parent's go.
 
 ## Next step
-Wait for T1 (AGY) and T4 (OpenCode) reports → parent gate on each sha (targeted tests +
-`just gate-fast` + docs diff) → RDD (parent runs AGY's; OpenCode runs its own after "go") → merge
-into `feat/e9-home` → T2 (OpenCode) in a fresh session.
+Gate T3 (parent runs its RDD) and T5a/T5b (OpenCode runs its own); merge each; then T6 (tray
+screen, needs T3 + T4) and T7 (close: simulator integration, by-hand seminar run, gate-full).
