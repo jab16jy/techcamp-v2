@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.domain.errors import PlotNotFoundError
 from techcamp.home.application import build_plot_status
+from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.domain.models import ReadingQuality
 
@@ -199,6 +200,37 @@ async def test_missing_readings_are_null_and_never_zero(db_session: AsyncSession
     bare = await _status(env)
     assert bare.latest.soil_moisture_pct is None
     assert bare.latest.at is None
+
+
+async def test_water_balance_is_yesterdays_row_or_null_never_a_stale_one(
+    db_session: AsyncSession,
+) -> None:
+    """docs/04 §Estado: "El último balance diario consolidado (el de ayer);
+    `null` si no hay." A balance from three days ago is not today's truth, and
+    it carries no date of its own in this payload, so serving it would pass a
+    stale number off as current."""
+    fresh = await make_env(db_session, name="Finca Al día")
+    await add_water_balance(db_session, fresh, day=YESTERDAY)
+    stale = await make_env(db_session, name="Finca Atrasada")
+    await add_water_balance(db_session, stale, day=TODAY - timedelta(days=3), depletion_mm=55.0)
+
+    fresh_status = await _status(fresh)
+    stale_status = await _status(stale)
+
+    # Yesterday's row is the balance.
+    assert fresh_status.water_balance is not None
+    assert fresh_status.water_balance.depletion_mm == pytest.approx(10.0)
+
+    # Three days old: the row exists, it is simply not yesterday's.
+    assert (
+        await db_session.get(WaterBalanceDailyRow, (stale.plot_id, TODAY - timedelta(days=3)))
+        is not None
+    )
+    assert stale_status.water_balance is None
+    # Negative: the stale depletion never reaches the payload, and the rest of
+    # the payload is still real, so the null is not a failed read.
+    assert stale_status.plot.id == stale.plot_id
+    assert stale_status.recommendation is None
 
 
 async def test_a_recommendation_that_was_never_calculated_is_null(
