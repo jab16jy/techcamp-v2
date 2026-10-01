@@ -1,0 +1,67 @@
+import { useQueries, useQuery } from '@tanstack/react-query'
+import { apiClient } from './client'
+import type { components } from './schema'
+
+/**
+ * The org's farms and their plots — the two read queries more than one screen
+ * needs.
+ *
+ * They live in `lib/`, not in `features/plots/`, because docs/07 §Estructura
+ * forbids a feature importing another feature and the home screen needs them
+ * too: it must resolve the active plot (D-T0.7, "la primera parcela de la
+ * primera finca") before it can ask for anything else. `features/plots` keeps
+ * re-exporting them, so nothing that already imports them changes.
+ */
+export type FarmView = components['schemas']['FarmView']
+export type PlotView = components['schemas']['PlotView']
+
+export interface FarmsPage {
+  farms: FarmView[]
+  /** True when `GET /farms`'s `next_cursor` was non-null (#21 round 10: don't
+   * silently drop farms past the first page). Paging through them is out of
+   * this task's scope — T8/T9 own the fuller plots UI. */
+  hasMore: boolean
+}
+
+/** docs/04-api.md: `GET /farms?org_id= → Page<Farm>`. */
+async function fetchFarmsPage(orgId: string): Promise<FarmsPage> {
+  const { data, error } = await apiClient.GET('/api/v1/farms', {
+    params: { query: { org_id: orgId } },
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from /farms')
+  return { farms: data.items, hasMore: data.next_cursor !== null }
+}
+
+/** The org's farms (first page). `orgId === null` (no org chosen yet) never fetches. */
+export function useFarms(orgId: string | null) {
+  return useQuery({
+    queryKey: ['farms', orgId],
+    queryFn: () => fetchFarmsPage(orgId as string),
+    enabled: orgId !== null,
+  })
+}
+
+/** docs/04-api.md: `GET /farms/{farm_id}/plots → Plot[]`. */
+async function fetchPlots(farmId: string): Promise<PlotView[]> {
+  const { data, error } = await apiClient.GET('/api/v1/farms/{farm_id}/plots', {
+    params: { path: { farm_id: farmId } },
+  })
+  if (error) throw error
+  if (!data) throw new Error('empty response from /farms/{farm_id}/plots')
+  return data
+}
+
+/**
+ * One query per farm (`useQueries`, not a combined `Promise.all`): a single
+ * farm's plots failing to load degrades that farm only, instead of blanking
+ * the whole list (#21 round 10). Returned in the same order as `farmIds`.
+ */
+export function usePlotsByFarm(farmIds: string[]) {
+  return useQueries({
+    queries: farmIds.map((farmId) => ({
+      queryKey: ['plots', farmId],
+      queryFn: () => fetchPlots(farmId),
+    })),
+  })
+}

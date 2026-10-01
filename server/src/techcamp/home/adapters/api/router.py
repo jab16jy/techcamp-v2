@@ -43,7 +43,7 @@ from techcamp.weather.adapters.api.deps import WeatherRepoDep
 router = APIRouter(tags=["home"])
 
 
-class PlotView(BaseModel):
+class PlotSummaryView(BaseModel):
     """The plot's own identity and its irrigation system, which is what the
     home screen renders (D-T0.7's active plot, ADR-0023's rainfed variant)."""
 
@@ -55,14 +55,14 @@ class PlotView(BaseModel):
     irrigation_system: str
 
 
-class CropView(BaseModel):
+class CycleCropView(BaseModel):
     id: int
     code: str
     name_es: str
 
 
 class ActiveCycleView(BaseModel):
-    crop: CropView
+    crop: CycleCropView
     stage: str | None
     """`initial|development|mid|late`, or null when the crop has no Kc stages
     or the sowing is later than today (D-T0.6). The web maps the key."""
@@ -127,7 +127,7 @@ class WeatherDayView(BaseModel):
     stale: bool
 
 
-class NodeHealthView(BaseModel):
+class PlotNodeHealthView(BaseModel):
     """`battery_v` and `rssi` stay out until a node reports them (D-T0.5)."""
 
     node_id: UUID
@@ -137,21 +137,21 @@ class NodeHealthView(BaseModel):
 
 
 class PlotStatusView(BaseModel):
-    plot: PlotView
+    plot: PlotSummaryView
     active_cycle: ActiveCycleView | None
     latest: LatestView
     water_balance: WaterBalanceView | None
     recommendation: RecommendationView | None
     open_alerts: list[OpenAlertView]
     weather_next_3d: list[WeatherDayView]
-    nodes: list[NodeHealthView]
+    nodes: list[PlotNodeHealthView]
     digital_adoption_index: None = None
     """D-T0.2: null until E11 computes the index (docs/11-metricas.md)."""
 
 
 def _view(status: PlotStatus) -> PlotStatusView:
     return PlotStatusView(
-        plot=PlotView(
+        plot=PlotSummaryView(
             id=status.plot.id,
             org_id=status.plot.org_id,
             farm_id=status.plot.farm_id,
@@ -162,7 +162,7 @@ def _view(status: PlotStatus) -> PlotStatusView:
         active_cycle=None
         if status.active_cycle is None
         else ActiveCycleView(
-            crop=CropView(
+            crop=CycleCropView(
                 id=status.active_cycle.crop.id,
                 code=status.active_cycle.crop.code,
                 name_es=status.active_cycle.crop.name_es,
@@ -228,7 +228,7 @@ def _view(status: PlotStatus) -> PlotStatusView:
             for day in status.weather_next_3d
         ],
         nodes=[
-            NodeHealthView(
+            PlotNodeHealthView(
                 node_id=node.node_id,
                 status=node.status.value,
                 last_seen_at=node.last_seen_at,

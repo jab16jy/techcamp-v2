@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getActivePlotId, setActivePlotId } from '../../../lib/api/activePlot'
 import { clearSession, setSession } from '../../../lib/api/session'
 import { PlotsScreen, type PlotsScreenProps } from './PlotsScreen'
 
@@ -257,6 +258,42 @@ describe('PlotsScreen', () => {
       screen.getByText('Humedad, suelo, ciclo de cultivo y nodos de esta parcela.'),
     ).toBeInTheDocument()
     expect(screen.getAllByText('Lote Norte')).toHaveLength(2)
+  })
+
+  it('opening a plot here makes it the active plot, for this org only (D-T0.7)', async () => {
+    // This file does not clear storage between tests, and an earlier case opens
+    // a plot: start from a device that has remembered nothing.
+    localStorage.clear()
+    setSession('token-abc', 'org-1')
+    setActivePlotId('org-2', 'plot-de-otra-org')
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/crops')) return jsonResponse([])
+      if (url.includes('/nodes?')) return jsonResponse({ items: [], next_cursor: null })
+      if (url.includes('/readings')) return jsonResponse({ series: [] })
+      if (url.includes('/stream')) return new Promise<Response>(() => {})
+      if (url.includes('/farms/farm-1/plots')) {
+        return jsonResponse([
+          { id: 'plot-1', farm_id: 'farm-1', name: 'Lote Norte', area_ha: 1, irrigation_system: 'none' },
+        ])
+      }
+      return jsonResponse({
+        items: [{ id: 'farm-1', org_id: 'org-1', name: 'Finca La Esperanza' }],
+        next_cursor: null,
+      })
+    })
+
+    renderPlotsScreen()
+
+    await waitFor(() => expect(screen.getByText('Lote Norte')).toBeInTheDocument())
+    expect(getActivePlotId('org-1')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Lote Norte/ }))
+
+    // Inicio will now answer for this plot.
+    await waitFor(() => expect(getActivePlotId('org-1')).toBe('plot-1'))
+    // Negative: another organization's choice is never overwritten.
+    expect(getActivePlotId('org-2')).toBe('plot-de-otra-org')
   })
 
   it('shows the "Registrar visita" action for technician and NOT for owner/producer/viewer', async () => {
