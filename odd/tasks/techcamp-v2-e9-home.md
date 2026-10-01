@@ -172,15 +172,20 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   Done: lane `e9-t1` (`2b55d8e`, `3a844d6`, `7715922`, fixes `b330661` #205, `e8ef7fa` #206);
   RDD `review-45f333b518029f99`, `review-057f840b7b4b286f`, `review-3b831cc84ee3f4ae` approved;
   #207 open (owner: no more rounds).
-- [ ] T2 `home` module + `GET /plots/{plot_id}/status`: skeleton, import-linter contract entry,
+- [x] T2 `home` module + `GET /plots/{plot_id}/status`: skeleton, import-linter contract entry,
   use case composing T1 + existing facades, null rules (D-T0.2/4/6), router, API tests (irrigated,
   rainfed, no cycle, no readings, no recommendation, stale weather) + isolation. ~550. Route:
   **OpenCode, high** (composition over six modules; the payload contract is the E9 core).
+  Done: lane `e9-t2` (`747daff`, `554d090`, fix `f5d8f0a`); RDD `review-6118d3c213c1854c`
+  approved, no findings.
 - [ ] T3 `GET /me/tray`: use case (D-T0.8 order), router, tests (multi-org technician, not
   assigned → `[]`, critical first, never-visited first) + isolation. ~300. Route: **AGY**.
-- [ ] T4 Web offline cache: `chore(deps)` persistence packages (via `find-docs`), persister
+- [x] T4 Web offline cache: `chore(deps)` persistence packages (via `find-docs`), persister
   wiring in `queryClient`, org-scoped keys, max age, bundle check, Vitest (restore from IndexedDB
   with `fake-indexeddb`). ~200. Route: **OpenCode, high** (new dependency, cache semantics).
+  Done: lane `e9-t4` (`95a27f7`, `f8a0ef3`, fixes `72b4362` #204, `dd7bf26` RDD correction,
+  `3cf97a1` token digest); RDD `review-8312b6a4a9787be9`, `review-7c429333286981ab` approved;
+  #209 open.
 - [ ] T5 Home screen (`features/plot-status/`): regenerate `schema.d.ts`, `usePlotStatus`, active
   plot (D-T0.7), decision card irrigated/rainfed with the "why", open alerts, soil moisture + 3-day
   forecast, sync + nodes, SSE invalidation, offline banner; `impeccable`, design frozen; Vitest
@@ -266,6 +271,23 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   read path) deletes the row and returns null without a session token; test removes the token
   directly to reproduce the kill window, with a token-present control. Parent gate: 56 + 16
   passed, gate-lane exit 0, size 172.92 kB. RDD on the fix candidate: OpenCode, after the go.
+  RDD round 2 (OpenCode): `review-7c429333286981ab` — one CRITICAL (a same-org second user on
+  the phone would get the previous user's cache: org-scoped keys do not separate users) fixed in
+  the bounded correction `dd7bf26` (row bound to the writing session), validator approved. Open
+  WARNING (7-day expiry gates the shared envelope, not each query) + validator notes → #209.
+  Parent gate on `dd7bf26`: it stored the raw bearer token in IndexedDB → sent back (store a
+  SHA-256 digest instead), same session.
+  Fix `3cf97a1` (+54/−5): the row keeps a hex SHA-256 of the token, never the token (test asserts
+  the whole stored value). Parent gate: 58 + 16 passed, gate-lane exit 0, size 172.92 kB. Lane
+  merged into `feat/e9-home`; session closed.
+- 2026-09-30 Integration RDD on `feat/e9-home` after the T1 merge (owner granted):
+  `review-0249705e7774dd7e` approved, 3 findings → owner rule (3+: fix the most important):
+  parent fixed both WARNINGs in `f77ee62` (alerts org-filter isolation proof; uncalibrated
+  reading excluded), each with a mutation check (filter removed → test fails); SUGGESTION → #208.
+- 2026-09-30 Owner rule for all later rounds: 1–2 non-blocking findings → issue only; 3+ → fix the
+  most important, file the rest.
+- 2026-09-30 T2 launched: OpenCode `e9-t2` (high), worktree `e9-t2`, branch `feat/e9-t2-status`
+  from `86aecb1`, DB `techcamp-db-e9-t2-4156389258` on 64258.
 - 2026-09-30 T1 (AGY `e9-t1`, Gemini 3.8 Flash high) → `2b55d8e` feat(telemetry,farms) T1a
   (652 lines) and `3a844d6` feat(alerts,irrigation,logbook) T1b (554 lines); tests ≈ 820 of
   1,206. Writer evidence: RED `ImportError … list_open_alerts_for_plots` (+ `crop_stage_for_day`,
@@ -297,6 +319,24 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   2026-09-30: no more fix rounds, findings stay in the issue. Round-3 WARNING "soil moisture
   mixes depths" is taken by T2 (D-T2.1); "future sowing contract" is already in docs/04 on
   `feat/e9-home`. Lane merged into `feat/e9-home` (see Tasks).
+- 2026-09-30 Owner: lanes that depend on T2 in anything wait for it (T3 held; its worktree
+  `e9-t3` exists at `8e05144`, no agent). Cleanup (owner): T1 DB + worktree, T4 worktree, the
+  merged `dev-tooling` worktree and branch removed; lane branches kept (RDD lineages).
+- 2026-09-30 Integration RDD after the T4 merge (owner granted): `review-1259758590d44a8f`
+  approved, 1 SUGGESTION (multi-org tray queries untested) → #210.
+- 2026-09-30 T2 (OpenCode `e9-t2`, high) → `747daff` feat(home) use case (prod 514 / tests 853)
+  and `554d090` feat(home) router (prod 291 / tests 308); 1,967 lines vs ~550 forecast (fixtures
+  across nine tables). RED `ModuleNotFoundError techcamp.home`, then `assert 404 == 401`; GREEN
+  13 → 22 passed; CodeGraph MCP ×5; other modules' suites run (no regressions). Parent gate: 22
+  passed, gate-fast clean, gate-lane exit 0, imports facade-only. Rulings: `plot` as a compact
+  `PlotSummary` (no polygon) ACCEPTED, written into docs/04 §Estado; `water_balance` = last of
+  30 days REJECTED (docs/04: yesterday's or null) → fixed by the same session, then its RDD.
+  Fix `f5d8f0a` (+44/−2): yesterday's row or null, RED "3-day-old balance → null". Parent gate:
+  23 passed, gate-lane exit 0. RDD (OpenCode; consent relayed in the pane, owner chose "Review"):
+  `review-6118d3c213c1854c` approved, zero findings (target covered T0+T1+T2 from the branch
+  point). Writer note, not a finding: `/status` resolves plot access four times (the reused
+  facade queries each check it) — SQL round trips, not HTTP; revisit in T7 if latency shows it.
+  Lane merged into `feat/e9-home`; session closed.
 
 ## Next step
 Wait for T1 (AGY) and T4 (OpenCode) reports → parent gate on each sha (targeted tests +

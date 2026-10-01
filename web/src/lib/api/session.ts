@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { clearPersistedCache, queryClient } from './queryClient'
 
 /**
  * Client-side session storage: bearer token + selected org id.
@@ -68,10 +69,20 @@ export function setOrgId(orgId: string): void {
   emit()
 }
 
+/**
+ * Drops the session AND everything the session read: the in-memory query cache
+ * and the persisted one (docs/07 §Flujo de datos y offline keeps the last plot
+ * state on the phone, which is exactly what must not survive the next user of
+ * a shared device). Both are best-effort and asynchronous — this stays a
+ * synchronous function because its callers are event handlers and the token
+ * must be gone before the redirect, not after a database write.
+ */
 export function clearSession(): void {
   removeStorage(TOKEN_KEY)
   removeStorage(ORG_KEY)
   removeStorage(ME_KEY)
+  queryClient.clear()
+  void clearPersistedCache()
   emit()
 }
 

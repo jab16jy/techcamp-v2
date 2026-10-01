@@ -160,12 +160,30 @@ export type NewPhoto = Pick<
   'id' | 'entity' | 'parent_id' | 'data' | 'content_type' | 'bytes'
 >
 
+/**
+ * One serialized TanStack Query cache (docs/07 §Flujo de datos y offline: the
+ * cache is persisted in this same IndexedDB, `q -- persistencia de caché -->
+ * dx`).
+ *
+ * `value` is the persister's own JSON, one opaque string per `key` rather than
+ * a row per query: the persister owns the envelope (its `timestamp`, `buster`
+ * and dehydrated state) and rewrites it whole on every save, so this store
+ * never has to know a query's shape — and a query key is not a primary key
+ * here, which is also why the offline logbook tables stay untouched by a cache
+ * that is wiped on sign-out.
+ */
+export interface QueryCacheRow {
+  key: string
+  value: string
+}
+
 export class TechcampDb extends Dexie {
   declare logbookEntries: Table<LogbookEntryRow, string>
   declare extensionVisits: Table<ExtensionVisitRow, string>
   declare outbox: Table<OutboxItem, number>
   declare meta: Table<MetaRow, string>
   declare photos: Table<PhotoRow, string>
+  declare queryCache: Table<QueryCacheRow, string>
 
   constructor() {
     super('techcamp')
@@ -189,6 +207,12 @@ export class TechcampDb extends Dexie {
     // an index instead of a scan of every photo on the phone.
     this.version(2).stores({
       photos: 'id, [entity+parent_id], status',
+    })
+    // The persisted query cache (docs/07 §Flujo de datos y offline, E9 T4), the
+    // same "declare only what this version changes" rule: a phone's unsynced
+    // logbook and outbox must survive it (see `db.upgrade.test.ts`).
+    this.version(3).stores({
+      queryCache: 'key',
     })
   }
 }

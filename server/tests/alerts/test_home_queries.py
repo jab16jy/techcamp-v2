@@ -182,6 +182,12 @@ async def test_list_open_alerts_for_plots_ordering_and_filtering(
     assert alert_resolved not in result_ids
     assert alert_b not in result_ids
 
+    # docs/09 isolation: org_b's plot asked with org_a's scope is empty — only the
+    # org filter removes it here (the plot filter matches), and org_b's own scope sees it.
+    assert await list_open_alerts_for_plots(plot_ids=[plot_b], org_ids=[org_a], alerts=repo) == []
+    own = await list_open_alerts_for_plots(plot_ids=[plot_b], org_ids=[org_b], alerts=repo)
+    assert [a.id for a in own] == [alert_b]
+
 
 async def test_list_open_alerts_for_plots_empty_inputs(
     db_session: AsyncSession,
