@@ -534,7 +534,33 @@ Screenshots: `../e9-briefs/evidence/` (outside the repo; seminar stack, 390×844
   post-merge gate 15 + 27 + 81 passed. Lane pane and worktree removed; branch kept. Whole-branch
   integration candidates `review-9a1420e152b12a1d` and `review-c237a3803d42f60a`: owner skipped.
 
+- 2026-10-01 Merged to `main` in order: #228 (`c8361ce`), #216–#224, #232, #225–#227, #230
+  (`968e4b9`). `main` == `feat/e9-home@7010b13` plus the two test-isolation fixes, checked with a
+  tree diff. A second pre-existing order-dependent test failed CI on #225 (web-only slice):
+  `alerts/test_lifecycle.py::test_two_concurrent_upgrades_write_one_critical_outbox_set` committed
+  an org and an alert through its own sessions without requesting `db_session`, so the alert
+  outlived it and `test_a_failure_after_the_alert_insert_rolls_back_everything` read it. RED on the
+  `refs/pull/225/merge` tree with `--randomly-seed=2098945181`, GREEN 1,170 passed; fix #232.
+  Cleanup: E9 worktrees (lanes, `e9-pr225`), local and remote branches, the E9 test DBs.
+
+## Learned (delivery, owner 2026-10-01: about two hours lost between the last gate and `main`)
+- **Validate the exact head that ships, against `main`, before opening any PR.** `gate-full` ran
+  once at `751b827`; `251d478`, `1229f44` and the `e9-cr` merge came after it with targeted gates
+  only. Rule: after the last commit, merge `origin/main` into the epic branch, then `just
+  gate-full` on that head; a later commit re-runs it.
+- **One random seed is not a validation.** Both CI failures (#228, #232) were pre-existing
+  order-dependent server tests (E7): green under one `pytest-randomly` seed, red under another,
+  and `gate-full` runs one seed. Rule: before slicing, run the full server suite under several
+  seeds (at least three) on that head; a failure is fixed on its own PR to `main` first.
+- **Stacked-to-main means base `main` from creation.** Basing each PR on the previous slice made
+  CodeRabbit skip 11 PRs (non-default base), kept CI off `main`, and forced a retarget plus
+  close/reopen per PR. Retargeting and reopening the whole open chain at once then froze inflated
+  line counts on the merged PRs (#224 shows +7,493 for a +983 slice); the merges themselves were
+  correct.
+- **CodeRabbit** reads `.coderabbit.yaml` from the PR head, so rules added in the last slice do not
+  apply to the earlier ones; a clean review only rewrites its first summary comment ("No
+  actionable comments"), with no formal review.
+
 ## Next step
-Merge #228 first, then the chain #216–#227 and `e9/13` (CodeRabbit fixes) in order, retargeting
-each next PR to `main`; then delete worktrees, branches and test DBs. Open issues: #207, #209,
-#211, #212, #213, #214, #215, #229.
+E9 delivered. Open issues: #207, #209, #211, #212, #213, #214, #215, #229. Next: the PR
+validation workflow (owner), then the next epic per docs/10.
