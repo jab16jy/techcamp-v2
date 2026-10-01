@@ -202,9 +202,11 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   Done: lane `e9-t5` (`83dff58`, `3024c7e`, `cb045d8`, fixes `d15a5db`, `6974e02`); RDD
   `review-b990eca43bc32d62` escalated, owner merged on the parent's verification; merged
   `aae1508`; #212 open.
-- [ ] T6 Technician tray (`features/visits/`): `useTray`, farm rows (existing primitives), order
+- [x] T6 Technician tray (`features/visits/`): `useTray`, farm rows (existing primitives), order
   from the server, last visit, `NewVisitSheet` entry, Inicio → tray for `technician` (D-T0.9),
   route test. ~350. Route: **AGY**.
+  Done: lane `e9-t6` (`69ea935`, `6fe370c`, `b1f6f3d`, fixes `2830370`, `15b4f7d` #213); RDD
+  `review-c5be0bf47ac4fbb6` approved; merged `2b2c11d`; #213 open.
 - [ ] T7 Close: server integration "real simulator data" (simulator payloads through the ingest
   flush, then `/status` shows the values and the node online); by-hand run on the seminar stack
   (`just` + simulator, screenshot via `playwright-cli`); `just gate-full` (the only full run);
@@ -414,8 +416,42 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   without the lists, 404 forgets it, partial farm failure) and item 2 (rainfed band, the why,
   unknown kind).
 
+- 2026-09-30 D-T6.1 (owner): a tap on a plot of another org in the tray switches the active org;
+  written into docs/07 "Bandeja del técnico" (`a3a8387`). Integration candidates on
+  `feat/e9-home` after `22d5e26` and `a3a8387`: owner chose "Skip this time"
+  (`review-9437628597801cf9`, `review-3a3baaad63af7260`).
+- 2026-09-30 T6 (AGY `e9-t6`, fresh session; worktree from `a3a8387`, web only, own CodeGraph
+  index; brief `e9-t6.md`) → `69ea935` chore(web) schema regen for `/me/tray` (86 generated),
+  `6fe370c` feat(web) tray screen (`useTray` `[orgId, 'tray']` persisted, `TrayScreen` +
+  `TrayList`, `CACHE_BUSTER` 3), `b1f6f3d` feat(web) Inicio by role + `/estado` (prod ~370 /
+  tests ~570 across the three). Writer evidence: RED `useTray` unresolved import, "expected 5 to
+  be 6" (routes), "Unable to find … Volver a la bandeja"; GREEN visits 20, app 10, App 2;
+  CodeGraph ×3; `impeccable` context step (mode Operate) + `impeccable detect` → 0 findings; E1
+  primitives only, `StatusBadge` kept out of alerts. Parent gate: diff read against docs/07
+  "Bandeja del técnico", D-T0.8/9/10, D-T6.1; `/farms/{id}/plots` resolves across the caller's
+  orgs (`resolve_farm_access`), so the cross-org tap works; `just gate` on app, visits, lib/api,
+  App, plot-status → 12+20+66+2+81 passed; gate-lane exit 0. Size: `size-limit` reported 140.71
+  kB because Rollup split `session`/`sheet`/`jsx-runtime` into chunks the entry imports
+  statically and the glob `index-*.js` misses them; real initial JS (entry + static imports)
+  ≈ 176 kB vs 172.6 kB on `feat/e9-home` → under 200 kB; measurement gap → #213. Quality issues
+  sent back: unicode `←` used as an icon; a technician saw the plot status (and its requests)
+  while `/me` was pending. Fix `2830370` (`ChevronDownIcon` rotated; `InicioTab` waits while
+  `/me` `isLoading`): parent gate 13+20+66+2+81, gate-lane exit 0, initial JS ≈ 176 kB.
+  RDD (parent, standing grant, scoped `--base-ref a3a8387 --committed-only`, 9 files / 1,120
+  lines): `review-c5be0bf47ac4fbb6`, lens `review-reliability`, approved, authority burned. 3
+  findings → rule 3+ → #213: WARNING offline cache path unproved fixed now; WARNING `/me` error
+  fallback to the status screen (acceptable: no role, nothing to choose the tray from) and
+  SUGGESTION fixed 50 ms sleep filed. First fix `0014dba` was vacuous: parent mutation check
+  (error branch without `trayItems === null`) still passed 9/9 (offline pauses the fetch, so the
+  refetch never failed) → sent back. `15b4f7d` (+26/−8, `Refs #213`): online, seeded cache,
+  rejected refetch, waits for the query error, asserts the list and no error state; parent
+  mutation check → 1 failed / 10, restored. The writer rewrote `0014dba` instead of adding a
+  commit (unpushed; brief forbids it) — noted. Final gate 13+21+66+2+81, gate-lane exit 0 on 5
+  commits. Merged `2b2c11d`; post-merge gate same 183 passed. T6 pane and worktree removed (no
+  DB); branch kept.
+
 ## Next step
-T6 (tray screen, AGY; needs T3 + T4, both merged): brief `e9-t6.md` (docs/07 "Bandeja del
-técnico", D-T0.9 technician Inicio → tray, `NewVisitSheet` entry, persisted `[orgId, 'tray']`,
-bump `CACHE_BUSTER`, regenerate `schema.d.ts` for `/me/tray`). Then T7 (close: simulator
-integration, by-hand seminar run, gate-full once).
+T7 (close; OpenCode + parent): server integration "real simulator data" (simulator payloads
+through the ingest flush → `/status` shows the values and the node online); by-hand seminar run
+with a `playwright-cli` screenshot; `just gate-full` once; tick the acceptance criteria with
+evidence; `just gate-lane main` before slicing; delivery only on the owner's word.

@@ -8,6 +8,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as sessionApi from '../../../lib/api/session'
 import * as activePlotApi from '../../../lib/api/activePlot'
+import { trayKey } from '../api/useTray'
 import { TrayScreen } from './TrayScreen'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -83,8 +84,8 @@ const FARM_2_PLOTS = [
   { id: 'plot-2', farm_id: 'farm-2', name: 'Lote Yuca', area_ha: 1.0, irrigation_system: 'none' },
 ]
 
-function renderScreen(initialEntries = ['/']) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+function renderScreen(initialEntries = ['/'], client?: QueryClient) {
+  const queryClient = client ?? new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const router = createMemoryRouter(
     [
       { path: '/', element: <TrayScreen /> },
@@ -214,16 +215,33 @@ describe('TrayScreen', () => {
 
   it('shows offline banner with cached tray data when offline', async () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
-    vi.mocked(fetch).mockImplementation(async (input) => {
-      const url = requestUrl(input as Request)
-      if (url.includes('/api/v1/me/tray')) return jsonResponse(TRAY_ITEMS)
-      throw new Error(`unexpected request: ${url}`)
-    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(trayKey('org-1'), TRAY_ITEMS)
 
-    renderScreen()
+    renderScreen(['/'], queryClient)
 
     await waitFor(() => expect(screen.getByText('Finca La Palma')).toBeInTheDocument())
     expect(screen.getByText(/Sin conexión/)).toBeInTheDocument()
+  })
+
+  it('keeps the persisted tray list and renders no error state when a refetch fails', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(trayKey('org-1'), TRAY_ITEMS)
+
+    vi.mocked(fetch).mockRejectedValue(new Error('Network error'))
+
+    renderScreen(['/'], queryClient)
+
+    // Wait until the refetch actually fails and the query enters the error state
+    await waitFor(() => {
+      expect(queryClient.getQueryState(trayKey('org-1'))?.status).toBe('error')
+    })
+
+    // D-T0.10: The cached data is rendered, and no error EmptyState is shown
+    expect(screen.getByRole('heading', { name: 'Finca La Palma' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Finca El Porvenir' })).toBeInTheDocument()
+    // Negative assertion: does not render the error EmptyState
+    expect(screen.queryByText('No se pudo cargar la bandeja')).toBeNull()
   })
 
   it('opens NewVisitSheet for the specific farm when clicking "Registrar visita"', async () => {
