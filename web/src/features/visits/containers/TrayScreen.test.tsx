@@ -244,6 +244,68 @@ describe('TrayScreen', () => {
     expect(screen.queryByText('No se pudo cargar la bandeja')).toBeNull()
   })
 
+  it('keeps a farm\'s cached plots when a refetch fails, and blocks with the error only when nothing is cached', async () => {
+    let attempts = 0
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/api/v1/me/tray')) return jsonResponse(TRAY_ITEMS)
+      if (url.includes('/api/v1/farms/farm-1/plots')) {
+        attempts++
+        // First load answers; every refetch after it fails.
+        if (attempts === 1) return jsonResponse(FARM_1_PLOTS)
+        throw new Error('Network error')
+      }
+      throw new Error(`unexpected request: ${url}`)
+    })
+
+    const { queryClient } = renderScreen()
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Finca La Palma' })).toBeInTheDocument())
+    const farm1Section = screen.getByRole('region', { name: 'Finca La Palma' })
+    fireEvent.click(within(farm1Section).getByRole('button', { name: /Finca La Palma/i }))
+    await waitFor(() => expect(within(farm1Section).getByText('Lote Mango')).toBeInTheDocument())
+
+    // A refetch that fails keeps the data and sets the error status.
+    void queryClient.refetchQueries({ queryKey: ['plots', 'farm-1'] })
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['plots', 'farm-1'])?.status).toBe('error'),
+    )
+
+    // D-T0.10: the cached plots are the offline answer, not a discarded list.
+    expect(within(farm1Section).getByRole('button', { name: /Lote Mango/i })).toBeInTheDocument()
+    // Negative assertion: no blocking error state over data that is still there.
+    expect(
+      within(farm1Section).queryByText('No se pudieron cargar las parcelas de esta finca.'),
+    ).toBeNull()
+    expect(within(farm1Section).queryByText('Cargando parcelas…')).toBeNull()
+  })
+
+  it('shows the blocking plots error and its retry when the first load fails (no data at all)', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/api/v1/me/tray')) return jsonResponse(TRAY_ITEMS)
+      if (url.includes('/api/v1/farms/farm-1/plots')) throw new Error('Network error')
+      throw new Error(`unexpected request: ${url}`)
+    })
+
+    renderScreen()
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Finca La Palma' })).toBeInTheDocument())
+    const farm1Section = screen.getByRole('region', { name: 'Finca La Palma' })
+    fireEvent.click(within(farm1Section).getByRole('button', { name: /Finca La Palma/i }))
+
+    await waitFor(() =>
+      expect(
+        within(farm1Section).getByText('No se pudieron cargar las parcelas de esta finca.'),
+      ).toBeInTheDocument(),
+    )
+    expect(within(farm1Section).getByRole('button', { name: 'Reintentar' })).toBeInTheDocument()
+    // Negative assertion: no plot button is invented out of a failed load, and
+    // the other farm's row is untouched.
+    expect(within(farm1Section).queryByRole('button', { name: /Lote Mango/i })).toBeNull()
+    expect(screen.getByRole('region', { name: 'Finca El Porvenir' })).toBeInTheDocument()
+  })
+
   it('opens NewVisitSheet for the specific farm when clicking "Registrar visita"', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = requestUrl(input as Request)
