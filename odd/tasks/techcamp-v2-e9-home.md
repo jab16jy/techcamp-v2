@@ -207,10 +207,12 @@ Forecasts are authored lines (prod + tests). Route = writer and reason.
   route test. ~350. Route: **AGY**.
   Done: lane `e9-t6` (`69ea935`, `6fe370c`, `b1f6f3d`, fixes `2830370`, `15b4f7d` #213); RDD
   `review-c5be0bf47ac4fbb6` approved; merged `2b2c11d`; #213 open.
-- [ ] T7 Close: server integration "real simulator data" (simulator payloads through the ingest
+- [x] T7 Close: server integration "real simulator data" (simulator payloads through the ingest
   flush, then `/status` shows the values and the node online); by-hand run on the seminar stack
   (`just` + simulator, screenshot via `playwright-cli`); `just gate-full` (the only full run);
   acceptance ticked with evidence; doc closed. ~200. Route: **OpenCode** + parent.
+  Done: lane `e9-t7` (`f47e408`, fix `2fe6efc` #215); RDD `review-c342bcfe0fb8fe90` approved;
+  merged `751b827`; seminar gaps → #214; `gate-full` exit 0.
 
 Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
 
@@ -223,18 +225,41 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
 - T7 after everything merges.
 
 ## Acceptance criteria
-- [ ] `GET /plots/{plot_id}/status` returns the docs/04 payload for an irrigated plot with real
+Screenshots: `../e9-briefs/evidence/` (outside the repo; seminar stack, 390×844).
+- [x] `GET /plots/{plot_id}/status` returns the docs/04 payload for an irrigated plot with real
   simulator readings, and the rainfed variant never shows `irrigate`, depth or minutes.
-- [ ] Missing data is `null`, never a fake zero: no cycle, no readings, no recommendation, no
-  adoption index.
-- [ ] `GET /me/tray` lists the technician's farms across orgs in the D-T0.8 order with open alerts
-  and `last_visit_on`; any other user gets `[]`.
-- [ ] Both endpoints are org-isolated (404 for another org's plot; the tray never shows a farm of
-  an org the caller is not in).
-- [ ] The home shows items 1–5 of docs/07 (irrigated and rainfed), updates on SSE, and opens
-  offline with the last state and its time.
-- [ ] A technician's Inicio opens the tray; a farm row leads to a new visit.
-- [ ] All checks green; `gate-full` once at close; RDD per slice; bundle ≤ 200 KB.
+  Evidence: `server/tests/home/test_simulator_integration.py` (real `publish_backfill` →
+  `ingest_uplinks` → `/status`; parent mutations: no calibration, node never seen, `seed + j` →
+  each fails it); `test_api.py::test_status_returns_the_whole_docs_payload_in_one_request`,
+  `::test_rainfed_plot_never_shows_irrigate_depth_or_minutes`; seminar run `/status`
+  `soil_moisture_pct` 25.393869813991657 = the test's value; `a-inicio-productor.png`.
+- [x] Missing data is `null`, never a fake zero: no cycle, no readings, no recommendation, no
+  adoption index. Evidence: `test_api.py::test_a_plot_without_cycle_readings_or_recommendation_is_all_null`,
+  `test_plot_status.py::test_missing_readings_are_null_and_never_zero`,
+  `::test_a_recommendation_that_was_never_calculated_is_null`,
+  `test_simulator_integration.py::test_before_any_flush_the_latest_metrics_are_null_and_the_node_is_not_online`.
+- [x] `GET /me/tray` lists the technician's farms across orgs in the D-T0.8 order with open alerts
+  and `last_visit_on`; any other user gets `[]`. Evidence: `test_tray.py::test_multi_org_technician_tray`,
+  `::test_tray_ordering_rules`, `::test_user_with_no_assigned_farms_returns_empty_list`,
+  `::test_farm_open_alerts_ordered_critical_first_then_newest`; `b-bandeja-tecnico.png`.
+- [x] Both endpoints are org-isolated (404 for another org's plot; the tray never shows a farm of
+  an org the caller is not in). Evidence: `test_api.py::test_a_plot_of_another_organization_is_404`,
+  `::test_a_plot_id_of_no_organization_at_all_answers_the_same_404`,
+  `test_tray.py::test_farm_in_unjoined_org_excluded_even_if_technician_id_matches`.
+- [x] The home shows items 1–5 of docs/07 (irrigated and rainfed), updates on SSE, and opens
+  offline with the last state and its time. Evidence: `PlotStatusScreen.test.tsx` (items 1–5
+  describes, rainfed card, "SSE invalidation" describe); `a-inicio-productor.png`;
+  `d-offline-ultimo-estado.png` (network cut); `e-offline-recarga-build.png` (production build,
+  full reload offline: home + "Sin conexión · dato de hace 53 min"). The dev server (seminar `web`
+  container, `npm run dev`) registers no service worker, so a reload offline fails there only.
+- [x] A technician's Inicio opens the tray; a farm row leads to a new visit. Evidence:
+  `routes.test.tsx` "renders technician tray on Inicio for technician role",
+  `TrayScreen.test.tsx` "opens NewVisitSheet for the specific farm…", D-T6.1 tests;
+  `b-bandeja-tecnico.png`, `c-tray-plot-estado.png`.
+- [x] All checks green; `gate-full` once at close; RDD per slice; bundle ≤ 200 KB. Evidence:
+  `just gate-full` on `751b827` exit 0 (server 1,172 passed; web 58 files / 453 tests; static
+  checks clean); RDD per lane slice (Tasks); real initial JS 175 KiB (`initial-js.sh`),
+  `size-limit` 140.75 kB under-reports (#213).
 
 ## Review (RDD)
 - Boundary: branch point `2fe6c78`. Docs commits are passive (structural readback).
@@ -450,8 +475,41 @@ Forecast total ≈ 2,740 authored lines (≈ 7–8 RDD slices, ~7 PRs).
   commits. Merged `2b2c11d`; post-merge gate same 183 passed. T6 pane and worktree removed (no
   DB); branch kept.
 
+- 2026-09-30 T7 (OpenCode `e9-t7`, high; worktree from `6352e14`, DB on 55255; brief `e9-t7.md`)
+  → `f47e408` test(home) `/status` with real simulator data through the ingest flush (+254, test
+  only). RED `AttributeError: value` (entity select), GREEN 2 → 34 passed; CodeGraph ×5. Parent
+  gate: diff read against docs/04 §Estado, docs/06 §1 and §10; `just gate server/tests/home` 34
+  passed; gate-lane exit 0; mutations in the parent worktree (stored raw value without
+  calibration → `None == 25.39…`; node never marked seen → `'provisioned' == 'online'`) both fail
+  the test. Part B (no commit): seminar stack + simulator `--provision --backfill-days 1` (96
+  uplinks, all calibrated) + `weather:run` + `irrigation:run`; screenshots a–d. Gaps reported, not
+  patched → #214 (no org/user endpoint, `minio-init` pull, stale images on `up -d`,
+  `irrigation:run` silent skip, `soil:autofill` null `root_depth_cm`, `podman-compose` missing,
+  `calibrate()` fixture params). Writer's "no offline app shell" was measured on the dev server;
+  parent checked `sw.ts` (precache + `NavigationRoute`) and asked for a production-build reload →
+  `e-offline-recarga-build.png` shows the home offline (Herdr restarted before the writer's text
+  report; the screenshot is the evidence). RDD (OpenCode, after the go, scoped `--base-ref
+  6352e14 --committed-only`): `review-c342bcfe0fb8fe90`, lens `review-reliability`, approved,
+  authority burned; 3 WARNINGs → rule 3+ → #215: the test rebuilt the backfill loop, fixed in
+  `2fe6efc` (+51/−29, real `publish_backfill` through the `UplinkPublisher` port; parent mutation
+  `seed + j` → `seed` fails it); 24 h window and representative sensor not end to end (covered by
+  unit tests) filed. `2fe6efc` rides without its own RDD (test only, no more rounds). Parent gate
+  34 passed, gate-lane 2/2. Merged `751b827`; post-merge `just gate server/tests/home` 34 passed.
+  T7 DB, worktree and pane removed; branch kept.
+- 2026-09-30 Integration candidate on `feat/e9-home` (`review-c392c5005611c7cc`, 83 files /
+  9,976 lines) relayed; owner's pick was accidental, no invocation run.
+- 2026-09-30 Parent close: `just gate-full` on `751b827` exit 0 — server 1,172 passed (7 min 29 s),
+  web 58 files / 453 tests passed, static checks clean, build ok, `size-limit` 140.75 kB (real
+  initial JS 175 KiB). Acceptance ticked with evidence; T7 ticked; doc closed.
+- 2026-09-30 `.coderabbit.yaml` (`251d478`, owner installed the CodeRabbit GitHub App): review
+  rules only (docs win, tracked `review-follow-up` issues referenced not re-raised, generated
+  files and `odd/**` excluded, `AGENTS.md` as code guidelines); validated against
+  `schema.v2.json`. Whole-branch integration candidates `review-cbef0808e810e2f0` and
+  `review-8a7e6ed3d9cfcba1` relayed; owner chose "Skip this time" for both.
+- 2026-09-30 `just gate-lane main`: all 48 commits in `main..aedb0fb` pass gate-fast (exit 0);
+  `just gate-fast` on `251d478` exit 0. `main` has no commits the epic branch lacks.
+
 ## Next step
-T7 (close; OpenCode + parent): server integration "real simulator data" (simulator payloads
-through the ingest flush → `/status` shows the values and the node online); by-hand seminar run
-with a `playwright-cli` screenshot; `just gate-full` once; tick the acceptance criteria with
-evidence; `just gate-lane main` before slicing; delivery only on the owner's word.
+E9 closed and `gate-lane main` green. Delivery (stacked-to-main chained PRs; no `main` merge
+needed) only on the owner's word. Open issues: #207, #209, #211,
+#212, #213, #214, #215.
