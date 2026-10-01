@@ -76,11 +76,14 @@ async def db_session() -> AsyncIterator[AsyncSession]:
         # `weather_cell`/`weather_daily` are in the truncate because they carry
         # no `org_id`: the `organization ... CASCADE` alone never reaches them,
         # and E5 writes a cell every time a plot is created, so they would
-        # otherwise leak from one test into the next.
+        # otherwise leak from one test into the next. `procrastinate_jobs` for
+        # the same reason: creating a plot on a cold cell defers a forecast
+        # fetch (farms `get_or_create_cell`), and a test that counts deferred
+        # jobs would otherwise see the previous test's.
         await conn.execute(
             text(
                 "TRUNCATE membership, app_user, organization, weather_daily, weather_cell, "
-                "irrigation_recommendation, water_balance_daily "
+                "irrigation_recommendation, water_balance_daily, procrastinate_jobs "
                 "RESTART IDENTITY CASCADE"
             )
         )
