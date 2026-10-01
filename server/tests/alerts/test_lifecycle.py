@@ -684,11 +684,16 @@ async def test_upgrading_an_already_critical_alert_adds_no_rows(
     assert len(await _rows(db_session, alert.id)) == 4
 
 
-async def test_two_concurrent_upgrades_write_one_critical_outbox_set() -> None:
+async def test_two_concurrent_upgrades_write_one_critical_outbox_set(
+    db_session: AsyncSession,
+) -> None:
     """Two evaluators upgrading at once must notify once (R3-001).
 
     Each upgrade runs on its own session, so the two really contend for the
     alert row: the loser must not add a second critical outbox set.
+    `db_session` is unused here but its teardown truncates the organization the
+    test commits through its own sessions; without it that alert outlives the
+    test and a later one that reads every alert sees it.
     """
     async with async_session_factory() as setup:
         org = await _make_org(setup)
