@@ -99,7 +99,7 @@ flowchart LR
 | Dato | Estrategia |
 |---|---|
 | Shell de la app (JS, CSS, íconos) | Precache del Service Worker: abre sin red |
-| Estado de parcela, alertas, clima | TanStack Query con caché persistida en IndexedDB (Dexie): offline se ve el último estado con su hora. Las claves de consulta llevan la organización y la caché persistida vence a los 7 días |
+| Estado de parcela, alertas, clima | TanStack Query con caché persistida en IndexedDB (Dexie): offline se ve el último estado con su hora. Las claves de consulta llevan la organización y la caché persistida vence a los 7 días. Solo se persiste la consulta que lo pide (`meta.persist`); cerrar sesión borra la caché en memoria y en disco, y cambiar la forma de un dato persistido obliga a subir la revisión de la caché (`CACHE_BUSTER`) en el mismo cambio |
 | Bitácora y visitas de extensión | **Local primero**: se escribe en Dexie y el sincronizador la sube ([06 §7](06-diseno-detallado.md#7-sincronización-offline-de-la-bitácora)) |
 | Eventos en vivo | SSE invalida o actualiza las consultas afectadas |
 | Teselas del mapa | Caché en tiempo de ejecución (las últimas vistas); mapas offline completos quedan diferidos (RF-18) |

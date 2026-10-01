@@ -78,8 +78,8 @@ La parcela pasa por el mismo control de acceso que el resto de `/plots/{plot_id}
 
 | Campo | Regla |
 |---|---|
-| `active_cycle` | `null` sin ciclo activo. `stage` es la clave de la etapa (`initial`, `development`, `mid`, `late`), o `null` si el cultivo no tiene etapas de Kc (`kc_source = none`). `day_of_cycle` es el día del ciclo hoy (`America/Bogota`), con la fecha de siembra como día 1. La interfaz traduce la clave. |
-| `latest` | Por métrica, la lectura válida más reciente de la parcela en las últimas 24 h; sin lectura, esa métrica es `null`. `at` es la hora del valor más reciente devuelto, o `null` si todos son `null`. |
+| `active_cycle` | `null` sin ciclo activo. `stage` es la clave de la etapa (`initial`, `development`, `mid`, `late`), o `null` si el cultivo no tiene etapas de Kc (`kc_source = none`). `day_of_cycle` es el día del ciclo hoy (`America/Bogota`), con la fecha de siembra como día 1. Si la siembra es posterior a hoy, `day_of_cycle` y `stage` son `null`: todavía no hay día del ciclo. La interfaz traduce la clave. |
+| `latest` | La humedad de suelo sale del sensor representativo de la parcela ([06 §5](06-diseno-detallado.md#5-riego-balance-hídrico-fao-56): uno cerca de Zr/2 o el promedio de dos en la zona de raíces); sin él, de la lectura más reciente de cualquier profundidad. Por métrica, la lectura válida más reciente de la parcela en las últimas 24 h; sin lectura, esa métrica es `null`. `at` es la hora del valor más reciente devuelto, o `null` si todos son `null`. |
 | `water_balance` | El último balance diario consolidado (el de ayer); `null` si no hay. |
 | `recommendation` | La de hoy, con el mismo objeto `rationale` que guarda el cálculo (incluye `forecast_rain_7d_mm`, la lluvia esperada que muestra la tarjeta de secano); la interfaz arma el porqué a partir de él. `null` si no se ha calculado. |
 | `open_alerts` | Alertas de la parcela con `state <> 'resolved'` (abiertas y reconocidas), las `critical` primero y luego de la más reciente a la más antigua. |
