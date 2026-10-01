@@ -38,6 +38,7 @@ export function TrayList({ rows, onToggleOpen, onSelectPlot, onAddVisit }: TrayL
       {rows.map(({ item, isOpen, plotsQuery }) => {
         const totalAlerts = item.open_alerts.length
         const criticalCount = item.open_alerts.filter((a) => a.severity === 'critical').length
+        const plots = plotsQuery?.data ?? null
 
         return (
           <section key={item.farm.id} aria-label={item.farm.name} className="flex flex-col">
@@ -85,10 +86,17 @@ export function TrayList({ rows, onToggleOpen, onSelectPlot, onAddVisit }: TrayL
 
             {isOpen && (
               <div className="mt-3">
+                {/**
+                 * The data, not `isSuccess` (D-T0.10, the same rule TrayScreen and
+                 * PlotStatusScreen use): a refetch that fails leaves the plots in
+                 * `data` with `isError` set, and that cached list IS the answer the
+                 * technician can still act on. Reading `isSuccess` replaced the list
+                 * with the error state the moment the phone dropped a request.
+                 */}
                 {plotsQuery?.isPending && (
                   <p className="text-base text-text-muted">Cargando parcelas…</p>
                 )}
-                {plotsQuery?.isError && (
+                {plots === null && plotsQuery?.isError && (
                   <div className="flex flex-col items-start gap-2">
                     <p className="text-base text-severity-critical">
                       No se pudieron cargar las parcelas de esta finca.
@@ -98,12 +106,12 @@ export function TrayList({ rows, onToggleOpen, onSelectPlot, onAddVisit }: TrayL
                     </Button>
                   </div>
                 )}
-                {plotsQuery?.isSuccess && plotsQuery.data.length === 0 && (
+                {plots !== null && plots.length === 0 && (
                   <p className="text-base text-text-muted">Esta finca todavía no tiene parcelas.</p>
                 )}
-                {plotsQuery?.isSuccess && plotsQuery.data.length > 0 && (
+                {plots !== null && plots.length > 0 && (
                   <ul className="divide-y divide-text/10 rounded-lg bg-surface-raised">
-                    {plotsQuery.data.map((plot) => (
+                    {plots.map((plot) => (
                       <li key={plot.id}>
                         <button
                           type="button"

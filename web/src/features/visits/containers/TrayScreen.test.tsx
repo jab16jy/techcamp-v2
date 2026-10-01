@@ -2,7 +2,7 @@
  * docs/07 §Mapa de pantallas "Bandeja del técnico" + D-T0.8, D-T0.9, D-T0.10, D-T6.1:
  * Technician tray screen tests.
  */
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -242,6 +242,149 @@ describe('TrayScreen', () => {
     expect(screen.getByRole('heading', { name: 'Finca El Porvenir' })).toBeInTheDocument()
     // Negative assertion: does not render the error EmptyState
     expect(screen.queryByText('No se pudo cargar la bandeja')).toBeNull()
+  })
+
+  it('keeps a farm\'s cached plots when a refetch fails, and blocks with the error only when nothing is cached', async () => {
+    let attempts = 0
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/api/v1/me/tray')) return jsonResponse(TRAY_ITEMS)
+      if (url.includes('/api/v1/farms/farm-1/plots')) {
+        attempts++
+        // First load answers; every refetch after it fails.
+        if (attempts === 1) return jsonResponse(FARM_1_PLOTS)
+        throw new Error('Network error')
+      }
+      throw new Error(`unexpected request: ${url}`)
+    })
+
+    const { queryClient } = renderScreen()
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Finca La Palma' })).toBeInTheDocument())
+    const farm1Section = screen.getByRole('region', { name: 'Finca La Palma' })
+    fireEvent.click(within(farm1Section).getByRole('button', { name: /Finca La Palma/i }))
+    await waitFor(() => expect(within(farm1Section).getByText('Lote Mango')).toBeInTheDocument())
+
+    // A refetch that fails keeps the data and sets the error status.
+    void queryClient.refetchQueries({ queryKey: ['plots', 'farm-1'] })
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['plots', 'farm-1'])?.status).toBe('error'),
+    )
+
+    // D-T0.10: the cached plots are the offline answer, not a discarded list.
+    expect(within(farm1Section).getByRole('button', { name: /Lote Mango/i })).toBeInTheDocument()
+    // Negative assertion: no blocking error state over data that is still there.
+    expect(
+      within(farm1Section).queryByText('No se pudieron cargar las parcelas de esta finca.'),
+    ).toBeNull()
+    expect(within(farm1Section).queryByText('Cargando parcelas…')).toBeNull()
+  })
+
+  it('shows the blocking plots error and its retry when the first load fails (no data at all)', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/api/v1/me/tray')) return jsonResponse(TRAY_ITEMS)
+      if (url.includes('/api/v1/farms/farm-1/plots')) throw new Error('Network error')
+      throw new Error(`unexpected request: ${url}`)
+    })
+
+    renderScreen()
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Finca La Palma' })).toBeInTheDocument())
+    const farm1Section = screen.getByRole('region', { name: 'Finca La Palma' })
+    fireEvent.click(within(farm1Section).getByRole('button', { name: /Finca La Palma/i }))
+
+    await waitFor(() =>
+      expect(
+        within(farm1Section).getByText('No se pudieron cargar las parcelas de esta finca.'),
+      ).toBeInTheDocument(),
+    )
+    expect(within(farm1Section).getByRole('button', { name: 'Reintentar' })).toBeInTheDocument()
+    // Negative assertion: no plot button is invented out of a failed load, and
+    // the other farm's row is untouched.
+    expect(within(farm1Section).queryByRole('button', { name: /Lote Mango/i })).toBeNull()
+    expect(screen.getByRole('region', { name: 'Finca El Porvenir' })).toBeInTheDocument()
+  })
+
+  /**
+   * D-T6.1 + D-T0.10: `GET /me/tray` answers with the farms of EVERY org the
+   * technician belongs to, but the cached entry is keyed by the active org. Tapping
+   * another org's plot switches the org while the request that would fill
+   * `['org-2','tray']` cannot leave the phone, and that key was never persisted
+   * either — so the way back to the tray reads an empty cache and stays on
+   * "Cargando bandeja…", for data the phone is already holding.
+   */
+  it('carries the tray across the org switch: offline, the farms show with the ORIGINAL fetch age', async () => {
+    // Only Date is faked, so `waitFor` keeps using real timers while the age the
+    // OfflineBanner prints is deterministic.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const fetchedAt = new Date('2026-09-30T15:00:00Z')
+    vi.setSystemTime(fetchedAt)
+
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestUrl(input as Request)
+      if (url.includes('/api/v1/me/tray')) return jsonResponse(TRAY_ITEMS)
+      if (url.includes('/api/v1/farms/farm-2/plots')) return jsonResponse(FARM_2_PLOTS)
+      throw new Error(`unexpected request: ${url}`)
+    })
+
+    const { queryClient, router } = renderScreen()
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Finca El Porvenir' })).toBeInTheDocument())
+    const originalUpdatedAt = queryClient.getQueryState(trayKey('org-1'))?.dataUpdatedAt
+    expect(originalUpdatedAt).toBe(fetchedAt.getTime())
+
+    const farm2Section = screen.getByRole('region', { name: 'Finca El Porvenir' })
+    fireEvent.click(within(farm2Section).getByRole('button', { name: /Finca El Porvenir/i }))
+    await waitFor(() => expect(within(farm2Section).getByText('Lote Yuca')).toBeInTheDocument())
+
+    // Twelve minutes later the connection is gone, as in the field.
+    vi.setSystemTime(new Date('2026-09-30T15:12:00Z'))
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    onlineManager.setOnline(false)
+    vi.mocked(fetch).mockRejectedValue(new Error('Network error'))
+
+    // The tap on a plot of org-2: the org switch is what loses the tray.
+    fireEvent.click(within(farm2Section).getByRole('button', { name: /Lote Yuca/i }))
+    await waitFor(() => expect(screen.getByText('Estado de la parcela')).toBeInTheDocument())
+    expect(sessionApi.getOrgId()).toBe('org-2')
+
+    // The way back to the tray.
+    await router.navigate('/')
+    await waitFor(() => expect(screen.queryByText('Estado de la parcela')).toBeNull())
+
+    // The seeded entry answers for org-2, carrying the original fetch hour.
+    expect(screen.getByRole('heading', { name: 'Finca El Porvenir' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Finca La Palma' })).toBeInTheDocument()
+    expect(screen.getByText(/Sin conexión/)).toBeInTheDocument()
+    expect(screen.getByText(/dato de hace 12 min/)).toBeInTheDocument()
+    // Negative assertion: no loading state and no blocking error over data we hold.
+    expect(screen.queryByText('Cargando bandeja\u2026')).toBeNull()
+    expect(screen.queryByText('No se pudo cargar la bandeja')).toBeNull()
+
+    // The org-1 entry is untouched: same data, same hour, still its own key.
+    expect(queryClient.getQueryState(trayKey('org-1'))?.dataUpdatedAt).toBe(originalUpdatedAt)
+    expect(queryClient.getQueryData(trayKey('org-1'))).toEqual(TRAY_ITEMS)
+    expect(queryClient.getQueryState(trayKey('org-2'))?.dataUpdatedAt).toBe(originalUpdatedAt)
+
+    onlineManager.setOnline(true)
+    vi.useRealTimers()
+  })
+
+  it('leaves a technician with no cached tray on the loading state, offline', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    onlineManager.setOnline(false)
+    vi.mocked(fetch).mockRejectedValue(new Error('Network error'))
+
+    renderScreen()
+
+    // Nothing seeded and nothing fetchable: the honest state is "still loading".
+    await waitFor(() => expect(screen.getByText('Cargando bandeja…')).toBeInTheDocument())
+    // Negative assertion: no farm is invented out of a fetch that never happened.
+    expect(screen.queryByText('Finca La Palma')).toBeNull()
+    expect(screen.queryByText('Sin fincas asignadas')).toBeNull()
+
+    onlineManager.setOnline(true)
   })
 
   it('opens NewVisitSheet for the specific farm when clicking "Registrar visita"', async () => {

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { minutesSince } from '../../../design-system/components/format'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
@@ -11,7 +12,7 @@ import { usePlotsByFarm, type PlotView } from '../../../lib/api/farms'
 import { setOrgId, useOrgId } from '../../../lib/api/session'
 import { usePendingCount } from '../../../lib/db/live'
 import { useOnlineStatus, useSyncState } from '../../../lib/sync/syncState'
-import { useTray, type TrayItem } from '../api/useTray'
+import { seedTrayForOrg, useTray, type TrayItem } from '../api/useTray'
 import { TrayList } from '../components/TrayList'
 import { NewVisitSheet } from './NewVisitSheet'
 
@@ -22,6 +23,7 @@ import { NewVisitSheet } from './NewVisitSheet'
  */
 export function TrayScreen() {
   const orgId = useOrgId()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const trayQuery = useTray(orgId)
   /**
@@ -63,6 +65,14 @@ export function TrayScreen() {
 
   const handleSelectPlot = (farm: TrayItem['farm'], plot: PlotView) => {
     if (farm.org_id !== orgId) {
+      /**
+       * The tray gathers this technician's farms across all their orgs, so the
+       * destination org's farms are in the data already on screen and only the query
+       * key changes. Seeded BEFORE the switch: afterwards the way back to the tray
+       * reads a key that was never fetched, and with no connection it never resolves
+       * (D-T6.1, D-T0.10).
+       */
+      seedTrayForOrg(queryClient, farm.org_id, trayItems, trayQuery.dataUpdatedAt)
       setOrgId(farm.org_id)
     }
     setActivePlotId(farm.org_id, plot.id)
