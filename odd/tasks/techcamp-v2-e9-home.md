@@ -501,8 +501,15 @@ Screenshots: `../e9-briefs/evidence/` (outside the repo; seminar stack, 390×844
 - 2026-09-30 Parent close: `just gate-full` on `751b827` exit 0 — server 1,172 passed (7 min 29 s),
   web 58 files / 453 tests passed, static checks clean, build ok, `size-limit` 140.75 kB (real
   initial JS 175 KiB). Acceptance ticked with evidence; T7 ticked; doc closed.
+- 2026-09-30 `.coderabbit.yaml` (`251d478`, owner installed the CodeRabbit GitHub App): review
+  rules only (docs win, tracked `review-follow-up` issues referenced not re-raised, generated
+  files and `odd/**` excluded, `AGENTS.md` as code guidelines); validated against
+  `schema.v2.json`. Whole-branch integration candidates `review-cbef0808e810e2f0` and
+  `review-8a7e6ed3d9cfcba1` relayed; owner chose "Skip this time" for both.
+- 2026-09-30 `just gate-lane main`: all 48 commits in `main..aedb0fb` pass gate-fast (exit 0);
+  `just gate-fast` on `251d478` exit 0. `main` has no commits the epic branch lacks.
 
 ## Next step
-E9 closed. `just gate-lane main` before slicing; delivery (stacked-to-main chained PRs, after
-merging `main` into `feat/e9-home`) only on the owner's word. Open issues: #207, #209, #211,
+E9 closed and `gate-lane main` green. Delivery (stacked-to-main chained PRs; no `main` merge
+needed) only on the owner's word. Open issues: #207, #209, #211,
 #212, #213, #214, #215.
