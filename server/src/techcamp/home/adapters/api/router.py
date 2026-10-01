@@ -20,17 +20,24 @@ from techcamp.alerts.adapters.api.deps import AlertRepoDep
 from techcamp.farms.adapters.api.deps import (
     CropCycleRepoDep,
     CropRepoDep,
+    FarmRepoDep,
     PlotRepoDep,
     SoilProfileRepoDep,
 )
 from techcamp.farms.domain.errors import PlotNotFoundError
-from techcamp.home.application import PlotStatus, build_plot_status
+from techcamp.home.application import (
+    PlotStatus,
+    TechnicianTrayItem,
+    build_plot_status,
+    build_technician_tray,
+)
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
 from techcamp.irrigation.adapters.api.deps import (
     NowDep,
     RecommendationRepoDep,
     WaterBalanceRepoDep,
 )
+from techcamp.logbook.adapters.api.deps import VisitRepoDep
 from techcamp.shared.errors import ProblemError
 from techcamp.telemetry.adapters.api.deps import (
     CalibrationRepoDep,
@@ -287,3 +294,77 @@ async def get_plot_status(
         raise ProblemError(status=404, title="Plot not found") from exc
 
     return _view(status)
+
+
+class FarmSummaryView(BaseModel):
+    """The docs/04 `farm` field in `/me/tray`: compact summary with no geometry."""
+
+    id: UUID
+    org_id: UUID
+    name: str
+    municipality_code: str
+
+
+class TrayItemView(BaseModel):
+    """One item in the technician tray response (docs/04 §Visitas; D-T0.8)."""
+
+    farm: FarmSummaryView
+    open_alerts: list[OpenAlertView]
+    last_visit_on: date | None
+
+
+def _tray_item_view(item: TechnicianTrayItem) -> TrayItemView:
+    return TrayItemView(
+        farm=FarmSummaryView(
+            id=item.farm.id,
+            org_id=item.farm.org_id,
+            name=item.farm.name,
+            municipality_code=item.farm.municipality_code,
+        ),
+        open_alerts=[
+            OpenAlertView(
+                id=alert.id,
+                org_id=alert.org_id,
+                rule_id=alert.rule_id,
+                plot_id=alert.plot_id,
+                node_id=alert.node_id,
+                rule_code=alert.rule_code,
+                state=alert.state,
+                severity=alert.severity,
+                evidence=alert.evidence,
+                opened_at=alert.opened_at,
+                acknowledged_at=alert.acknowledged_at,
+                resolved_at=alert.resolved_at,
+                escalated_at=alert.escalated_at,
+                resolution_note=alert.resolution_note,
+            )
+            for alert in item.open_alerts
+        ],
+        last_visit_on=item.last_visit_on,
+    )
+
+
+@router.get("/me/tray", response_model=list[TrayItemView])
+async def get_technician_tray(
+    user_id: CurrentUserId,
+    memberships: MembershipRepoDep,
+    farms: FarmRepoDep,
+    plots: PlotRepoDep,
+    alerts: AlertRepoDep,
+    visits: VisitRepoDep,
+) -> list[TrayItemView]:
+    """docs/04 §Visitas de extensión y bandeja del técnico: `GET /me/tray`.
+
+    Returns farms assigned to the caller across all memberships (D-T0.8).
+    Ordered: critical alerts desc, open alerts desc, last_visit_on asc (null first),
+    farm name, farm id. Returns [] for any caller with no assigned farms (200, never 403).
+    """
+    items = await build_technician_tray(
+        user_id=user_id,
+        memberships=memberships,
+        farms=farms,
+        plots=plots,
+        alerts=alerts,
+        visits=visits,
+    )
+    return [_tray_item_view(item) for item in items]
