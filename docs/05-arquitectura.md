@@ -180,7 +180,7 @@ techcamp-v2/
 ├── web/                  # PWA (React + Vite + TypeScript)
 ├── server/               # backend (FastAPI), un paquete por módulo de dominio
 │   └── src/techcamp/{identity,farms,telemetry,weather,irrigation,alerts,
-│                     notifications,logbook,risk,metrics,assistant,shared}
+│                     notifications,logbook,risk,metrics,assistant,home,shared}
 ├── ml/                   # entrenamiento offline (dependencias pesadas); publica artefactos
 ├── firmware/             # firmware de referencia del nodo ESP32 + simulador de nodo
 ├── infra/                # compose, Caddyfile, config de Mosquitto y ChirpStack

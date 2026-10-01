@@ -509,7 +509,32 @@ Screenshots: `../e9-briefs/evidence/` (outside the repo; seminar stack, 390×844
 - 2026-09-30 `just gate-lane main`: all 48 commits in `main..aedb0fb` pass gate-fast (exit 0);
   `just gate-fast` on `251d478` exit 0. `main` has no commits the epic branch lacks.
 
+- 2026-10-01 Delivery (owner: "push the branches and open the PRs"): 12 stacked-to-main PRs
+  #216–#227, branches `e9/01`…`e9/12` cut at existing commits of `feat/e9-home` (no rewrite).
+  Parallel lanes force two boundaries: T4 lands with the T2 merge (#221), T3 with the T5 fixes
+  (#224). 9 of 12 exceed 400 authored lines (single reviewed commits, mostly tests): noted as
+  `size:exception` in each PR.
+- 2026-10-01 CI `server` failed on #216, #218, #221, #224: `alerts/test_jobs.py` sweep tests count
+  every deferred job, and a plot on a cold cell defers a forecast fetch; `db_session` did not
+  truncate `procrastinate_jobs`. Pre-existing on `main` (RED with `--randomly-seed=3532017283`).
+  Fix PR #228 (`3029b61`, `procrastinate_jobs` in the teardown TRUNCATE): full suite green with the
+  four failing seeds, 1,120 passed each. Merges before the chain.
+- 2026-10-01 CodeRabbit (installed by the owner; `.coderabbit.yaml` applies only from #227, since
+  it reads the PR head): stacked children were skipped (non-default base) until
+  `@coderabbitai review`. 13 actionable + 2 nitpicks on #216, #219, #221, #223, #225, #226; the
+  other six had none. Parent verified each against `feat/e9-home` (read-only mapper): 3 false
+  (artifacts of the slice order; the cache is already bound to the session token digest). Rule
+  3+: fixed now — docs `1229f44` (polygon route, valid reading, `home` in docs/05) and lane
+  `e9-cr` (OpenCode, brief `e9-cr.md`): `d9b7797` `isPending` for a paused `/me` (#226),
+  `6a699f4` cached plots kept on a failed refetch (#225), `3fc84e3` tray seeded and persisted
+  across an org switch, org kept in the key per docs/07 (#225). Parent gate: 15 + 27 passed,
+  gate-lane 3/3, four mutations each fail one test, restored byte-identical. RDD (owner granted):
+  `review-f5379620922a310e` approved, authority burned; R3-001 WARNING (seeding can downgrade a
+  newer destination tray) → #229 with the remaining CodeRabbit findings. Merged `75fbb43`;
+  post-merge gate 15 + 27 + 81 passed. Lane pane and worktree removed; branch kept. Whole-branch
+  integration candidates `review-9a1420e152b12a1d` and `review-c237a3803d42f60a`: owner skipped.
+
 ## Next step
-E9 closed and `gate-lane main` green. Delivery (stacked-to-main chained PRs; no `main` merge
-needed) only on the owner's word. Open issues: #207, #209, #211,
-#212, #213, #214, #215.
+Merge #228 first, then the chain #216–#227 and `e9/13` (CodeRabbit fixes) in order, retargeting
+each next PR to `main`; then delete worktrees, branches and test DBs. Open issues: #207, #209,
+#211, #212, #213, #214, #215, #229.

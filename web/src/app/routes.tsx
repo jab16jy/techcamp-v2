@@ -39,13 +39,20 @@ const TrayScreen = lazy(() =>
  * in the active organization, and PlotStatusScreen for any other role (D-T0.9, docs/07).
  * While the /me query is pending (no data yet), renders null to prevent flashing
  * PlotStatusScreen and firing its queries for technicians.
+ *
+ * `isPending`, NOT `isLoading`: in v5 `isLoading === isPending && isFetching`, and an
+ * uncached `/me` whose request cannot leave the device is PAUSED — pending, not
+ * fetching. Waiting on `isLoading` picked the plot status screen for a technician the
+ * moment the phone lost signal, flashing it and firing its queries (T6 no-status-flash
+ * rule, #226). A query that ERRORED is not pending, so the status screen stays the
+ * fallback below.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
 function InicioTab() {
   const meQuery = useMe()
   const role = useActiveOrgRole()
 
-  if (meQuery.isLoading) {
+  if (meQuery.isPending) {
     return null
   }
 
