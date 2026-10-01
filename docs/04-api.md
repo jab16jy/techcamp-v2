@@ -61,18 +61,33 @@ Una sola llamada que arma todo lo que el productor ve al abrir la app. Así se e
 
 ```
 GET /plots/{plot_id}/status → {
-  plot, active_cycle: { crop, stage, day_of_cycle },
+  plot, active_cycle: { crop, stage, day_of_cycle } | null,
   latest: { soil_moisture_pct, air_temp_c, air_rh_pct, at },
-  water_balance: { depletion_mm, taw_mm, raw_mm, stress_moisture_pct, status: "ok|watch|irrigate|stress" },
-  recommendation: { kind, depth_mm?, duration_min?, advice[]?, rationale[] } | null,
+  water_balance: { depletion_mm, taw_mm, raw_mm, stress_moisture_pct, status: "ok|watch|irrigate|stress" } | null,
+  recommendation: { kind, depth_mm?, duration_min?, advice[]?, rationale } | null,
   open_alerts: Alert[],
   weather_next_3d: WeatherDay[],
   nodes: NodeHealth[],
-  digital_adoption_index: { value, month }
+  digital_adoption_index: { value, month } | null
 }
 ```
 
 En una parcela de secano el `status` nunca es `irrigate`: cuando `Dr > RAW` es `stress`, y `recommendation.kind = rainfed` trae `advice[]` sin `depth_mm` ni `duration_min` ([ADR-0023](adr/0023-parcelas-con-riego-y-secano.md)).
+
+La parcela pasa por el mismo control de acceso que el resto de `/plots/{plot_id}`: `404` si no existe o es de otra organización. Un dato que falta llega como `null`, nunca como un cero:
+
+| Campo | Regla |
+|---|---|
+| `active_cycle` | `null` sin ciclo activo. `stage` es la clave de la etapa (`initial`, `development`, `mid`, `late`), o `null` si el cultivo no tiene etapas de Kc (`kc_source = none`). `day_of_cycle` es el día del ciclo hoy (`America/Bogota`), con la fecha de siembra como día 1. La interfaz traduce la clave. |
+| `latest` | Por métrica, la lectura válida más reciente de la parcela en las últimas 24 h; sin lectura, esa métrica es `null`. `at` es la hora del valor más reciente devuelto, o `null` si todos son `null`. |
+| `water_balance` | El último balance diario consolidado (el de ayer); `null` si no hay. |
+| `recommendation` | La de hoy, con el mismo objeto `rationale` que guarda el cálculo (incluye `forecast_rain_7d_mm`, la lluvia esperada que muestra la tarjeta de secano); la interfaz arma el porqué a partir de él. `null` si no se ha calculado. |
+| `open_alerts` | Alertas de la parcela con `state <> 'resolved'` (abiertas y reconocidas), las `critical` primero y luego de la más reciente a la más antigua. |
+| `weather_next_3d` | Las filas de pronóstico de hoy y los dos días siguientes, con su marca `stale`. |
+| `nodes` | Un `NodeHealth` por nodo de la parcela: `{ node_id, status, last_seen_at, completeness_24h }`. La batería y el RSSI quedan fuera hasta que un nodo los reporte. |
+| `digital_adoption_index` | `null` hasta que E11 calcule el índice ([11-metricas](11-metricas.md)). |
+
+La composición vive en el módulo `home` ([05 §Módulos](05-arquitectura.md#módulos-c4-nivel-3), D-T0.1).
 
 ### Nodos y sensores
 
@@ -111,7 +126,7 @@ GET  /plots/{plot_id}/water-balance?from=&to=         → WaterBalanceDay[]
 
 `GET /plots/{plot_id}/irrigation/recommendation` acepta `day` (por defecto la fecha de hoy en `America/Bogota`). Si la parcela no existe o pertenece a otra organización, responde `404` ("Plot not found"). Si para el día consultado no hay recomendación calculada y guardada, responde `404` con el título "Recommendation not found". La respuesta entrega un objeto `IrrigationRecommendation` con la forma:
 `{ plot_id: string, day: string, kind: string, depth_mm: float | null, duration_min: int | null, advice: string[], rationale: object }`.
-`kind` toma uno de los valores del árbol de decisión (`irrigate`, `postpone`, `not_needed`, `no_kc`, `rainfed`). En parcelas de secano (`kind = rainfed`), `depth_mm` y `duration_min` son `null`, y `advice` entrega la lista ordenada de códigos agronómicos aplicables (`delay_sowing`, `rain_expected`, `conserve_moisture`, `prioritize_harvest`, `no_action`). `rationale` contiene el objeto JSON almacenado con los insumos numéricos y banderas del cálculo (`et0_mm`, `kc`, `kc_source`, `kc_approximate`, `p`, `raw_mm`, `taw_mm`, `depletion_model_mm`, `depletion_mm`, `k`, `without_sensor`, `forecast_rain_48h_mm`, `low_confidence`, `forecast_missing`, etc.); la lista `rationale[]` de `/status` (E9) es una presentación resumida de este objeto.
+`kind` toma uno de los valores del árbol de decisión (`irrigate`, `postpone`, `not_needed`, `no_kc`, `rainfed`). En parcelas de secano (`kind = rainfed`), `depth_mm` y `duration_min` son `null`, y `advice` entrega la lista ordenada de códigos agronómicos aplicables (`delay_sowing`, `rain_expected`, `conserve_moisture`, `prioritize_harvest`, `no_action`). `rationale` contiene el objeto JSON almacenado con los insumos numéricos y banderas del cálculo (`et0_mm`, `kc`, `kc_source`, `kc_approximate`, `p`, `raw_mm`, `taw_mm`, `depletion_model_mm`, `depletion_mm`, `k`, `without_sensor`, `forecast_rain_48h_mm`, `low_confidence`, `forecast_missing`, etc.); `/status` (E9) entrega este mismo objeto, y la interfaz lo presenta.
 
 `GET /plots/{plot_id}/water-balance` acepta `from` y `to` (fechas en formato `YYYY-MM-DD`). Por defecto, `to` es el día de ayer en `America/Bogota` (último balance diario consolidado) y `from` es `to − 29 días` (rango de 30 días). Si `from > to` o el rango supera los 366 días contando ambos extremos, responde `422`. Si la parcela no existe o pertenece a otra organización, responde `404` ("Plot not found"). Retorna `WaterBalanceDay[]` ordenado por día ascendente (o `[]` si no hay filas en el rango). Cada elemento tiene la forma:
 `{ day: string, etc_mm: float, effective_rain_mm: float, irrigation_mm: float, taw_mm: float, raw_mm: float, depletion_model_mm: float, depletion_mm: float, soil_moisture_obs_pct: float | null, assimilation_k: float, stress_moisture_pct: float, status: string }`.
@@ -196,6 +211,8 @@ GET  /me/tray                                  → [{ farm, open_alerts: Alert[]
 GET  /farms/{farm_id}/visits                   → Page<ExtensionVisit>
 GET  /organizations/{org_id}/visits?from=&to=  → Page<ExtensionVisit>   # exportación de visitas por organización
 ```
+
+`GET /me/tray` devuelve las fincas cuyo `technician_id` es quien llama, en todas sus organizaciones; a cualquier otro usuario le responde `[]` (una bandeja vacía no revela nada, así que no hay `403`). `open_alerts` son las alertas con `state <> 'resolved'` de las parcelas de la finca, con el mismo orden que en `/status`. `last_visit_on` es el `visited_on` de la visita más reciente no borrada, o `null`. Orden: más alertas `critical` abiertas primero, luego más alertas abiertas, luego la visita más antigua (las nunca visitadas primero) y por último el nombre de la finca. Vive en el módulo `home`, como `/status`.
 
 `GET /farms/{farm_id}/visits` responde a cualquier miembro de la organización de la finca. `GET /organizations/{org_id}/visits` es la exportación (RF-19): `owner` y `technician`; otro rol recibe `403` y un no miembro `404`. Las dos son páginas con cursor, de la más reciente a la más antigua.
 
