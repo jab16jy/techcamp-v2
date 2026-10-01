@@ -20,6 +20,7 @@ from techcamp.alerts.application.ports import (
 from techcamp.alerts.application.use_cases import (
     acknowledge,
     list_alerts,
+    list_open_alerts_for_plots,
     open_alert,
     resolve_automatically,
     resolve_manually,
@@ -39,6 +40,7 @@ __all__ = [
     "evaluate_node_health",
     "evaluate_weather_rules",
     "list_alerts",
+    "list_open_alerts_for_plots",
     "list_rules",
     "open_alert",
     "resolve_automatically",

@@ -5,8 +5,10 @@ docs/04-api.md:105-109; docs/06 §5.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from techcamp.farms.application.manage_plots import resolve_plot_access
@@ -17,11 +19,17 @@ from techcamp.irrigation.application.ports import (
     IrrigationRecommendationRepository,
     WaterBalanceRepository,
 )
-from techcamp.irrigation.domain.errors import InvalidDateRangeError, RecommendationNotFoundError
+from techcamp.irrigation.domain.errors import (
+    InvalidCropStagesError,
+    InvalidDateRangeError,
+    RecommendationNotFoundError,
+)
 from techcamp.irrigation.domain.models import (
+    StageLike,
     StoredIrrigationRecommendation,
     WaterBalanceStatus,
     compute_water_balance_status,
+    stage_for_cycle_day,
 )
 from techcamp.shared.dates import local_today
 
@@ -143,3 +151,25 @@ async def query_plot_water_balance(
         )
         for r in rows
     ]
+
+
+def crop_stage_for_day(
+    stages: Sequence[StageLike],
+    sown_on: date | Any,
+    day: date,
+) -> tuple[str | None, int]:
+    """Growth stage key and 1-based cycle day for a cycle on a given day (D-T0.6).
+
+    Returns (stage_key | None, day_of_cycle).
+    day_of_cycle is (day - sown_on).days + 1.
+    stage_key is None when the crop has no Kc stages (InvalidCropStagesError).
+    """
+    actual_sown_on: date = getattr(sown_on, "sown_on", sown_on)
+    day_of_cycle = (day - actual_sown_on).days + 1
+    if day_of_cycle < 1 or not stages:
+        return None, day_of_cycle
+    try:
+        stage_key = stage_for_cycle_day(stages, day_of_cycle)
+        return stage_key, day_of_cycle
+    except InvalidCropStagesError:
+        return None, day_of_cycle

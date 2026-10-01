@@ -219,3 +219,11 @@ class ExtensionVisitRepository(Protocol):
         excluding deleted, newest first.
         """
         ...
+
+    async def get_latest_visit_dates_for_farms(
+        self,
+        farm_ids: Sequence[UUID],
+        org_ids: Sequence[UUID],
+    ) -> dict[UUID, date]:
+        """Max visited_on per farm for non-deleted visits across org_ids."""
+        ...
