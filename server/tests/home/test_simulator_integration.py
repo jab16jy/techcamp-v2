@@ -2,17 +2,23 @@
 
 docs/10 E9 closes on "pantalla de inicio completa con datos reales del
 simulador", so this test proves that phrase instead of asserting it: the
-uplinks are the ones `publish_backfill` would send (`docs/06 §10`), JSON-encoded
-exactly as `MqttUplinkPublisher` encodes them, and the calibration is the one
+uplinks are produced by `simulator.runner.publish_backfill` itself (`docs/06
+§10`) through the `UplinkPublisher` port and encoded exactly as
+`MqttUplinkPublisher` encodes them, and the calibration is the one
 `node_client.ensure_calibrations` posts for a `%` sensor
-(`docs/03-modelo-datos.md:463-467`). Nothing here is hand-made JSON, so a change
-in either breaks this test the way it would break the seminar.
+(`docs/03-modelo-datos.md:463-467`). Nothing here is hand-made JSON, and the
+backfill is not reimplemented here either, so a change in either breaks this
+test the way it would break the seminar.
 
 The payload under test is `docs/04 §Estado de la parcela (pantalla principal)`,
 read through the real ingest flush (`docs/06 §1`): parse → channel → calibrate →
-quality → batch insert → node status. D-T0.4 (the 24 h window), D-T0.5 (`nodes`)
-and D-T2.1 (the representative sensor, which the plot's `root_depth_cm` makes
-this one) all decide what comes back, so they are exercised rather than mocked.
+quality → batch insert → node status. D-T0.5 (`nodes`) is what this file
+exercises. D-T0.4's 24 h window and D-T2.1's representative depth are NOT
+proved here — every reading this file generates is inside the window, and one
+moisture sensor cannot tell representative selection from "any moisture sensor"
+apart. Both are covered where they belong: the window at
+`tests/telemetry/test_home_queries.py`, the representative sensor at
+`tests/home/test_plot_status.py`.
 """
 
 from __future__ import annotations
@@ -32,7 +38,8 @@ from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.irrigation.adapters.api.deps import get_now
 from techcamp.main import app
 from techcamp.simulator.node_client import _calibration_payload
-from techcamp.simulator.trajectory import backfill_timestamps, build_uplink, raw_value_at
+from techcamp.simulator.runner import publish_backfill
+from techcamp.simulator.trajectory import backfill_timestamps, raw_value_at
 from techcamp.telemetry.adapters.orm import ReadingRow, SensorRow
 from techcamp.telemetry.adapters.repositories import (
     SqlAlchemyCalibrationRepository,
@@ -142,28 +149,43 @@ async def _calibrate_like_the_simulator(
     return created
 
 
-def _simulated_uplinks(node_id: UUID) -> tuple[list[RawUplink], list[int]]:
-    """The uplinks `publish_backfill` would send for this node's two channels:
-    one per trajectory point, `seq = i + 1`, and sensor `j` on
-    `raw_value_at(i, seed=SEED + j)` (`docs/06 §10`)."""
-    sensors = [{"channel_key": "sm_10"}, {"channel_key": "t_air"}]
+class _RecordingPublisher:
+    """The `UplinkPublisher` port's double (ADR-0002: external I/O needs one,
+    and Mosquitto is not assumed running for a test). It records what the
+    backfill publishes so the test reads the payloads `publish_backfill` really
+    built, instead of rebuilding that loop here and proving nothing about it.
+    """
+
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, Any]] = []
+
+    async def publish_uplink(self, node_id: UUID, payload: dict[str, Any]) -> None:
+        self.payloads.append(payload)
+
+    async def publish_status(self, node_id: UUID, status: str) -> None:
+        raise AssertionError("the backfill publishes no status message")
+
+
+async def _simulated_uplinks(node_id: UUID) -> tuple[list[RawUplink], list[int]]:
+    """The uplinks `publish_backfill` sends for this node's two channels: one
+    per trajectory point, `seq = i + 1`, sensor `j` on `seed + j` (`docs/06
+    §10`). Driving the real function is the point — its point count, its `seq`
+    and its per-sensor seed offset are what the assertions below read."""
+    publisher = _RecordingPublisher()
+    published = await publish_backfill(
+        publisher,
+        node_id,
+        sensors=[{"channel_key": "sm_10"}, {"channel_key": "t_air"}],
+        days=DAYS,
+        interval_s=INTERVAL_S,
+        seed=SEED,
+        now=NOW,
+    )
     timestamps = backfill_timestamps(days=DAYS, interval_s=INTERVAL_S, now=NOW)
+    assert published == len(timestamps) == len(publisher.payloads)
     messages = [
-        RawUplink(
-            node_id=node_id,
-            payload=json.dumps(
-                build_uplink(
-                    seq=i + 1,
-                    ts=ts,
-                    channels={
-                        sensor["channel_key"]: raw_value_at(i, seed=SEED + j)
-                        for j, sensor in enumerate(sensors)
-                    },
-                )
-            ).encode(),
-            received_at=NOW,
-        )
-        for i, ts in enumerate(timestamps)
+        RawUplink(node_id=node_id, payload=json.dumps(payload).encode(), received_at=NOW)
+        for payload in publisher.payloads
     ]
     return messages, timestamps
 
@@ -188,7 +210,7 @@ async def test_status_shows_the_newest_calibrated_simulator_reading(
     calibration = await _calibrate_like_the_simulator(
         db_session, org_id=env.org_id, sensor_id=moisture
     )
-    messages, timestamps = _simulated_uplinks(node_id)
+    messages, timestamps = await _simulated_uplinks(node_id)
 
     stats = await ingest_uplinks(messages, **_ingest_ports(db_session))
 
