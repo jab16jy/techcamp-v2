@@ -18,7 +18,7 @@ from techcamp.telemetry.application import (
     get_plot_nodes_health,
     query_latest_plot_readings,
 )
-from techcamp.telemetry.domain.models import NodeStatus, ReadingQuality
+from techcamp.telemetry.domain.models import Node, NodeStatus, NodeTransport, ReadingQuality
 
 from .test_repositories import _make_node, _make_org_and_plot, _make_sensor
 
@@ -100,7 +100,6 @@ async def test_query_latest_plot_readings_success_and_missing_is_none(
     # soil_moisture returns newest reading within 24h
     assert res["soil_moisture"] is not None
     assert res["soil_moisture"].value == 28.5
-    assert res["soil_moisture"].ts == now - timedelta(hours=1)
     assert res["soil_moisture"].time == now - timedelta(hours=1)
 
     # air_temp has no reading -> None (never 0)
@@ -161,7 +160,7 @@ async def test_query_latest_plot_readings_filters_out_of_range_and_older_than_24
     # Must return the valid reading at now - 10h, NOT the out-of-range or >24h one
     assert res["soil_moisture"] is not None
     assert res["soil_moisture"].value == 22.0
-    assert res["soil_moisture"].ts == now - timedelta(hours=10)
+    assert res["soil_moisture"].time == now - timedelta(hours=10)
 
 
 async def test_query_latest_plot_readings_org_isolation(
@@ -204,6 +203,49 @@ async def test_query_latest_plot_readings_org_isolation(
     )
     assert res_a["soil_moisture"] is not None
     assert res_a["soil_moisture"].value == 25.0
+
+
+async def test_query_latest_plot_readings_deterministic_tiebreak_at_same_timestamp(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id = await _make_org_and_plot(db_session, "Finca Tiebreak")
+    node_id = await _make_node(db_session, org_id, plot_id)
+    sensor_1 = await _make_sensor(db_session, node_id, channel_key="sm_10")
+    sensor_2 = await _make_sensor(db_session, node_id, channel_key="sm_20")
+    assert sensor_1 < sensor_2
+
+    now = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
+    same_time = now - timedelta(hours=1)
+
+    # Insert readings for both sensors at the exact same timestamp
+    await _insert_reading(
+        db_session,
+        sensor_2,
+        at=same_time,
+        raw_value=20.0,
+        value=20.0,
+    )
+    await _insert_reading(
+        db_session,
+        sensor_1,
+        at=same_time,
+        raw_value=10.0,
+        value=10.0,
+    )
+
+    repo = SqlAlchemyReadingRepository(db_session)
+
+    # DISTINCT ON (SensorRow.metric) with tiebreak by SensorRow.id picks sensor_1 deterministically
+    for _ in range(2):
+        res = await query_latest_plot_readings(
+            plot_id=cast_uuid(plot_id),
+            org_id=cast_uuid(org_id),
+            metrics=["soil_moisture"],
+            now=now,
+            readings=repo,
+        )
+        assert res["soil_moisture"] is not None
+        assert res["soil_moisture"].value == 10.0
 
 
 async def test_get_plot_nodes_health_filters_by_plot_and_org(
@@ -278,6 +320,59 @@ async def test_get_plot_nodes_health_filters_by_plot_and_org(
         now=now,
     )
     assert empty_for_other_org == []
+
+
+class _FakePagingNodeRepo:
+    def __init__(self, all_nodes: list[Node]) -> None:
+        self.all_nodes = sorted(all_nodes, key=lambda n: n.id)
+        self.calls: list[UUID | None] = []
+
+    async def list_for_org(
+        self,
+        org_id: UUID,
+        *,
+        plot_id: UUID | None = None,
+        status: NodeStatus | None = None,
+        limit: int = 50,
+        cursor: UUID | None = None,
+    ) -> list[Node]:
+        self.calls.append(cursor)
+        candidates = [n for n in self.all_nodes if cursor is None or n.id > cursor]
+        # Real repos enforce page limit (max 50)
+        return candidates[: min(limit, 50)]
+
+    async def count_readings_since(self, node_id: UUID, org_id: UUID, since: datetime) -> int:
+        return 5
+
+
+async def test_get_plot_nodes_health_no_silent_cap_pages_through_all_nodes() -> None:
+    org_id = uuid7()
+    plot_id = uuid7()
+    nodes_data = [
+        Node(
+            id=uuid7(),
+            org_id=org_id,
+            plot_id=plot_id,
+            transport=NodeTransport.WIFI,
+            dev_eui=f"{i:016x}",
+            claim_code=f"CODE-{i}",
+            credential_hash="hash",
+            firmware="v1",
+            interval_s=300,
+            claimed_at=datetime.now(UTC),
+            last_seen_at=datetime.now(UTC),
+            status=NodeStatus.ONLINE,
+        )
+        for i in range(60)
+    ]
+    repo = _FakePagingNodeRepo(nodes_data)
+    result = await get_plot_nodes_health(
+        plot_id=plot_id,
+        org_id=org_id,
+        nodes=repo,  # type: ignore[arg-type]
+    )
+    assert len(repo.calls) > 1
+    assert len(result) == 60
 
 
 def cast_uuid(val: object) -> UUID:

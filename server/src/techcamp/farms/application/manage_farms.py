@@ -108,6 +108,4 @@ async def list_farms_for_technician(
     farms: FarmRepository,
 ) -> list[Farm]:
     """Farms assigned to `technician_id` across `org_ids`, ordered by name (D-T0.8)."""
-    if not org_ids:
-        return []
     return await farms.list_for_technician(technician_id, org_ids)

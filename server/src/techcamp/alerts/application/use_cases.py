@@ -242,6 +242,4 @@ async def list_open_alerts_for_plots(
 
     Ordered critical first, then newest first.
     """
-    if not plot_ids or not org_ids:
-        return []
     return await alerts.list_open_for_plots(plot_ids=plot_ids, org_ids=org_ids)

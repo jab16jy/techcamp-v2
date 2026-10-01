@@ -129,6 +129,48 @@ async def test_list_farms_for_technician_empty_org_ids(
     assert result == []
 
 
+async def test_list_farms_for_technician_same_name_orders_by_id(
+    db_session: AsyncSession,
+) -> None:
+    org_1 = await _make_org(db_session, "Org Same 1")
+    org_2 = await _make_org(db_session, "Org Same 2")
+    technician = uuid7()
+    db_session.add(AppUserRow(id=technician, phone=f"+57{uuid7().int % 10**13:013d}"))
+    await db_session.commit()
+
+    id_smaller, id_larger = sorted([uuid7(), uuid7()])
+    # Insert id_larger first, id_smaller second, both named "Same Farm"
+    db_session.add(
+        FarmRow(
+            id=id_larger,
+            org_id=cast_uuid(org_1),
+            name="Same Farm",
+            municipality_code="47001",
+            location=_POINT,
+            technician_id=technician,
+        )
+    )
+    db_session.add(
+        FarmRow(
+            id=id_smaller,
+            org_id=cast_uuid(org_2),
+            name="Same Farm",
+            municipality_code="47001",
+            location=_POINT,
+            technician_id=technician,
+        )
+    )
+    await db_session.commit()
+
+    repo = SqlAlchemyFarmRepository(db_session)
+    result = await list_farms_for_technician(
+        technician_id=technician,
+        org_ids=[cast_uuid(org_1), cast_uuid(org_2)],
+        farms=repo,
+    )
+    assert [f.id for f in result] == [id_smaller, id_larger]
+
+
 def cast_uuid(val: object) -> UUID:
     if isinstance(val, UUID):
         return val

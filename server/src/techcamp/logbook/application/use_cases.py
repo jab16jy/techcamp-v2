@@ -80,6 +80,4 @@ async def get_latest_visit_dates(
 
     Farms without visits are absent from the returned dictionary.
     """
-    if not farm_ids or not org_ids:
-        return {}
     return await visits.get_latest_visit_dates_for_farms(farm_ids=farm_ids, org_ids=org_ids)
