@@ -24,6 +24,7 @@ Make the pre-PR gate fast and trustworthy before E10/E11 start, and close the on
 
 ## Review (RDD)
 - Candidate is each work-unit commit; native review runs only under the user-owned RDD switch.
+- Round 1 (`cd78b4d..8bf225b`, high tier, lineage `review-fca55583a30c771b`): R1 CRITICAL fixed in the bounded correction (`8bf225b`), approved and acknowledged. Warnings that touch own code fixed in `5bc3803` and `9ce61b3`; the rest in #235.
 
 ## Tasks
 - [x] T1 #141 residual: reject plot+node both in get_escalation_target (RED first), close the issue with the verified status of the other four findings. Surfaces: server/src/techcamp/alerts/adapters/repositories.py, server/tests/alerts/test_escalation.py.
