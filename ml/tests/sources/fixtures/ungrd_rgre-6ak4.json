@@ -1,0 +1,32 @@
+[
+  {
+    ":id": "row-b8ex.hdin.7n3v",
+    "fecha": "2023-01-10T00:00:00.000",
+    "evento": "INUNDACION",
+    "codificaci_n_segun_divipola": "13430"
+  },
+  {
+    ":id": "row-d3x9-uupz-v684",
+    "fecha": "2023-01-11T00:00:00.000",
+    "evento": "INUNDACION",
+    "codificaci_n_segun_divipola": "13188"
+  },
+  {
+    ":id": "row-8vgf~8ebw~f8kh",
+    "fecha": "2023-01-12T00:00:00.000",
+    "evento": "INUNDACION",
+    "codificaci_n_segun_divipola": "13074"
+  },
+  {
+    ":id": "row-z5dv-6d7x_m9qi",
+    "fecha": "2023-01-14T00:00:00.000",
+    "evento": "INUNDACION",
+    "codificaci_n_segun_divipola": "23417"
+  },
+  {
+    ":id": "row-vvyj.3bjr-7jy6",
+    "fecha": "2023-01-02T00:00:00.000",
+    "evento": "INUNDACION",
+    "codificaci_n_segun_divipola": "25126"
+  }
+]
