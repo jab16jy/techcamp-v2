@@ -1,0 +1,83 @@
+[
+ {
+  "latitude": 10.75,
+  "longitude": -74.75,
+  "generationtime_ms": 36.107540130615234,
+  "utc_offset_seconds": -18000,
+  "timezone": "America/Bogota",
+  "timezone_abbreviation": "GMT-5",
+  "elevation": 104.0,
+  "daily_units": {
+   "time": "iso8601",
+   "precipitation_sum": "mm",
+   "soil_moisture_0_to_7cm_mean": "m\u00b3/m\u00b3"
+  },
+  "daily": {
+   "time": [
+    "2018-06-30",
+    "2018-07-01",
+    "2018-07-02",
+    "2018-07-03",
+    "2018-07-04",
+    "2018-07-05"
+   ],
+   "precipitation_sum": [
+    0.3,
+    4.8,
+    6.4,
+    0.8,
+    0.0,
+    0.0
+   ],
+   "soil_moisture_0_to_7cm_mean": [
+    null,
+    0.434,
+    0.448,
+    0.433,
+    0.418,
+    0.401
+   ]
+  }
+ },
+ {
+  "latitude": 9.75,
+  "longitude": -73.25,
+  "generationtime_ms": 16.262531280517578,
+  "utc_offset_seconds": -18000,
+  "timezone": "America/Bogota",
+  "timezone_abbreviation": "GMT-5",
+  "elevation": 111.0,
+  "location_id": 1,
+  "daily_units": {
+   "time": "iso8601",
+   "precipitation_sum": "mm",
+   "soil_moisture_0_to_7cm_mean": "m\u00b3/m\u00b3"
+  },
+  "daily": {
+   "time": [
+    "2018-06-30",
+    "2018-07-01",
+    "2018-07-02",
+    "2018-07-03",
+    "2018-07-04",
+    "2018-07-05"
+   ],
+   "precipitation_sum": [
+    1.2,
+    2.3,
+    3.9,
+    5.2,
+    0.1,
+    0.5
+   ],
+   "soil_moisture_0_to_7cm_mean": [
+    0.413,
+    0.408,
+    0.417,
+    0.45,
+    0.433,
+    0.413
+   ]
+  }
+ }
+]
