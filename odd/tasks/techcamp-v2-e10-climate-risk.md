@@ -72,6 +72,18 @@ feeds E12 (assistant cites risk) and E15 (risk rules), off the critical path (do
 - D-T3.1 Municipality point = DIVIPOLA cabecera (datos.gov.co `gdxc-w37w`), MGN layer 317 as the
   code/count check: the MGN service returns no geometry (owner, 2026-10-02; docs/08 §Fuentes).
 
+### Decisions (T6b)
+- D-T6b.1 Serving builds the M2 features **without** a climatology, so `precip_anomaly_*` is `None`
+  (missing evidence, never `0`). No doc says where a served version's train years live, and T6b does
+  not invent a `metrics` key for it: the daily job asks the archive for the six months before M and
+  builds the rest of the vector from them. T9 owns the question — it registers the real predictors
+  (docs/08 §M2 "Features": anomalies against the *train* climatology) and wires the climatology with
+  them. Owner, 2026-10-02.
+- D-T6b.2 The daily risk job is **one** procrastinate task at 06:00 America/Bogota that walks the
+  cells with plots in a loop, not a fan-out of one job per cell like `weather`/`irrigation`: the
+  endpoint docs/04 §Solo perfil seminario answers is a single `{ job_id }`, and an archive outage
+  skips its cell and the run goes on (docs/06 §8). Owner, 2026-10-02.
+
 ## Tasks
 Forecasts are authored lines (additions + deletions, generated excluded). Route = writer and reason.
 

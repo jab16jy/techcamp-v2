@@ -36,6 +36,26 @@ class EventType(StrEnum):
     FLOOD = "flood"
     DROUGHT = "drought"
 
+    @property
+    def version_name(self) -> str:
+        """The `model_version.name` this event is registered under
+        (docs/03-modelo-datos.md:319-333: `risk_flood|risk_drought|suitability`).
+
+        A prediction stores the event (`flood|drought`) and a model version stores
+        the name it serves, so the writer of both needs this one mapping. It lives
+        with the vocabulary rather than in the job that happens to need it first.
+        """
+        return _VERSION_NAMES[self]
+
+
+_VERSION_NAMES: Mapping[EventType, str] = {
+    EventType.FLOOD: "risk_flood",
+    EventType.DROUGHT: "risk_drought",
+}
+"""Spelled out instead of derived from the value: the three names docs/03
+declares are a vocabulary of their own, and a fourth event must be registered here
+rather than guessed into a `risk_*` name nothing reads."""
+
 
 class Severity(StrEnum):
     """How urgent a prediction is (docs/08-ml.md §M2 "Severidad").
