@@ -142,6 +142,46 @@ async def test_a_range_that_ends_before_it_starts_is_refused() -> None:
     assert calls == 0
 
 
+async def test_a_body_that_is_not_json_is_an_unavailable_source() -> None:
+    """A 200 whose body is not JSON (a proxy's HTML error page, a truncated
+    response) is a source this adapter cannot read, not a source that answered.
+    It must raise the same contract error as any other unreadable answer, and it
+    must count as a failure: recording the success first would leave the breaker
+    blind to a provider that answers 200 with something else (R3-json-decode-escapes-contract,
+    #239)."""
+    calls = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, text="<html>502 Bad Gateway</html>")
+
+    adapter = _adapter(
+        _handler, sleep=_no_sleep, circuit_failure_threshold=1, circuit_cooldown_seconds=60.0
+    )
+
+    with pytest.raises(ArchiveUnavailableError):
+        await adapter.fetch_daily(10.9, -74.1, start_day=_START, end_day=_END)
+
+    # The failure was counted, so the next call is refused from the breaker's
+    # own state instead of paying the provider another round.
+    assert adapter.is_circuit_open is True
+    with pytest.raises(ArchiveCircuitBreakerOpenError):
+        await adapter.fetch_daily(10.9, -74.1, start_day=_START, end_day=_END)
+    assert calls == 1
+
+
+async def test_an_elevation_body_that_is_not_json_is_an_unavailable_source() -> None:
+    """The elevation call reads through the same request path, so an unreadable
+    body there is the same contract error rather than a raw decode failure."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not json")
+
+    with pytest.raises(ArchiveUnavailableError):
+        await _adapter(_handler).fetch_elevations([(10.9, -74.1)])
+
+
 async def test_a_malformed_body_is_an_unavailable_source() -> None:
     """A 200 without a `daily.time` array is not a dry month: it is a source that
     cannot be read, and the cell keeps serving the prediction it has."""

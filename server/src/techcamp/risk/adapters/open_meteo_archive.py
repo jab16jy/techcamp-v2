@@ -283,8 +283,20 @@ class OpenMeteoArchiveAdapter:
                         f"Open-Meteo archive returned status {response.status_code}"
                     )
 
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    # `json.JSONDecodeError` is a `ValueError`, and a 200 that is
+                    # not JSON (a proxy's HTML error page) is a source this
+                    # adapter cannot read: the `except ArchiveUnavailableError`
+                    # below records the failure and re-raises, which is why the
+                    # success is only recorded once the body decoded (#239).
+                    raise ArchiveUnavailableError(
+                        f"Open-Meteo returned a body that is not JSON: {exc}"
+                    ) from exc
+
                 self._circuit_breaker.record_success()
-                return response.json()
+                return body
 
             except httpx.RequestError as exc:
                 if attempts < self._max_retries:
