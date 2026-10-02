@@ -21,6 +21,7 @@ from techcamp.risk.domain.features import (
     Neighbours,
     build_features,
     monthly_climatology,
+    precip_anomaly,
     precip_sum,
     seasonality,
     slope_degrees,
@@ -329,16 +330,16 @@ def test_slope_degrees_is_zero_on_flat_terrain() -> None:
     assert slope_degrees(flat) == 0.0
     # A single axis tilted: dz/dx = (25 - 0) / (2 x 1000) = 0.0125, dz/dy = 0, so
     # slope = degrees(atan(0.0125)).
-    assert Neighbours(
-        east=25.0, west=0.0, north=10.0, south=10.0, spacing_m=1000.0
-    ).slope_degrees() == pytest.approx(0.7161599454704085)
+    assert slope_degrees(
+        Neighbours(east=25.0, west=0.0, north=10.0, south=10.0, spacing_m=1000.0)
+    ) == pytest.approx(0.7161599454704085)
 
 
 def test_slope_degrees_rejects_a_non_positive_spacing() -> None:
     with pytest.raises(ValueError, match="spacing_m"):
         slope_degrees(Neighbours(east=1.0, west=0.0, north=0.0, south=0.0, spacing_m=0.0))
     with pytest.raises(ValueError, match="spacing_m"):
-        Neighbours(east=1.0, west=0.0, north=0.0, south=0.0, spacing_m=-500.0).slope_degrees()
+        slope_degrees(Neighbours(east=1.0, west=0.0, north=0.0, south=0.0, spacing_m=-500.0))
 
 
 def test_seasonality_puts_january_at_the_phase_origin() -> None:
@@ -368,3 +369,50 @@ def test_issue_month_is_read_as_its_calendar_month() -> None:
     )
 
     assert from_mid_month == from_first
+
+
+def test_a_mid_month_issue_date_never_reads_days_of_the_issue_month() -> None:
+    """The job runs on whatever day it runs, so the public helpers get a date
+    inside M, not its first day. Read as given, the window would end inside M and
+    train or predict on days of the month being predicted, which docs/08 §M2
+    "Horizonte" forbids (#237 R3-004).
+
+    November 2024 carries 999.0 mm/day from its 1st to its 16th: a leaked 1m
+    window from 2024-11-17 would sum 186 + 16 x 999 = 16170 mm, while the correct
+    window ends on 2024-10-31 and sums October's 31 d x 6.0 = 186 mm.
+    """
+    mid_month = date(2024, 11, 17)
+    leaked_days = _series(date(2024, 11, 1), date(2024, 11, 16), lambda day: 999.0)
+    leaked_soil = {date(2024, 11, 5): 0.99}
+
+    assert precip_sum(_precip_series() | leaked_days, issue_month=mid_month, months=1) == (
+        pytest.approx(186.0)
+    )
+    assert precip_anomaly(
+        _precip_series() | leaked_days,
+        issue_month=mid_month,
+        months=1,
+        climatology=CLIMATOLOGY_MM,
+    ) == pytest.approx(36.0)
+    assert soil_moisture_mean(_soil_series() | leaked_soil, issue_month=mid_month) == pytest.approx(
+        EXPECTED_SOIL_MEAN_M3
+    )
+    # The negative: a leaked window would have moved all three by the November days.
+    assert precip_sum(_precip_series() | leaked_days, issue_month=mid_month, months=1) != (
+        pytest.approx(186.0 + 16 * 999.0)
+    )
+    assert build_features(
+        issue_month=mid_month,
+        precipitation=_precip_series() | leaked_days,
+        soil_moisture=_soil_series() | leaked_soil,
+        elevation_m=ELEVATION_M,
+        neighbours=NEIGHBOURS,
+        climatology=CLIMATOLOGY_MM,
+    ) == build_features(
+        issue_month=ISSUE_MONTH,
+        precipitation=_precip_series(),
+        soil_moisture=_soil_series(),
+        elevation_m=ELEVATION_M,
+        neighbours=NEIGHBOURS,
+        climatology=CLIMATOLOGY_MM,
+    )

@@ -34,8 +34,8 @@ PRECIPITATION_WINDOWS_MONTHS = (1, 2, 3, 4, 5, 6)
 at least six months (docs/08 §M2 "Particion")."""
 
 ANOMALY_WINDOWS_MONTHS = (1, 3, 6)
-"""Anomalies against the train climatology, at the accumulations the v1
-inventory kept; a shorter window carries nothing the longer ones do not."""
+"""Windows, in months, whose accumulation is compared against the climatology
+(docs/08 §M2 "Features": anomalies against the train climatology)."""
 
 FEATURE_NAMES: tuple[str, ...] = (
     *(f"precip_sum_{months}m" for months in PRECIPITATION_WINDOWS_MONTHS),
@@ -64,9 +64,6 @@ class Neighbours:
     north: float
     south: float
     spacing_m: float
-
-    def slope_degrees(self) -> float:
-        return slope_degrees(self)
 
 
 def seasonality(month: int) -> tuple[float, float]:
@@ -124,23 +121,25 @@ def monthly_climatology(series: DailySeries, *, years: Container[int]) -> dict[i
 
 def precip_sum(series: DailySeries, *, issue_month: date, months: int) -> float | None:
     """Rainfall (mm) over the `months` calendar months ending on the last day of
-    M-1, or `None` when any day of the window is missing."""
-    total = 0.0
-    for day in _window_days(issue_month, months=months):
-        value = series.get(day)
-        if value is None:
-            return None
-        total += value
-    return total
+    M-1, or `None` when any day of the window is missing.
+
+    `issue_month` is read as its calendar month, so the day-of-month it carries
+    never moves the window's end.
+    """
+    return _window_sum(series, issue_month=issue_month, months=months)
 
 
 def soil_moisture_mean(series: DailySeries, *, issue_month: date) -> float | None:
     """Mean volumetric soil moisture (m³/m³) over M-1, or `None` when any day of
-    that month is missing."""
-    total = precip_sum(series, issue_month=issue_month, months=1)
+    that month is missing.
+
+    `issue_month` is read as its calendar month, like every other window here.
+    """
+    total = _window_sum(series, issue_month=issue_month, months=1)
     if total is None:
         return None
-    return total / len(_window_days(issue_month, months=1))
+    first, last = _window_bounds(issue_month, months=1)
+    return total / ((last - first).days + 1)
 
 
 def precip_anomaly(
@@ -153,6 +152,8 @@ def precip_anomaly(
     """Accumulation minus the climatology of the same calendar months, or `None`
     when the accumulation is missing or the climatology does not cover every
     calendar month of the window: an unknown expected total is not a zero one.
+
+    `issue_month` is read as its calendar month, like every other window here.
     """
     total = precip_sum(series, issue_month=issue_month, months=months)
     if total is None:
@@ -179,13 +180,14 @@ def build_features(
 
     `issue_month` is M: only its calendar month identifies the prediction, so any
     day of M names the same one. `elevation_m`, `neighbours` and `climatology` are
-    optional because serving has a cell's elevation from Open-Meteo but no train
-    climatology, and a dataset row may have no elevation answer; their features are
-    then `None`.
+    optional, so their features are `None` when the caller has no answer: the
+    elevation pair until Open-Meteo answers for the centroid, and the climatology
+    when no train window covers the cell yet. Serving does compute one, with
+    `monthly_climatology` over the served version's train years (docs/06 §8), and
+    reading anomalies without it would break the parity `ml/` and `server/` owe.
     """
-    month_start = _month_start(issue_month.year, issue_month.month, offset=0)
     features: dict[str, float | None] = {
-        f"precip_sum_{months}m": precip_sum(precipitation, issue_month=month_start, months=months)
+        f"precip_sum_{months}m": precip_sum(precipitation, issue_month=issue_month, months=months)
         for months in PRECIPITATION_WINDOWS_MONTHS
     }
     for months in ANOMALY_WINDOWS_MONTHS:
@@ -193,13 +195,13 @@ def build_features(
             None
             if climatology is None
             else precip_anomaly(
-                precipitation, issue_month=month_start, months=months, climatology=climatology
+                precipitation, issue_month=issue_month, months=months, climatology=climatology
             )
         )
-    month_sin, month_cos = seasonality(month_start.month)
+    month_sin, month_cos = seasonality(issue_month.month)
     return {
         **features,
-        "soil_moisture_mean_1m": soil_moisture_mean(soil_moisture, issue_month=month_start),
+        "soil_moisture_mean_1m": soil_moisture_mean(soil_moisture, issue_month=issue_month),
         "elevation_m": elevation_m,
         "slope_deg": None if neighbours is None else slope_degrees(neighbours),
         "month_sin": month_sin,
@@ -214,15 +216,36 @@ def _month_start(year: int, month: int, *, offset: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
+def _window_bounds(issue_month: date, *, months: int) -> tuple[date, date]:
+    """First and last day of the window: `months` calendar months ending on the
+    last day of M-1. `issue_month` is read as its calendar month, so a caller that
+    passes the day the job ran on gets the same window as one that passes the
+    first of M, and never reads a day of M.
+    """
+    first_of_month = _month_start(issue_month.year, issue_month.month, offset=0)
+    return (
+        _month_start(issue_month.year, issue_month.month, offset=-months),
+        first_of_month - timedelta(days=1),
+    )
+
+
+def _window_sum(series: DailySeries, *, issue_month: date, months: int) -> float | None:
+    """Total of the window, whatever the series measures, or `None` when any day
+    of it is missing."""
+    first, last = _window_bounds(issue_month, months=months)
+    total = 0.0
+    day = first
+    while day <= last:
+        value = series.get(day)
+        if value is None:
+            return None
+        total += value
+        day += timedelta(days=1)
+    return total
+
+
 def _window_months(issue_month: date, months: int) -> list[int]:
-    """The calendar months (1-12) of the `months`-month window that ends on the
-    last day of M-1, in chronological order."""
-    start = _month_start(issue_month.year, issue_month.month, offset=-months)
-    return [(start.month - 1 + step) % 12 + 1 for step in range(months)]
-
-
-def _window_days(issue_month: date, *, months: int) -> list[date]:
-    """Every day of the window, which ends on the last day of M-1."""
-    first = _month_start(issue_month.year, issue_month.month, offset=-months)
-    last = issue_month - timedelta(days=1)
-    return [first + timedelta(days=step) for step in range((last - first).days + 1)]
+    """The calendar months (1-12) of the window that ends on the last day of M-1,
+    in chronological order."""
+    first, _ = _window_bounds(issue_month, months=months)
+    return [(first.month - 1 + step) % 12 + 1 for step in range(months)]
