@@ -141,6 +141,48 @@ async def test_the_registered_baseline_is_served_when_no_model_is_promoted(
     assert served.thresholds == {"high": 0.7, "critical": 0.85}
 
 
+async def test_a_newer_unpromoted_candidate_never_displaces_the_promoted_model(
+    db_session: AsyncSession,
+) -> None:
+    """A candidate registered after the promoted version has not passed the gate,
+    so the promoted one keeps serving (docs/08 §M2 "Línea base servida")."""
+    promoted_id = await _version(db_session, promoted=True)
+    candidate_id = await _version(
+        db_session,
+        version="candidate",
+        promoted=False,
+        created_at=datetime(2026, 10, 9, tzinfo=UTC),
+    )
+
+    served = await SqlAlchemyRiskRepository(db_session).served_version(_FLOOD)
+
+    assert served is not None
+    assert served.id == promoted_id
+    assert served.id != candidate_id
+
+
+async def test_an_unpromoted_candidate_never_displaces_the_baseline(
+    db_session: AsyncSession,
+) -> None:
+    """With nothing promoted the registered baseline serves, never a candidate
+    that did not pass the gate (docs/06 §8)."""
+    baseline_id = await _version(
+        db_session, version="climatology", promoted=False, is_baseline=True
+    )
+    candidate_id = await _version(
+        db_session,
+        version="candidate",
+        promoted=False,
+        created_at=datetime(2026, 10, 9, tzinfo=UTC),
+    )
+
+    served = await SqlAlchemyRiskRepository(db_session).served_version(_FLOOD)
+
+    assert served is not None
+    assert served.id == baseline_id
+    assert served.id != candidate_id
+
+
 async def test_no_registered_version_leaves_the_event_unserved(
     db_session: AsyncSession,
 ) -> None:

@@ -107,10 +107,15 @@ class SqlAlchemyRiskRepository:
         sorts by creation time, so the order is deterministic without inventing
         a column the docs do not have.
         """
-        for is_baseline in (False, True):
+        # A registered but unpromoted candidate has not passed the gate: it never
+        # serves, neither over the promoted version nor over the baseline.
+        for served_rule in (
+            ModelVersionRow.promoted.is_(True),
+            ModelVersionRow.is_baseline.is_(True),
+        ):
             result = await self._session.execute(
                 select(*_VERSION_COLUMNS)
-                .where(ModelVersionRow.name == name, ModelVersionRow.is_baseline.is_(is_baseline))
+                .where(ModelVersionRow.name == name, served_rule)
                 .order_by(ModelVersionRow.created_at.desc(), ModelVersionRow.id.desc())
                 .limit(1)
             )
