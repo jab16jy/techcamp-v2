@@ -108,6 +108,8 @@ class RiskPredictionRow(Base):
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     horizon_start: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    # `real`, as docs/03-modelo-datos.md:345 declares it: `float4`, so the stored
+    # value carries 32-bit precision. Tests compare probabilities with `approx`.
     probability: Mapped[float] = mapped_column(Float, nullable=False)
     severity: Mapped[str] = mapped_column(String, nullable=False)
     top_factors: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
