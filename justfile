@@ -297,6 +297,10 @@ gate-lane base="main":
 gate-release base="origin/main" extra_seeds="2":
     #!/usr/bin/env bash
     set -euo pipefail
+    # `just` pastes arguments into the script text, so a value with a quote or a `$(...)`
+    # would run as shell. Positional arguments reach the script as data instead.
+    base="$1"
+    extra_seeds="$2"
 
     if ! git fetch origin main; then
       echo "could not fetch origin main; 'just gate-release' judges HEAD against it" >&2
@@ -304,30 +308,33 @@ gate-release base="origin/main" extra_seeds="2":
     fi
     # Step 1. Without it a lane is gated against a main that HEAD never saw, which is
     # exactly the retarget-and-reopen dance the stacked PRs of E9 paid for.
-    if ! git merge-base --is-ancestor "{{base}}" HEAD; then
-      echo "{{base}} is not an ancestor of HEAD: merge {{base}} into the epic branch first" >&2
+    if ! git merge-base --is-ancestor "$base" HEAD; then
+      echo "$base is not an ancestor of HEAD: merge $base into the epic branch first" >&2
       exit 1
     fi
     # The gates judge HEAD. A dirty tree passes while the pushed commit fails, or fails
     # for a reason no commit carries, and both cost a CI round trip to explain.
-    if [ -n "$(git status --porcelain)" ]; then
+    # Captured first: inside `[ -n "$(...)" ]` a failing git would read as an empty,
+    # clean status and let a broken checkout through.
+    dirty=$(git status --porcelain)
+    if [ -n "$dirty" ]; then
       echo "the working tree is not clean; the gates judge HEAD, not a dirty tree" >&2
       git status --short >&2
       exit 1
     fi
-    if ! [[ "{{extra_seeds}}" =~ ^[0-9]+$ ]]; then
-      echo "extra_seeds is a count of extra server runs, not '{{extra_seeds}}'" >&2
+    if ! [[ "$extra_seeds" =~ ^[0-9]+$ ]]; then
+      echo "extra_seeds is a count of extra server runs, not '$extra_seeds'" >&2
       exit 1
     fi
 
     lane_log=$(mktemp "${TMPDIR:-/tmp}/gate-lane.XXXXXX.log")
-    echo "=== gate-lane {{base}}..HEAD in the background, log: $lane_log"
+    echo "=== gate-lane $base..HEAD in the background, log: $lane_log"
     # Job control gives the lane its own process group, so the trap can kill the whole
     # lane — just, the recipe, its temporary worktree loop — and not only its first pid.
     # That group is also why the trap is the only signal the lane gets: a Ctrl-C in the
     # terminal reaches this shell, not a process group of its own.
     set -m
-    just --justfile "$_worktree/justfile" gate-lane "{{base}}" >"$lane_log" 2>&1 &
+    just --justfile "$_worktree/justfile" gate-lane "$base" >"$lane_log" 2>&1 &
     lane_pid=$!
     set +m
     # An interrupted run must not carry on to the next seed either, and no exit path
@@ -336,7 +343,9 @@ gate-release base="origin/main" extra_seeds="2":
     trap 'stop_lane; exit 130' INT TERM
     trap stop_lane EXIT
 
-    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
+    # Same reason: a failing `db-env` must stop the run, not hand `read` an empty line.
+    db_env=$(just --justfile "$_worktree/justfile" db-env)
+    read -r port container url <<<"$db_env"
     export DATABASE_URL="$url"
 
     # Every part runs: a first failure is a fact to read next to the others, not a reason
@@ -349,13 +358,13 @@ gate-release base="origin/main" extra_seeds="2":
     echo "=== gate-full on HEAD (its own pytest seed shows in the pytest header)"
     just --justfile "$_worktree/justfile" gate-full || full_rc=$?
 
-    for i in $(seq 1 "{{extra_seeds}}"); do
+    for i in $(seq 1 "$extra_seeds"); do
       # A random seed, never a fixed one: two runs that replay the same order prove
       # nothing about the order-dependent tests. RANDOM alone repeats inside one shell,
       # so the wall clock rides along to widen the range.
       now=$(date +%s)
       seed=$(( (RANDOM * 1000 + RANDOM + now) % 1000000 ))
-      echo "=== full server suite, extra run $i of {{extra_seeds}}, seed $seed"
+      echo "=== full server suite, extra run $i of $extra_seeds, seed $seed"
       rc=0
       (cd "$_worktree/server" && uv run pytest --randomly-seed="$seed") || rc=$?
       seeds+=("$seed")
@@ -377,7 +386,7 @@ gate-release base="origin/main" extra_seeds="2":
 
     echo "=== summary"
     printf '%-38s %s\n' "part" "result"
-    printf '%-38s %s\n' "gate-lane {{base}}..HEAD" "$(status_word "$lane_rc")"
+    printf '%-38s %s\n' "gate-lane $base..HEAD" "$(status_word "$lane_rc")"
     printf '%-38s %s\n' "gate-full" "$(status_word "$full_rc")"
     for i in "${!seeds[@]}"; do
       printf '%-38s %s\n' "pytest --randomly-seed=${seeds[$i]}" "$(status_word "${seed_rcs[$i]}")"
@@ -391,4 +400,5 @@ gate-release base="origin/main" extra_seeds="2":
       echo "at least one part failed; fix it in its own small PR to the base branch first" >&2
       exit 1
     fi
-    echo "every part passed: open the PRs with base {{base}} from creation"
+    echo "every part passed: open the PRs with base $base from creation"
+
