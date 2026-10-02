@@ -230,6 +230,8 @@ class SqlAlchemyAlertRepository:
         `org_id` in each `where` is the isolation (docs/09): a target of another
         organization resolves to nothing, so its technician can never be reached.
         """
+        if plot_id is not None and node_id is not None:
+            raise ValueError("An alert target is a plot or a node, never neither or both")
         if plot_id is not None:
             stmt = (
                 select(PlotRow.farm_id, FarmRow.technician_id)

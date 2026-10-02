@@ -31,13 +31,20 @@ def _migrated_schema() -> None:
     command.upgrade(config, "head")
     _set_our_background_jobs(scheduled=False)
     yield
-    _set_our_background_jobs(scheduled=True)
+    # No re-arming before the downgrade (#89): `alter_job(scheduled => true)` keeps
+    # the old `next_start`, so every policy that fell due during the session would
+    # fire the moment the launcher saw it, racing the `DROP INDEX` and
+    # `DROP MATERIALIZED VIEW` below. The downgrade drops the jobs with their
+    # hypertables, so there is nothing to restore.
     command.downgrade(config, "base")
 
 
 def _set_our_background_jobs(*, scheduled: bool) -> None:
-    """Unschedule (or restore) TimescaleDB's compression and
-    continuous-aggregate policies for the whole test session.
+    """Unschedule TimescaleDB's compression and continuous-aggregate
+    policies for the whole test session.
+
+    Only the session start calls this: a `scheduled=True` before the downgrade
+    would re-arm the jobs while it runs (#89).
 
     They share a lock domain with the rows a test writes and with the
     `CALL refresh_continuous_aggregate(..., NULL, NULL)` a test runs by hand:
