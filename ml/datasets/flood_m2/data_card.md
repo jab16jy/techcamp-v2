@@ -25,12 +25,12 @@ fecha de descarga y su `sha256` en `ml/.cache/raw/MANIFEST.tsv`. Los parquets de
 | Dato | Fuente | Licencia | Versión / descarga | Hash (primeros 16) |
 |---|---|---|---|---|
 | Municipios (punto) | DIVIPOLA, códigos municipios, `https://www.datos.gov.co/resource/gdxc-w37w.json` | CC BY-SA 4.0 | 2026-10-02T17:45:26Z | `ecf12e564067cb29` |
-| Municipios (control) | DANE MGN 2024, capa Municipio 317, `https://portalgis.dane.gov.co/mparcgis/rest/services/MGN2024/Serv_CapasMGN_2024/MapServer/317/query` | CC BY-SA 4.0 (DANE) | 2026-10-02T17:45:27Z | `545d85378ba1784` |
+| Municipios (control) | DANE MGN 2024, capa Municipio 317, `https://portalgis.dane.gov.co/mparcgis/rest/services/MGN2024/Serv_CapasMGN_2024/MapServer/317/query` | CC BY-SA 4.0 (DANE) | 2026-10-02T17:45:27Z | `545d85378ba1784b` |
 | Etiquetas 2019–2022 | UNGRD, `https://www.datos.gov.co/resource/wwkg-r6te.json` | CC BY-SA 4.0 | 2026-10-02T17:27:25Z | `171266650fe22614` |
 | Etiquetas 2023–2024 | UNGRD, `https://www.datos.gov.co/resource/rgre-6ak4.json` | CC BY-SA 4.0 | 2026-10-02T17:27:28Z | `7769c6d43fc754f8` |
-| Etiquetas 2025+ | UNGRD, `https://www.datos.gov.co/resource/2343-nuqp.json` | CC BY 4.0 | 2026-10-02T17:27:32Z | `7e54b5371993eb8` |
-| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, 2026-10-02T18:02Z, **3 de 6 trozos** (`archive_000` `956284edc5cbf9f7`, `archive_001` `255c33527febdf48`, `archive_002` `db28970e8074ec09`) | ver `MANIFEST.tsv` |
-| Elevación y vecino | Open-Meteo elevation (Copernicus GLO-90), `https://api.open-meteo.com/v1/elevation` | Open-Meteo, uso no comercial | 2026-10-02T17:28:00Z | `d52dc71cce74be05` |
+| Etiquetas 2025+ | UNGRD, `https://www.datos.gov.co/resource/2343-nuqp.json` | CC BY 4.0 | 2026-10-02T17:27:32Z | `7e54b5371993ebc3` |
+| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, 2026-10-02T18:02Z, **3 de 6 trozos**: `archive_000` `956284edc5cbf9f7`, `archive_001` `255c33527febdf48`, `archive_002` `db28970e8074ec09` | ver `MANIFEST.tsv` |
+| Elevación y vecino | Open-Meteo elevation (Copernicus GLO-90), `https://api.open-meteo.com/v1/elevation` | Open-Meteo, uso no comercial | 2026-10-02T17:28Z, 10 trozos (975 coordenadas) | trozo 000 de 10: `d52dc71cce74be05` (los diez en `MANIFEST.tsv`) |
 
 Open-Meteo gratuito es de uso no comercial: cubre el seminario; producción necesita su
 plan de pago (docs/08 §Fuentes de datos de M2).
@@ -43,18 +43,32 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   `department_name`, `lat`, `lon`. El control MGN 2024 tiene que dar exactamente el
   mismo conjunto de `mpio_cdpmp`; si no, la construcción falla.
 - **Clima:** `precipitation_sum` y `soil_moisture_0_to_7cm_mean` diarios, desde
-  **2018-06-30** (un día antes del inicio) hasta el último mes completo. La serie
-  empieza en 2018-07-01 para que las ventanas de seis meses de docs/08 §M2 "Features"
-  estén completas antes del primer mes etiquetado, 2019-01.
-  **Estado al cerrar T3 (2026-10-02): descarga a medias.** Hay 3 de los 6 trozos en el
-  caché y el parquet arma **430 895 filas** para los 195 municipios, del 2018-06-30 al
-  2026-06-28; faltan tres trozos (el resto de la segunda ventana y la tercera). No es un
-  fallo del código sino de la cuota: el nivel gratuito de Open-Meteo admite 5 000 de
-  peso por hora y esta consulta gasta 2 920 por llamada, así que faltan unas tres
-  ventanas horarias. `python -m techcamp_ml.sources fetch --source weather` reanuda
-  donde se quedó y no vuelve a pedir lo que ya está en el caché; al terminar hay que
-  reparsear y volver a copiar los hashes de esta tarjeta.
-- **Etiquetas:** del **2019-01-01** (primera región) al **2025-12-31**.
+  **2018-06-30** (un día antes del inicio) hasta el último mes completo que ERA5 ya
+  publicó del todo: con su retraso de ~5 días, el 2026-10-02 ese mes es **2026-08**.
+  La serie empieza en 2018-07-01 para que las ventanas de seis meses de docs/08 §M2
+  "Features" estén completas antes del primer mes etiquetado, 2019-01.
+
+  **Estado al cerrar T3 (2026-10-02): descarga a medias, cobertura desigual.** Hay 3 de
+  los 6 trozos en el caché y el parquet arma **430 895 filas**:
+
+  | Cobertura | Municipio | Rango |
+  |---|---|---|
+  | Completa (195) | los 195 municipios | 2018-06-30 → 2022-06-29 (`archive_000` + `archive_001`, ventana 1) |
+  | Parcial (100) | los 100 primeros por código (`archive_002`) | 2022-06-30 → 2026-06-28 |
+
+  O sea: **no** hay clima hasta 2026-09-30 ni hasta 2026-08-31 para todo el conjunto;
+  95 municipios no pasan de 2022-06-29 y 100 no pasan de 2026-06-28. Faltan tres
+  trozos (resto de la ventana 2 y ventana 3 completa). No es un fallo del código sino
+  de la cuota: el nivel gratuito de Open-Meteo pesa una consulta por variables,
+  ubicaciones y dominios (10 000/día por IP, con cubos por minuto y por hora), y el
+  archivo histórico pesa además por la longitud del rango pedido.
+  `python -m techcamp_ml.sources fetch --source weather` reanuda donde se quedó y no
+  vuelve a pedir lo que ya está en el caché; al terminar hay que reparsear y volver a
+  copiar los hashes de esta tarjeta. **T4 no debe correr sobre este parquet.**
+
+- **Etiquetas:** ventana de consulta por dataset: 2019-01-01→2022-12-31,
+  2023-01-01→2024-12-31 y 2025-01-01→(sin tope), en ese orden y sin mezclar años entre
+  fuentes. Rango de los **datos** de la región: **2019-02-26 → 2025-12-02**.
 
 ## Conteos
 
@@ -119,8 +133,10 @@ clasificar y cuenta, para que una fila perdida por un valor raro sea visible.
    por municipio no es comparable con su exposición real al riesgo.
 2. ** Cabecera, no centroide:** ver D-T3.1 arriba. En municipios extensos la cabecera
    puede no representar el clima de la parte inundable.
-3. **Cobertura de etiquetas vs. clima:** el clima llega al último mes completo
-   (2026-09-30 con esta descarga) y las etiquetas terminan el 2025-12-31, porque
+3. **Cobertura de etiquetas vs. clima:** la descarga de clima **termina el 2026-06-28**
+   (y sólo para 100 de los 195 municipios; ver la tabla de cobertura arriba). El fin
+   previsto es el 2026-08-31, el último mes completo que ERA5 había publicado del todo
+   el 2026-10-02. Las etiquetas, en cambio, terminan el **2025-12-02** porque
    `2343-nuqp` todavía no tiene rows de 2026. Los meses de 2026 quedan sin etiqueta:
    no son negativos, son desconocidos, y T4 no debe contarlos como tales.
 4. **Duplicados de reporte:** 550 combinaciones (municipio, día, clase) aparecen más
@@ -129,10 +145,14 @@ clasificar y cuenta, para que una fila perdida por un valor raro sea visible.
 5. **Resolución de ERA5:** el archivo histórico devuelve el valor de la celda de 0,25°
    que contiene el punto, no el valor del punto (la respuesta devuelve 10,75 / -74,75 para
    una cabecera en 10,98 / -74,82). Dos municipios vecinos pueden compartir celda.
-6. **Cuotas de la fuente:** Open-Meteo gratuito mide por variables × días, no por
-   coordenadas. La descarga va en ventanas de cuatro años (2 920 de peso por llamada,
-   bajo el tope horario de 5 000) y reanuda desde el caché; sin eso, 24 llamadas de
-   25 coordenadas gastaban 70 080 de peso contra un tope diario de 10 000.
+6. **Cuotas de la fuente:** el nivel gratuito de Open-Meteo pesa una consulta por sus
+   **variables, ubicaciones y dominios** (documentación de Open-Meteo, "Rate
+   Limiting": 10 000/día por IP, con cubos por minuto y por hora, y 3–5 peticiones
+   concurrentes); el archivo histórico pesa además por la longitud del rango pedido.
+   La descarga va en ventanas de cuatro años y en trozos de hasta 100 coordenadas
+   (el tope que la API impone por petición), y reanuda desde el caché. No se puede
+   calcular por adelantado cuántas peticiones gasta el rango completo, y por eso el
+   code no lo inventa: mide y respeta el `Retry-After` que llega con el 429.
 
 ## Antes de 2019: sin resolver
 
