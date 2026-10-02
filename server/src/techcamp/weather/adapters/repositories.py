@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import PlotRow
 from techcamp.weather.adapters.orm import WeatherCellRow, WeatherDailyRow
+from techcamp.weather.application.ports import WeatherCellPoint
 from techcamp.weather.domain.models import WeatherDay
 
 _DAILY_COLUMNS = (
@@ -187,13 +188,25 @@ class SqlAlchemyWeatherRepository:
             if (day := from_day + datetime.timedelta(days=offset)) not in observed
         ]
 
-    async def active_cell_ids(self) -> list[int]:
-        """Ids of the cells at least one plot points at: the cells the 3 h
-        forecast job refreshes (docs/06-diseno-detallado.md §6). A cell nobody's
-        plot falls into is not worth a provider call."""
+    async def active_cells(self) -> list[WeatherCellPoint]:
+        """The cells at least one plot points at, with the centre each provider is
+        asked about, ordered by id (docs/06-diseno-detallado.md §6: una celda sin
+        parcelas no vale una llamada al proveedor).
+
+        The public read of weather's cells: the risk job asks the Open-Meteo archive
+        about these points (docs/06-diseno-detallado.md §8 "Datos de entrada") and
+        reaches them through this facade instead of joining `weather_cell` and
+        `plot` itself (docs/05-arquitectura.md §Lecturas cruzadas)."""
         result = await self._session.execute(
-            select(WeatherCellRow.id)
+            select(WeatherCellRow.id, WeatherCellRow.lat, WeatherCellRow.lon)
             .where(WeatherCellRow.id.in_(select(PlotRow.weather_cell_id)))
             .order_by(WeatherCellRow.id)
         )
-        return list(result.scalars())
+        return [
+            WeatherCellPoint(id=row.id, lat=float(row.lat), lon=float(row.lon)) for row in result
+        ]
+
+    async def active_cell_ids(self) -> list[int]:
+        """Ids of the cells at least one plot points at: the cells the 3 h
+        forecast job refreshes (docs/06-diseno-detallado.md §6)."""
+        return [cell.id for cell in await self.active_cells()]

@@ -55,5 +55,23 @@ class WeatherForecastPort(Protocol):
     ) -> list[DailyWeatherRow]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class WeatherCellPoint:
+    """One 0.1° cell with the centre every provider is asked about
+    (docs/06-diseno-detallado.md §6: la celda de una parcela es la del centroide
+    de su polígono, redondeado a 0,1°).
+
+    `lat`/`lon` are floats, not the `Decimal` the column stores: a coordinate that
+    leaves the process is a plain number, and rounding it to `Decimal` again on the
+    way in would invite a call with a different point than the one stored.
+    """
+
+    id: int
+    lat: float
+    lon: float
+
+
 class WeatherRepository(Protocol):
     async def list_daily(self, cell_id: int, from_day: date, to_day: date) -> list[WeatherDay]: ...
+
+    async def active_cells(self) -> list[WeatherCellPoint]: ...

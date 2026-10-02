@@ -1,8 +1,10 @@
 """Weather application facade: public queries and use cases (docs/05; D-T0.1)."""
 
+from techcamp.weather.application.ports import WeatherCellPoint
 from techcamp.weather.application.query_weather import PlotWeatherDay, query_plot_weather
 
 __all__ = [
     "PlotWeatherDay",
+    "WeatherCellPoint",
     "query_plot_weather",
 ]
