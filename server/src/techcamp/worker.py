@@ -11,6 +11,7 @@ from techcamp.irrigation.adapters import jobs as _irrigation_jobs  # noqa: F401 
 from techcamp.notifications.adapters import (
     jobs as _notifications_jobs,  # noqa: F401  registers tasks
 )
+from techcamp.risk.adapters import jobs as _risk_jobs  # noqa: F401  registers tasks
 from techcamp.shared.jobs import app
 from techcamp.telemetry.adapters import jobs as _telemetry_jobs  # noqa: F401  registers tasks
 from techcamp.weather.adapters import jobs as _weather_jobs  # noqa: F401  registers tasks
