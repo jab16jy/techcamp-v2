@@ -34,6 +34,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["techcamp_ml"]
+
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src"
