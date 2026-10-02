@@ -44,5 +44,13 @@ mypy_path = "src"
 packages = ["techcamp_ml"]
 strict = true
 
+[[tool.mypy.overrides]]
+# pandas ships neither stubs nor a py.typed marker (T3: the M2 source parsers shape
+# frames with it). The parsers are typed at their own boundary — they take bytes and
+# return a `pd.DataFrame` with a named, tested column list — so an untyped import
+# costs the annotations, not a runtime assumption about a column.
+module = ["pandas.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
