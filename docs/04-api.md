@@ -228,6 +228,9 @@ POST /assistant/messages  { conversation_id?, plot_id?, content } → text/event
 POST /assistant/messages/{message_id}:feedback { helpful: bool } → 204
 ```
 
+`GET /plots/{plot_id}/risk` devuelve la predicción vigente de la celda de la parcela por evento (`flood`, `drought`): la del mes en curso de la versión promovida o, sin ella, de la línea base; si el mes en curso todavía no tiene predicción (ERA5 llega con ~5 días de retraso, [06 §8](06-diseno-detallado.md#8-inferencia-de-riesgo-climático)), la más reciente. Un evento sin predicción no aparece; una parcela sin celda responde `[]`. Mismo control de acceso que `/plots/{plot_id}`: `404` si no existe o es de otra organización. Cada elemento:
+`{ event_type: "flood"|"drought", horizon_start: date, horizon_days: int, probability: number, severity: "low"|"high"|"critical", top_factors: [{ feature: string, value: number, contribution: number }], model_version: { name: string, version: string, is_baseline: bool, metrics: object }, created_at: string }`.
+
 ### Operación
 
 ```

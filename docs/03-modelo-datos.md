@@ -323,8 +323,14 @@ erDiagram
     text artifact_uri
     jsonb metrics
     jsonb baseline_metrics
+    bool is_baseline
+    text artifact_sha256
+    text dataset_hash
+    text git_commit
+    jsonb thresholds
     bool promoted
     text promotion_reason
+    timestamptz created_at
   }
   risk_prediction {
     uuid id PK
@@ -334,8 +340,9 @@ erDiagram
     date horizon_start
     int horizon_days
     real probability
-    text severity
+    text severity "low|high|critical"
     jsonb top_factors
+    timestamptz created_at
   }
   kb_document {
     uuid id PK
@@ -372,6 +379,7 @@ erDiagram
     text name
     text department
     geometry boundary
+    geometry centroid
   }
 ```
 
@@ -397,6 +405,18 @@ erDiagram
 | Tipo | Tablas normales de Postgres, **no** hypertable | `weather_daily` guarda una ventana acotada de 16 días por celda; no es una serie de alta frecuencia como `reading`, y el balance hídrico diario (E6) la lee como una relación común |
 | Unicidad de la celda | `UNIQUE (lat, lon)` | La celda es la caché de Open-Meteo ([docs/09](09-cuellos-de-botella.md#modos-de-falla)): sin unicidad, dos parcelas asignadas a la vez a la misma celda crean dos filas y dos llamadas al proveedor. Las coordenadas son el resultado de redondear a 0,1° ([docs/00](00-glosario.md)) |
 | Nulos | Las cinco medidas admiten `null`; solo `fetched_at` es `NOT NULL` | Open-Meteo devuelve `null` para un día del que no tiene valor; inventar un cero falsearía el balance hídrico. `fetched_at` sí es obligatorio porque es el reloj de la regla `stale` ([docs/06](06-diseno-detallado.md)) |
+
+### `municipality`, `model_version` y `risk_prediction`: riesgo climático (E10)
+
+| Aspecto | Decisión | Por qué |
+|---|---|---|
+| Origen de `municipality` | DANE MGN 2024 (`mpio_cdpmp`), los 1.122 municipios: código, nombre, departamento y `centroid` desde un CSV versionado en el repositorio; `boundary` admite `null` y solo lo llena el cargador de `ml/` | La tabla `municipios` de la v1 se perdió con sus datos ([ADR-0019](adr/0019-reconstruccion-de-modelos.md)). Cargar todo el país deja válida la FK de `farm.municipality_code` en cualquier finca, no solo en el Caribe |
+| Líneas base | Fila de `model_version` con `is_baseline = true` y `artifact_uri` de su tabla o regla | Toda `risk_prediction` tiene `model_version_id`, también la de la línea base ([08](08-ml.md#m2-riesgo-de-inundación)) |
+| Integridad del artefacto | `artifact_sha256` se verifica antes de cargar el artefacto | El artefacto se deserializa en el `worker`: un objeto cambiado en el bucket no se ejecuta |
+| Umbrales | `thresholds` = `{ "high": p, "critical": p \| null }` calibrados en validación | La severidad sale de la versión, no de una constante del servidor |
+| Trazabilidad | `dataset_hash` y `git_commit` por versión | Regla de gobierno de [08](08-ml.md#reglas-de-gobierno) |
+| Unicidad de la predicción | `UNIQUE (cell_id, event_type, horizon_start, model_version_id)` | Una predicción por celda, evento, mes y versión: el job es idempotente y promover otra versión agrega su predicción sin borrar la anterior |
+| Versión promovida | Índice único parcial `(name) WHERE promoted` | Como máximo una versión promovida por evento; revertir es promover la anterior |
 
 ### `logbook_entry`: la tabla que se sincroniza offline
 

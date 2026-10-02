@@ -63,4 +63,8 @@ El mismo término significa lo mismo en conversaciones, documentos, la interfaz 
 | Riesgo climático | `risk_prediction` | Probabilidad calibrada de un evento (inundación o sequía) en un horizonte, con severidad. |
 | Versión de modelo | `model_version` | Artefacto entrenado con sus métricas, su línea base y su estado de promoción. |
 | Línea base | `baseline` | Método simple (una heurística) que un modelo de ML debe superar para promoverse. Solo se usa en ML; los datos de la parcela antes de TechCamp son la encuesta de inscripción (`plot_baseline`). |
+| Compuerta de promoción | `decide_promotion` | Prueba que decide, una sola vez sobre el test bloqueado, si un modelo reemplaza a la mejor línea base: límite inferior del IC95 de la mejora > 0 y Brier no peor ([ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md)). |
+| Harness de evaluación | `ml/harness/` | Partición, métricas y compuerta fijas antes de experimentar; tiene dueño humano y los agentes no lo modifican. |
+| Model card | `card.md` | Ficha previa de un modelo: decisión que mejora, etiqueta, unidad, frecuencia real, costo de los errores, métrica y limitaciones. |
+| Severidad del riesgo | `severity` | `low`, `high` o `critical` según los umbrales de la versión del modelo; en la interfaz, bajo, alto y crítico. |
 | Índice de adopción digital | `digital_adoption_index` | Indicador compuesto de 0 a 100 por parcela que mide el uso de la plataforma: monitoreo, registro, decisión y acción ante alertas ([11-metricas](11-metricas.md)). |
