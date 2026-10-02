@@ -1,0 +1,44 @@
+[project]
+name = "techcamp-ml"
+version = "0.1.0"
+description = "TechCamp v2 ML models, datasets, and harness"
+requires-python = ">=3.12"
+dependencies = [
+    "lightgbm>=4.7",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scikit-learn>=1.9",
+    "techcamp",
+]
+
+[tool.uv.sources]
+techcamp = { path = "../server", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-randomly>=5.0.0",
+    "ruff>=0.16.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["techcamp_ml"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
