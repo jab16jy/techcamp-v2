@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "TechCamp v2 ML models, datasets, and harness"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx",
     "lightgbm>=4.7",
     "numpy",
     "pandas",
