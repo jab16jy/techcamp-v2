@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import techcamp.risk.adapters.api.dev_jobs as dev_jobs_module
 import techcamp.risk.adapters.jobs as jobs_module
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import OrganizationRow
@@ -34,7 +35,6 @@ from techcamp.risk.adapters.open_meteo_archive import seminar_archive_adapter
 from techcamp.risk.adapters.orm import ModelVersionRow
 from techcamp.risk.application.ports import PredictionOutcome, PredictorRegistry
 from techcamp.risk.domain.models import ModelVersion
-from techcamp.shared.dates import local_today
 from techcamp.shared.ids import uuid7
 from techcamp.shared.jobs import app as jobs_app
 from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
@@ -43,12 +43,31 @@ pytestmark = pytest.mark.anyio
 
 _ROUTE = "/dev/jobs/risk:run"
 _REGISTERED_PATH = "/api/v1/dev/jobs/risk:run"
-_DAY = datetime.date(2026, 10, 2)
+_FROZEN_TODAY = datetime.date(2026, 10, 2)
+"""The day every test in this module believes it is.
+
+No test here may depend on the wall clock: `local_today()` moves the job's
+six-month window, the default day of the route and the future-day `422` with it,
+and the recorded responses of the seminar adapter (ADR-0021) are only guaranteed for
+the window they were recorded over (#240 R3-wall-clock-dependent-job-tests). The
+clock is frozen per module, so a test on 2026-10-02 and the same test in December are
+the same test.
+"""
+
+_DAY = _FROZEN_TODAY
 _VERSION = "2026-10-02"
 _POINT = "SRID=4326;POINT(-74.1 10.9)"
 _BOUNDARY = (
     "SRID=4326;POLYGON((-74.10 10.90, -74.10 10.91, -74.09 10.91, -74.09 10.90, -74.10 10.90))"
 )
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Freeze "today" in the two modules that read it (#240
+    R3-wall-clock-dependent-job-tests)."""
+    monkeypatch.setattr(jobs_module, "local_today", lambda: _FROZEN_TODAY)
+    monkeypatch.setattr(dev_jobs_module, "local_today", lambda: _FROZEN_TODAY)
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +78,23 @@ async def _clear_jobs(db_session: AsyncSession):
     yield
     await db_session.execute(text("DELETE FROM procrastinate_jobs"))
     await db_session.commit()
+
+
+class _OutOfRangePredictor:
+    """Answers a probability outside `[0, 1]` on one call, which the CHECK of
+    `risk_prediction` rejects (docs/03-modelo-datos.md)."""
+
+    def __init__(self, probability: float, *, out_of_range_on_call: int) -> None:
+        self._probability = probability
+        self._out_of_range_on_call = out_of_range_on_call
+        self.calls = 0
+
+    def predict(
+        self, version: ModelVersion, features: Mapping[str, float | None]
+    ) -> PredictionOutcome:
+        self.calls += 1
+        probability = 1.5 if self.calls == self._out_of_range_on_call else self._probability
+        return PredictionOutcome(probability=probability, top_factors=[])
 
 
 class _FixedPredictor:
@@ -77,23 +113,33 @@ class _FixedPredictor:
 
 
 def _use_doubles(
-    monkeypatch: pytest.MonkeyPatch, *, with_predictors: bool = True, with_cells: bool = True
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    with_predictors: bool = True,
+    with_cells: bool = True,
+    predictors: PredictorRegistry | None = None,
 ) -> None:
     if with_cells:
         # The composition root does this in `techcamp/worker.py`
-        # (docs/05 §Solo la fachada pública); tests wire it the same way.
-        jobs_module.configure_weather_cells(SqlAlchemyWeatherRepository)
+        # (docs/05 §Solo la fachada pública). Through monkeypatch, so whether a test
+        # finds the seam configured never depends on the order they ran in (#240
+        # R3-global-seam-leak).
+        monkeypatch.setattr(jobs_module, "_weather_cells", SqlAlchemyWeatherRepository)
     monkeypatch.setattr(jobs_module, "_archive", lambda: seminar_archive_adapter())
     monkeypatch.setattr(
         jobs_module,
         "_predictors",
-        lambda: PredictorRegistry(
-            {
-                ("risk_flood", _VERSION): _FixedPredictor(0.82),
-                ("risk_drought", _VERSION): _FixedPredictor(0.2),
-            }
-            if with_predictors
-            else {}
+        lambda: (
+            predictors
+            if predictors is not None
+            else PredictorRegistry(
+                {
+                    ("risk_flood", _VERSION): _FixedPredictor(0.82),
+                    ("risk_drought", _VERSION): _FixedPredictor(0.2),
+                }
+                if with_predictors
+                else {}
+            )
         ),
     )
 
@@ -188,14 +234,16 @@ async def test_the_run_predicts_the_month_of_the_day_it_is_given(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The month is the day's, and `horizon_days` its length (docs/08-ml.md §M2
-    "Horizonte"; D-T0.3): a run named for another day of M writes M."""
+    "Horizonte"; D-T0.3): the run of the 20th of a month writes that month. August,
+    not a month ahead of the frozen today, so its window is a window the recorded
+    responses cover (#240 R3-wall-clock-dependent-job-tests)."""
     _use_doubles(monkeypatch)
     cell_id = await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
     await _register_versions(db_session, "risk_flood")
 
-    await predict_active_cells(timestamp=0, day=datetime.date(2026, 11, 20).isoformat())
+    await predict_active_cells(timestamp=0, day=datetime.date(2026, 8, 20).isoformat())
 
-    assert await _stored(db_session) == [(cell_id, "flood", datetime.date(2026, 11, 1), "high")]
+    assert await _stored(db_session) == [(cell_id, "flood", datetime.date(2026, 8, 1), "high")]
 
 
 async def test_a_second_run_of_the_same_month_writes_no_second_prediction(
@@ -226,6 +274,34 @@ async def test_a_run_with_no_registered_predictor_stores_nothing(
     await predict_active_cells(timestamp=0, day=_DAY.isoformat())
 
     assert await _stored(db_session) == []
+
+
+async def test_a_cell_the_database_rejects_does_not_lose_the_cells_around_it(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#240 R3-one-cell-failure-aborts-run and R3-long-transaction-across-http: a
+    write the database rejects (a probability outside [0, 1] trips the CHECK of
+    docs/03-modelo-datos.md) used to leave `run_daily_risk` entirely, and the single
+    commit at the end of the run rolled back every cell predicted before it. The
+    failed cell stores nothing; the cells around it are stored."""
+    first = await _cell_with_plot(db_session, lat="10.1", lon="-74.1")
+    second = await _cell_with_plot(db_session, lat="11.1", lon="-74.2")
+    third = await _cell_with_plot(db_session, lat="12.1", lon="-74.3")
+    await _register_versions(db_session, "risk_flood")
+    predictor = _OutOfRangePredictor(0.4, out_of_range_on_call=2)
+    _use_doubles(
+        monkeypatch,
+        predictors=PredictorRegistry({("risk_flood", _VERSION): predictor}),
+    )
+
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert predictor.calls == 3
+    assert [(cell_id, event) for cell_id, event, _, _ in await _stored(db_session)] == [
+        (first, "flood"),
+        (third, "flood"),
+    ]
+    assert second not in {cell_id for cell_id, _, _, _ in await _stored(db_session)}
 
 
 async def test_a_run_without_a_configured_cell_reader_fails_loudly(
@@ -288,7 +364,7 @@ async def test_the_run_defaults_to_the_bogota_day(
 
     await predict_active_cells(timestamp=0)
 
-    assert await _stored(db_session) == [(cell_id, "flood", local_today().replace(day=1), "high")]
+    assert await _stored(db_session) == [(cell_id, "flood", _FROZEN_TODAY.replace(day=1), "high")]
 
 
 def _client() -> TestClient:
@@ -334,7 +410,7 @@ async def test_the_dev_route_returns_a_job_id_and_defaults_the_day_to_today(
         "task_name": RUN_ACTIVE_CELLS_TASK_NAME,
         "queue_name": QUEUE_NAME,
         "status": "todo",
-        "args": {"day": local_today().isoformat(), "timestamp": 0},
+        "args": {"day": _FROZEN_TODAY.isoformat(), "timestamp": 0},
     }
 
 
@@ -351,7 +427,7 @@ async def test_the_dev_route_rejects_a_future_day_with_422(db_session: AsyncSess
     """The month of a day that has not happened is not a month to predict: the
     horizon reads data through the last day of M-1 (docs/08-ml.md §M2 "Horizonte"),
     and a month whose window does not exist cannot have a prediction."""
-    tomorrow = local_today() + datetime.timedelta(days=1)
+    tomorrow = _FROZEN_TODAY + datetime.timedelta(days=1)
     response = _client().post(_ROUTE, json={"day": tomorrow.isoformat()})
 
     assert response.status_code == 422

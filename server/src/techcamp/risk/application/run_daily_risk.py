@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 from techcamp.risk.application.ports import (
+    CellTransactions,
     Predictor,
     PredictorRegistry,
     RiskArchivePort,
@@ -205,6 +206,7 @@ async def run_daily_risk(
     versions: RiskRepository,
     archive: RiskArchivePort,
     predictors: PredictorRegistry,
+    transactions: CellTransactions | None = None,
 ) -> DailyRiskRun:
     """Predict the risk of every given cell for the month of `day`.
 
@@ -220,8 +222,16 @@ async def run_daily_risk(
     The cells are worked one after another. An outage or a slow provider call
     therefore delays the cells after it and never blocks them, which is acceptable
     at the pilot's scale of a few hundred cells and keeps one cell's failure from
-    cancelling the rest of the run (docs/06-diseno-detallado.md §6
-    "Degradación").
+    cancelling the rest of the run (docs/06-diseno-detallado.md §6 "Degradación").
+    That containment is not only for provider outages: a predictor that raises, or a
+    write the database rejects — a probability outside `[0, 1]` trips the CHECK of
+    docs/03-modelo-datos.md — is contained to its own cell exactly the same way, and
+    the run carries on with the cells after it.
+
+    `transactions` is the caller's transaction hook, committed once per cell: pass it
+    to keep a failure late in the run from discarding the predictions already written
+    (`CellTransactions`). Without it the run leaves every transaction to the
+    repository, which is what the pure callers and the tests want.
     """
     issue_month = day.replace(day=1)
     window_start, window_end = window_bounds(issue_month, months=FEATURE_WINDOW_MONTHS)
@@ -269,32 +279,51 @@ async def run_daily_risk(
             neighbours=neighbours_from(elevations),
         )
 
-        for event, version, predictor in pending:
-            outcome = predictor.predict(version, features)
-            prediction = RiskPrediction(
-                id=uuid7(),
-                cell_id=cell.id,
-                model_version_id=version.id,
-                event_type=event,
-                horizon_start=issue_month,
-                horizon_days=horizon_days,
-                probability=outcome.probability,
-                severity=severity_for(outcome.probability, version.thresholds),
-                top_factors=outcome.top_factors,
-                created_at=datetime.now(UTC),
-            )
-            if await versions.insert_prediction(prediction):
-                written += 1
-            else:
-                # La predicción de una celda, evento y mes se escribe una vez;
-                # las corridas siguientes del mismo mes no la repiten
-                # (docs/06-diseno-detallado.md §8).
-                logger.info(
-                    "risk: cell %s already has a %s prediction for %s",
-                    cell.id,
-                    event.value,
-                    issue_month,
+        stored_here = 0
+        try:
+            for event, version, predictor in pending:
+                outcome = predictor.predict(version, features)
+                prediction = RiskPrediction(
+                    id=uuid7(),
+                    cell_id=cell.id,
+                    model_version_id=version.id,
+                    event_type=event,
+                    horizon_start=issue_month,
+                    horizon_days=horizon_days,
+                    probability=outcome.probability,
+                    severity=severity_for(outcome.probability, version.thresholds),
+                    top_factors=outcome.top_factors,
+                    created_at=datetime.now(UTC),
                 )
-                skipped += 1
+                if await versions.insert_prediction(prediction):
+                    written += 1
+                    stored_here += 1
+                else:
+                    # La predicción de una celda, evento y mes se escribe una vez;
+                    # las corridas siguientes del mismo mes no la repiten
+                    # (docs/06-diseno-detallado.md §8).
+                    logger.info(
+                        "risk: cell %s already has a %s prediction for %s",
+                        cell.id,
+                        event.value,
+                        issue_month,
+                    )
+                    skipped += 1
+            if transactions is not None:
+                await transactions.commit()
+        except Exception:
+            # One cell's failure is its own: the run logs it, undoes whatever that
+            # cell left pending and carries on with the cells after it, because a
+            # rejected statement poisons the transaction it was in (#240
+            # R3-one-cell-failure-aborts-run, R3-long-transaction-across-http).
+            logger.warning(
+                "risk: cell %s could not be predicted for %s, the run goes on",
+                cell.id,
+                issue_month,
+                exc_info=True,
+            )
+            if transactions is not None:
+                await transactions.rollback()
+            skipped += len(pending) - stored_here
 
     return DailyRiskRun(issue_month=issue_month, written=written, skipped=skipped)

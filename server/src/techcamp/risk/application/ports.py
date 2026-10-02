@@ -17,7 +17,7 @@ registered for has no prediction this run, never a fabricated probability
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
@@ -77,6 +77,28 @@ class RiskRepository(Protocol):
     async def latest_prediction(
         self, cell_id: int, event_type: EventType, model_version_id: uuid.UUID
     ) -> RiskPrediction | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CellTransactions:
+    """What the run does with the caller's transaction after each cell (docs/05
+    §Estructura hexagonal de cada módulo: the application layer handles the
+    transactions).
+
+    **Commit per cell.** A run walks every cell that has a plot, and each one costs
+    two provider calls with a 10 s timeout and up to three retries; one transaction
+    around the whole run would hold a connection across all of them, so a drop late
+    in the run would discard every prediction already written. Per cell, the loss is
+    that cell's.
+
+    **Rollback before continuing.** A statement the database rejected leaves its
+    transaction aborted, and every later statement of an aborted transaction fails
+    too — so after a cell's failure the run undoes it and keeps going with the
+    next one instead of failing every cell after it.
+    """
+
+    commit: Callable[[], Awaitable[None]]
+    rollback: Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)

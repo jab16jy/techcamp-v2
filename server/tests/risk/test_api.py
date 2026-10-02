@@ -30,8 +30,8 @@ from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.main import app
+from techcamp.risk.adapters import repositories as repositories_module
 from techcamp.risk.adapters.orm import ModelVersionRow, RiskPredictionRow
-from techcamp.shared.dates import local_today
 from techcamp.shared.ids import uuid7
 
 pytestmark = pytest.mark.anyio
@@ -41,10 +41,23 @@ _BOUNDARY = (
     "SRID=4326;POLYGON((-74.10 10.90, -74.10 10.91, -74.09 10.91, -74.09 10.90, -74.10 10.90))"
 )
 _CREATED = datetime(2026, 10, 2, tzinfo=UTC)
-_THIS_MONTH = local_today().replace(day=1)
+_FROZEN_TODAY = date(2026, 10, 2)
+"""The day this suite believes it is, so the month it predicts for is the same
+month in December as it is today (#240 R3-wall-clock-dependent-job-tests: the
+endpoint answers the current month through `local_today`, and a test whose fixtures
+move with the wall clock stops being the test it was written as)."""
+
+_THIS_MONTH = _FROZEN_TODAY.replace(day=1)
 _LAST_MONTH = (_THIS_MONTH - timedelta(days=1)).replace(day=1)
 
 _phone_seq = count()
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Freeze the clock the repository reads to decide which prediction is the
+    current one (`SqlAlchemyRiskRepository.latest_prediction`)."""
+    monkeypatch.setattr(repositories_module, "local_today", lambda: _FROZEN_TODAY)
 
 
 async def _member(

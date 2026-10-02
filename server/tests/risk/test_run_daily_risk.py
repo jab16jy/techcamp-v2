@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from techcamp.risk.application.ports import (
+    CellTransactions,
     PredictionOutcome,
     PredictorRegistry,
     RiskCell,
@@ -101,6 +102,24 @@ class _RecordingPredictor:
         return PredictionOutcome(probability=self._probability, top_factors=self._top_factors)
 
 
+class _FailingPredictor:
+    """A predictor double that raises on the call named by `fail_on_call`, so a
+    failure lands partway through a run (#240 R3-one-cell-failure-aborts-run)."""
+
+    def __init__(self, probability: float, *, fail_on_call: int) -> None:
+        self._probability = probability
+        self._fail_on_call = fail_on_call
+        self.calls = 0
+
+    def predict(
+        self, version: ModelVersion, features: Mapping[str, float | None]
+    ) -> PredictionOutcome:
+        self.calls += 1
+        if self.calls == self._fail_on_call:
+            raise RuntimeError("the model artifact is corrupt")
+        return PredictionOutcome(probability=self._probability, top_factors=[])
+
+
 class FakeRiskRepository:
     """The risk rows double, with the uniqueness of
     `uq_risk_prediction_cell_event_month_version` (docs/03-modelo-datos.md)."""
@@ -174,6 +193,38 @@ class FakeArchive:
         return list(self._elevations)
 
 
+class _FailingInsertRepository(FakeRiskRepository):
+    """The rows double whose insert rejects one cell the way the table's CHECK
+    would: a probability outside `[0, 1]` (docs/03-modelo-datos.md)."""
+
+    def __init__(self, versions: Mapping[str, ModelVersion], *, fail_cell_id: int) -> None:
+        super().__init__(versions)
+        self._fail_cell_id = fail_cell_id
+
+    async def insert_prediction(self, prediction: RiskPrediction) -> bool:
+        if prediction.cell_id == self._fail_cell_id:
+            raise ValueError("probability out of range")
+        return await super().insert_prediction(prediction)
+
+
+class _RecordingTransactions:
+    """The caller's transaction hook, recorded instead of performed.
+
+    Structural, not a subclass: `CellTransactions` is a frozen slotted dataclass and
+    subclassing one re-creates the class, which breaks `super()`.
+    """
+
+    def __init__(self) -> None:
+        self.commits = 0
+        self.rollbacks = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
+
+
 def _registry(*predictors: tuple[str, _RecordingPredictor]) -> PredictorRegistry:
     return PredictorRegistry({(name, _VERSION): predictor for name, predictor in predictors})
 
@@ -198,16 +249,31 @@ async def _run(
     versions: FakeRiskRepository,
     archive: FakeArchive,
     predictors: PredictorRegistry,
+    transactions: CellTransactions | None = None,
 ):
     return await run_daily_risk(
-        day=_DAY, cells=cells, versions=versions, archive=archive, predictors=predictors
+        day=_DAY,
+        cells=cells,
+        versions=versions,
+        archive=archive,
+        predictors=predictors,
+        transactions=transactions,
     )
 
 
-def _every_event(versions: FakeRiskRepository, archive: FakeArchive, predictors: PredictorRegistry):
+def _every_event(
+    versions: FakeRiskRepository,
+    archive: FakeArchive,
+    predictors: PredictorRegistry,
+    transactions: CellTransactions | None = None,
+):
     """The default arrangement: two cells, both events served and registered."""
     return _run(
-        cells=[_cell(1), _cell(2)], versions=versions, archive=archive, predictors=predictors
+        cells=[_cell(1), _cell(2)],
+        versions=versions,
+        archive=archive,
+        predictors=predictors,
+        transactions=transactions,
     )
 
 
@@ -507,6 +573,81 @@ async def test_the_anomaly_features_are_missing_until_the_climatology_is_wired()
     assert features["precip_anomaly_1m"] is None
     assert features["precip_anomaly_6m"] is None
     assert features["precip_sum_1m"] == pytest.approx(_PRECIPITATION_MM * 30)
+
+
+async def test_a_predictor_that_fails_partway_through_does_not_stop_the_run() -> None:
+    """One cell's failure never cancels the rest of the run (docs/06-diseno-detallado.md
+    §6 "Degradación"), and the cell it happened on stores nothing (#240
+    R3-one-cell-failure-aborts-run: only ArchiveUnavailableError was contained, so a
+    predictor raising left run_daily_risk entirely)."""
+    versions = FakeRiskRepository({"risk_flood": _version("risk_flood")})
+    predictor = _FailingPredictor(0.4, fail_on_call=2)
+
+    run = await _run(
+        cells=[_cell(1), _cell(2), _cell(3)],
+        versions=versions,
+        archive=FakeArchive(),
+        predictors=_registry(("risk_flood", predictor)),
+    )
+
+    assert predictor.calls == 3
+    assert {row.cell_id for row in versions.rows} == {1, 3}
+    assert run.written == 2
+
+
+async def test_a_rejected_prediction_does_not_stop_the_run() -> None:
+    """The same containment for the write: an insert the database rejects (a
+    probability outside [0, 1] trips the CHECK of docs/03-modelo-datos.md) leaves
+    that cell with nothing and the run with its other cells (#240
+    R3-one-cell-failure-aborts-run)."""
+    versions = _FailingInsertRepository({"risk_flood": _version("risk_flood")}, fail_cell_id=2)
+
+    run = await _run(
+        cells=[_cell(1), _cell(2), _cell(3)],
+        versions=versions,
+        archive=FakeArchive(),
+        predictors=_registry(("risk_flood", _RecordingPredictor(0.4))),
+    )
+
+    assert {row.cell_id for row in versions.rows} == {1, 3}
+    assert run.written == 2
+
+
+async def test_a_failed_cell_is_rolled_back_before_the_run_continues() -> None:
+    """A rejected statement leaves the transaction aborted, so every later statement
+    of it would fail too: the run has to undo the failed cell before moving on (#240
+    R3-long-transaction-across-http)."""
+    versions = _FailingInsertRepository({"risk_flood": _version("risk_flood")}, fail_cell_id=1)
+    transactions = _RecordingTransactions()
+
+    await _run(
+        cells=[_cell(1), _cell(2)],
+        versions=versions,
+        archive=FakeArchive(),
+        predictors=_registry(("risk_flood", _RecordingPredictor(0.4))),
+        transactions=transactions,
+    )
+
+    assert transactions.rollbacks == 1
+    assert transactions.commits == 1
+
+
+async def test_it_commits_after_every_cell() -> None:
+    """Committing per cell is what limits a late failure to that cell: one
+    transaction across the whole run would roll back every cell's predictions when
+    the last one fails (#240 R3-long-transaction-across-http)."""
+    transactions = _RecordingTransactions()
+
+    run = await _every_event(
+        versions=_both_events_served(),
+        archive=FakeArchive(),
+        predictors=_both_events_registered(),
+        transactions=transactions,
+    )
+
+    assert transactions.commits == 2
+    assert transactions.rollbacks == 0
+    assert run.written == 4
 
 
 async def test_a_second_run_of_the_same_month_writes_nothing_new() -> None:

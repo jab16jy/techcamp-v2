@@ -48,7 +48,7 @@ from techcamp.risk.adapters.open_meteo_archive import (
     seminar_archive_adapter,
 )
 from techcamp.risk.adapters.repositories import SqlAlchemyRiskRepository
-from techcamp.risk.application.ports import PredictorRegistry, RiskCell
+from techcamp.risk.application.ports import CellTransactions, PredictorRegistry, RiskCell
 from techcamp.risk.application.run_daily_risk import run_daily_risk
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.dates import local_today
@@ -152,14 +152,21 @@ async def predict_active_cells(timestamp: int, day: str | None = None) -> None:
     target = datetime.date.fromisoformat(day) if day else local_today()
     async with async_session_factory() as session:
         cells = await risk_cells(_cells_source(session))
+        # Close the read transaction before the first provider call: a transaction
+        # must not stay open across the archive calls of the cells, which are two
+        # HTTP requests each with a 10 s timeout and up to three retries. The run
+        # then commits per cell, so a failure late in it loses that cell only
+        # instead of every prediction already written (#240
+        # R3-long-transaction-across-http).
+        await session.commit()
         run = await run_daily_risk(
             day=target,
             cells=cells,
             versions=SqlAlchemyRiskRepository(session),
             archive=_archive(),
             predictors=_predictors(),
+            transactions=CellTransactions(commit=session.commit, rollback=session.rollback),
         )
-        await session.commit()
     logger.info(
         "risk: %s predictions for %s over %s cells (%s cell/event pairs skipped)",
         run.written,
