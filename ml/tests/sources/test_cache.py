@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-from techcamp_ml.sources.cache import MANIFEST_COLUMNS, read_manifest, save_raw
+import pytest
+
+from techcamp_ml.sources.cache import MANIFEST_COLUMNS, cached_files, read_manifest, save_raw
 from techcamp_ml.sources.layout import Layout
 
 
@@ -89,4 +91,30 @@ def test_the_manifest_forgets_a_raw_copy_that_is_no_longer_there(tmp_path: Path)
 
     # The manifest is the provenance of what is in the cache, not a diary of what
     # once was: a row pointing at a deleted file would misreport the dataset.
+    assert len(read_manifest(layout)) == 0
+
+
+def test_an_interrupted_raw_write_leaves_no_half_cached_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A truncated file that exists is a completed file as far as a resume can tell."""
+    layout = Layout(tmp_path)
+
+    original = Path.write_bytes
+
+    def truncating_write(self: Path, data: bytes) -> int:
+        """The bytes land, then the process dies: the worst case for a resume."""
+        original(self, data[: len(data) // 2])
+        raise OSError("the process died mid-write")
+
+    monkeypatch.setattr(Path, "write_bytes", truncating_write)
+    with pytest.raises(OSError):
+        save_raw(layout, "weather", "archive_000.json", "https://example.test/w", b"{}")
+
+    monkeypatch.undo()
+    assert not layout.raw_copy("weather", "archive_000.json").exists()
+    # The half-written bytes sit in a .part file, never under the name a resume
+    # reads as a finished chunk.
+    assert cached_files(layout, "weather") == ["archive_000.json.part"]
     assert len(read_manifest(layout)) == 0

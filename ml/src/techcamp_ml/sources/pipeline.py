@@ -60,6 +60,19 @@ DIVIPOLA_RAW = "divipola.json"
 MGN_RAW = "mgn317.geojson"
 
 
+def _chunk_ready(layout: Layout, source: str, name: str, sidecar: str) -> bool:
+    """A chunk counts as downloaded only when its response *and* its sidecar landed.
+
+    The sidecar is what tells the parser which coordinates and window the response
+    answers, so a response without it is an interrupted chunk, not a finished one.
+    """
+    return layout.raw_copy(source, name).exists() and layout.raw_copy(source, sidecar).exists()
+
+
+def _batch_count(total: int) -> int:
+    return -(-total // COORDINATE_BATCH)
+
+
 def _requested(names: Sequence[str]) -> tuple[str, ...]:
     unknown = [name for name in names if name not in SOURCE_NAMES]
     if unknown:
@@ -71,6 +84,7 @@ def fetch_sources(
     names: Sequence[str] = SOURCE_NAMES,
     *,
     layout: Layout = DEFAULT_LAYOUT,
+    today: date | None = None,
 ) -> dict[str, int]:
     """Download every raw copy the named sources need. Returns raw copies per source."""
     requested = _requested(names)
@@ -84,7 +98,7 @@ def fetch_sources(
     if "weather" in requested:
         assert municipalities is not None
         counts["weather"] = _fetch_weather(
-            layout, municipalities, last_complete_month(date.today())
+            layout, municipalities, last_complete_month(today or date.today())
         )
     if "elevation" in requested:
         assert municipalities is not None
@@ -96,6 +110,7 @@ def parse_sources(
     names: Sequence[str] = SOURCE_NAMES,
     *,
     layout: Layout = DEFAULT_LAYOUT,
+    today: date | None = None,
 ) -> dict[str, Path]:
     """Build the parquets of the named sources from the raw cache alone."""
     requested = _requested(names)
@@ -105,7 +120,7 @@ def parse_sources(
     if "labels" in requested:
         written["labels"] = _parse_labels(layout, codes)
     if "weather" in requested:
-        written["weather"] = _parse_weather(layout, municipalities)
+        written["weather"] = _parse_weather(layout, municipalities, today)
     if "elevation" in requested:
         written["elevation"] = _parse_elevation(layout)
     return written
@@ -165,10 +180,15 @@ def _fetch_labels(layout: Layout) -> int:
         offset = 0
         while True:
             name = f"{source.dataset}.p{offset // SOCRATA_PAGE:03d}.json"
-            if (layout.raw_copy("labels", name)).exists():
-                break
-            payload = fetch(layout, "labels", name, url, params=label_params(source, offset=offset))
-            written += 1
+            cached = layout.raw_copy("labels", name).exists()
+            # Resume keeps walking the pages, it does not stop at the first one it has:
+            # a cache holding page 0 alone still owes every page after it.
+            payload = (
+                read_raw(layout, "labels", name)
+                if cached
+                else fetch(layout, "labels", name, url, params=label_params(source, offset=offset))
+            )
+            written += 0 if cached else 1
             if len(json.loads(payload)) < SOCRATA_PAGE:
                 break
             offset += SOCRATA_PAGE
@@ -212,7 +232,7 @@ def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, end: date) -> i
         for batch in chunks(points, COORDINATE_BATCH):
             name = CHUNK_TEMPLATE.format(index=index)
             index += 1
-            if (layout.raw_copy("weather", f"{name}.json")).exists():
+            if _chunk_ready(layout, "weather", f"{name}.json", f"{name}.request.json"):
                 continue  # an interrupted fetch resumes here
             params = archive_params(start, stop)
             query = "&".join(f"{key}={value}" for key, value in params.items())
@@ -244,7 +264,12 @@ def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, end: date) -> i
     return written
 
 
-def _parse_weather(layout: Layout, municipalities: pd.DataFrame) -> Path:
+def _parse_weather(
+    layout: Layout,
+    municipalities: pd.DataFrame,
+    today: date | None = None,
+) -> Path:
+    _assert_archive_complete(layout, len(municipalities), today)
     names = cached_files(layout, "weather")
     frames = []
     for name in names:
@@ -262,12 +287,31 @@ def _parse_weather(layout: Layout, municipalities: pd.DataFrame) -> Path:
     return write_parquet(layout, "weather", weather)
 
 
+def _assert_archive_complete(layout: Layout, municipalities: int, today: date | None) -> None:
+    """Refuse to build a climate parquet out of a half-downloaded range.
+
+    Every window and coordinate batch of the range has to be cached, or the series
+    would be shorter for part of the region than the parquet's name implies.
+    """
+    windows = weather_windows(WEATHER_START, last_complete_month(today or date.today()))
+    expected = [
+        f"{CHUNK_TEMPLATE.format(index=index)}.json"
+        for index in range(len(windows) * _batch_count(municipalities))
+    ]
+    missing = [name for name in expected if not layout.raw_copy("weather", name).exists()]
+    if missing:
+        raise ValueError(
+            f"the archive download is incomplete, missing chunks: {missing}; "
+            "run the fetch step and parse again"
+        )
+
+
 def _fetch_elevation(layout: Layout, municipalities: pd.DataFrame) -> int:
     points = elevation_points(municipalities)
     written = 0
     for index, batch in enumerate(chunks(points, MAX_COORDINATES_PER_REQUEST)):
         name = f"elevation_{index:03d}"
-        if (layout.raw_copy("elevation", f"{name}.json")).exists():
+        if _chunk_ready(layout, "elevation", f"{name}.json", f"{name}.points.json"):
             continue
         params = {
             "latitude": ",".join(str(point[1]) for point in batch),

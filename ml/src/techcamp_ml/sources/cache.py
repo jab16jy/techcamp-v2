@@ -46,7 +46,11 @@ def save_raw(
     """Save one raw copy and record (or refresh) its manifest row."""
     path = layout.raw_copy(source, name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
+    # Written beside its target and renamed: a half-written payload must never be a
+    # file a later run reads as a completed download.
+    partial = path.with_name(f"{path.name}.part")
+    partial.write_bytes(payload)
+    partial.replace(path)
 
     stamp = (fetched_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
     entry = RawEntry(source, name, url, stamp, sha256_of(payload), len(payload))
