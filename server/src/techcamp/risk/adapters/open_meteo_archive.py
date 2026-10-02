@@ -31,10 +31,10 @@ Three things this adapter refuses to leave to a caller:
 
 The resilience is the one `weather/adapters/open_meteo.py` uses — 10 s timeout,
 3 retries with exponential backoff and jitter on transport errors, 5xx and 429,
-behind `shared/circuit_breaker.py` — kept here rather than imported because
-import-linter stops one module's adapters from reaching another's
-(docs/05-arquitectura.md), and the breaker, which is what carries the state,
-is already shared.
+behind `shared/circuit_breaker.py` — kept here rather than imported because a
+module may not reach another module's `adapters`
+(docs/05-arquitectura.md §Solo la fachada pública), and the breaker, which is what
+carries the state, is already shared.
 """
 
 from __future__ import annotations

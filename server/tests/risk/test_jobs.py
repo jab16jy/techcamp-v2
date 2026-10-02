@@ -76,7 +76,13 @@ class _FixedPredictor:
         )
 
 
-def _use_doubles(monkeypatch: pytest.MonkeyPatch, *, with_predictors: bool = True) -> None:
+def _use_doubles(
+    monkeypatch: pytest.MonkeyPatch, *, with_predictors: bool = True, with_cells: bool = True
+) -> None:
+    if with_cells:
+        # The composition root does this in `techcamp/worker.py`
+        # (docs/05 §Solo la fachada pública); tests wire it the same way.
+        jobs_module.configure_weather_cells(SqlAlchemyWeatherRepository)
     monkeypatch.setattr(jobs_module, "_archive", lambda: seminar_archive_adapter())
     monkeypatch.setattr(
         jobs_module,
@@ -220,6 +226,38 @@ async def test_a_run_with_no_registered_predictor_stores_nothing(
     await predict_active_cells(timestamp=0, day=_DAY.isoformat())
 
     assert await _stored(db_session) == []
+
+
+async def test_a_run_without_a_configured_cell_reader_fails_loudly(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The composition seam is not optional: a worker that never called
+    `configure_weather_cells` must raise instead of running a job that predicts
+    nothing and looks like a month without risk (docs/05-arquitectura.md §Solo la
+    fachada pública)."""
+    monkeypatch.setattr(jobs_module, "_weather_cells", None)
+    await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood")
+
+    with pytest.raises(RuntimeError, match="configure_weather_cells"):
+        await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert await _stored(db_session) == []
+
+
+async def test_the_worker_runs_the_risk_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A task on a queue this worker does not listen to never runs, and every test
+    that calls the coroutine directly would stay green (docs/10-dag.md §3, ADR-0012)."""
+    import techcamp.worker as worker
+
+    listened: list[str] = []
+    monkeypatch.setattr(
+        worker.app, "run_worker", lambda **kwargs: listened.extend(kwargs["queues"])
+    )
+
+    worker.main()
+
+    assert QUEUE_NAME in listened
 
 
 async def test_the_daily_run_is_scheduled_at_six_in_the_morning(

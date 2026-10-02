@@ -139,12 +139,14 @@ class FakeArchive:
         elevations: Sequence[float | None] = _ELEVATIONS,
         unavailable_for: set[tuple[float, float]] = frozenset(),
         last_day: date | None = None,
+        unmeasured: date | None = None,
     ) -> None:
         self.requested: list[tuple[float, float, date, date]] = []
         self.elevation_requests: list[list[tuple[float, float]]] = []
         self._elevations = list(elevations)
         self._unavailable_for = set(unavailable_for)
         self._last_day = last_day
+        self._unmeasured = unmeasured
 
     async def fetch_daily(
         self, lat: float, lon: float, *, start_day: date, end_day: date
@@ -155,7 +157,12 @@ class FakeArchive:
         last = self._last_day or end_day
         return [
             ArchiveDay(
-                day=day, precipitation_mm=_PRECIPITATION_MM, soil_moisture_m3_m3=_SOIL_MOISTURE
+                day=day,
+                # How the real adapter reports a day ERA5 has not aggregated: the
+                # row is there and its measures are `None`
+                # (`adapters/open_meteo_archive.py`, `_extract_float`).
+                precipitation_mm=None if day == self._unmeasured else _PRECIPITATION_MM,
+                soil_moisture_m3_m3=None if day == self._unmeasured else _SOIL_MOISTURE,
             )
             for day in _days(start_day, last)
         ]
@@ -343,6 +350,44 @@ async def test_an_archive_still_covering_m_minus_one_lag_predicts_nothing() -> N
     assert (run.written, run.skipped) == (0, 2)
 
 
+async def test_a_day_of_the_window_era5_has_not_measured_predicts_nothing() -> None:
+    """The row for the last day of M-1 can be present and still carry no value: the
+    T6a client reports a day ERA5 has not aggregated with `None` measures
+    (`_extract_float`), so checking the row's existence is not enough. Without this
+    guard every feature would come out `None`, a prediction would be written, and
+    `ON CONFLICT DO NOTHING` would block the right one for the rest of the month
+    (docs/06-diseno-detallado.md §8 "Datos de entrada"; docs/03 §Unicidad)."""
+    versions = _both_events_served()
+    archive = FakeArchive(unmeasured=_WINDOW[1])
+
+    run = await _run(
+        cells=[_cell(1)],
+        versions=versions,
+        archive=archive,
+        predictors=_both_events_registered(),
+    )
+
+    assert versions.rows == []
+    assert (run.written, run.skipped) == (0, 2)
+
+
+async def test_a_day_measured_in_the_middle_of_the_window_predicts_nothing() -> None:
+    """A missing day anywhere in the six months leaves every rainfall accumulation
+    `None` (`domain.features._window_sum`), so the window is not computable at all."""
+    versions = _both_events_served()
+    archive = FakeArchive(unmeasured=date(2026, 6, 15))
+
+    run = await _run(
+        cells=[_cell(1)],
+        versions=versions,
+        archive=archive,
+        predictors=_both_events_registered(),
+    )
+
+    assert versions.rows == []
+    assert (run.written, run.skipped) == (0, 2)
+
+
 async def test_the_predictor_receives_the_six_month_window_and_the_cells_terrain() -> None:
     predictor = _RecordingPredictor(0.5)
     archive = FakeArchive()
@@ -380,6 +425,52 @@ async def test_the_predictor_receives_the_six_month_window_and_the_cells_terrain
     assert east[1] > centre[1] and west[1] < centre[1]
     assert north[0] > centre[0] and south[0] < centre[0]
     assert north[1] == centre[1] and east[0] == centre[0]
+
+
+async def test_the_neighbours_are_one_kilometre_away_where_training_places_them() -> None:
+    """Train/serve parity (docs/08-ml.md §M2 "Features" and §Reglas de gobierno
+    "Paridad de features"; docs/06-diseno-detallado.md §8): the training neighbours
+    come from `ml/src/techcamp_ml/sources/elevation.py` (`neighbour_offsets`, lane
+    `e10-t3`), which converts metres to degrees with 111_320.0 m per degree of
+    latitude:
+
+        d_lat = 1000 / 111_320             = 0.008983111749910169
+        d_lon = 1000 / (111_320 * cos 10.9) = 0.009148156265391933
+
+    The literals are pinned here on purpose, not recomputed from the constants: a
+    different constant or a different formula at serving time would ask Open-Meteo
+    for the elevation of another point, and `slope_deg` would be the slope of
+    another slope than the one the model was trained on. The latitude step does not
+    depend on the latitude; the longitude one does.
+    """
+    archive = FakeArchive()
+
+    await _run(
+        cells=[RiskCell(id=1, lat=10.9, lon=-74.1)],
+        versions=FakeRiskRepository({"risk_flood": _version("risk_flood")}),
+        archive=archive,
+        predictors=_registry(("risk_flood", _RecordingPredictor(0.5))),
+    )
+
+    centre, east, west, north, south = archive.elevation_requests[0]
+    assert north[0] - centre[0] == pytest.approx(0.008983111749910169)
+    assert centre[0] - south[0] == pytest.approx(0.008983111749910169)
+    assert east[1] - centre[1] == pytest.approx(0.009148156265391933)
+    assert centre[1] - west[1] == pytest.approx(0.009148156265391933)
+
+    archive_at_45 = FakeArchive()
+    await _run(
+        cells=[RiskCell(id=2, lat=45.0, lon=-74.1)],
+        versions=FakeRiskRepository({"risk_flood": _version("risk_flood")}),
+        archive=archive_at_45,
+        predictors=_registry(("risk_flood", _RecordingPredictor(0.5))),
+    )
+    north_45, east_45 = (
+        archive_at_45.elevation_requests[0][3],
+        archive_at_45.elevation_requests[0][1],
+    )
+    assert north_45[0] - 45.0 == pytest.approx(0.008983111749910169)
+    assert east_45[1] + 74.1 == pytest.approx(0.012704038469036066)
 
 
 async def test_a_neighbour_without_an_elevation_leaves_the_slope_missing() -> None:

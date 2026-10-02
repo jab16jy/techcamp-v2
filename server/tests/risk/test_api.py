@@ -315,7 +315,8 @@ async def test_an_event_with_no_registered_version_does_not_appear(
 
 async def test_the_prediction_of_another_cell_is_not_served(db_session: AsyncSession) -> None:
     """A prediction belongs to its cell: another cell's risk is never this plot's,
-    even when both cells are active (docs/09-cuellos-de-botella.md:39)."""
+    even when both cells are active (docs/03-modelo-datos.md
+    §`municipality`, `model_version` y `risk_prediction`, fila `org_id`)."""
     org_id, _user_id, token = await _member(db_session, role="owner")
     mine = await _cell(db_session, 905)
     other = await _cell(db_session, 906)

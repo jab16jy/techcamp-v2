@@ -12,9 +12,10 @@ cell.
 Access is the plot's, through `farms`' facade: a plot that does not exist or
 belongs to another organization raises `PlotNotFoundError` (docs/04 §Riesgo: mismo
 control de acceso que `/plots/{plot_id}`; docs/09-cuellos-de-botella.md
-§Seguridad). Neither `risk_prediction` nor `weather_cell` carries `org_id` — a
-prediction is a property of a cell shared by every organization
-(docs/09-cuellos-de-botella.md:39) — so this check is the whole isolation.
+§Seguridad). Neither `risk_prediction` nor `model_version` carries `org_id` — a
+prediction belongs to a `weather_cell`, which is shared reference data for every
+organization (docs/03-modelo-datos.md §`municipality`, `model_version` y
+`risk_prediction`, fila `org_id`) — so this check is the whole isolation.
 """
 
 from __future__ import annotations

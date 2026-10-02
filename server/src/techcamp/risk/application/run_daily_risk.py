@@ -29,7 +29,7 @@ import math
 from calendar import monthrange
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from techcamp.risk.application.ports import (
     Predictor,
@@ -62,10 +62,19 @@ NEIGHBOUR_SPACING_M = 1000.0
 from, ~1 km (docs/08-ml.md §M2 "Elevación y pendiente": finite differences over
 4 neighbours ~1 km apart)."""
 
-_METRES_PER_DEGREE_LAT = 110_574.0
-"""Metres in one degree of latitude (~110.574 km). The longitude offset divides by
-the cosine of the latitude, because a degree of longitude is shorter the closer the
-cell is to a pole; the floor keeps a cell at the pole from dividing by zero."""
+_METRES_PER_DEGREE_LAT = 111_320.0
+"""Metres in one degree of latitude, and the longitude offset's divisor by the cosine
+of the latitude, because a degree of longitude is shorter the closer the cell is to a
+pole. The floor keeps a cell at the pole from dividing by zero.
+
+The constant and the formula are T3's, not a fresh choice: the training neighbours
+come from `ml/src/techcamp_ml/sources/elevation.py` (`neighbour_offsets`, lane
+`e10-t3`), and train/serve parity is a governance rule — the same module, the same
+source and the same inputs on both sides (docs/08-ml.md §M2 "Features", §Reglas de
+gobierno "Paridad de features"; docs/06-diseno-detallado.md §8). A different
+constant would ask Open-Meteo for the elevation of a *different* point at serving
+time, so `slope_deg` would describe a different slope than the one the model was
+trained on."""
 
 _POINTS_PER_CELL = 5
 """The centre plus its four neighbours: one elevation call answers all five
@@ -92,6 +101,11 @@ def elevation_points(cell: RiskCell) -> list[tuple[float, float]]:
     """The centre first, then east, west, north and south `NEIGHBOUR_SPACING_M`
     away: the order `neighbours_from` reads them in, and the five points of one
     elevation call (docs/08-ml.md §M2 "Elevación y pendiente").
+
+    `d_lat = spacing / METRES_PER_DEGREE_LAT` and
+    `d_lon = spacing / (METRES_PER_DEGREE_LAT * cos(lat))` are T3's
+    `neighbour_offsets`, term for term
+    (`ml/src/techcamp_ml/sources/elevation.py`, lane `e10-t3`).
     """
     lat_step = NEIGHBOUR_SPACING_M / _METRES_PER_DEGREE_LAT
     lon_step = lat_step / max(math.cos(math.radians(cell.lat)), 1e-6)
@@ -121,16 +135,36 @@ def neighbours_from(elevations: Sequence[float | None]) -> Neighbours | None:
     return Neighbours(east=east, west=west, north=north, south=south, spacing_m=NEIGHBOUR_SPACING_M)
 
 
-def _reaches_previous_month(days: Sequence[ArchiveDay], *, window_end: date) -> bool:
-    """Whether the archive answered through the last day of M-1.
+def _covers_window(days: Sequence[ArchiveDay], *, window_start: date, window_end: date) -> bool:
+    """Whether the archive answered **every day of the window with a real value**.
 
-    ERA5 arrives with ~5 days of delay, so for the first days of M the response
-    stops short of M-1 and every window of the features would be missing its last
-    days. The cell then has no prediction for the new month, and the previous one
-    keeps being served (docs/06-diseno-detallado.md §8 "Datos de entrada";
-    docs/04-api.md §Riesgo, métricas y asistente).
+    Checking that the row for the last day of M-1 exists is not enough: the client
+    keeps a day ERA5 has not aggregated, with `None` measures
+    (`adapters/open_meteo_archive.py`, `_extract_float`), so for the first days of M
+    the response covers M-1 on paper and measures nothing at its end. Then every
+    accumulation of `domain.features` is `None` and a prediction written from them
+    would be one the `ON CONFLICT DO NOTHING` of docs/03 §Unicidad blocks for the
+    rest of the month: the cell would keep an empty prediction nobody can correct
+    until M is over.
+
+    Every day of the window needs `precipitation_mm`, the measure whose six-month
+    window is the longest one (docs/08-ml.md §M2 "Features"); a day without soil
+    moisture stays missing evidence that `build_features` reports as `None` for
+    that one feature, which the predictor is free to read.
+
+    So while the previous month is incomplete the cell has no prediction for the new
+    one and keeps the one it has (docs/06-diseno-detallado.md §8 "Datos de entrada";
+    docs/04-api.md §Riesgo, métricas y asistente: el mes en curso sin predicción
+    sirve la más reciente).
     """
-    return any(row.day >= window_end for row in days)
+    reported = {row.day: row.precipitation_mm for row in days}
+    day = window_start
+    while day <= window_end:
+        value = reported.get(day)
+        if value is None or math.isnan(value):
+            return False
+        day += timedelta(days=1)
+    return True
 
 
 async def _predictable(
@@ -215,11 +249,12 @@ async def run_daily_risk(
             skipped += len(pending)
             continue
 
-        if not _reaches_previous_month(days, window_end=window_end):
+        if not _covers_window(days, window_start=window_start, window_end=window_end):
             logger.warning(
-                "risk: archive for cell %s does not cover %s yet (ERA5 delay), "
-                "no prediction for %s",
+                "risk: archive for cell %s does not cover %s..%s with real values yet "
+                "(ERA5 delay), no prediction for %s",
                 cell.id,
+                window_start,
                 window_end,
                 issue_month,
             )
