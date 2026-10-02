@@ -140,11 +140,22 @@ def _parse_municipalities(layout: Layout) -> pd.DataFrame:
 
 
 def _fetch_municipalities(layout: Layout) -> int:
-    fetch(layout, "municipalities", DIVIPOLA_RAW, DIVIPOLA_RESOURCE, params=divipola_params())
+    written = 0
+    if not (layout.raw_copy("municipalities", DIVIPOLA_RAW)).exists():
+        fetch(
+            layout,
+            "municipalities",
+            DIVIPOLA_RAW,
+            DIVIPOLA_RESOURCE,
+            params=divipola_params(),
+        )
+        written += 1
     # MGN answers `geometry: null` on this layer, so it is the code control, not a
     # geometry source (owner decision D-T3.1).
-    fetch(layout, "municipalities", MGN_RAW, MGN_LAYER_URL, params=mgn_params())
-    return 2
+    if not (layout.raw_copy("municipalities", MGN_RAW)).exists():
+        fetch(layout, "municipalities", MGN_RAW, MGN_LAYER_URL, params=mgn_params())
+        written += 1
+    return written
 
 
 def _fetch_labels(layout: Layout) -> int:
