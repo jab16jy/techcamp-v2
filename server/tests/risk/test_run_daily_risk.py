@@ -207,6 +207,18 @@ class _FailingInsertRepository(FakeRiskRepository):
         return await super().insert_prediction(prediction)
 
 
+class _CountingVersions(FakeRiskRepository):
+    """The rows double that counts how many times the served version was read."""
+
+    def __init__(self, versions: Mapping[str, ModelVersion]) -> None:
+        super().__init__(versions)
+        self.reads = 0
+
+    async def served_version(self, name: str) -> ModelVersion | None:
+        self.reads += 1
+        return await super().served_version(name)
+
+
 class _RecordingTransactions:
     """The caller's transaction hook, recorded instead of performed.
 
@@ -629,7 +641,8 @@ async def test_a_failed_cell_is_rolled_back_before_the_run_continues() -> None:
     )
 
     assert transactions.rollbacks == 1
-    assert transactions.commits == 1
+    # One commit closed the read of the served versions, the other the surviving cell.
+    assert transactions.commits == 2
 
 
 async def test_it_commits_after_every_cell() -> None:
@@ -645,9 +658,68 @@ async def test_it_commits_after_every_cell() -> None:
         transactions=transactions,
     )
 
-    assert transactions.commits == 2
+    # One commit closes the read the served versions were resolved in, before the
+    # first provider call, plus one per cell.
+    assert transactions.commits == 3
     assert transactions.rollbacks == 0
     assert run.written == 4
+
+
+async def test_the_read_of_the_served_versions_is_closed_before_the_first_provider_call() -> None:
+    """A `SELECT` autobegins a transaction, so resolving which version serves each
+    event must not leave one open across `fetch_daily`: an open transaction pins a
+    pooled connection for the length of the HTTP call and its retries
+    (docs/09-cuellos-de-botella.md; #240 R3-long-transaction-across-http)."""
+    events: list[str] = []
+
+    class _OrderedVersions(FakeRiskRepository):
+        async def served_version(self, name: str) -> ModelVersion | None:
+            events.append(f"served_version:{name}")
+            return await super().served_version(name)
+
+    class _OrderedArchive(FakeArchive):
+        async def fetch_daily(
+            self, lat: float, lon: float, *, start_day: date, end_day: date
+        ) -> list[ArchiveDay]:
+            events.append("fetch_daily")
+            return await super().fetch_daily(lat, lon, start_day=start_day, end_day=end_day)
+
+    class _OrderedTransactions:
+        async def commit(self) -> None:
+            events.append("commit")
+
+        async def rollback(self) -> None:
+            events.append("rollback")
+
+    await _run(
+        cells=[_cell(1)],
+        versions=_OrderedVersions({"risk_flood": _version("risk_flood")}),
+        archive=_OrderedArchive(),
+        predictors=_registry(("risk_flood", _RecordingPredictor(0.82))),
+        transactions=_OrderedTransactions(),
+    )
+
+    first_provider_call = events.index("fetch_daily")
+    # Negative: the version reads alone are not enough, a commit has to land first.
+    assert "commit" in events[:first_provider_call]
+    assert events.index("commit") < first_provider_call
+
+
+async def test_the_served_versions_are_resolved_once_for_the_whole_run() -> None:
+    """The served version and its predictor are properties of the event, not of the
+    cell: resolving them per cell repeats the same read once per cell and per event
+    for an answer that cannot differ."""
+    versions = _CountingVersions({"risk_flood": _version("risk_flood")})
+
+    await _run(
+        cells=[_cell(1), _cell(2), _cell(3)],
+        versions=versions,
+        archive=FakeArchive(),
+        predictors=_registry(("risk_flood", _RecordingPredictor(0.82))),
+    )
+
+    # One read per event, whatever the number of cells.
+    assert versions.reads == len(EventType)
 
 
 async def test_a_second_run_of_the_same_month_writes_nothing_new() -> None:

@@ -81,15 +81,22 @@ class RiskRepository(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class CellTransactions:
-    """What the run does with the caller's transaction after each cell (docs/05
-    §Estructura hexagonal de cada módulo: the application layer handles the
-    transactions).
+    """What the run does with the caller's transaction (docs/05 §Estructura
+    hexagonal de cada módulo: the application layer handles the transactions).
 
-    **Commit per cell.** A run walks every cell that has a plot, and each one costs
-    two provider calls with a 10 s timeout and up to three retries; one transaction
-    around the whole run would hold a connection across all of them, so a drop late
-    in the run would discard every prediction already written. Per cell, the loss is
-    that cell's.
+    **Nothing open across a provider call.** A run walks every cell that has a plot,
+    and each one costs two provider calls with a 10 s timeout and up to three
+    retries. A `SELECT` autobegins a transaction, so the reads the run makes are
+    closed before it reaches for the archive: a transaction still open during
+    `fetch_daily` pins a pooled connection for the length of the HTTP call and its
+    retries (docs/09-cuellos-de-botella.md). The run therefore commits once after
+    resolving the served versions, before the first cell.
+
+    **Commit per cell.** One transaction around the whole run would discard every
+    prediction already written when a drop comes late in it. Per cell, the loss is
+    that cell's. `SqlAlchemyRiskRepository.insert_prediction` also commits its own
+    row, so the isolation the run relies on is finer still; the per-cell commit is
+    what keeps the count and the rollback below meaningful for any other adapter.
 
     **Rollback before continuing.** A statement the database rejected leaves its
     transaction aborted, and every later statement of an aborted transaction fails

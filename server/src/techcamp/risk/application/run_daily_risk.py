@@ -169,17 +169,18 @@ def _covers_window(days: Sequence[ArchiveDay], *, window_start: date, window_end
 
 
 async def _predictable(
-    cell: RiskCell, *, versions: RiskRepository, predictors: PredictorRegistry
+    *, versions: RiskRepository, predictors: PredictorRegistry
 ) -> list[tuple[EventType, ModelVersion, Predictor]]:
-    """The `(event, version, predictor)` triples this cell can be predicted for,
-    logging and dropping the ones it cannot.
+    """The `(event, version, predictor)` triples this run can predict, logging and
+    dropping the ones it cannot.
 
     An event with no registered version and a version with no registered predictor
     are the same outcome — no prediction for that event this run — and neither is
     a reason to invent a probability (docs/06-diseno-detallado.md §8 "Sin modelo
-    promovido"). Resolved before the archive is fetched because the window is the
-    same for every event: a cell nothing can be predicted for costs no provider
-    call at all.
+    promovido"). The served version and its predictor are properties of the event,
+    not of the cell, so this is asked once for the whole run: a cell nothing can be
+    predicted for costs no provider call at all, and the read behind it is a read of
+    the events, never one per cell.
     """
     pending: list[tuple[EventType, ModelVersion, Predictor]] = []
     for event in EventType:
@@ -239,12 +240,19 @@ async def run_daily_risk(
 
     written = 0
     skipped = 0
-    for cell in cells:
-        pending = await _predictable(cell, versions=versions, predictors=predictors)
-        skipped += len(EventType) - len(pending)
-        if not pending:
-            continue
+    # Which version serves each event is the same answer for every cell, so it is
+    # resolved once, before the walk. That read autobegins a transaction, and one
+    # left open across `fetch_daily` would pin a pooled connection for the length of
+    # the HTTP call and its retries, so it is closed here too (#240
+    # R3-long-transaction-across-http).
+    pending_events = await _predictable(versions=versions, predictors=predictors)
+    skipped += (len(EventType) - len(pending_events)) * len(cells)
+    if transactions is not None:
+        await transactions.commit()
+    if not pending_events:
+        return DailyRiskRun(issue_month=issue_month, written=written, skipped=skipped)
 
+    for cell in cells:
         try:
             days = await archive.fetch_daily(
                 cell.lat, cell.lon, start_day=window_start, end_day=window_end
@@ -256,7 +264,7 @@ async def run_daily_risk(
                 cell.id,
                 exc_info=True,
             )
-            skipped += len(pending)
+            skipped += len(pending_events)
             continue
 
         if not _covers_window(days, window_start=window_start, window_end=window_end):
@@ -268,7 +276,7 @@ async def run_daily_risk(
                 window_end,
                 issue_month,
             )
-            skipped += len(pending)
+            skipped += len(pending_events)
             continue
 
         features = build_features(
@@ -281,7 +289,7 @@ async def run_daily_risk(
 
         stored_here = 0
         try:
-            for event, version, predictor in pending:
+            for event, version, predictor in pending_events:
                 outcome = predictor.predict(version, features)
                 prediction = RiskPrediction(
                     id=uuid7(),
@@ -324,6 +332,6 @@ async def run_daily_risk(
             )
             if transactions is not None:
                 await transactions.rollback()
-            skipped += len(pending) - stored_here
+            skipped += len(pending_events) - stored_here
 
     return DailyRiskRun(issue_month=issue_month, written=written, skipped=skipped)
