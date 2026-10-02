@@ -1,0 +1,28 @@
+name: PR validation
+
+# The PR's own title, labels and body (#234). Separate from CI so a label edit never
+# re-runs the suites. Not a required check: this repo is on the free plan and cannot
+# configure one (D-T5b.1), so the title rule is visible, not enforced by the platform.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-validation:
+    # Dependabot titles and bodies are generated and carry no epic or issue.
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: bash .github/scripts/pr-validation.sh
