@@ -31,7 +31,12 @@ EXTRA_DAYS_BEFORE = 1
 """ERA5 answers the first day of a window with nulls now and then, so the window
 opens a day earlier and the dataset builder drops that day."""
 
-COORDINATE_BATCH = 25
+COORDINATE_BATCH = 100
+"""Coordinates per request.
+
+The weight of a call does not depend on how many coordinates it carries, so small
+batches cost the budget over and over: at 25 the whole range is 24 calls, at 100 it
+is 6. 100 keeps a response in the megabytes instead of a couple of hundred."""
 CHUNK_TEMPLATE = "archive_{index:03d}"
 WINDOW_DAYS = 1460
 """The archive is downloaded in four-year windows.

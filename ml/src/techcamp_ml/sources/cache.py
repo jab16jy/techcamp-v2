@@ -70,11 +70,20 @@ def read_raw(layout: Layout, source: str, name: str) -> bytes:
 
 
 def read_manifest(layout: Layout) -> pd.DataFrame:
-    """The manifest as a frame, empty when nothing was ever downloaded."""
+    """The manifest as a frame, empty when nothing was ever downloaded.
+
+    Rows whose raw copy is gone are dropped: the manifest documents what the cache
+    holds, so a cleared cache and a stale row cannot disagree about the dataset.
+    """
     if not layout.manifest.exists():
         return pd.DataFrame(columns=list(MANIFEST_COLUMNS))
     frame = pd.read_csv(layout.manifest, sep="\t", dtype=str, keep_default_na=False)
-    return frame[list(MANIFEST_COLUMNS)]
+    frame = frame[list(MANIFEST_COLUMNS)]
+    present = [
+        (layout.raw_copy(source, name)).exists()
+        for source, name in zip(frame["source"], frame["file"], strict=True)
+    ]
+    return frame[present].reset_index(drop=True)
 
 
 def cached_files(layout: Layout, source: str) -> list[str]:

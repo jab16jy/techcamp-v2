@@ -80,3 +80,13 @@ def test_the_throttle_counts_coordinates_not_requests() -> None:
 
     # A 429 without Retry-After waits the minute the host names in its message.
     assert retry_delay(httpx.Response(429), attempt=0) == 60.0
+
+
+def test_the_manifest_forgets_a_raw_copy_that_is_no_longer_there(tmp_path: Path) -> None:
+    layout = Layout(tmp_path)
+    entry = save_raw(layout, "weather", "archive_000.json", "https://example.test/w", b"{}")
+    layout.raw_copy("weather", entry.file).unlink()
+
+    # The manifest is the provenance of what is in the cache, not a diary of what
+    # once was: a row pointing at a deleted file would misreport the dataset.
+    assert len(read_manifest(layout)) == 0

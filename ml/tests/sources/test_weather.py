@@ -1,14 +1,18 @@
 """Open-Meteo archive: the query the serving client must repeat, and its parser."""
 
+import math
 from collections.abc import Callable
 from datetime import date
 
 import pandas as pd
 import pytest
 
+from techcamp_ml.sources.municipalities import EXPECTED_MUNICIPALITIES
 from techcamp_ml.sources.weather import (
     ARCHIVE_PARAMS,
+    COORDINATE_BATCH,
     DAILY_VARIABLES,
+    WEATHER_START,
     WINDOW_DAYS,
     archive_params,
     concat_windows,
@@ -84,3 +88,14 @@ def test_concatenating_windows_drops_the_day_they_overlap_on(
 
     assert len(joined) == 12, "the extra day of the second window repeats the first one's last day"
     assert not joined.duplicated(subset=["code", "date"]).any()
+
+
+def test_a_full_fetch_stays_under_the_free_tier_daily_weight() -> None:
+    """Few calls beat small calls: the weight is per request, not per coordinate."""
+    calls = len(weather_windows(WEATHER_START, date(2026, 9, 30))) * math.ceil(
+        EXPECTED_MUNICIPALITIES / COORDINATE_BATCH
+    )
+    weight = calls * len(DAILY_VARIABLES) * WINDOW_DAYS
+
+    assert len(DAILY_VARIABLES) * WINDOW_DAYS < 5_000, "one call must fit the 5,000/hour cap"
+    assert weight < 20_000, f"{calls} calls would spend {weight}, over two daily free budgets"
