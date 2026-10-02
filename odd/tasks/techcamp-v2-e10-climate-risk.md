@@ -69,6 +69,12 @@ feeds E12 (assistant cites risk) and E15 (risk rules), off the critical path (do
 - D-T0.9 API shape of `GET /plots/{plot_id}/risk` (docs/04 §Riesgo, métricas y asistente).
 - D-T0.10 Alerts open per plot of the cell at severity ≥ `high`, resolve on the first newer
   prediction below it (docs/06 §8).
+- D-T3.1 Municipality point is the DIVIPOLA municipal seat, with MGN 2024 layer 317 as the
+  code control (layer answers `geometry: null`, so there is no centroid); docs/08
+  §Fuentes de datos de M2 updated in the same work unit (owner, 2026-10-02).
+- D-T3.2 Labels stop at 2019 (owner, 2026-10-02): UNGRD 2019-2025 only, no DesInventar and
+  no pre-2019 consolidated, no source mixed inside a year. 1,508 events over 180 of the 195
+  municipalities. Documented in `ml/datasets/flood_m2/data_card.md`.
 
 ## Tasks
 Forecasts are authored lines (additions + deletions, generated excluded). Route = writer and reason.

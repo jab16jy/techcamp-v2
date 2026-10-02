@@ -154,19 +154,17 @@ clasificar y cuenta, para que una fila perdida por un valor raro sea visible.
    calcular por adelantado cuántas peticiones gasta el rango completo, y por eso el
    code no lo inventa: mide y respeta el `Retry-After` que llega con el 429.
 
-## Antes de 2019: sin resolver
+## Antes de 2019: cerrado, sin DesInventar (D-T3.2)
 
-docs/08 §Fuentes de datos de M2 deja los consolidados anuales de la UNGRD (1998–2021) y
-la exportación de DesInventar Colombia como respaldo, **sólo si su formato permite el
-mismo mapeo por municipio y día**, unidos con un año de corte fijo y nunca mezclando
-fuentes dentro de un año.
+**Decisión del dueño (D-T3.2, 2026-10-02): el corte es 2019.** Las etiquetas del dataset
+son sólo UNGRD 2019-2025 (los tres consolidados de datos.gov.co): 1 508 reportes en 180
+de los 195 municipios. No se consulta DesInventar ni ningún consolidado previo a 2019, y
+ninguna fuente se mezcla con otra dentro de un año (docs/08 §Fuentes de datos de M2).
 
-**No se pudo verificar en esta tarea**: los hosts de esos archivos no están en la lista
-de hosts autorizados para T3, así que no se descargó ni un esquema. La decisión queda
-abierta para el dueño: sin ellos, el dataset empieza en 2019, como está hoy. Lo que hace
-falta para cerrarlo es comprobar si esos archivos traen el municipio como código DIVIPOLA
-o sólo como nombre (con los problemas de tildes y de cambios de nombre que implica), y si
-traen fecha de inicio por evento.
+Consecuencia para el modelo: la primera mitad de la serie no tiene etiquetas, así que no
+hay positivos anteriores a 2019-01 y la línea base de climatología se calcula sólo con lo
+que hay. Si algún día se quisiera abrir el corte, sería una decisión nueva (y un host
+nuevo autorizado), no un ajuste de este dataset.
 
 ## Qué sigue
 
