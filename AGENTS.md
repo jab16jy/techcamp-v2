@@ -65,6 +65,11 @@ instead of assembling checks by hand:
 - `just gate-full`: clean database, then everything CI runs. Once, at epic close.
 - `just gate-lane <base>`: `gate-fast` on every commit of `base..HEAD`. Run it before slicing a
   lane into PRs; gating only HEAD misses a middle commit that breaks.
+- `just gate-release [base] [extra_seeds]`: steps 1-4 of the pre-PR rule (#234) on one command.
+  `gate-lane <base>` runs in the background (static only, its own worktrees) while the
+  foreground runs `gate-full` plus that many extra full server runs with random seeds; it
+  prints every seed, ends with a summary table, and exits non-zero if any part failed.
+  Defaults: `base="origin/main"`, `extra_seeds=2`.
 
 Direct tools: `uv run pytest tests/<module>/test_x.py::test_name` in `server/` (a bare `pytest`
 falls back to the seminar stack's database on 5432); `npm test -- --run <file>` in `web/`

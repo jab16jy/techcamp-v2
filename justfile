@@ -275,3 +275,120 @@ gate-lane base="main":
       echo "    ok"
     done
     echo "all $(printf '%s\n' $shas | wc -l) commits in {{base}}..HEAD pass gate-fast"
+
+# The pre-PR rule of #234, steps 1 to 4, as one recipe: the epic branch must contain
+# origin/main, every commit of the lane must pass the static checks, gate-full must pass
+# on that exact head, and the full server suite must pass under gate-full's own seed plus
+# `extra_seeds` more. E9 lost two hours between the last local gate and main because three
+# of those steps were skipped one at a time (#228, #232).
+#
+# gate-lane is the background half because it is static only and gates each commit in its
+# own detached worktrees: it touches neither the tree nor the database. gate-full and the
+# extra seeds are the foreground half because they share this worktree's one database,
+# which gate-full recreates. Serial on the E9 lane was about 42 minutes; this is about 25.
+#
+# `just` cannot run two recipes of the same justfile at once, so the halves are plain
+# `just ... gate-lane` / `just ... gate-full` sub-commands read from this body, not
+# dependencies. Nothing aborts on the first failure: every part runs, and the summary is
+# what decides.
+
+# Steps 1-4 of the pre-PR rule: lane in the background, gate-full and extra seeds in front.
+[group: 'gate']
+gate-release base="origin/main" extra_seeds="2":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if ! git fetch origin main; then
+      echo "could not fetch origin main; 'just gate-release' judges HEAD against it" >&2
+      exit 1
+    fi
+    # Step 1. Without it a lane is gated against a main that HEAD never saw, which is
+    # exactly the retarget-and-reopen dance the stacked PRs of E9 paid for.
+    if ! git merge-base --is-ancestor "{{base}}" HEAD; then
+      echo "{{base}} is not an ancestor of HEAD: merge {{base}} into the epic branch first" >&2
+      exit 1
+    fi
+    # The gates judge HEAD. A dirty tree passes while the pushed commit fails, or fails
+    # for a reason no commit carries, and both cost a CI round trip to explain.
+    if [ -n "$(git status --porcelain)" ]; then
+      echo "the working tree is not clean; the gates judge HEAD, not a dirty tree" >&2
+      git status --short >&2
+      exit 1
+    fi
+    if ! [[ "{{extra_seeds}}" =~ ^[0-9]+$ ]]; then
+      echo "extra_seeds is a count of extra server runs, not '{{extra_seeds}}'" >&2
+      exit 1
+    fi
+
+    lane_log=$(mktemp "${TMPDIR:-/tmp}/gate-lane.XXXXXX.log")
+    echo "=== gate-lane {{base}}..HEAD in the background, log: $lane_log"
+    # Job control gives the lane its own process group, so the trap can kill the whole
+    # lane — just, the recipe, its temporary worktree loop — and not only its first pid.
+    # That group is also why the trap is the only signal the lane gets: a Ctrl-C in the
+    # terminal reaches this shell, not a process group of its own.
+    set -m
+    just --justfile "$_worktree/justfile" gate-lane "{{base}}" >"$lane_log" 2>&1 &
+    lane_pid=$!
+    set +m
+    # An interrupted run must not carry on to the next seed either, and no exit path
+    # may leave the lane holding worktrees and a `just` process.
+    stop_lane() { kill -- "-$lane_pid" 2>/dev/null || kill "$lane_pid" 2>/dev/null || true; }
+    trap 'stop_lane; exit 130' INT TERM
+    trap stop_lane EXIT
+
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
+    export DATABASE_URL="$url"
+
+    # Every part runs: a first failure is a fact to read next to the others, not a reason
+    # to spend another 8 minutes not learning whether the rest is green.
+    lane_rc=0
+    full_rc=0
+    seeds=()
+    seed_rcs=()
+
+    echo "=== gate-full on HEAD (its own pytest seed shows in the pytest header)"
+    just --justfile "$_worktree/justfile" gate-full || full_rc=$?
+
+    for i in $(seq 1 "{{extra_seeds}}"); do
+      # A random seed, never a fixed one: two runs that replay the same order prove
+      # nothing about the order-dependent tests. RANDOM alone repeats inside one shell,
+      # so the wall clock rides along to widen the range.
+      now=$(date +%s)
+      seed=$(( (RANDOM * 1000 + RANDOM + now) % 1000000 ))
+      echo "=== full server suite, extra run $i of {{extra_seeds}}, seed $seed"
+      rc=0
+      (cd "$_worktree/server" && uv run pytest --randomly-seed="$seed") || rc=$?
+      seeds+=("$seed")
+      seed_rcs+=("$rc")
+    done
+
+    wait "$lane_pid" || lane_rc=$?
+
+    status_word() { if [ "$1" -eq 0 ]; then echo PASS; else echo FAIL; fi; }
+    failed=0
+    for rc in "$lane_rc" "$full_rc"; do
+      [ "$rc" -eq 0 ] || failed=1
+    done
+    if [ "${#seed_rcs[@]}" -gt 0 ]; then
+      for rc in "${seed_rcs[@]}"; do
+        [ "$rc" -eq 0 ] || failed=1
+      done
+    fi
+
+    echo "=== summary"
+    printf '%-38s %s\n' "part" "result"
+    printf '%-38s %s\n' "gate-lane {{base}}..HEAD" "$(status_word "$lane_rc")"
+    printf '%-38s %s\n' "gate-full" "$(status_word "$full_rc")"
+    for i in "${!seeds[@]}"; do
+      printf '%-38s %s\n' "pytest --randomly-seed=${seeds[$i]}" "$(status_word "${seed_rcs[$i]}")"
+    done
+
+    if [ "$lane_rc" -ne 0 ]; then
+      echo "=== last 30 lines of $lane_log" >&2
+      tail -n 30 "$lane_log" >&2
+    fi
+    if [ "$failed" -ne 0 ]; then
+      echo "at least one part failed; fix it in its own small PR to the base branch first" >&2
+      exit 1
+    fi
+    echo "every part passed: open the PRs with base {{base}} from creation"
