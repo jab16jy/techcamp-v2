@@ -81,7 +81,7 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   ADR-0020 (`models/`, `datasets/`, `harness/`, `experiments/`), M2 model card (step 1),
   CODEOWNERS and the hash-lock test framework (#192). ~250. Route: Herdr writer.
 - [ ] T2 Shared features (`risk` domain, pure): rainfall accumulations 1–6 months, anomalies vs a
-  train-only climatology, seasonality, elevation/slope inputs; FAO-style numeric examples as tests.
+  train-only climatology, seasonality, elevation/slope inputs; hand-computed rainfall and terrain examples as tests.
   ~300. Route: Herdr writer. Parallel with T1/T3 (no shared files).
 - [ ] T3 Dataset sources: municipality reference (DIVIPOLA + centroids, Caribbean), Open-Meteo
   archive downloader, flood-event labels (UNGRD / DesInventar), elevation; pinned versions, cache,
@@ -109,6 +109,12 @@ Wave 1 (after T0): T1, T2. Wave 2: T3, T6 (after T2). Wave 3: T4, T5, T7. Wave 4
 
 ## Review (RDD)
 Branch point: `a2bae6b` (main). RDD on (global). Per work-unit commit: `gentle-ai review assess`.
+- T0 `06ca02f`: assess passive; START closed `approved` with no lenses (low, non-executable only),
+  lineage `review-1226f740382b58ff`, acknowledged. Reviewed boundary → `06ca02f`.
+- T2 `99839c5` (lane `e10-t2`): the Pi writer ran RDD itself (out of brief); lineage
+  `review-2c38c84a60f334ec` approved, reliability lens, 4 non-blocking findings (ids/locations
+  only in the receipt) → #237. R3-004 and R3-001 fixed in the lane (`Refs #237`); R3-003 fixed
+  here; R3-002 open.
 
 ## Delivery
 Strategy: `ask-on-risk` resolved by AGENTS.md → stacked-to-main chained PRs of ~400 lines.
