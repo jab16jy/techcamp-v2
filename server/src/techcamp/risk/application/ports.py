@@ -16,12 +16,13 @@ registered for has no prediction this run, never a fabricated probability
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
 
-from techcamp.risk.domain.models import ArchiveDay, ModelVersion, RiskPrediction
+from techcamp.risk.domain.models import ArchiveDay, EventType, ModelVersion, RiskPrediction
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,10 @@ class RiskRepository(Protocol):
     async def served_version(self, name: str) -> ModelVersion | None: ...
 
     async def insert_prediction(self, prediction: RiskPrediction) -> bool: ...
+
+    async def latest_prediction(
+        self, cell_id: int, event_type: EventType, model_version_id: uuid.UUID
+    ) -> RiskPrediction | None: ...
 
 
 @dataclass(frozen=True, slots=True)
