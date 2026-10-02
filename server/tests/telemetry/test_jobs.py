@@ -264,11 +264,19 @@ async def test_two_queued_jobs_for_one_sensor_never_run_at_the_same_time(
     # truncate never reaches it before this test) would come back as `second`
     # and fail the assertion for a reason that has nothing to do with the lock
     # (#89, order-dependent under pytest-randomly). Only this test's two jobs
-    # may be fetchable.
+    # may be fetchable. The stray row has no `queueing_lock`, which is the shape a
+    # job deferred without one has, and `NULL = ANY(...)` is never true.
+    await db_session.execute(
+        text(
+            "INSERT INTO procrastinate_jobs (queue_name, task_name, lock, queueing_lock) "
+            "VALUES ('telemetry', 'telemetry.stray', 'stray-lock', NULL)"
+        )
+    )
     await db_session.execute(
         text(
             "DELETE FROM procrastinate_jobs "
-            "WHERE queue_name = 'telemetry' AND NOT (queueing_lock = ANY(ARRAY[:a, :b]))"
+            "WHERE queue_name = 'telemetry' "
+            "AND (queueing_lock IS NULL OR queueing_lock <> ALL (ARRAY[:a, :b]))"
         ),
         {
             "a": f"recalibrate:{calibration_ids[0]}",
