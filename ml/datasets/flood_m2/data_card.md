@@ -29,7 +29,7 @@ fecha de descarga y su `sha256` en `ml/.cache/raw/MANIFEST.tsv`. Los parquets de
 | Etiquetas 2019–2022 | UNGRD, `https://www.datos.gov.co/resource/wwkg-r6te.json` | CC BY-SA 4.0 | 2026-10-02T17:27:25Z | `171266650fe22614` |
 | Etiquetas 2023–2024 | UNGRD, `https://www.datos.gov.co/resource/rgre-6ak4.json` | CC BY-SA 4.0 | 2026-10-02T17:27:28Z | `7769c6d43fc754f8` |
 | Etiquetas 2025+ | UNGRD, `https://www.datos.gov.co/resource/2343-nuqp.json` | CC BY 4.0 | 2026-10-02T17:27:32Z | `7e54b5371993eb8` |
-| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, descarga en curso al redactar esta tarjeta | ver `MANIFEST.tsv` |
+| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, 2026-10-02T18:02Z, **3 de 6 trozos** (`archive_000` `956284edc5cbf9f7`, `archive_001` `255c33527febdf48`, `archive_002` `db28970e8074ec09`) | ver `MANIFEST.tsv` |
 | Elevación y vecino | Open-Meteo elevation (Copernicus GLO-90), `https://api.open-meteo.com/v1/elevation` | Open-Meteo, uso no comercial | 2026-10-02T17:28:00Z | `d52dc71cce74be05` |
 
 Open-Meteo gratuito es de uso no comercial: cubre el seminario; producción necesita su
@@ -46,6 +46,14 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   **2018-06-30** (un día antes del inicio) hasta el último mes completo. La serie
   empieza en 2018-07-01 para que las ventanas de seis meses de docs/08 §M2 "Features"
   estén completas antes del primer mes etiquetado, 2019-01.
+  **Estado al cerrar T3 (2026-10-02): descarga a medias.** Hay 3 de los 6 trozos en el
+  caché y el parquet arma **430 895 filas** para los 195 municipios, del 2018-06-30 al
+  2026-06-28; faltan tres trozos (el resto de la segunda ventana y la tercera). No es un
+  fallo del código sino de la cuota: el nivel gratuito de Open-Meteo admite 5 000 de
+  peso por hora y esta consulta gasta 2 920 por llamada, así que faltan unas tres
+  ventanas horarias. `python -m techcamp_ml.sources fetch --source weather` reanuda
+  donde se quedó y no vuelve a pedir lo que ya está en el caché; al terminar hay que
+  reparsear y volver a copiar los hashes de esta tarjeta.
 - **Etiquetas:** del **2019-01-01** (primera región) al **2025-12-31**.
 
 ## Conteos
