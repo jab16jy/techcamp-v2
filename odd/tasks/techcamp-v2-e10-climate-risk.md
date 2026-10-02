@@ -69,6 +69,8 @@ feeds E12 (assistant cites risk) and E15 (risk rules), off the critical path (do
 - D-T0.9 API shape of `GET /plots/{plot_id}/risk` (docs/04 §Riesgo, métricas y asistente).
 - D-T0.10 Alerts open per plot of the cell at severity ≥ `high`, resolve on the first newer
   prediction below it (docs/06 §8).
+- D-T3.1 Municipality point = DIVIPOLA cabecera (datos.gov.co `gdxc-w37w`), MGN layer 317 as the
+  code/count check: the MGN service returns no geometry (owner, 2026-10-02; docs/08 §Fuentes).
 
 ## Tasks
 Forecasts are authored lines (additions + deletions, generated excluded). Route = writer and reason.
@@ -91,7 +93,7 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
 - [ ] T5 Harness + gate (owner approval gate): split with gap, department hold-out, real frequency,
   bootstrap CI95, locked test, `decide_promotion`; own tests; freeze hashes after approval.
   ~400. Route: Herdr writer. Depends T1 (schema from T4 for wiring).
-- [ ] T6 Server schema + risk serving: migrations (`municipality`, `model_version`,
+- [~] T6 Server schema + risk serving (T6a done `515f399`; T6b next): migrations (`municipality`, `model_version`,
   `risk_prediction`), baseline heuristics (flood: accumulated rainfall; drought: SPI-3), archive
   client, daily job, `/dev/jobs/risk:run`, `GET /plots/{plot_id}/risk`. ~400. Route: Herdr writer.
   Depends T2. Parallel with T3–T5.
@@ -126,6 +128,14 @@ Branch point: `a2bae6b` (main). RDD on (global). Per work-unit commit: `gentle-a
   gate green). The validator, also blind to the base, rejected it → `escalated`,
   `native_stop_required`: T1 has no approved receipt. Lesson: never split a generated lockfile
   into the review base; exclude it from the candidate some other way or review the code first.
+- T6a (Pi; `1c7bbe6`, `6d6fb03`, `aac5808`): the Pi host's capture tool rejected its own STATUS
+  bindings (`capture-binding-rejected`, 4× on lineages `review-59ef866551e0b37c`,
+  `review-4d3db5cb0650f1b4`); owner: continue without reporting. Parent ran it natively once
+  (lineage `review-6cbfe58d6e9462b1`, reliability): CRITICAL `R3-served-version-ignores-promoted`
+  fixed in the bounded correction `85d528e` (validator passed) → approved, acknowledged; WARNING
+  `R3-json-decode-escapes-contract` → #239, fixed `a45ec55` (unreviewed: Pi capture defect).
+  Merged `515f399`. Owner rules from this round: RDD is the Pi writer's own job; work units
+  ≤ ~400 lines, lockfiles alone.
 
 ## Delivery
 Strategy: `ask-on-risk` resolved by AGENTS.md → stacked-to-main chained PRs of ~400 lines.
