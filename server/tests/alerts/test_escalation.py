@@ -396,6 +396,20 @@ async def test_a_critical_node_alert_escalates_to_the_farms_technician(
     assert len(sms) == 1
 
 
+async def test_an_escalation_target_naming_both_a_plot_and_a_node_is_refused(
+    db_session: AsyncSession,
+) -> None:
+    """R3-both-targets-accepted: the contract is "a plot or a node, never neither or
+    both". With both given the plot used to win silently and the node was ignored."""
+    org = await _make_org(db_session)
+    alerts = SqlAlchemyAlertRepository(db_session)
+
+    with pytest.raises(ValueError, match="never neither or both"):
+        await alerts.get_escalation_target(
+            org_id=org.org_id, plot_id=org.plot_id, node_id=org.node_id
+        )
+
+
 async def test_a_node_alert_of_one_org_never_texts_another_orgs_technician(
     db_session: AsyncSession,
 ) -> None:
