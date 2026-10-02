@@ -152,9 +152,21 @@ gate-fast:
     # same two lines, so the rules and their tests are gated in the same places.
     echo "--- ast-grep test"; uv run ast-grep test --config ../sgconfig.yml
     echo "--- ast-grep scan"; uv run ast-grep scan --config ../sgconfig.yml
+    cd "$_worktree/ml"
+    echo "--- ml ruff check";   uv run ruff check
+    echo "--- ml ruff format";  uv run ruff format --check
+    echo "--- ml mypy";         uv run mypy
     cd "$_worktree/web"
     echo "--- eslint";           npm run lint
     echo "--- tsc";              npm run typecheck
+
+# Regenerate the ML harness lock manifest (ADR-0020, #192).
+[group: 'ml']
+ml-lock:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$_worktree"
+    uv run --project ml python -m techcamp_ml.harness.lock generate
 
 # `server/...` runs pytest from `server/`, `web/...` runs vitest, and anything else is
 # already covered by the static checks. No paths means the static checks only (D-T0.1):
@@ -185,6 +197,10 @@ gate *paths: gate-fast
           echo "--- pytest $path"
           (cd "$_worktree/server" && uv run pytest "${path#server/}")
           ;;
+        ml/*)
+          echo "--- pytest $path"
+          (cd "$_worktree" && uv run --project ml pytest "$path")
+          ;;
         web/*)
           echo "--- vitest $path"
           (cd "$_worktree/web" && npm test -- --run "${path#web/}")
@@ -207,6 +223,8 @@ gate-full: db-reset gate-fast
     export DATABASE_URL="$url"
     cd "$_worktree/server"
     echo "--- pytest (full)"; uv run pytest
+    cd "$_worktree/ml"
+    echo "--- pytest ml (full)"; uv run pytest
     cd "$_worktree/web"
     echo "--- vitest (full)"; npm test -- --run
     echo "--- vite build";    npm run build
