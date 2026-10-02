@@ -259,6 +259,23 @@ async def test_two_queued_jobs_for_one_sensor_never_run_at_the_same_time(
     )
     assert locks == [f"recalibrate:sensor:{sensor_id}"] * 2
 
+    # The fetch below is queue-wide, so a `todo` row another test committed to
+    # the `telemetry` queue through a session of its own (the `db_session`
+    # truncate never reaches it before this test) would come back as `second`
+    # and fail the assertion for a reason that has nothing to do with the lock
+    # (#89, order-dependent under pytest-randomly). Only this test's two jobs
+    # may be fetchable.
+    await db_session.execute(
+        text(
+            "DELETE FROM procrastinate_jobs "
+            "WHERE queue_name = 'telemetry' AND NOT (queueing_lock = ANY(ARRAY[:a, :b]))"
+        ),
+        {
+            "a": f"recalibrate:{calibration_ids[0]}",
+            "b": f"recalibrate:{calibration_ids[1]}",
+        },
+    )
+
     # Two workers, the fetch its worker would run: the first takes the older
     # job (id ASC), and while it is `doing` the sensor's lock keeps the second
     # one out of reach.
