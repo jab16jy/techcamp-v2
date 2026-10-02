@@ -31,21 +31,27 @@ EXTRA_DAYS_BEFORE = 1
 """ERA5 answers the first day of a window with nulls now and then, so the window
 opens a day earlier and the dataset builder drops that day."""
 
-COORDINATE_BATCH = 100
-"""Coordinates per request.
+ERA5_LAG_DAYS = 5
+"""ERA5 arrives with about five days of lag (docs/08 §Fuentes de datos de M2: 'ERA5
+llega con ~5 días de retraso'), so the newest days a request can still miss are not
+in the dataset."""
 
-The weight of a call does not depend on how many coordinates it carries, so small
-batches cost the budget over and over: at 25 the whole range is 24 calls, at 100 it
-is 6. 100 keeps a response in the megabytes instead of a couple of hundred."""
+MAX_COORDINATES_PER_REQUEST = 100
+"""The per-request cap on locations the API enforces (docs/08 §Fuentes de datos de M2
+gives 100 for the elevation endpoint; the archive enforces one too, adjustable per
+deployment). The downloader never puts more than this in a single call."""
+
+COORDINATE_BATCH = MAX_COORDINATES_PER_REQUEST
 CHUNK_TEMPLATE = "archive_{index:03d}"
 WINDOW_DAYS = 1460
-"""The archive is downloaded in four-year windows.
+"""The archive is downloaded in windows of four years.
 
-The free tier weights a call by `variables x days`, independently of how many
-coordinates it carries (measured 2026-10-02: five retries of one 25-coordinate,
-eight-year request exhausted the hourly 5,000 budget on its own). A window of
-1,460 days is 2,920 weight, under the 5,000/hour cap, and the whole 8-year range
-is 6,026 weight, under the 10,000/day one."""
+Open-Meteo's free tier weighs a query by its variables, locations and domains
+(docs, "Rate Limiting": 10,000/day per IP, with minute and hourly buckets on top),
+and the archive weighs it further by the length of the requested range. A window
+bounds that range per request and keeps each response in the megabytes; how many
+requests the whole 8-year download takes is a quota question, not a correctness one,
+which is why the fetch resumes from the cache instead of trying to be clever."""
 
 
 def archive_params(start: date, end: date) -> dict[str, str]:
@@ -86,8 +92,12 @@ def concat_windows(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
 
 
 def last_complete_month(today: date) -> date:
-    """The last day of the month before `today`: ERA5 lags about five days."""
-    return today.replace(day=1) - timedelta(days=1)
+    """The last day of the last month ERA5 has fully published as of `today`.
+
+    ERA5 lags about five days, so the month before `today` is not necessarily
+    complete: on 2026-10-02 the last complete month is still August.
+    """
+    return (today - timedelta(days=ERA5_LAG_DAYS)).replace(day=1) - timedelta(days=1)
 
 
 def parse_archive(payload: bytes, codes: Sequence[str]) -> pd.DataFrame:
@@ -96,7 +106,10 @@ def parse_archive(payload: bytes, codes: Sequence[str]) -> pd.DataFrame:
     A `null` day stays missing (NaN): docs/08 and the shared feature module read
     missing evidence as a third state, never as zero rain.
     """
-    entries: list[dict[str, Any]] = json.loads(payload)
+    entries = json.loads(payload)
+    # One location comes back as an object, several as a list (verified 2026-10-02).
+    if isinstance(entries, dict):
+        entries = [entries]
     if len(entries) != len(codes):
         raise ValueError(f"expected {len(codes)} archive locations, got {len(entries)}")
     rows: list[dict[str, Any]] = []

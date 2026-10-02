@@ -19,10 +19,15 @@ from techcamp_ml.sources.layout import Layout
 
 BASE_INTERVAL_SECONDS = 2.0
 SECONDS_PER_COORDINATE = 0.25
-"""The free Open-Meteo tier allows 600 calls/min, and it bills one call per
-**coordinate**, not per request (verified 2026-10-02: a 25-coordinate archive
-request is throttled at the same pace as 25 single ones). 0.25 s per coordinate keeps
-a full run near 240 calls/min, under half the tier."""
+"""The gap between requests grows with how many coordinates a request carries.
+
+Open-Meteo weighs a query by its variables, locations and domains, and the archive
+weighs it further by the length of the requested range; its free tier is 10,000/day
+per IP with minute and hourly buckets on top ("Rate Limiting" in its docs). Whether
+a given batch fits a bucket is the host's arithmetic, not ours, so the gap is
+proportional to the batch and every 429 is honoured through `retry_delay` instead of
+being guessed at. 0.25 s per coordinate is well under any published per-minute
+figure."""
 
 DEFAULT_TIMEOUT_SECONDS = 180.0
 DEFAULT_RETRIES = 5

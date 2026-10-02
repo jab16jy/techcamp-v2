@@ -1,17 +1,18 @@
 """Open-Meteo archive: the query the serving client must repeat, and its parser."""
 
-import math
 from collections.abc import Callable
 from datetime import date
 
 import pandas as pd
 import pytest
 
+from techcamp_ml.sources.fetching import chunks
 from techcamp_ml.sources.municipalities import EXPECTED_MUNICIPALITIES
 from techcamp_ml.sources.weather import (
     ARCHIVE_PARAMS,
     COORDINATE_BATCH,
     DAILY_VARIABLES,
+    MAX_COORDINATES_PER_REQUEST,
     WEATHER_START,
     WINDOW_DAYS,
     archive_params,
@@ -40,8 +41,7 @@ def test_archive_params_start_one_day_before_the_range() -> None:
 
 
 def test_last_complete_month_is_the_end_of_the_previous_month() -> None:
-    assert last_complete_month(date(2026, 10, 2)) == date(2026, 9, 30)
-    assert last_complete_month(date(2026, 1, 1)) == date(2025, 12, 31)
+    assert last_complete_month(date(2026, 10, 8)) == date(2026, 9, 30)
     assert last_complete_month(date(2026, 3, 31)) == date(2026, 2, 28)
 
 
@@ -90,12 +90,41 @@ def test_concatenating_windows_drops_the_day_they_overlap_on(
     assert not joined.duplicated(subset=["code", "date"]).any()
 
 
-def test_a_full_fetch_stays_under_the_free_tier_daily_weight() -> None:
-    """Few calls beat small calls: the weight is per request, not per coordinate."""
-    calls = len(weather_windows(WEATHER_START, date(2026, 9, 30))) * math.ceil(
-        EXPECTED_MUNICIPALITIES / COORDINATE_BATCH
-    )
-    weight = calls * len(DAILY_VARIABLES) * WINDOW_DAYS
+def test_batching_bounds_a_request_without_hiding_any_municipality() -> None:
+    """The weight counts locations, so batching must not skip or duplicate work.
 
-    assert len(DAILY_VARIABLES) * WINDOW_DAYS < 5_000, "one call must fit the 5,000/hour cap"
-    assert weight < 20_000, f"{calls} calls would spend {weight}, over two daily free budgets"
+    Open-Meteo weighs a query by variables, locations and domains, with a cap on the
+    locations one request may carry. Both hold here: no request over the cap, and the
+    batches cover every municipality exactly once.
+    """
+    windows = weather_windows(WEATHER_START, last_complete_month(date(2026, 10, 2)))
+    assert len(windows) == 3, "8.2 years of range, four years per window"
+
+    for _window in windows:
+        batches = list(chunks(range(EXPECTED_MUNICIPALITIES), COORDINATE_BATCH))
+        assert all(len(batch) <= MAX_COORDINATES_PER_REQUEST for batch in batches)
+        assert sorted(index for batch in batches for index in batch) == list(
+            range(EXPECTED_MUNICIPALITIES)
+        )
+
+
+def test_parse_archive_reads_a_single_location_body(fixture: Callable[[str], bytes]) -> None:
+    """Open-Meteo answers one location with an object, not a list."""
+    import json
+
+    one = json.dumps(json.loads(fixture("open_meteo_archive_era5.json"))[0]).encode()
+
+    frame = parse_archive(one, ["08001"])
+
+    assert len(frame) == 6
+    assert set(frame["code"]) == {"08001"}
+    assert frame["precipitation_sum"].iloc[1] == pytest.approx(4.8)
+
+
+def test_the_last_complete_month_waits_for_the_era5_delay() -> None:
+    # ERA5 arrives with about five days of lag (docs/08 §Fuentes de datos de M2), so
+    # 2026-09 is not a complete month on 2026-10-02: it still has days in flight.
+    assert last_complete_month(date(2026, 10, 2)) == date(2026, 8, 31)
+    assert last_complete_month(date(2026, 10, 8)) == date(2026, 9, 30)
+    # Early in a month the lag reaches back into the one before it.
+    assert last_complete_month(date(2026, 1, 1)) == date(2025, 11, 30)
