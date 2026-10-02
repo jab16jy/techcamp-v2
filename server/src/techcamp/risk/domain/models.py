@@ -56,6 +56,23 @@ Thresholds = Mapping[str, float | None]
 
 
 @dataclass(frozen=True, slots=True)
+class ArchiveDay:
+    """One day of the Open-Meteo ERA5 archive for one point (docs/08-ml.md §M2
+    "Clima").
+
+    The two measures the M2 features read, kept together because they come from
+    the same day of the same response. Both are `float | None`: ERA5 has no
+    value for a day it has not aggregated, and a `0` mm would be a claim about
+    the weather that the archive does not make (the same rule
+    `domain/features.py` follows on the series it is handed).
+    """
+
+    day: date
+    precipitation_mm: float | None
+    soil_moisture_m3_m3: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class ModelVersion:
     """One registered model or baseline (docs/03-modelo-datos.md:319-333).
 
