@@ -93,23 +93,24 @@ class DailyRiskRun:
     wrote part of it. Each of them is logged with its reason, so a run that
     predicts nothing says why instead of looking like a quiet one.
 
-    `written` and `skipped` add up to the pairs the run was asked about, and
-    `written` never counts a row the cell's own transaction rolled back (#242
-    `R3-rollback-leaves-written-count-inflated`).
+    `written` and `skipped` add up to the pairs the run was asked about. A row
+    `insert_prediction` stored counts as written even when the cell failed after
+    it: the real adapter commits every row of its own, so a rollback undoes
+    nothing that was written (#242 `R3-rollback-leaves-written-count-inflated`).
 
-    `predictions` are the rows this run stored, and they are what the caller
-    evaluates the alerts from (docs/06-diseno-detallado.md §8 "Alertas": after
-    writing the predictions, every plot of the cell opens the alert). Only the
-    rows of a cell that committed are in there, which is what makes "no new
-    prediction this run leaves the alert untouched" true by construction: a rerun
-    of a month already predicted writes nothing and therefore has nothing to
-    decide.
+    `predictions` are the rows STORED for this run's month, read back from the
+    store rather than remembered, and they are what the caller evaluates the
+    alerts from (docs/06-diseno-detallado.md §8 "Alertas": after writing the
+    predictions, every plot of the cell opens the alert). The month is the unit on
+    purpose: a rerun of a month already predicted writes nothing, and evaluating
+    only what one attempt inserted would leave that month without an alert
+    whenever the attempt that failed was the alert step itself.
     """
 
     issue_month: date
     written: int
     skipped: int
-    predictions: tuple[RiskPrediction, ...] = ()
+    predictions: list[RiskPrediction]
 
 
 def elevation_points(cell: RiskCell) -> list[tuple[float, float]]:
@@ -254,7 +255,6 @@ async def run_daily_risk(
 
     written = 0
     skipped = 0
-    fresh: list[RiskPrediction] = []
     # Which version serves each event is the same answer for every cell, so it is
     # resolved once, before the walk. That read autobegins a transaction, and one
     # left open across `fetch_daily` would pin a pooled connection for the length of
@@ -265,7 +265,9 @@ async def run_daily_risk(
     if transactions is not None:
         await transactions.commit()
     if not pending_events:
-        return DailyRiskRun(issue_month=issue_month, written=written, skipped=skipped)
+        return DailyRiskRun(
+            issue_month=issue_month, written=written, skipped=skipped, predictions=[]
+        )
 
     for cell in cells:
         try:
@@ -304,7 +306,6 @@ async def run_daily_risk(
 
         stored_here = 0
         already_here = 0
-        stored_rows: list[RiskPrediction] = []
         try:
             for event, version, predictor in pending_events:
                 outcome = predictor.predict(version, features)
@@ -322,7 +323,6 @@ async def run_daily_risk(
                 )
                 if await versions.insert_prediction(prediction):
                     stored_here += 1
-                    stored_rows.append(prediction)
                 else:
                     # La predicción de una celda, evento y mes se escribe una vez;
                     # las corridas siguientes del mismo mes no la repiten
@@ -347,40 +347,46 @@ async def run_daily_risk(
                 issue_month,
                 exc_info=True,
             )
-            if transactions is None:
-                # Nothing was undone: the repository owns each of its own
-                # transactions, so the rows this cell did store are still stored.
-                written += stored_here
-                fresh.extend(stored_rows)
-            else:
+            if transactions is not None:
                 try:
                     await transactions.rollback()
                 except Exception:
                     # Undoing a cell that failed is part of containing it: a
                     # rollback that raises (a dropped connection) must not take the
-                    # cells after this one down with it. The rows are lost either
-                    # way, so the counts below treat them as never stored (#242
-                    # R3-rollback-leaves-written-count-inflated).
+                    # cells after this one down with it.
                     logger.warning(
                         "risk: the transaction of cell %s could not be undone",
                         cell.id,
                         exc_info=True,
                     )
-            # Every pair of a cell that failed produced nothing stored: the ones it
-            # wrote went back with the transaction, the one that raised was never
-            # stored, and the ones after it were never attempted. So the cell
-            # contributes to `written` nothing at all and to `skipped` all of its
-            # pairs, and `written` never reports a row the rollback discarded (#242
-            # R3-rollback-leaves-written-count-inflated).
-            skipped += len(pending_events)
-        else:
-            written += stored_here
-            fresh.extend(stored_rows)
-            skipped += already_here
+            # The pairs of a failed cell that are neither stored nor already
+            # stored produced nothing: the one that raised was never stored, and
+            # the ones after it were never attempted.
+            skipped += len(pending_events) - stored_here - already_here
+        # A row `insert_prediction` stored is written whether or not the cell went
+        # on to fail. `SqlAlchemyRiskRepository` commits every row of its own
+        # (`risk/adapters/repositories.py`), so the rollback above does not undo
+        # them: dropping them from `written` would report a month with fewer
+        # predictions than the table holds, and would drop the row the alerts are
+        # decided on (#242 R3-rollback-leaves-written-count-inflated).
+        written += stored_here
+        skipped += already_here
+
+    # What the caller decides the alerts from is the month, not this run's insert:
+    # a rerun of a month already predicted stores nothing, and evaluating only what
+    # an attempt wrote would leave that month without an alert when the attempt
+    # that failed was the alert step (the job retries, ADR-0012; docs/06 §8
+    # "Alertas"). The stored rows are read back, so they are what is really there
+    # and `open_alert`/`resolve_automatically` are idempotent on them.
+    predictions = await versions.stored_predictions(
+        horizon_start=issue_month,
+        cell_ids=[cell.id for cell in cells],
+        model_version_ids=[version.id for _, version, _ in pending_events],
+    )
 
     return DailyRiskRun(
         issue_month=issue_month,
         written=written,
         skipped=skipped,
-        predictions=tuple(fresh),
+        predictions=predictions,
     )

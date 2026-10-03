@@ -643,6 +643,10 @@ Spelled out instead of derived from the value, the same reason
 `NON_PLOT_RULE_CODES` is: a third event must be registered here rather than
 guessed into a rule code nothing reads."""
 
+RISK_RULE_EVENTS: Mapping[str, str] = {code: event for event, code in RISK_RULE_CODES.items()}
+"""`RISK_RULE_CODES` read the other way, for the evaluator that walks the
+organization's rules and asks each one which event it is about."""
+
 
 def decide_risk_rule(
     *, severity: PredictionSeverity, current_alert: Alert | None, at: datetime

@@ -122,7 +122,11 @@ class _FailingPredictor:
 
 class FakeRiskRepository:
     """The risk rows double, with the uniqueness of
-    `uq_risk_prediction_cell_event_month_version` (docs/03-modelo-datos.md)."""
+    `uq_risk_prediction_cell_event_month_version` (docs/03-modelo-datos.md).
+
+    `insert_prediction` stores the row the way the real adapter does, by committing
+    it: a rollback of the caller's transaction cannot undo it (#242
+    R3-rollback-leaves-written-count-inflated)."""
 
     def __init__(self, versions: Mapping[str, ModelVersion]) -> None:
         self._versions = dict(versions)
@@ -145,6 +149,24 @@ class FakeRiskRepository:
             return False
         self.rows.append(prediction)
         return True
+
+    async def stored_predictions(
+        self,
+        *,
+        horizon_start: date,
+        cell_ids: Sequence[int],
+        model_version_ids: Sequence[uuid.UUID],
+    ) -> list[RiskPrediction]:
+        return sorted(
+            (
+                row
+                for row in self.rows
+                if row.horizon_start == horizon_start
+                and row.cell_id in cell_ids
+                and row.model_version_id in model_version_ids
+            ),
+            key=lambda row: (row.cell_id, row.event_type.value),
+        )
 
 
 class FakeArchive:
@@ -645,51 +667,20 @@ async def test_a_failed_cell_is_rolled_back_before_the_run_continues() -> None:
     assert transactions.commits == 2
 
 
-class _TransactionalRiskRepository(FakeRiskRepository):
-    """The rows double of an adapter that does NOT commit each prediction, so a
-    rollback takes the cell's rows with it (#242
-    R3-rollback-leaves-written-count-inflated).
-
-    `SqlAlchemyRiskRepository` commits every row itself, so a rollback there keeps
-    what was written. This double is the other adapter the `CellTransactions`
-    docstring talks about: its rows live only until the run's own commit, which is
-    what makes "what is actually stored" observable in a test.
-    """
-
-    def __init__(self, versions: Mapping[str, ModelVersion]) -> None:
-        super().__init__(versions)
-        self.rollbacks = 0
-        self._pending: list[RiskPrediction] = []
-
-    async def insert_prediction(self, prediction: RiskPrediction) -> bool:
-        if not await super().insert_prediction(prediction):
-            return False
-        self._pending.append(prediction)
-        return True
-
-    async def commit(self) -> None:
-        self._pending.clear()
-
-    async def rollback(self) -> None:
-        self.rollbacks += 1
-        for row in self._pending:
-            self.rows.remove(row)
-        self._pending.clear()
-
-
-async def test_a_rolled_back_cell_reports_neither_a_stored_row_nor_a_written_one() -> None:
-    """A cell that wrote one event and failed the next one rolls its written rows
-    back with the transaction, so `written` must stop counting them and `skipped`
-    must take every pair of the failed cell (#242
-    R3-rollback-leaves-written-count-inflated: `written` reported rows the rollback
-    had already discarded, and the lost rows were counted as neither written nor
-    skipped).
+async def test_a_cell_that_fails_after_it_stored_a_row_keeps_that_row_written() -> None:
+    """#242 R3-rollback-leaves-written-count-inflated, the production direction:
+    `SqlAlchemyRiskRepository.insert_prediction` commits every row of its own
+    (`risk/adapters/repositories.py:163`), so the cell's rollback does NOT undo the
+    flood row it stored before the drought predict raised. A stored row is written
+    whether or not the cell went on to fail — dropping it from `written` reported a
+    month with fewer predictions than the table holds.
 
     `EventType` walks flood first, so the cell stores its flood prediction and then
     fails on the drought one."""
-    versions = _TransactionalRiskRepository(
+    versions = FakeRiskRepository(
         {"risk_flood": _version("risk_flood"), "risk_drought": _version("risk_drought")}
     )
+    transactions = _RecordingTransactions()
 
     run = await _run(
         cells=[_cell(1)],
@@ -699,14 +690,37 @@ async def test_a_rolled_back_cell_reports_neither_a_stored_row_nor_a_written_one
             ("risk_flood", _RecordingPredictor(0.82)),
             ("risk_drought", _FailingPredictor(0.2, fail_on_call=1)),
         ),
-        transactions=CellTransactions(commit=versions.commit, rollback=versions.rollback),
+        transactions=transactions,
     )
 
-    assert versions.rollbacks == 1
-    # Nothing of the failed cell is stored, so nothing of it was written.
-    assert versions.rows == []
-    assert run.written == 0
-    assert run.skipped == 2
+    assert transactions.rollbacks == 1
+    assert [(row.event_type, row.severity) for row in versions.rows] == [
+        (EventType.FLOOD, Severity.HIGH)
+    ]
+    assert run.written == 1
+    # The pair that raised produced nothing, and none of the cell's was stored
+    # twice: `written` and `skipped` still add up to the pairs of the run.
+    assert run.skipped == 1
+    assert [row.event_type for row in run.predictions] == [EventType.FLOOD]
+
+
+async def test_a_rerun_of_a_month_hands_over_the_rows_the_first_run_stored() -> None:
+    """docs/06-diseno-detallado.md §8: la predicción de una celda, evento y mes se
+    escribe una vez, so the runs after the first write nothing — and would hand the
+    caller an empty list to evaluate, losing that month's alert. What the caller
+    needs is the month, not the run's own insert, so the run reads the rows back
+    from the store and both runs return the same ones."""
+    versions = _both_events_served()
+    archive = FakeArchive()
+    predictors = _both_events_registered()
+
+    first = await _every_event(versions=versions, archive=archive, predictors=predictors)
+    second = await _every_event(versions=versions, archive=archive, predictors=predictors)
+
+    assert first.written == 4
+    assert second.written == 0
+    assert second.skipped == 4
+    assert [row.id for row in second.predictions] == [row.id for row in first.predictions]
 
 
 async def test_a_rollback_that_itself_fails_does_not_abort_the_run() -> None:
@@ -753,10 +767,9 @@ async def test_it_commits_after_every_cell() -> None:
     assert transactions.commits == 3
     assert transactions.rollbacks == 0
     assert run.written == 4
-    # The rows the run kept are exactly the ones it counted, which is what lets
-    # the caller evaluate the alerts over them and nothing else (docs/06 §8
-    # "Alertas"): a path that counted a row without keeping it, or the other way
-    # round, would decide alerts over predictions this run never wrote.
+    # The rows the caller decides the alerts from are the ones the store holds,
+    # which on a first run of a month is exactly what this run wrote (a rerun
+    # stores nothing and still hands the stored rows over, asserted below).
     assert len(run.predictions) == run.written
     assert {row.cell_id for row in run.predictions} == {1, 2}
 

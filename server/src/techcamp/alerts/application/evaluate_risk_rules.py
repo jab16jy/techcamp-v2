@@ -23,7 +23,7 @@ from uuid import UUID
 from techcamp.alerts.application.ports import AlertRepository, AlertRuleRepository
 from techcamp.alerts.application.use_cases import open_alert, resolve_automatically
 from techcamp.alerts.domain import (
-    RISK_RULE_CODES,
+    RISK_RULE_EVENTS,
     AlertAction,
     PredictionEvidence,
     decide_risk_rule,
@@ -66,67 +66,71 @@ async def evaluate_risk_rules(
     alerts: AlertRepository,
 ) -> None:
     """Decide `flood_risk` / `drought_risk` for every plot of `org_id` from the
-    predictions this run wrote.
+    predictions stored for a month.
 
     A prediction belongs to a CELL (docs/03-modelo-datos.md §`risk_prediction`),
     and docs/06 §8 opens the alert on every plot of that cell, so the plots are
     reached the other way around: the org's own farms and plots, and each plot
-    with a prediction about its own cell. That is what keeps the fan-out inside
+    with the predictions about its own cell. That is what keeps the fan-out inside
     the organization — neighbouring plots may share a cell (docs/00 glosario), so
     the cell id alone cannot say whose alert a prediction is about.
     """
-    rules_by_code = {rule.code: rule for rule in await rules.list_for_org(org_id)}
-    by_cell: dict[int | None, list[PredictionEvidence]] = {}
+    org_rules = await rules.list_for_org(org_id)
+    by_cell_event: dict[tuple[int | None, str], list[PredictionEvidence]] = {}
     for prediction in predictions:
-        code = RISK_RULE_CODES.get(prediction.event)
-        if code is None or code not in rules_by_code:
-            # An event with no rule of its own, or a rule this organization does
-            # not read: nothing to decide, never a guessed rule.
-            continue
-        by_cell.setdefault(prediction.cell_id, []).append(prediction)
+        by_cell_event.setdefault((prediction.cell_id, prediction.event), []).append(prediction)
 
-    if not by_cell:
+    if not by_cell_event:
         return
 
     for farm in await farms.list_for_org(org_id, limit=_MAX_FARMS_PER_ORG):
         for plot in await plots.list_for_farm(farm.id, org_id):
-            for prediction in by_cell.get(plot.weather_cell_id, ()):
-                rule = rules_by_code[RISK_RULE_CODES[prediction.event]]
-                # `get_non_resolved_for_target` never returns a resolved alert (the
-                # partial unique index's own scope), so it is the "current" alert.
-                current = await alerts.get_non_resolved_for_target(
-                    rule_id=rule.id, org_id=plot.org_id, plot_id=plot.id, node_id=None
-                )
-                decision = decide_risk_rule(
-                    severity=prediction.severity, current_alert=current, at=at
-                )
-                match decision.action:
-                    case AlertAction.OPEN:
-                        await open_alert(
-                            rule=rule,
-                            at=at,
-                            alerts=alerts,
-                            plot_id=plot.id,
-                            evidence={
-                                "event": prediction.event,
-                                "severity": prediction.severity.value,
-                                "horizon_start": prediction.horizon_start.isoformat(),
-                                # docs/06 §8: "toda alerta se puede rastrear hasta
-                                # el modelo exacto".
-                                "model_version_id": str(prediction.model_version_id),
-                            },
-                        )
-                    case AlertAction.RESOLVE:
-                        assert decision.alert is not None, "a resolve decision carries the alert"
-                        await resolve_automatically(
-                            alert_id=decision.alert.id,
-                            org_id=plot.org_id,
-                            farm_id=plot.farm_id,
-                            at=at,
-                            alerts=alerts,
-                        )
-                    case AlertAction.UPGRADE | AlertAction.NO_ACTION:
-                        # The rule's severity is `critical` from the start (docs/06
-                        # §3), so there is no upgrade to make, and a prediction that
-                        # is still at `alto` changes nothing.
-                        pass
+            # The organization's rules one by one, like `evaluate_weather_rules`:
+            # `uq_alert_rule_factory_code` covers only `org_id IS NULL`, so a rule
+            # the organization added for itself sits next to the factory one and
+            # both are decided. An event with no rule, or a rule that is not a
+            # model rule, is never decided on a prediction.
+            for rule in org_rules:
+                event = RISK_RULE_EVENTS.get(rule.code)
+                if event is None:
+                    continue
+                for prediction in by_cell_event.get((plot.weather_cell_id, event), ()):
+                    # `get_non_resolved_for_target` never returns a resolved alert
+                    # (the partial unique index's own scope), so it is the "current"
+                    # alert.
+                    current = await alerts.get_non_resolved_for_target(
+                        rule_id=rule.id, org_id=plot.org_id, plot_id=plot.id, node_id=None
+                    )
+                    decision = decide_risk_rule(
+                        severity=prediction.severity, current_alert=current, at=at
+                    )
+                    match decision.action:
+                        case AlertAction.OPEN:
+                            await open_alert(
+                                rule=rule,
+                                at=at,
+                                alerts=alerts,
+                                plot_id=plot.id,
+                                evidence={
+                                    "event": prediction.event,
+                                    "severity": prediction.severity.value,
+                                    "horizon_start": prediction.horizon_start.isoformat(),
+                                    # docs/06 §8: "toda alerta se puede rastrear hasta
+                                    # el modelo exacto".
+                                    "model_version_id": str(prediction.model_version_id),
+                                },
+                            )
+                        case AlertAction.RESOLVE:
+                            assert decision.alert is not None, "a resolve carries the alert"
+                            await resolve_automatically(
+                                alert_id=decision.alert.id,
+                                org_id=plot.org_id,
+                                farm_id=plot.farm_id,
+                                at=at,
+                                alerts=alerts,
+                            )
+                        case AlertAction.UPGRADE | AlertAction.NO_ACTION:
+                            # The rule's severity is `critical` from the start
+                            # (docs/06 §3), so there is no upgrade to make, and a
+                            # prediction that is still at `alto` changes nothing.
+                            pass

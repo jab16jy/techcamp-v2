@@ -30,6 +30,7 @@ from techcamp.alerts.adapters.repositories import (
 from techcamp.alerts.application import evaluate_risk_rules
 from techcamp.alerts.domain import (
     RISK_RULE_CODES,
+    RISK_RULE_EVENTS,
     Alert,
     AlertAction,
     AlertState,
@@ -146,6 +147,10 @@ def test_the_two_events_name_their_own_rule_and_only_those_events_are_risk() -> 
     assert RISK_RULE_CODES == {"flood": "flood_risk", "drought": "drought_risk"}
     assert RISK_RULE_CODES.get("suitability") is None
     assert RISK_RULE_CODES.get("flood_risk") is None
+    # The evaluator walks the rules and asks the other direction, so the two
+    # mappings cannot say different things.
+    assert RISK_RULE_EVENTS == {code: event for event, code in RISK_RULE_CODES.items()}
+    assert RISK_RULE_EVENTS.get("heat_stress") is None
 
 
 # -- the use case over real plots of the cell a prediction is about --
@@ -235,6 +240,33 @@ async def _evaluate(
         plots=SqlAlchemyPlotRepository(db_session),
         alerts=SqlAlchemyAlertRepository(db_session),
     )
+
+
+async def _own_rule(
+    db_session: AsyncSession, *, org_id: UUID, code: str, severity: str = "critical"
+) -> None:
+    """One rule of the organization itself.
+
+    `uq_alert_rule_factory_code` is unique on `code` where `org_id IS NULL`, so an
+    org MAY have its own row of a factory code (`test_schema.py`
+    `test_a_second_factory_rule_with_an_existing_code_is_rejected`), which is the
+    case this evaluator has to decide like `evaluate_weather_rules` does.
+    """
+    db_session.add(
+        AlertRuleRow(
+            id=uuid7(),
+            org_id=org_id,
+            code=code,
+            metric="probability",
+            operator=">",
+            threshold=0.5,
+            hysteresis=0.0,
+            min_duration_min=0,
+            severity=severity,
+            crop_id=None,
+        )
+    )
+    await db_session.commit()
 
 
 async def _alerts(db_session: AsyncSession, plot_id: UUID) -> list[tuple[str, str, str]]:
@@ -426,3 +458,32 @@ async def test_a_prediction_of_one_org_never_opens_an_alert_on_another_orgs_plot
 
     assert await _alerts(db_session, my_plot) == [("flood_risk", "open", "critical")]
     assert await _alerts(db_session, their_plot) == []
+
+
+async def test_every_rule_of_the_org_that_is_a_model_rule_is_decided(
+    db_session: AsyncSession,
+) -> None:
+    """The evaluator walks the organization's rules like
+    `evaluate_weather_rules` does (`alerts/application/evaluate_weather_rules.py:138`),
+    so a rule the organization added for itself is decided next to the factory one
+    — `uq_alert_rule_factory_code` only covers `org_id IS NULL`, so both rows exist
+    and only keeping one per code would silently drop the org's own.
+
+    The negative half is on the same walk: the org's own `heat_stress` is not a
+    model rule, so a prediction is never evidence for it."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
+    await _own_rule(db_session, org_id=org.org_id, code="flood_risk")
+    await _own_rule(db_session, org_id=org.org_id, code="heat_stress", severity="warning")
+
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[_evidence(cell_id=cell_id, severity="critical")],
+    )
+
+    assert await _alerts(db_session, plot_id) == [
+        ("flood_risk", "open", "critical"),
+        ("flood_risk", "open", "critical"),
+    ]

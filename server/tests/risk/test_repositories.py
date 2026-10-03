@@ -261,6 +261,52 @@ async def test_another_version_of_the_same_month_is_its_own_row(
     assert rows.scalar_one() == 2
 
 
+async def test_a_month_read_never_crosses_its_cell_month_or_served_version(
+    db_session: AsyncSession,
+) -> None:
+    """The run reads back the month it predicted, for the cells it walked and the
+    versions being served, and nothing else may come back: another cell's row is
+    another plot's, another month's is another horizon, and another version's is a
+    promotion this month was not predicted by (docs/06-diseno-detallado.md §8;
+    ADR-0012: the retry of a run decides the rows of the same month and version)."""
+    served_id = await _version(db_session)
+    other_id = await _version(db_session, name="risk_drought", version="2026-10-09", promoted=False)
+    await _cell(db_session)
+    await _cell(db_session, cell_id=_OTHER_CELL_ID)
+    month = _month_start(local_today())
+    repository = SqlAlchemyRiskRepository(db_session)
+
+    await repository.insert_prediction(_prediction(served_id, horizon_start=month))
+    await repository.insert_prediction(
+        _prediction(served_id, horizon_start=month, event_type=EventType.DROUGHT)
+    )
+    await repository.insert_prediction(
+        _prediction(served_id, cell_id=_OTHER_CELL_ID, horizon_start=month)
+    )
+    await repository.insert_prediction(
+        _prediction(served_id, horizon_start=_month_start(month.replace(month=9)))
+    )
+    await repository.insert_prediction(
+        _prediction(other_id, horizon_start=month, event_type=EventType.DROUGHT)
+    )
+
+    rows = await repository.stored_predictions(
+        horizon_start=month, cell_ids=[_CELL_ID], model_version_ids=[served_id]
+    )
+
+    assert [(row.cell_id, row.event_type, row.horizon_start) for row in rows] == [
+        (_CELL_ID, EventType.DROUGHT, month),
+        (_CELL_ID, EventType.FLOOD, month),
+    ]
+    # Nothing to read is nothing, never an unfiltered query.
+    assert (
+        await repository.stored_predictions(
+            horizon_start=month, cell_ids=[], model_version_ids=[served_id]
+        )
+        == []
+    )
+
+
 async def test_the_current_month_is_served_even_when_a_later_one_exists(
     db_session: AsyncSession,
 ) -> None:
