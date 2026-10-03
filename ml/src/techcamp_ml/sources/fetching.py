@@ -53,13 +53,17 @@ def fetch(
     weight: int = 0,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     retries: int = DEFAULT_RETRIES,
+    transport: httpx.BaseTransport | None = None,
 ) -> bytes:
     """Download one response into the raw cache and return its bytes.
 
     `weight` is the number of coordinates the request asks for: the throttle counts
-    coordinates, because that is what the host throttles on.
+    coordinates, because that is what the host throttles on. `transport` is the seam
+    the tests answer on, so the retry loop is proven without the network.
     """
-    payload = _get(url, params=params, weight=weight, timeout=timeout, retries=retries)
+    payload = _get(
+        url, params=params, weight=weight, timeout=timeout, retries=retries, transport=transport
+    )
     save_raw(layout, source, name, url, payload)
     return payload
 
@@ -89,10 +93,11 @@ def _get(
     weight: int,
     timeout: float,
     retries: int,
+    transport: httpx.BaseTransport | None = None,
 ) -> bytes:
     global _last_request_at  # noqa: PLW0603 - the throttle is process-wide by design
     interval = interval_seconds(weight)
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    with httpx.Client(timeout=timeout, follow_redirects=True, transport=transport) as client:
         for attempt in range(retries):
             wait = interval - (time.monotonic() - _last_request_at)
             if wait > 0:
