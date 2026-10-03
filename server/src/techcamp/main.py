@@ -13,6 +13,7 @@ from techcamp.irrigation.adapters.api.router import router as irrigation_router
 from techcamp.logbook.adapters.api.attachments import router as attachments_router
 from techcamp.logbook.adapters.api.sync import router as logbook_sync_router
 from techcamp.logbook.adapters.api.visits import router as visits_router
+from techcamp.metrics.adapters.api.router import router as metrics_router
 from techcamp.notifications.adapters.api.router import router as notifications_router
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.errors import register_error_handlers
@@ -49,6 +50,7 @@ app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(visits_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
 app.include_router(home_router, prefix="/api/v1")
+app.include_router(metrics_router, prefix="/api/v1")
 
 if is_seminar_profile():
     # /dev routes only exist in the seminar profile (ADR-0021); still part of
