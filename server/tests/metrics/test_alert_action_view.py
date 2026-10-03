@@ -17,6 +17,7 @@ from datetime import date, timedelta
 import pytest
 from metrics.conftest import (
     add_alert,
+    add_cycle,
     add_logbook_entry,
     add_node,
     add_node_alert,
@@ -106,6 +107,65 @@ async def test_plot_alert_view_rejects_a_discarded_or_impossible_action(
         (r.alert_id, r.has_timely_action)
         for r in await source.plot_alert_actions(drip.org_id, drip.plot_id, **_SEPTEMBER)
     ] == [(heat, False)]
+
+
+async def test_plot_alert_view_counts_an_irrigation_of_any_cycle_as_the_action(
+    db_session: AsyncSession,
+) -> None:
+    """The bounded correction for `R3-reliability.alert-action.cross-plot`: the
+    `water_stress` irrigation clause is scoped to the **plot**, not to a crop
+    cycle, and that is now proven rather than incidental.
+
+    docs/11:50 defines the action as "un riego registrado" with no cycle qualifier,
+    and `logbook_entry.crop_cycle_id` is nullable (docs/03-modelo-datos.md:410),
+    because the phone sends the cycle it has cached and often sends none. A
+    cycle-scoped clause would therefore *discard* real actions. Both shapes score
+    as acted on: an irrigation carrying a cycle that has nothing to do with the
+    alert, and an irrigation carrying no cycle at all.
+
+    The negative: neither counts outside the 48-hour window, so the clause stays a
+    window and not a blanket "the plot ever irrigated".
+    """
+    dated = await make_env(db_session, name="Finca Con Ciclo")
+    cycle_id = await add_cycle(
+        db_session,
+        dated,
+        sown_on=date(2026, 9, 1),
+        status="harvested",
+        expected_harvest_on=date(2026, 9, 30),
+    )
+    dated_alert = await add_alert(db_session, dated, rule_code="water_stress", at=_OPENED_AT)
+    await add_logbook_entry(
+        db_session,
+        dated,
+        kind="irrigation",
+        occurred_on=date(2026, 9, 12),
+        irrigation_mm=12.0,
+        crop_cycle_id=cycle_id,
+    )
+    undated = await make_env(db_session, name="Finca Sin Ciclo")
+    undated_alert = await add_alert(db_session, undated, rule_code="water_stress", at=_OPENED_AT)
+    await add_logbook_entry(
+        db_session, undated, kind="irrigation", occurred_on=date(2026, 9, 12), irrigation_mm=9.0
+    )
+    late = await make_env(db_session, name="Finca Tardía")
+    late_alert = await add_alert(db_session, late, rule_code="water_stress", at=_OPENED_AT)
+    await add_logbook_entry(
+        db_session, late, kind="irrigation", occurred_on=date(2026, 9, 13), irrigation_mm=9.0
+    )
+
+    source = SqlAlchemyMetricsSourceRepository(db_session)
+    scored = {
+        r.alert_id: r.has_timely_action
+        for env, _ in ((dated, None), (undated, None), (late, None))
+        for r in await source.plot_alert_actions(env.org_id, env.plot_id, **_SEPTEMBER)
+    }
+
+    assert scored == {
+        dated_alert: True,  # irrigation tagged with a cycle
+        undated_alert: True,  # irrigation with no cycle at all
+        late_alert: False,  # one day past the window
+    }
 
 
 async def test_plot_alert_view_reads_only_the_plot_and_month_it_was_asked_for(
