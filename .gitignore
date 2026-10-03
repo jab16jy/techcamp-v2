@@ -1,3 +1,8 @@
+# ML build products: the raw cache holds the source provenance, the parquets
+# are rebuilt from it (docs/08 §Reglas de gobierno, 'Reproducible o no existe').
+ml/.cache/
+ml/data/
+
 # Python
 __pycache__/
 *.pyc
