@@ -103,6 +103,12 @@ class AlertRepository(Protocol):
         §8): without them, the morning after a farmer closed the alert by hand
         (docs/06 §3 "cierre manual") would open it again from evidence the run
         had already judged.
+
+        It answers for an OPENING or a NO-ACTION only. A decision of RESOLVE never
+        consults it, because the resolving row of the next month is issued while
+        the alert it must resolve is still open — the absorbed case above — and
+        honouring the record there would leave the alert open for the rest of the
+        month (see `evaluate_risk_rules`).
         """
         ...
 

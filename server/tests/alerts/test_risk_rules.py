@@ -439,7 +439,17 @@ async def test_a_new_prediction_below_high_resolves_the_open_alert(
     await _evaluate(
         db_session,
         org_id=org.org_id,
-        predictions=[_evidence(cell_id=cell_id, severity="low", horizon_start=date(2026, 11, 1))],
+        predictions=[
+            _evidence(
+                cell_id=cell_id,
+                severity="low",
+                horizon_start=date(2026, 11, 1),
+                # Stored before it is evaluated and after the alert opened, the
+                # order the daily run produces (`_ISSUED_AT` before `_AT` would be
+                # an ordering no run ever has).
+                issued_at=later - timedelta(minutes=5),
+            )
+        ],
         at=later,
     )
 
@@ -577,6 +587,59 @@ async def test_a_prediction_the_user_closed_by_hand_is_never_decided_again(
         )
 
     assert await _alerts(db_session, plot_id) == [("flood_risk", "resolved", "critical")]
+
+
+async def test_a_low_prediction_stored_after_the_alert_opened_still_resolves_it(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06 §8: "la resuelve en la primera predicción nueva por debajo de
+    `alto`", in the order the daily run really produces.
+
+    The run STORES its predictions and evaluates them minutes later, so the
+    resolving row's `issued_at` (`risk_prediction.created_at`) is ALWAYS after the
+    `opened_at` of the alert it has to resolve — which is exactly the ordering that
+    matches the "absorbed by the open alert" record. Suppressing the decision on
+    that record would leave the alert open for the rest of the month (#246
+    R3-decided-once-suppresses-the-resolution)."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
+
+    # Day 1: a `alto` prediction stored at 06:00, evaluated at 06:05.
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[_evidence(cell_id=cell_id, horizon_start=date(2026, 10, 1))],
+    )
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+    # Day 2: the next month's `bajo` prediction, stored at 06:00 and evaluated at
+    # 06:05 — issued while the alert of day 1 is still open.
+    later = _AT + timedelta(days=1)
+    stored = later - timedelta(minutes=5)
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[
+            _evidence(
+                cell_id=cell_id,
+                severity="low",
+                horizon_start=date(2026, 11, 1),
+                issued_at=stored,
+            )
+        ],
+        at=later,
+    )
+
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "resolved", "critical")]
+    resolved = await db_session.get_one(
+        AlertRow,
+        (
+            await db_session.execute(select(AlertRow.id).where(AlertRow.plot_id == plot_id))
+        ).scalar_one(),
+    )
+    assert resolved.resolved_at is not None
+    assert _ISSUED_AT < stored < later
 
 
 async def test_a_prediction_an_open_alert_absorbed_never_reopens_it_after_the_close(

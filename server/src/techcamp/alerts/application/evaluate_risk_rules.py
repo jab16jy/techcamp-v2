@@ -96,23 +96,25 @@ async def evaluate_risk_rules(
                 if event is None:
                     continue
                 for prediction in by_cell_event.get((plot.weather_cell_id, event), ()):
-                    # One prediction is decided once per plot and rule. The run
-                    # hands the same stored row over every morning of its month
-                    # (docs/06 §8), so without this the morning after a farmer
-                    # closed the alert by hand (docs/06 §3 "cierre manual") would
-                    # open it again from evidence that was already judged — either
-                    # by the alert that carries this prediction's identity, or by
-                    # the alert that was open when the prediction was issued and
-                    # answered it with NO_ACTION. Another month, or another
-                    # model_version_id, is another prediction and is decided.
-                    decided = await alerts.get_decided_for_target(
-                        rule_id=rule.id,
-                        org_id=plot.org_id,
-                        plot_id=plot.id,
-                        prediction=prediction,
-                    )
-                    if decided is not None:
-                        continue
+                    # The decision comes FIRST. A stored prediction is decided once
+                    # per plot and rule (docs/06 §8): the run hands the same row
+                    # over every morning of its month, so without a record the
+                    # morning after a farmer closed the alert by hand
+                    # (docs/06 §3 "cierre manual") would open it again from
+                    # evidence that was already judged — either by the alert that
+                    # carries this prediction's identity, or by the alert that was
+                    # open when the prediction was issued and answered it with
+                    # NO_ACTION, leaving no other record.
+                    #
+                    # That record suppresses OPEN and NO_ACTION only. A RESOLVE is
+                    # never suppressed: the daily run STORES a prediction and
+                    # evaluates it minutes later, so the resolving row of the next
+                    # month is always issued while the alert it has to resolve is
+                    # still open — exactly the absorbed case — and honouring the
+                    # record there would leave the alert open for the rest of the
+                    # month (docs/06 §8: "la resuelve en la primera predicción
+                    # nueva por debajo de `alto`").
+                    #
                     # `get_non_resolved_for_target` never returns a resolved alert
                     # (the partial unique index's own scope), so it is the "current"
                     # alert.
@@ -122,6 +124,15 @@ async def evaluate_risk_rules(
                     decision = decide_risk_rule(
                         severity=prediction.severity, current_alert=current, at=at
                     )
+                    if decision.action is not AlertAction.RESOLVE:
+                        decided = await alerts.get_decided_for_target(
+                            rule_id=rule.id,
+                            org_id=plot.org_id,
+                            plot_id=plot.id,
+                            prediction=prediction,
+                        )
+                        if decided is not None:
+                            continue
                     match decision.action:
                         case AlertAction.OPEN:
                             await open_alert(
