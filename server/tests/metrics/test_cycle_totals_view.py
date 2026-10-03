@@ -15,8 +15,9 @@ apart from "no evidence" (`None`).
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 from metrics.conftest import (
@@ -27,8 +28,10 @@ from metrics.conftest import (
     bogota_midnight,
     make_env,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.farms.adapters.orm import CropCycleRow
 from techcamp.metrics.adapters.source_repository import SqlAlchemyMetricsSourceRepository
 
 pytestmark = pytest.mark.anyio
@@ -220,3 +223,99 @@ async def test_a_cycle_with_balance_but_no_stress_reads_zero_stress_days(
     totals = await SqlAlchemyMetricsSourceRepository(db_session).cycle_totals(env.org_id, cycle_id)
 
     assert totals is not None and totals.water_stress_days == 0
+
+
+async def test_cycle_totals_measure_an_active_cycle_up_to_today(
+    db_session: AsyncSession,
+) -> None:
+    """Closes `R3-reliability.cycle-totals.now-dependence`: the documented
+    active-cycle path, which D-T0.8 makes T4 hit on every read, had no test.
+
+    With no `expected_harvest_on` the window's upper bound falls back to today in
+    America/Bogota, so a cycle with no end date is still measured up to now. The
+    assertion is a bound rather than an exact count, because `now()` lives in SQL
+    and cannot be frozen; what is pinned is that the window reaches today instead
+    of stopping at the sowing date or at a null bound.
+
+    The negative: a stressed day after today must not be counted, so the bound is
+    doing the work rather than the count being unbounded.
+    """
+    source = SqlAlchemyMetricsSourceRepository(db_session)
+    env = await make_env(db_session)
+    today = datetime.now(UTC).astimezone(ZoneInfo("America/Bogota")).date()
+    cycle_id = await add_cycle(
+        db_session,
+        env,
+        sown_on=today - timedelta(days=10),
+        status="active",
+        expected_harvest_on=None,
+    )
+    for offset in range(3):
+        await add_water_balance(
+            db_session,
+            env,
+            day=today - timedelta(days=2) + timedelta(days=offset),
+            depletion_mm=60.0,
+            raw_mm=46.2,
+        )
+    # A stressed day in the future is outside the window whatever `now()` is.
+    await add_water_balance(
+        db_session, env, day=today + timedelta(days=1), depletion_mm=60.0, raw_mm=46.2
+    )
+
+    totals = await source.cycle_totals(env.org_id, cycle_id)
+
+    assert totals is not None
+    assert totals.water_stress_days == 3
+    # The fallback really is what ran: an `active` cycle has no `expected_harvest_on`.
+    assert (await db_session.get(CropCycleRow, cycle_id)).expected_harvest_on is None
+
+
+async def test_cycle_totals_never_count_another_organizations_balance(
+    db_session: AsyncSession,
+) -> None:
+    """docs/09 §Seguridad, closing `R3-reliability.cycle-totals.plot-isolation`.
+
+    The water-balance lateral filters by `wb.plot_id` only and never joins
+    `organization`, so the proof that it cannot leak is the plot key itself: a
+    cycle belongs to a plot, and a plot belongs to one organization, so another
+    organization's balance rows sit under a `plot_id` this cycle can never name.
+
+    Here the foreign plot's balance rows exist and are stressed, and this cycle
+    still reads `None`: no evidence reached it.
+    """
+    source = SqlAlchemyMetricsSourceRepository(db_session)
+    env = await make_env(db_session)
+    cycle_id = await add_cycle(db_session, env, **_CYCLE)
+    foreign = await make_env(db_session, name="Finca Extranjera")
+    await add_water_balance(
+        db_session, foreign, day=date(2026, 9, 2), depletion_mm=60.0, raw_mm=46.2
+    )
+
+    totals = await source.cycle_totals(env.org_id, cycle_id)
+
+    assert totals is not None and totals.water_stress_days is None
+
+
+async def test_a_partial_sale_cannot_be_written_without_a_price(
+    db_session: AsyncSession,
+) -> None:
+    """Closes `R3-reliability.cycle-totals.null-sale-price`, which read
+    `revenue_cop` as able to silently understate a sale recorded without a price.
+
+    It cannot: `ck_logbook_entry_sold_and_price` (docs/03-modelo-datos.md:409)
+    requires `sold_kg` and `sale_price_cop_per_kg` together, so the null-
+    propagation branch the finding describes is unreachable. Proving the CHECK
+    here is what stops the next review from re-raising it.
+    """
+    env = await make_env(db_session)
+
+    with pytest.raises(IntegrityError):
+        await add_logbook_entry(
+            db_session,
+            env,
+            kind="harvest",
+            occurred_on=date(2026, 9, 28),
+            yield_kg=500,
+            sold_kg=300,
+        )

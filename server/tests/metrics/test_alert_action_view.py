@@ -36,6 +36,29 @@ Sep 12 (D-T0.6): the logbook records dates, not hours, so an entry dated Sep 13
 is already past 48 h."""
 _SEPTEMBER = {"from_day": date(2026, 9, 1), "to_day": date(2026, 9, 30)}
 
+# Three review findings about this view are closed by documents and the data
+# model rather than by a test, because there is no behaviour left to pin. They
+# are recorded here so the next review does not re-raise them.
+#
+# - `R3-reliability.alert-action.rule-window` asked for a per-rule timely window.
+#   The window is one constant for the whole component by decision D-T0.6
+#   (docs/11-metricas.md §2: "el día local de `opened_at + 48 h`"), and
+#   `alert_rule` carries no action-window column — only `min_duration_min`, which
+#   governs how long a *violation* must last before the rule fires, not how long
+#   the producer has to answer. There is nothing per-rule to read.
+# - `R3-reliability.alert-action.entry-scope` asked the alert-linked branch to
+#   filter by `kind`. docs/03-modelo-datos.md:421 assigns that role to `alert_id`
+#   on *any* entry ("cualquiera con `alert_id`: la entrada es la acción
+#   registrada tras la alerta"), so no `kind` filter is the documented rule. The
+#   observation-kind case is already asserted in
+#   `test_plot_alert_view_scores_timely_actions_and_excludes_node_alerts`.
+# - `R3-reliability.alert-action.repeat-entry` worried one entry satisfies every
+#   alert whose window contains it. The alert-linked branch is keyed on
+#   `e.alert_id = a.id`, so an entry answers exactly the one alert it names; only
+#   the plot-scoped irrigation clause can serve two alerts at once, and
+#   `uq_alert_non_resolved_plot` allows just one non-resolved alert per
+#   (rule, plot), so two same-rule windows cannot overlap.
+
 
 async def test_plot_alert_view_scores_timely_actions_and_excludes_node_alerts(
     db_session: AsyncSession,

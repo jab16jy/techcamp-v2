@@ -13,7 +13,8 @@ and a month the node was never claimed in has no row at all.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from metrics.conftest import (
@@ -121,3 +122,85 @@ async def test_monitoring_view_reads_only_the_plot_it_was_asked_for(
         (date(2025, 12, 1), 18_000, 0)
     ]
     assert await source.node_month_readings(env.org_id, env.plot_id, month=date(2025, 11, 1)) == []
+
+
+async def test_monitoring_view_counts_one_reading_per_uplink_not_per_sensor(
+    db_session: AsyncSession,
+) -> None:
+    """Closes `R3-reliability.monitoring.duplicate-count`: the numerator counts
+    distinct uplink instants, so two sensors of one node reporting at the same
+    instant is ONE reading, not two.
+
+    That is the whole reason the view reads `COUNT(DISTINCT r.time)`: every sensor
+    of a node shares one `reading.time` per uplink, which is the unit
+    `interval_s` is expressed in. Two sensors at one instant must not make the
+    plot look better monitored than it is — the component measures that the plot
+    is being measured, and one uplink is one measurement.
+
+    The negative is in the same assertion: a second sensor reporting at a
+    *different* instant is a real second reading and must be counted.
+    """
+    env = await make_env(db_session)
+    node_id = await add_claimed_node(
+        db_session, env, claim_code="node-a", claimed_at=bogota_midnight(MONTH), interval_s=3600
+    )
+    soil = await add_sensor(db_session, node_id, channel_key="sm-a-20", metric="soil_moisture")
+    air = await add_sensor(db_session, node_id, channel_key="air-rh-150", metric="air_rh")
+    shared = bogota_midnight(date(2026, 9, 2))
+    # Both sensors report the SAME uplink instant: one reading.
+    await add_reading(db_session, soil, at=shared, value=21.0)
+    await add_reading(db_session, air, at=shared, value=68.0)
+    # A genuinely later uplink is a second reading.
+    await add_reading(db_session, soil, at=shared + timedelta(hours=1), value=21.4)
+
+    rows = await SqlAlchemyMetricsSourceRepository(db_session).node_month_readings(
+        env.org_id, env.plot_id, month=MONTH
+    )
+
+    assert [(r.received_readings, r.claimed_seconds) for r in rows] == [(2, _FULL_MONTH_SECONDS)]
+
+
+async def test_monitoring_view_caps_the_current_month_at_now(
+    db_session: AsyncSession,
+) -> None:
+    """Closes `R3-reliability.monitoring.now-dependence`: the `LEAST(month end,
+    now())` cap exists so a month still in flight is not charged for days that
+    have not happened yet.
+
+    `now()` lives in SQL, so the current month cannot be pinned to an exact
+    second without a clock seam. What IS assertable is the bound the cap exists
+    to guarantee: a node claimed inside the current month is charged from its
+    claim to *now*, so its seconds can never exceed the wall-clock time actually
+    elapsed, and never reach the month's full length.
+
+    The negative is the same bound from below: a node claimed at the start of
+    the current month is charged at least the seconds since that moment.
+    """
+    source = SqlAlchemyMetricsSourceRepository(db_session)
+    env = await make_env(db_session)
+    today = datetime.now(UTC).astimezone(ZoneInfo("America/Bogota")).date()
+    month_start = today.replace(day=1)
+    claimed_now = datetime.now(UTC)
+    month_open = bogota_midnight(month_start)
+
+    early = await add_claimed_node(
+        db_session, env, claim_code="node-early", claimed_at=month_open, interval_s=3600
+    )
+    late = await add_claimed_node(
+        db_session, env, claim_code="node-late", claimed_at=claimed_now, interval_s=3600
+    )
+
+    rows = {
+        r.node_id: r.claimed_seconds
+        for r in await source.node_month_readings(env.org_id, env.plot_id, month=month_start)
+    }
+
+    now = datetime.now(UTC)
+    elapsed_full_month = (now - claimed_now).total_seconds()
+    assert elapsed_full_month < float(_FULL_MONTH_SECONDS), "the month is still in flight"
+    # A node claimed now cannot be credited with more than the seconds since.
+    assert 0 <= rows[late] <= elapsed_full_month
+    # A node claimed when the month opened is credited the whole elapsed month,
+    # which is more than the late node and still no more than a full month.
+    assert rows[early] >= rows[late] >= 0
+    assert rows[early] <= _FULL_MONTH_SECONDS

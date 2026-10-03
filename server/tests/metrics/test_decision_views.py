@@ -26,6 +26,7 @@ from metrics.conftest import (
     add_recommendation,
     make_env,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.metrics.adapters.source_repository import SqlAlchemyMetricsSourceRepository
@@ -136,6 +137,60 @@ async def test_decision_view_joins_each_day_to_its_applied_depth(
         (date(2026, 9, 12), "irrigate", Decimal("10"), Decimal("8.0")),
         (date(2026, 9, 13), "irrigate", Decimal("5"), None),
     ]
+
+
+async def test_decision_view_reads_no_evidence_for_a_plot_with_no_recommendation(
+    db_session: AsyncSession,
+) -> None:
+    """Closes `R3-reliability.decision-view.no-evidence`: the port docstring says
+    the `decision` denominator depends on how many days carried a
+    recommendation, so a plot that never got one must read as an empty result
+    rather than as a denominator of zero.
+
+    That is a different claim from the sibling-plot assertion: here the plot
+    exists, belongs to the org and simply has no recommendation history, so T5
+    sees `[]` and the component is `null` (D-T0.3), not `0`.
+
+    The negative is in the same test: an entry with no matching recommendation
+    still does not produce a decision day, because the denominator counts days
+    that carried a decision.
+    """
+    env = await make_env(db_session)
+    await add_logbook_entry(
+        db_session, env, kind="irrigation", occurred_on=date(2026, 9, 10), irrigation_mm=18.0
+    )
+
+    rows = await SqlAlchemyMetricsSourceRepository(db_session).decision_days(
+        env.org_id, env.plot_id, **_SEPTEMBER
+    )
+
+    assert rows == []
+
+
+async def test_one_recommendation_per_plot_day_is_enforced_by_the_database(
+    db_session: AsyncSession,
+) -> None:
+    """Closes `R3-reliability.decision-view.duplicate-days`, which read
+    `decision_days`' `ORDER BY day` as able to return two rows in an unstable
+    order.
+
+    It cannot: `uq_irrigation_recommendation_plot_day`
+    (docs/03-modelo-datos.md:206) makes `(plot_id, day)` unique, so the tie the
+    ordering would have to break never exists. Proving the constraint is what
+    stops the next review from re-raising it.
+    """
+    env = await make_env(db_session)
+    await add_recommendation(db_session, env, day=date(2026, 9, 10), kind="irrigate", depth_mm=20.0)
+
+    with pytest.raises(IntegrityError):
+        await add_recommendation(
+            db_session,
+            env,
+            day=date(2026, 9, 10),
+            kind="postpone",
+            depth_mm=None,
+            duration_min=None,
+        )
 
 
 async def test_decision_view_keeps_the_kinds_the_component_does_not_count(
