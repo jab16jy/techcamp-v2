@@ -92,6 +92,16 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   dataset siguiente es del siguiente, no de éste. Rango de los **datos** de la región:
   **2019-02-26 → 2025-12-02**.
 
+  **La paginación se publica antes de paginar** (`labels_plan.json` en
+  `ml/.cache/raw/labels/`, con su fila en el manifiesto), igual que el plan del archivo
+  histórico: el `fetch` lo escribe abierto antes de la primera página y lo reescribe con
+  todas las páginas que caminó cuando llega a una página corta. El `parse` **se niega**
+  si el plan no está, si sigue abierto o si el caché no responde alguna página prometida,
+  diciendo cuál. Socrata no publica un total de filas, así que sólo el `fetch` puede saber
+  que una página fue la última: un `fetch` cortado dejaba páginas que nadie sabía si eran
+  las últimas, y el `parse` armaba un parquet de etiquetas que se leía como completo
+  (#241).
+
 ## Conteos
 
 Etiquetas de inundación en la región: **1 508 reportes**, 180 de los 195 municipios con
