@@ -1,6 +1,7 @@
 """Schema behavior of the metrics tables: `plot_baseline`, the enrollment survey
-(docs/03-modelo-datos.md:239-248, 426-430; docs/11-metricas.md §1), and
-`plot_metric_monthly`, the adoption index (docs/03:438; docs/11 §2). E11 T1.
+(docs/03-modelo-datos.md:239-248, 426-430; docs/11-metricas.md §1),
+`plot_metric_monthly`, the adoption index (docs/03:438; docs/11 §2), and
+`crop_cycle_summary`, the per-cycle impact (docs/03:439). E11 T1.
 
 Upgrade and downgrade are exercised by every test run: `conftest._migrated_schema`
 migrates to `head` once per session and downgrades to `base` at teardown, so a
@@ -20,9 +21,13 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from techcamp.farms.adapters.orm import FarmRow, PlotRow
+from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow
 from techcamp.identity.adapters.orm import OrganizationRow
-from techcamp.metrics.adapters.orm import PlotBaselineRow, PlotMetricMonthlyRow
+from techcamp.metrics.adapters.orm import (
+    CropCycleSummaryRow,
+    PlotBaselineRow,
+    PlotMetricMonthlyRow,
+)
 from techcamp.shared.ids import uuid7
 
 pytestmark = pytest.mark.anyio
@@ -362,3 +367,201 @@ async def test_plot_metric_monthly_rejects_a_plot_of_another_organization(
         )
 
     assert "fk_plot_metric_monthly_plot_id_org_id" in str(exc_info.value.orig)
+
+
+# -- crop_cycle_summary: the per-cycle impact (D-T0.8, D-T0.9) ----------------
+
+
+async def _make_cycle(db_session: AsyncSession, plot_id: Any) -> Any:
+    cycle_id = uuid7()
+    db_session.add(
+        CropCycleRow(
+            id=cycle_id,
+            plot_id=plot_id,
+            crop_id=_CROP_ID,
+            sown_on=datetime.date(2026, 1, 15),
+            expected_harvest_on=None,
+            status="harvested",
+        )
+    )
+    await db_session.commit()
+    return cycle_id
+
+
+async def test_crop_cycle_summary_accepts_all_metrics_null(db_session: AsyncSession) -> None:
+    """docs/03:441: a missing metric is stored as null, never as zero. This is also
+    `relative_yield`'s state until `field_record` exists (D-T0.9)."""
+    org_id, plot_id, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    db_session.add(
+        CropCycleSummaryRow(
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=org_id,
+            yield_kg_ha=None,
+            yield_change_vs_baseline=None,
+            relative_yield=None,
+            water_applied_m3_ha=None,
+            irrigation_wue_kg_m3=None,
+            water_stress_days=None,
+            cost_cop_ha=None,
+            cost_cop_kg=None,
+            yield_kg_per_labor_day=None,
+            gross_margin_cop=None,
+            loss_kg=None,
+            loss_cop=None,
+            computed_at=_COMPUTED_AT,
+        )
+    )
+    await db_session.commit()
+
+    stored = await db_session.get(CropCycleSummaryRow, cycle_id)
+    assert stored is not None
+    assert stored.yield_kg_ha is None
+    assert stored.relative_yield is None
+
+
+async def test_crop_cycle_summary_stores_a_full_cycle(db_session: AsyncSession) -> None:
+    org_id, plot_id, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    db_session.add(
+        CropCycleSummaryRow(
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=org_id,
+            yield_kg_ha=3200.0,
+            yield_change_vs_baseline=0.25,
+            relative_yield=1.1,
+            water_applied_m3_ha=1800.0,
+            irrigation_wue_kg_m3=1.78,
+            water_stress_days=6,
+            cost_cop_ha=2_400_000,
+            cost_cop_kg=750,
+            yield_kg_per_labor_day=420.0,
+            gross_margin_cop=1_200_000,
+            loss_kg=40,
+            loss_cop=90_000,
+            computed_at=_COMPUTED_AT,
+        )
+    )
+    await db_session.commit()
+
+    stored = await db_session.get(CropCycleSummaryRow, cycle_id)
+    assert stored is not None
+    assert stored.water_stress_days == 6
+    assert stored.irrigation_wue_kg_m3 == 1.78
+
+
+async def test_crop_cycle_summary_accepts_a_negative_change_and_margin(
+    db_session: AsyncSession,
+) -> None:
+    """The two metrics that are legitimately negative: a drop against the enrollment
+    survey (`yield_change_vs_baseline`, docs/11 §1) and a cycle that cost more than it
+    earned (`gross_margin_cop`). Their absence from the non-negative CHECKs is the
+    point of this test."""
+    org_id, plot_id, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    db_session.add(
+        CropCycleSummaryRow(
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=org_id,
+            yield_kg_ha=800.0,
+            yield_change_vs_baseline=-0.33,
+            relative_yield=None,
+            water_applied_m3_ha=None,
+            irrigation_wue_kg_m3=None,
+            water_stress_days=4,
+            cost_cop_ha=2_000_000,
+            cost_cop_kg=None,
+            yield_kg_per_labor_day=None,
+            gross_margin_cop=-150_000,
+            loss_kg=None,
+            loss_cop=None,
+            computed_at=_COMPUTED_AT,
+        )
+    )
+    await db_session.commit()
+
+    stored = await db_session.get(CropCycleSummaryRow, cycle_id)
+    assert stored is not None
+    assert stored.yield_change_vs_baseline == -0.33
+    assert stored.gross_margin_cop == -150_000
+
+
+async def test_crop_cycle_summary_rejects_a_negative_metric(db_session: AsyncSession) -> None:
+    """Liters, kilograms and pesos cannot be negative."""
+    org_id, plot_id, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "crop_cycle_summary",
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=org_id,
+            yield_kg_ha=-0.5,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "ck_crop_cycle_summary_yield_kg_ha_non_negative" in str(exc_info.value.orig)
+
+
+async def test_crop_cycle_summary_rejects_negative_stress_days(db_session: AsyncSession) -> None:
+    org_id, plot_id, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "crop_cycle_summary",
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=org_id,
+            water_stress_days=-1,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "ck_crop_cycle_summary_water_stress_days_non_negative" in str(exc_info.value.orig)
+
+
+async def test_crop_cycle_summary_rejects_negative_losses(db_session: AsyncSession) -> None:
+    org_id, plot_id, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "crop_cycle_summary",
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=org_id,
+            loss_kg=-5,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "ck_crop_cycle_summary_loss_kg_non_negative" in str(exc_info.value.orig)
+
+
+async def test_crop_cycle_summary_rejects_a_plot_of_another_organization(
+    db_session: AsyncSession,
+) -> None:
+    """docs/09 §Seguridad: a summary row can never cross organizations."""
+    _, plot_id, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "crop_cycle_summary",
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=uuid7(),
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "fk_crop_cycle_summary_plot_id_org_id" in str(exc_info.value.orig)

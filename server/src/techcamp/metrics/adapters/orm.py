@@ -29,6 +29,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     Numeric,
     String,
 )
@@ -132,4 +133,84 @@ class PlotMetricMonthlyRow(Base):
     digital_adoption_index: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
     """Null when all four components are null; otherwise 100 points split evenly over
     the non-null ones (D-T0.3)."""
+    computed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CropCycleSummaryRow(Base):
+    """The impact of one finished cycle (`harvested` or `lost`; an active cycle is
+    computed on read and not stored, D-T0.8). Every metric is nullable: no applied
+    water in a rainfed plot, no comparison without an enrollment survey,
+    `relative_yield` null until `field_record` exists (D-T0.9)."""
+
+    __tablename__ = "crop_cycle_summary"
+    __table_args__ = (
+        CheckConstraint(
+            "yield_kg_ha is null or yield_kg_ha >= 0",
+            name="ck_crop_cycle_summary_yield_kg_ha_non_negative",
+        ),
+        CheckConstraint(
+            "relative_yield is null or relative_yield >= 0",
+            name="ck_crop_cycle_summary_relative_yield_non_negative",
+        ),
+        CheckConstraint(
+            "water_applied_m3_ha is null or water_applied_m3_ha >= 0",
+            name="ck_crop_cycle_summary_water_applied_non_negative",
+        ),
+        CheckConstraint(
+            "irrigation_wue_kg_m3 is null or irrigation_wue_kg_m3 >= 0",
+            name="ck_crop_cycle_summary_irrigation_wue_non_negative",
+        ),
+        CheckConstraint(
+            "water_stress_days is null or water_stress_days >= 0",
+            name="ck_crop_cycle_summary_water_stress_days_non_negative",
+        ),
+        CheckConstraint(
+            "cost_cop_ha is null or cost_cop_ha >= 0",
+            name="ck_crop_cycle_summary_cost_cop_ha_non_negative",
+        ),
+        CheckConstraint(
+            "cost_cop_kg is null or cost_cop_kg >= 0",
+            name="ck_crop_cycle_summary_cost_cop_kg_non_negative",
+        ),
+        CheckConstraint(
+            "yield_kg_per_labor_day is null or yield_kg_per_labor_day >= 0",
+            name="ck_crop_cycle_summary_yield_per_labor_day_non_negative",
+        ),
+        CheckConstraint(
+            "loss_kg is null or loss_kg >= 0", name="ck_crop_cycle_summary_loss_kg_non_negative"
+        ),
+        CheckConstraint(
+            "loss_cop is null or loss_cop >= 0",
+            name="ck_crop_cycle_summary_loss_cop_non_negative",
+        ),
+        # `yield_change_vs_baseline` and `gross_margin_cop` have no range CHECK on
+        # purpose: a cycle can yield less than the enrollment survey and can cost
+        # more than it earns (docs/11 §1).
+        ForeignKeyConstraint(
+            ["plot_id", "org_id"],
+            ["plot.id", "plot.org_id"],
+            name="fk_crop_cycle_summary_plot_id_org_id",
+        ),
+    )
+
+    crop_cycle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("crop_cycle.id"), primary_key=True)
+    plot_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    """No column-level FK: the composite `fk_crop_cycle_summary_plot_id_org_id` ties
+    it to `plot.id` together with `org_id`."""
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
+    yield_kg_ha: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    yield_change_vs_baseline: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    """Null when there is no enrollment survey or the crop differs (docs/11:22)."""
+    relative_yield: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    water_applied_m3_ha: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    irrigation_wue_kg_m3: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    water_stress_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """A count of days with `Ks < 1` (docs/11 §1), so a whole number."""
+    cost_cop_ha: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    cost_cop_kg: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    yield_kg_per_labor_day: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    gross_margin_cop: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    loss_kg: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    """Sum of the alert observations' `quantity`, in kg (docs/03:420)."""
+    loss_cop: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
     computed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
