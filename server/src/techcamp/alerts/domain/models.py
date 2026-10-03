@@ -7,9 +7,9 @@ allowance `farms.domain` has).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -215,6 +215,73 @@ class CellDayHumidityEvidence:
 
 WorkerRuleEvidence = ForecastRainEvidence | CellDayHumidityEvidence
 """The two members of the forecast source's evidence, one per rule code."""
+
+
+class PredictionSeverity(StrEnum):
+    """The severity a `risk_prediction` carries (docs/08-ml.md §M2 "Severidad").
+
+    A copy of the model's own `low|high|critical` codes rather than an import of
+    `risk`'s enum, for the same reason `CellDay` is a copy of a `weather_daily`
+    row: docs/05 grants `alerts` the `risk` APPLICATION package, and these three
+    codes are the whole of a stored `severity` a rule is decided on. They are not
+    the alert severities above either — `Severity.INFO`/`WARNING`/`CRITICAL` say
+    how urgent the notice is, this says what the model predicted.
+    """
+
+    LOW = "low"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+ALERTING_PREDICTION_SEVERITIES: frozenset[PredictionSeverity] = frozenset(
+    {PredictionSeverity.HIGH, PredictionSeverity.CRITICAL}
+)
+"""docs/06-diseno-detallado.md §8 "Alertas": "cada parcela de la celda abre la
+alerta si la severidad es `alto` o `crítico`, y la resuelve en la primera
+predicción nueva por debajo de `alto`". The two severities at or above `alto` are
+data here so the decision reads no branch per severity."""
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionEvidence:
+    """One `risk_prediction` as the model rules are decided on (docs/06 §3,
+    §8; docs/03-modelo-datos.md §`risk_prediction`).
+
+    `cell_id` is the `weather_cell` the prediction belongs to, and it is the cell
+    that decides WHICH plots the alert is about (docs/06 §8: "cada parcela de la
+    celda"), not the rule. `horizon_start` and `model_version_id` are what the
+    alert stores as its evidence, because docs/06 §8 asks every alert to be
+    traceable to the exact model that raised it.
+
+    `from_stored` is the constructor the calling module uses: it stores `severity`
+    as the code docs/03 declares and this module owns the vocabulary, so a stored
+    row is turned into evidence where the enum is known.
+    """
+
+    cell_id: int
+    event: str
+    severity: PredictionSeverity
+    horizon_start: date
+    model_version_id: UUID
+
+    @classmethod
+    def from_stored(
+        cls,
+        *,
+        cell_id: int,
+        event: str,
+        severity: str,
+        horizon_start: date,
+        model_version_id: UUID,
+    ) -> PredictionEvidence:
+        return cls(
+            cell_id=cell_id,
+            event=event,
+            severity=PredictionSeverity(severity),
+            horizon_start=horizon_start,
+            model_version_id=model_version_id,
+        )
+
 
 FUNGAL_MIN_TEMP_C = 20.0
 FUNGAL_MAX_TEMP_C = 30.0
@@ -560,6 +627,66 @@ def decide_worker_rule(
             alert=None,
         )
     if mildness is False or is_clear_met(rule.operator, value, rule.threshold, rule.hysteresis):
+        return AlertDecision(
+            action=AlertAction.RESOLVE,
+            alert=current_alert.resolve_automatically(at),
+        )
+    return AlertDecision(action=AlertAction.NO_ACTION, alert=current_alert)
+
+
+RISK_RULE_CODES: Mapping[str, str] = {"flood": "flood_risk", "drought": "drought_risk"}
+"""The rule code each risk event is evaluated with (docs/03-modelo-datos.md:
+`risk_prediction.event_type` is `flood|drought`; docs/06-diseno-detallado.md §3
+names the two rules `flood_risk` / `drought_risk`).
+
+Spelled out instead of derived from the value, the same reason
+`NON_PLOT_RULE_CODES` is: a third event must be registered here rather than
+guessed into a rule code nothing reads."""
+
+
+def decide_risk_rule(
+    *, severity: PredictionSeverity, current_alert: Alert | None, at: datetime
+) -> AlertDecision:
+    """Decide `flood_risk` / `drought_risk` on the severity of ONE NEW prediction
+    (docs/06-diseno-detallado.md §8 "Alertas").
+
+    Its own decision, like `decide_worker_rule` and `decide_node_health` and for
+    the same reason: the condition is "Severidad del modelo >= alto"
+    (docs/06-diseno-detallado.md §3), which the seeded rule cannot express — its
+    `metric`, `operator` and `threshold` are all NULL, because the number the rule
+    compares is a calibrated probability this module never sees. So the rule value
+    is not a parameter; the caller holds it to open the alert with, and its own
+    severity is the `critical` docs/06 §3 gives the row.
+
+    - no alert + the new prediction is `high` or `critical` -> open
+    - open/acknowledged + the new prediction is `low` -> resolve
+    - otherwise no action
+
+    **No window and no hysteresis band.** One prediction per run is one sample, so
+    a 60-minute run over it is zero length and the alert could never resolve
+    (D22's reasoning, which docs/06 §8 repeats for these rules: "sin ventana de
+    60 min: igual que las reglas de pronóstico, su cadencia es su evidencia").
+
+    **Missing evidence is decided by the caller, not here.** This function is only
+    called with a prediction the run JUST wrote, so a cell or event with no new
+    prediction is never passed and its alert is left untouched: silence is not a
+    prediction below `alto`, and a month the archive never completed must not
+    resolve an alert that is still true (docs/06 §8 "mientras el mes anterior no
+    esté completo, la celda no tiene predicción del mes nuevo").
+    """
+    if current_alert is not None and current_alert.state is AlertState.RESOLVED:
+        current_alert = None
+
+    if current_alert is None:
+        return AlertDecision(
+            action=(
+                AlertAction.OPEN
+                if severity in ALERTING_PREDICTION_SEVERITIES
+                else AlertAction.NO_ACTION
+            ),
+            alert=None,
+        )
+    if severity not in ALERTING_PREDICTION_SEVERITIES:
         return AlertDecision(
             action=AlertAction.RESOLVE,
             alert=current_alert.resolve_automatically(at),
