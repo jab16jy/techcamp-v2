@@ -7,9 +7,12 @@ builder is proved on fixtures and the real build waits for the ERA5 quota (data 
 """
 
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
+
+from techcamp_ml.sources.layout import Layout
 
 WEATHER_FIRST = date(2018, 7, 1)
 """Six months before the first labelled month, the way the real archive starts (docs/08
@@ -145,3 +148,19 @@ def elevation_frame() -> pd.DataFrame:
 @pytest.fixture
 def labels_frame() -> pd.DataFrame:
     return labels()
+
+
+@pytest.fixture
+def sources(tmp_path: Path) -> Layout:
+    """A layout whose four source parquets hold the two municipalities above.
+
+    The build reads the parquets the parse step writes and nothing else, so this is the
+    whole world it sees.
+    """
+    layout = Layout(tmp_path)
+    layout.data.mkdir(parents=True, exist_ok=True)
+    municipalities().to_parquet(layout.data / "municipalities.parquet", index=False)
+    weather().to_parquet(layout.data / "weather.parquet", index=False)
+    elevation().to_parquet(layout.data / "elevation.parquet", index=False)
+    labels().to_parquet(layout.data / "labels.parquet", index=False)
+    return layout

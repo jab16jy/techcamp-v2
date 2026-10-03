@@ -19,11 +19,15 @@ would be a claim about the weather (docs/08, "Cero no es evidencia faltante").
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 import math
 from calendar import monthrange
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -36,6 +40,13 @@ from techcamp.risk.domain.features import (
 
 from techcamp_ml.sources.elevation import NEIGHBOUR_DIRECTIONS
 from techcamp_ml.sources.labels import LABEL_SOURCES, LabelSource
+from techcamp_ml.sources.layout import DEFAULT_LAYOUT, ML_ROOT, Layout
+
+DATASET_NAME = "flood_m2"
+PARQUET_NAME = f"{DATASET_NAME}.parquet"
+MANIFEST_NAME = "manifest.json"
+SOURCE_NAMES = ("municipalities", "weather", "elevation", "labels")
+"""The four parquets of the parse step, in the order the table is built from them."""
 
 IDENTITY_COLUMNS = (
     "code",
@@ -212,3 +223,120 @@ def _number(value: Any) -> float | None:
         return None
     reading = float(value)
     return None if math.isnan(reading) else reading
+
+
+@dataclass(frozen=True, slots=True)
+class Built:
+    """Where the dataset landed, and the manifest that traces it."""
+
+    path: Path
+    manifest_path: Path
+    manifest: dict[str, Any]
+
+
+def build_dataset(
+    *,
+    layout: Layout = DEFAULT_LAYOUT,
+    out_dir: Path | None = None,
+    manifest_dir: Path | None = None,
+) -> Built:
+    """Build the table, write it as one parquet and record its sha256 in the manifest.
+
+    Every input is read before anything is written, so a cache that answers less than the
+    four parquets leaves no dataset and no manifest behind: the harness must never find a
+    parquet it cannot trace.
+
+    The build is a pure function of those parquets. Nothing here reads the clock or a
+    random seed, so the same cache gives the same file and the same sha256 on any day
+    (docs/08 §Reglas de gobierno: "reproducible o no existe").
+    """
+    frames = {name: _read_source(layout, name) for name in SOURCE_NAMES}
+    table = build_table(
+        frames["municipalities"], frames["weather"], frames["elevation"], frames["labels"]
+    )
+
+    path = (out_dir or DEFAULT_LAYOUT.data.parent / "dataset") / PARQUET_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Written beside its target and renamed, like every raw copy: a half-written parquet
+    # is a dataset a later run reads as complete.
+    partial = path.with_name(f"{path.name}.part")
+    table.to_parquet(partial, index=False)
+    partial.replace(path)
+
+    manifest = _manifest(table, path, layout, frames)
+    manifest_path = (manifest_dir or ML_ROOT / "datasets" / DATASET_NAME) / MANIFEST_NAME
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return Built(path, manifest_path, manifest)
+
+
+def main(argv: Sequence[str] | None = None, *, layout: Layout = DEFAULT_LAYOUT) -> int:
+    """The build script's entry point: build, write the manifest, print it."""
+    parser = argparse.ArgumentParser(
+        description="Build the M2 municipality x month dataset from the source parquets."
+    )
+    parser.add_argument("--out", type=Path, default=None, help="directory for the parquet")
+    parser.add_argument("--manifest", type=Path, default=None, help="directory for manifest.json")
+    arguments = parser.parse_args(argv)
+    built = build_dataset(layout=layout, out_dir=arguments.out, manifest_dir=arguments.manifest)
+    print(json.dumps(built.manifest, indent=2, sort_keys=True))
+    return 0
+
+
+def _read_source(layout: Layout, name: str) -> pd.DataFrame:
+    """One source parquet, or a refusal naming the step that writes it.
+
+    The dataset is built from the cached copies alone (docs/08 §Reglas de gobierno), so a
+    source the parse never wrote is a step that never ran, not an empty table.
+    """
+    path = layout.data / f"{name}.parquet"
+    if not path.exists():
+        raise ValueError(
+            f"the {name} parquet is missing ({path}): the dataset is built only from the "
+            "parquets of the parse step, so run it and build again"
+        )
+    return pd.read_parquet(path)
+
+
+def _manifest(
+    table: pd.DataFrame,
+    path: Path,
+    layout: Layout,
+    frames: dict[str, pd.DataFrame],
+) -> dict[str, Any]:
+    """What the dataset is, what it cost and what it was built from.
+
+    No build date: the manifest is part of what has to be reproducible, and a clock would
+    make two builds of one cache differ.
+    """
+    positives = int(table[LABEL_COLUMN].sum())
+    return {
+        "dataset": DATASET_NAME,
+        "file": path.name,
+        "sha256": _sha256(path),
+        "bytes": path.stat().st_size,
+        "rows": int(len(table)),
+        "positives": positives,
+        "negatives": int(len(table)) - positives,
+        "municipalities": int(table["code"].nunique()),
+        "months": {
+            "from": f"{table['year'].min():04d}-{table['month'].min():02d}",
+            "to": f"{table['year'].max():04d}-{table['month'].max():02d}",
+        },
+        "columns": list(COLUMNS),
+        "all_null_features": [
+            column for column in FEATURE_NAMES if bool(table[column].isna().all())
+        ],
+        "sources": {
+            name: {
+                "rows": int(len(frame)),
+                "sha256": _sha256(layout.data / f"{name}.parquet"),
+            }
+            for name, frame in frames.items()
+        },
+    }
+
+
+def _sha256(path: Path) -> str:
+    """The hash of a file, the same digest the raw-cache manifest records."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
