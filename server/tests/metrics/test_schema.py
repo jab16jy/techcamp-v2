@@ -1,5 +1,6 @@
-"""Schema behavior of `plot_baseline`, the enrollment survey
-(docs/03-modelo-datos.md:239-248, 426-430; docs/11-metricas.md §1). E11 T1.
+"""Schema behavior of the metrics tables: `plot_baseline`, the enrollment survey
+(docs/03-modelo-datos.md:239-248, 426-430; docs/11-metricas.md §1), and
+`plot_metric_monthly`, the adoption index (docs/03:438; docs/11 §2). E11 T1.
 
 Upgrade and downgrade are exercised by every test run: `conftest._migrated_schema`
 migrates to `head` once per session and downgrades to `base` at teardown, so a
@@ -21,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import OrganizationRow
-from techcamp.metrics.adapters.orm import PlotBaselineRow
+from techcamp.metrics.adapters.orm import PlotBaselineRow, PlotMetricMonthlyRow
 from techcamp.shared.ids import uuid7
 
 pytestmark = pytest.mark.anyio
@@ -33,6 +34,8 @@ _BOUNDARY = (
 _CROP_ID = 1
 """`maize`, seeded by `67cf2dd1f13e_add_crop_catalog`; the catalog is global
 reference data and no test writes it."""
+_COMPUTED_AT = datetime.datetime(2026, 3, 1, 2, 0, tzinfo=datetime.UTC)
+"""Frozen, not `now()`: a test clock must not drift (E11 lessons, #14)."""
 
 
 async def _make_plot(db_session: AsyncSession) -> tuple[Any, Any, int]:
@@ -203,3 +206,159 @@ async def test_plot_baseline_rejects_a_plot_of_another_organization(
         )
 
     assert "fk_plot_baseline_plot_id_org_id" in str(exc_info.value.orig)
+
+
+# -- plot_metric_monthly: the adoption index (D-T0.2, D-T0.3) -----------------
+
+
+async def test_plot_metric_monthly_stores_the_index_and_its_components(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id, _ = await _make_plot(db_session)
+    month = datetime.date(2026, 2, 1)
+
+    db_session.add(
+        PlotMetricMonthlyRow(
+            plot_id=plot_id,
+            month=month,
+            org_id=org_id,
+            monitoring=0.9,
+            record_keeping=0.75,
+            decision=None,
+            risk_management=1,
+            digital_adoption_index=88.33,
+            computed_at=_COMPUTED_AT,
+        )
+    )
+    await db_session.commit()
+
+    stored = await db_session.get(PlotMetricMonthlyRow, (plot_id, month))
+    assert stored is not None
+    assert stored.monitoring == 0.9
+    # A component with no evidence is null, and it does not drag the index to zero
+    # (D-T0.3: the 100 points split over the non-null components).
+    assert stored.decision is None
+    assert stored.digital_adoption_index == 88.33
+
+
+async def test_plot_metric_monthly_accepts_an_all_null_month(db_session: AsyncSession) -> None:
+    """A plot with no evidence at all still gets its month: the index is null, not 0
+    (docs/11:57 — a null index means "no evidence", a 0 would mean "not adopted")."""
+    org_id, plot_id, _ = await _make_plot(db_session)
+    month = datetime.date(2026, 2, 1)
+
+    db_session.add(
+        PlotMetricMonthlyRow(
+            plot_id=plot_id,
+            month=month,
+            org_id=org_id,
+            monitoring=None,
+            record_keeping=None,
+            decision=None,
+            risk_management=None,
+            digital_adoption_index=None,
+            computed_at=_COMPUTED_AT,
+        )
+    )
+    await db_session.commit()
+
+    stored = await db_session.get(PlotMetricMonthlyRow, (plot_id, month))
+    assert stored is not None
+    assert stored.monitoring is None
+    assert stored.digital_adoption_index is None
+
+
+async def test_plot_metric_monthly_rejects_a_component_outside_zero_one(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id, _ = await _make_plot(db_session)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_metric_monthly",
+            plot_id=plot_id,
+            month=datetime.date(2026, 2, 1),
+            org_id=org_id,
+            monitoring=1.2,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "ck_plot_metric_monthly_monitoring_range" in str(exc_info.value.orig)
+
+
+async def test_plot_metric_monthly_rejects_a_negative_component(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id, _ = await _make_plot(db_session)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_metric_monthly",
+            plot_id=plot_id,
+            month=datetime.date(2026, 2, 1),
+            org_id=org_id,
+            record_keeping=-0.1,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "ck_plot_metric_monthly_record_keeping_range" in str(exc_info.value.orig)
+
+
+async def test_plot_metric_monthly_rejects_an_index_above_one_hundred(
+    db_session: AsyncSession,
+) -> None:
+    org_id, plot_id, _ = await _make_plot(db_session)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_metric_monthly",
+            plot_id=plot_id,
+            month=datetime.date(2026, 2, 1),
+            org_id=org_id,
+            digital_adoption_index=101,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "ck_plot_metric_monthly_index_range" in str(exc_info.value.orig)
+
+
+async def test_plot_metric_monthly_rejects_a_month_that_is_not_the_first_of_the_month(
+    db_session: AsyncSession,
+) -> None:
+    """The primary key is the calendar month itself, so a mid-month date would be a
+    second bucket for the same month (docs/03:438)."""
+    org_id, plot_id, _ = await _make_plot(db_session)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_metric_monthly",
+            plot_id=plot_id,
+            month=datetime.date(2026, 2, 15),
+            org_id=org_id,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "ck_plot_metric_monthly_month_is_first_of_month" in str(exc_info.value.orig)
+
+
+async def test_plot_metric_monthly_rejects_a_plot_of_another_organization(
+    db_session: AsyncSession,
+) -> None:
+    """docs/09 §Seguridad: the index row can never cross organizations."""
+    _, plot_id, _ = await _make_plot(db_session)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_metric_monthly",
+            plot_id=plot_id,
+            month=datetime.date(2026, 2, 1),
+            org_id=uuid7(),
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "fk_plot_metric_monthly_plot_id_org_id" in str(exc_info.value.orig)

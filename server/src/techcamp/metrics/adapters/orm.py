@@ -25,8 +25,10 @@ import uuid
 from sqlalchemy import (
     CheckConstraint,
     Date,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Numeric,
     String,
 )
@@ -75,3 +77,59 @@ class PlotBaselineRow(Base):
     """Same closed vocabulary as `plot.irrigation_system` (docs/03:246)."""
     recorded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"), nullable=True)
     """Whoever saved the survey last; `PUT` replaces the row, so this moves (D-T0.11)."""
+
+
+class PlotMetricMonthlyRow(Base):
+    """The adoption index and its four components for one calendar month
+    (docs/03:438, docs/11 §2, D-T0.2). The month is the first day of the month, so
+    the key is the bucket itself."""
+
+    __tablename__ = "plot_metric_monthly"
+    __table_args__ = (
+        CheckConstraint(
+            "monitoring is null or (monitoring >= 0 and monitoring <= 1)",
+            name="ck_plot_metric_monthly_monitoring_range",
+        ),
+        CheckConstraint(
+            "record_keeping is null or (record_keeping >= 0 and record_keeping <= 1)",
+            name="ck_plot_metric_monthly_record_keeping_range",
+        ),
+        CheckConstraint(
+            "decision is null or (decision >= 0 and decision <= 1)",
+            name="ck_plot_metric_monthly_decision_range",
+        ),
+        CheckConstraint(
+            "risk_management is null or (risk_management >= 0 and risk_management <= 1)",
+            name="ck_plot_metric_monthly_risk_management_range",
+        ),
+        CheckConstraint(
+            "digital_adoption_index is null or "
+            "(digital_adoption_index >= 0 and digital_adoption_index <= 100)",
+            name="ck_plot_metric_monthly_index_range",
+        ),
+        CheckConstraint(
+            "extract(day from month) = 1", name="ck_plot_metric_monthly_month_is_first_of_month"
+        ),
+        ForeignKeyConstraint(
+            ["plot_id", "org_id"],
+            ["plot.id", "plot.org_id"],
+            name="fk_plot_metric_monthly_plot_id_org_id",
+        ),
+        # docs/04 §`GET /organizations/{org_id}/metrics?month=`: the org-month
+        # listing behind `OrgMetrics` (D-T0.12).
+        Index("ix_plot_metric_monthly_org_month", "org_id", "month"),
+    )
+
+    plot_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    month: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organization.id"), nullable=False)
+    monitoring: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    record_keeping: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    decision: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    """Null in a rainfed plot: there is no applied depth to follow (docs/11:52)."""
+    risk_management: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    """A component with no evidence is null, never 0 (D-T0.3)."""
+    digital_adoption_index: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    """Null when all four components are null; otherwise 100 points split evenly over
+    the non-null ones (D-T0.3)."""
+    computed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
