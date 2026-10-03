@@ -111,6 +111,9 @@ dejar de tapar `2343-nuqp` en 2027: 1 508 reportes antes y después.
 **Otros conteos:** elevación 195 filas (2 a 1 307 m, media 90 m); los cuatro vecinos a
 1 km se piden en la misma llamada y salen en las columnas `east_m`, `west_m`,
 `north_m`, `south_m`, que son las que consume `techcamp.risk.domain.features.Neighbours`.
+`parse --source elevation` se niega a armar la tabla si le falta **algún** municipio y
+nombra cuántos son: una tabla corta dejaría las features de vecino de T4 sin definir para
+los que faltan, sin decir nada.
 
 ## Decisiones de esta tarea
 

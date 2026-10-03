@@ -88,6 +88,10 @@ def _recording_fetch(requested: list[str]) -> Callable[..., bytes]:
             payload = _region_payloads()[0 if name == "divipola.json" else 1]
         elif name.endswith((".json",)) and "labels" == source:
             payload = json.dumps(_LABEL_PAGE[:2]).encode()
+        elif source == "elevation":
+            # The elevation endpoint answers one value per requested coordinate.
+            asked = len(str(params.get("latitude", "")).split(","))
+            payload = json.dumps({"elevation": [10.0] * asked}).encode()
         else:
             payload = json.dumps(
                 [_archive_day()] * len(str(params.get("latitude", "")).split(","))
@@ -355,3 +359,60 @@ def test_the_range_a_parse_owes_comes_from_the_day_it_is_given(
     moved = f"{CHUNK_TEMPLATE.format(index=(len(windows) - 1) * 2)}.json"
     with pytest.raises(ValueError, match=moved):
         pipeline.parse_sources(["weather"], layout=layout, today=date(2027, 6, 1))
+
+
+def test_the_elevation_download_asks_for_every_seat_and_its_neighbours(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    requested: list[str] = []
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch(requested))
+    today = date(2026, 10, 2)
+
+    # 195 municipalities x (the seat plus four neighbours) at 100 coordinates per call.
+    assert pipeline.fetch_sources(["elevation"], layout=layout, today=today)["elevation"] == 10
+    # Negative half: a resume asks for nothing, the chunks are already in the cache.
+    assert pipeline.fetch_sources(["elevation"], layout=layout, today=today)["elevation"] == 0
+
+    frame = pd.read_parquet(
+        pipeline.parse_sources(["elevation"], layout=layout, today=today)["elevation"]
+    )
+    assert len(frame) == 195
+    assert set(frame["code"]) == set(_codes()), "every municipality, and no neighbour row"
+    assert not frame.duplicated(subset=["code"]).any()
+    assert {"east_m", "west_m", "north_m", "south_m"} <= set(frame.columns)
+
+
+def test_parsing_refuses_an_elevation_that_leaves_a_municipality_out(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch([]))
+    today = date(2026, 10, 2)
+    pipeline.fetch_sources(["elevation"], layout=layout, today=today)
+    (layout.raw_copy("elevation", "elevation_009.json")).unlink()
+
+    # A short slope table would leave T4's neighbour features undefined for the
+    # municipalities it lost, with nothing saying so.
+    with pytest.raises(ValueError, match="elevation"):
+        pipeline.parse_sources(["elevation"], layout=layout, today=today)
+    assert not (layout.data / "elevation.parquet").exists(), "no parquet from a short cache"
+
+
+def test_parsing_an_elevation_cache_with_nothing_in_it_says_run_fetch_first(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+) -> None:
+    layout = Layout(tmp_path)
+    divipola, mgn = _region_payloads()
+    save_raw(layout, "municipalities", "divipola.json", "test", divipola)
+    save_raw(layout, "municipalities", "mgn317.geojson", "test", mgn)
+
+    with pytest.raises(ValueError, match="fetch"):
+        pipeline.parse_sources(["elevation"], layout=layout, today=date(2026, 10, 2))

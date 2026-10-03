@@ -154,7 +154,7 @@ def parse_sources(
     if "weather" in requested:
         written["weather"] = _parse_weather(layout, municipalities, today or date.today())
     if "elevation" in requested:
-        written["elevation"] = _parse_elevation(layout)
+        written["elevation"] = _parse_elevation(layout, municipalities)
     return written
 
 
@@ -368,18 +368,40 @@ def _fetch_elevation(layout: Layout, municipalities: pd.DataFrame) -> int:
     return written
 
 
-def _parse_elevation(layout: Layout) -> Path:
-    frames = [
-        parse_elevation(
-            read_raw(layout, "elevation", name),
-            json.loads(read_raw(layout, "elevation", name.replace(".json", ".points.json"))),
-        )
+def _parse_elevation(layout: Layout, municipalities: pd.DataFrame) -> Path:
+    """The slope table, or a refusal: every municipality of the region has to be in it.
+
+    A missing chunk leaves the seat (and its four neighbours) out of the table, and T4
+    would take a short frame for the whole region.
+    """
+    names = [
+        name
         for name in sorted(cached_files(layout, "elevation"))
         if name.startswith("elevation_")
         and name.endswith(".json")
         and not name.endswith(".points.json")
     ]
-    return write_parquet(layout, "elevation", pd.concat(frames, ignore_index=True))
+    if not names:
+        raise ValueError(
+            "the raw cache holds no elevation chunk; run the fetch step and parse again"
+        )
+    frame = pd.concat(
+        [
+            parse_elevation(
+                read_raw(layout, "elevation", name),
+                json.loads(read_raw(layout, "elevation", name.replace(".json", ".points.json"))),
+            )
+            for name in names
+        ],
+        ignore_index=True,
+    )
+    missing = sorted(set(municipalities["code"]) - set(frame["code"]))
+    if missing:
+        raise ValueError(
+            f"the elevation download does not cover {len(missing)} municipalities of the "
+            f"region, among them {missing[:5]}; run the fetch step and parse again"
+        )
+    return write_parquet(layout, "elevation", frame)
 
 
 __all__ = [
