@@ -418,6 +418,20 @@ def test_parsing_an_elevation_cache_with_nothing_in_it_says_run_fetch_first(
         pipeline.parse_sources(["elevation"], layout=layout, today=date(2026, 10, 2))
 
 
+def test_parsing_labels_with_nothing_in_the_cache_says_run_fetch_first(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+) -> None:
+    layout = Layout(tmp_path)
+    divipola, mgn = _region_payloads()
+    save_raw(layout, "municipalities", "divipola.json", "test", divipola)
+    save_raw(layout, "municipalities", "mgn317.geojson", "test", mgn)
+
+    # A KeyError on `code` would tell nobody that the step to run is the fetch one.
+    with pytest.raises(ValueError, match="fetch"):
+        pipeline.parse_sources(["labels"], layout=layout, today=date(2026, 10, 2))
+
+
 def test_a_cached_payload_the_manifest_never_documented_is_downloaded_again(
     tmp_path: Path,
     fixture: Callable[[str], bytes],

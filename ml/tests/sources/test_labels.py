@@ -134,19 +134,20 @@ def test_a_code_outside_the_region_is_dropped_and_counted(
         CODES,
     )
 
-    assert dropped.unknown_code >= 1, "20050, 20054 and 25126 are outside the Caribbean region"
-    assert "25126" not in set(frame["code"])
+    assert dropped.unknown_code == 3, "20050, 20054 and 21021 are outside the Caribbean region"
+    assert "21021" not in set(frame["code"])
+    assert "20045" in set(frame["code"]), "the two rows inside the region survive"
+    assert len(frame) == 2
     assert len(frame) + dropped.unknown_code + dropped.other_event + dropped.bad_date == 5
 
 
 def test_a_bad_date_is_counted_and_not_guessed(fixture: Callable[[str], bytes]) -> None:
-    import json
-
     payload = json.loads(fixture("ungrd_rgre-6ak4.json"))
     payload[0]["fecha"] = "no-es-una-fecha"
 
     frame, dropped = parse_labels(json.dumps(payload).encode(), LABEL_SOURCES[1], CODES)
 
     assert dropped.bad_date == 1
-    assert len(frame) == len(payload) - dropped.bad_date - dropped.unknown_code
-    assert frame["date"].notna().all()
+    assert (dropped.other_event, dropped.unknown_code, dropped.outside_window) == (0, 1, 0)
+    assert len(frame) == 3, "the four other rows: three in the region, one out of it"
+    assert frame["date"].notna().all(), "a row with no date never becomes a NaT-free guess"

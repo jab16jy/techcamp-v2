@@ -258,7 +258,11 @@ def _parse_labels(layout: Layout, codes: Collection[str]) -> Path:
             frame, page_dropped = parse_labels(read_raw(layout, "labels", page), source, codes)
             frames.append(frame)
             dropped += page_dropped
-    labels = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if not frames:
+        # An empty frame has no columns, and sorting it by `code` would answer a
+        # KeyError instead of naming the step that was never run.
+        raise ValueError("the raw cache holds no label page; run the fetch step and parse again")
+    labels = pd.concat(frames, ignore_index=True)
     labels = labels.sort_values(["code", "date"], ignore_index=True)
     report = {
         "rows": int(len(labels)),
