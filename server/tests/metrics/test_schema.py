@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow
-from techcamp.identity.adapters.orm import OrganizationRow
+from techcamp.identity.adapters.orm import AppUserRow, OrganizationRow
 from techcamp.metrics.adapters.orm import (
     CropCycleSummaryRow,
     PlotBaselineRow,
@@ -43,10 +43,14 @@ _COMPUTED_AT = datetime.datetime(2026, 3, 1, 2, 0, tzinfo=datetime.UTC)
 """Frozen, not `now()`: a test clock must not drift (E11 lessons, #14)."""
 
 
-async def _make_plot(db_session: AsyncSession) -> tuple[Any, Any, int]:
-    """One organization with a farm and a plot; returns `(org_id, plot_id, crop_id)`."""
+async def _make_plot(db_session: AsyncSession) -> tuple[Any, Any, int, Any]:
+    """One organization with a farm, a plot and a user;
+    returns `(org_id, plot_id, crop_id, user_id)`."""
     org_id = uuid7()
     db_session.add(OrganizationRow(id=org_id, name="Finca", kind="individual"))
+    await db_session.commit()
+    user_id = uuid7()
+    db_session.add(AppUserRow(id=user_id, phone=f"+57{user_id.int % 10**10:010d}"))
     await db_session.commit()
     farm_id = uuid7()
     db_session.add(
@@ -65,7 +69,7 @@ async def _make_plot(db_session: AsyncSession) -> tuple[Any, Any, int]:
         )
     )
     await db_session.commit()
-    return org_id, plot_id, _CROP_ID
+    return org_id, plot_id, _CROP_ID, user_id
 
 
 async def _insert(db_session: AsyncSession, table: str, **values: Any) -> None:
@@ -80,7 +84,7 @@ async def _insert(db_session: AsyncSession, table: str, **values: Any) -> None:
 
 async def test_plot_baseline_stores_the_enrollment_survey(db_session: AsyncSession) -> None:
     """A complete survey round-trips: it is the reference impact is measured against."""
-    org_id, plot_id, crop_id = await _make_plot(db_session)
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
 
     db_session.add(
         PlotBaselineRow(
@@ -91,7 +95,7 @@ async def test_plot_baseline_stores_the_enrollment_survey(db_session: AsyncSessi
             last_yield_kg_ha=1200.5,
             last_cost_cop_ha=1_500_000,
             irrigation_practice="gravity",
-            recorded_by=None,
+            recorded_by=user_id,
         )
     )
     await db_session.commit()
@@ -103,12 +107,13 @@ async def test_plot_baseline_stores_the_enrollment_survey(db_session: AsyncSessi
     assert stored.irrigation_practice == "gravity"
 
 
-async def test_plot_baseline_accepts_a_survey_without_declared_yield_or_cost(
+async def test_plot_baseline_accepts_a_survey_without_a_declared_cost(
     db_session: AsyncSession,
 ) -> None:
-    """The figures are approximate and the farmer may not know them (docs/03:245): they
-    are `null`, not `0` — a zero yield would read as a real, catastrophic harvest."""
-    org_id, plot_id, crop_id = await _make_plot(db_session)
+    """`last_cost_cop_ha` is the one optional field of `PUT /plots/{plot_id}/baseline`
+    (docs/04-api.md:52): an approximate figure the farmer may not know, so it is
+    `null` rather than `0` — a zero cost would read as a real, free season."""
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
 
     db_session.add(
         PlotBaselineRow(
@@ -116,25 +121,26 @@ async def test_plot_baseline_accepts_a_survey_without_declared_yield_or_cost(
             org_id=org_id,
             enrolled_on=datetime.date(2026, 2, 10),
             crop_id=crop_id,
-            last_yield_kg_ha=None,
+            last_yield_kg_ha=900.0,
             last_cost_cop_ha=None,
             irrigation_practice="none",
-            recorded_by=None,
+            recorded_by=user_id,
         )
     )
     await db_session.commit()
 
     stored = await db_session.get(PlotBaselineRow, plot_id)
     assert stored is not None
-    assert stored.last_yield_kg_ha is None
     assert stored.last_cost_cop_ha is None
+    assert stored.last_yield_kg_ha == 900.0
 
 
-async def test_plot_baseline_rejects_an_undocumented_irrigation_practice(
+async def test_plot_baseline_rejects_a_missing_declared_yield(
     db_session: AsyncSession,
 ) -> None:
-    """Same closed vocabulary as `plot.irrigation_system` (docs/03 §`plot_baseline`)."""
-    org_id, plot_id, crop_id = await _make_plot(db_session)
+    """The yield is the reference impact is measured against, so it is required;
+    docs/04-api.md:52 marks only `last_cost_cop_ha` optional."""
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -144,8 +150,52 @@ async def test_plot_baseline_rejects_an_undocumented_irrigation_practice(
             org_id=org_id,
             enrolled_on=datetime.date(2026, 2, 10),
             crop_id=crop_id,
-            irrigation_practice="canal",
+            last_yield_kg_ha=None,
+            irrigation_practice="drip",
+            recorded_by=user_id,
+        )
+
+    assert "last_yield_kg_ha" in str(exc_info.value.orig)
+
+
+async def test_plot_baseline_rejects_a_missing_recorder(db_session: AsyncSession) -> None:
+    """D-T0.11 and docs/04:233: `recorded_by` is always the caller who saved the
+    survey, so it can never be null."""
+    org_id, plot_id, crop_id, _ = await _make_plot(db_session)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_baseline",
+            plot_id=plot_id,
+            org_id=org_id,
+            enrolled_on=datetime.date(2026, 2, 10),
+            crop_id=crop_id,
+            last_yield_kg_ha=900.0,
+            irrigation_practice="drip",
             recorded_by=None,
+        )
+
+    assert "recorded_by" in str(exc_info.value.orig)
+
+
+async def test_plot_baseline_rejects_an_undocumented_irrigation_practice(
+    db_session: AsyncSession,
+) -> None:
+    """Same closed vocabulary as `plot.irrigation_system` (docs/03 §`plot_baseline`)."""
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_baseline",
+            plot_id=plot_id,
+            org_id=org_id,
+            enrolled_on=datetime.date(2026, 2, 10),
+            crop_id=crop_id,
+            last_yield_kg_ha=900.0,
+            irrigation_practice="canal",
+            recorded_by=user_id,
         )
 
     assert "ck_plot_baseline_irrigation_practice" in str(exc_info.value.orig)
@@ -153,7 +203,7 @@ async def test_plot_baseline_rejects_an_undocumented_irrigation_practice(
 
 async def test_plot_baseline_rejects_a_negative_declared_value(db_session: AsyncSession) -> None:
     """A negative yield or cost is a bug in the caller, not missing data (`null` is)."""
-    org_id, plot_id, crop_id = await _make_plot(db_session)
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -165,14 +215,14 @@ async def test_plot_baseline_rejects_a_negative_declared_value(db_session: Async
             crop_id=crop_id,
             last_yield_kg_ha=-1,
             irrigation_practice="drip",
-            recorded_by=None,
+            recorded_by=user_id,
         )
 
     assert "ck_plot_baseline_last_yield_non_negative" in str(exc_info.value.orig)
 
 
 async def test_plot_baseline_rejects_a_negative_declared_cost(db_session: AsyncSession) -> None:
-    org_id, plot_id, crop_id = await _make_plot(db_session)
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -182,9 +232,10 @@ async def test_plot_baseline_rejects_a_negative_declared_cost(db_session: AsyncS
             org_id=org_id,
             enrolled_on=datetime.date(2026, 2, 10),
             crop_id=crop_id,
+            last_yield_kg_ha=900.0,
             last_cost_cop_ha=-1,
             irrigation_practice="drip",
-            recorded_by=None,
+            recorded_by=user_id,
         )
 
     assert "ck_plot_baseline_last_cost_non_negative" in str(exc_info.value.orig)
@@ -195,7 +246,7 @@ async def test_plot_baseline_rejects_a_plot_of_another_organization(
 ) -> None:
     """docs/09 §Seguridad: `org_id` is tied to the plot's own, so a row can never
     name one organization while pointing at another organization's plot."""
-    org_id, plot_id, crop_id = await _make_plot(db_session)
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
     other_org_id = uuid7()
 
     with pytest.raises(IntegrityError) as exc_info:
@@ -206,8 +257,9 @@ async def test_plot_baseline_rejects_a_plot_of_another_organization(
             org_id=other_org_id,
             enrolled_on=datetime.date(2026, 2, 10),
             crop_id=crop_id,
+            last_yield_kg_ha=900.0,
             irrigation_practice="drip",
-            recorded_by=None,
+            recorded_by=user_id,
         )
 
     assert "fk_plot_baseline_plot_id_org_id" in str(exc_info.value.orig)
@@ -219,7 +271,7 @@ async def test_plot_baseline_rejects_a_plot_of_another_organization(
 async def test_plot_metric_monthly_stores_the_index_and_its_components(
     db_session: AsyncSession,
 ) -> None:
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     month = datetime.date(2026, 2, 1)
 
     db_session.add(
@@ -249,7 +301,7 @@ async def test_plot_metric_monthly_stores_the_index_and_its_components(
 async def test_plot_metric_monthly_accepts_an_all_null_month(db_session: AsyncSession) -> None:
     """A plot with no evidence at all still gets its month: the index is null, not 0
     (docs/11:57 — a null index means "no evidence", a 0 would mean "not adopted")."""
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     month = datetime.date(2026, 2, 1)
 
     db_session.add(
@@ -276,7 +328,7 @@ async def test_plot_metric_monthly_accepts_an_all_null_month(db_session: AsyncSe
 async def test_plot_metric_monthly_rejects_a_component_outside_zero_one(
     db_session: AsyncSession,
 ) -> None:
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -295,7 +347,7 @@ async def test_plot_metric_monthly_rejects_a_component_outside_zero_one(
 async def test_plot_metric_monthly_rejects_a_negative_component(
     db_session: AsyncSession,
 ) -> None:
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -314,7 +366,7 @@ async def test_plot_metric_monthly_rejects_a_negative_component(
 async def test_plot_metric_monthly_rejects_an_index_above_one_hundred(
     db_session: AsyncSession,
 ) -> None:
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -335,7 +387,7 @@ async def test_plot_metric_monthly_rejects_a_month_that_is_not_the_first_of_the_
 ) -> None:
     """The primary key is the calendar month itself, so a mid-month date would be a
     second bucket for the same month (docs/03:438)."""
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -354,7 +406,7 @@ async def test_plot_metric_monthly_rejects_a_plot_of_another_organization(
     db_session: AsyncSession,
 ) -> None:
     """docs/09 §Seguridad: the index row can never cross organizations."""
-    _, plot_id, _ = await _make_plot(db_session)
+    _, plot_id, _, _ = await _make_plot(db_session)
 
     with pytest.raises(IntegrityError) as exc_info:
         await _insert(
@@ -391,7 +443,7 @@ async def _make_cycle(db_session: AsyncSession, plot_id: Any) -> Any:
 async def test_crop_cycle_summary_accepts_all_metrics_null(db_session: AsyncSession) -> None:
     """docs/03:441: a missing metric is stored as null, never as zero. This is also
     `relative_yield`'s state until `field_record` exists (D-T0.9)."""
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     cycle_id = await _make_cycle(db_session, plot_id)
 
     db_session.add(
@@ -423,7 +475,7 @@ async def test_crop_cycle_summary_accepts_all_metrics_null(db_session: AsyncSess
 
 
 async def test_crop_cycle_summary_stores_a_full_cycle(db_session: AsyncSession) -> None:
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     cycle_id = await _make_cycle(db_session, plot_id)
 
     db_session.add(
@@ -461,7 +513,7 @@ async def test_crop_cycle_summary_accepts_a_negative_change_and_margin(
     survey (`yield_change_vs_baseline`, docs/11 §1) and a cycle that cost more than it
     earned (`gross_margin_cop`). Their absence from the non-negative CHECKs is the
     point of this test."""
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     cycle_id = await _make_cycle(db_session, plot_id)
 
     db_session.add(
@@ -494,7 +546,7 @@ async def test_crop_cycle_summary_accepts_a_negative_change_and_margin(
 
 async def test_crop_cycle_summary_rejects_a_negative_metric(db_session: AsyncSession) -> None:
     """Liters, kilograms and pesos cannot be negative."""
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     cycle_id = await _make_cycle(db_session, plot_id)
 
     with pytest.raises(IntegrityError) as exc_info:
@@ -512,7 +564,7 @@ async def test_crop_cycle_summary_rejects_a_negative_metric(db_session: AsyncSes
 
 
 async def test_crop_cycle_summary_rejects_negative_stress_days(db_session: AsyncSession) -> None:
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     cycle_id = await _make_cycle(db_session, plot_id)
 
     with pytest.raises(IntegrityError) as exc_info:
@@ -530,7 +582,7 @@ async def test_crop_cycle_summary_rejects_negative_stress_days(db_session: Async
 
 
 async def test_crop_cycle_summary_rejects_negative_losses(db_session: AsyncSession) -> None:
-    org_id, plot_id, _ = await _make_plot(db_session)
+    org_id, plot_id, _, user_id = await _make_plot(db_session)
     cycle_id = await _make_cycle(db_session, plot_id)
 
     with pytest.raises(IntegrityError) as exc_info:
@@ -551,7 +603,7 @@ async def test_crop_cycle_summary_rejects_a_plot_of_another_organization(
     db_session: AsyncSession,
 ) -> None:
     """docs/09 §Seguridad: a summary row can never cross organizations."""
-    _, plot_id, _ = await _make_plot(db_session)
+    _, plot_id, _, _ = await _make_plot(db_session)
     cycle_id = await _make_cycle(db_session, plot_id)
 
     with pytest.raises(IntegrityError) as exc_info:
@@ -565,3 +617,36 @@ async def test_crop_cycle_summary_rejects_a_plot_of_another_organization(
         )
 
     assert "fk_crop_cycle_summary_plot_id_org_id" in str(exc_info.value.orig)
+
+
+async def test_crop_cycle_summary_rejects_a_plot_that_is_not_the_cycles_own(
+    db_session: AsyncSession,
+) -> None:
+    """The summary's plot must be the cycle's own plot: otherwise one row could
+    report another plot's metrics for this cycle."""
+    org_id, plot_id, _, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+    other_org_id, other_plot_id, _, _ = await _make_plot(db_session)
+    db_session.add(
+        CropCycleRow(
+            id=uuid7(),
+            plot_id=other_plot_id,
+            crop_id=_CROP_ID,
+            sown_on=datetime.date(2026, 1, 15),
+            expected_harvest_on=None,
+            status="harvested",
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "crop_cycle_summary",
+            crop_cycle_id=cycle_id,
+            plot_id=other_plot_id,
+            org_id=other_org_id,
+            computed_at=_COMPUTED_AT,
+        )
+
+    assert "fk_crop_cycle_summary_crop_cycle_id_plot_id" in str(exc_info.value.orig)

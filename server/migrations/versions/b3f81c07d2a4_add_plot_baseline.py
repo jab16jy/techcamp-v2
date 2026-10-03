@@ -11,8 +11,12 @@ org_id)` to `(plot.id, plot.org_id)` with a composite foreign key — the patter
 naming one organization while pointing at another organization's plot
 (docs/09-cuellos-de-botella.md#seguridad).
 
-The declared yield and cost are nullable and their CHECKs admit null: they are
-approximate figures a farmer may simply not know (docs/03:245).
+`last_yield_kg_ha` and `recorded_by` are NOT NULL: `PUT /plots/{plot_id}/baseline`
+lists only `last_cost_cop_ha` as optional (docs/04-api.md:52), docs/03:245's
+"aproximado" annotates the cost and not the yield, and `recorded_by` is always the
+caller who saved the survey (D-T0.11, docs/04:233). `last_cost_cop_ha` stays
+nullable and its CHECK admits null: it is an approximate figure a farmer may not
+know.
 
 Revision ID: b3f81c07d2a4
 Revises: e8b109b00c01
@@ -43,10 +47,15 @@ def upgrade() -> None:
         sa.Column('org_id', sa.Uuid(), sa.ForeignKey('organization.id'), nullable=False),
         sa.Column('enrolled_on', sa.Date(), nullable=False),
         sa.Column('crop_id', sa.Integer(), sa.ForeignKey('crop.id'), nullable=False),
-        sa.Column('last_yield_kg_ha', sa.Numeric(), nullable=True),
+        # Required by `PUT /plots/{plot_id}/baseline` (docs/04-api.md:52): only
+        # `last_cost_cop_ha` is optional. docs/03:245's "aproximado" annotates the
+        # cost, not the yield — the survey's whole point is the yield it measures
+        # impact against, so a missing one would make the row useless.
+        sa.Column('last_yield_kg_ha', sa.Numeric(), nullable=False),
         sa.Column('last_cost_cop_ha', sa.Numeric(), nullable=True),
         sa.Column('irrigation_practice', sa.String(), nullable=False),
-        sa.Column('recorded_by', sa.Uuid(), sa.ForeignKey('app_user.id'), nullable=True),
+        # Never null: `PUT` records the caller who saved it (D-T0.11, docs/04:233).
+        sa.Column('recorded_by', sa.Uuid(), sa.ForeignKey('app_user.id'), nullable=False),
         sa.CheckConstraint(
             "irrigation_practice in ('none','drip','sprinkler','gravity')",
             name='ck_plot_baseline_irrigation_practice',

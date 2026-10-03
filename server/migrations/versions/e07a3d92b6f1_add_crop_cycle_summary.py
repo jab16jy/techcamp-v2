@@ -15,8 +15,11 @@ more than it earns. Constraining them to >= 0 would refuse a real, negative resu
 
 `org_id` is tied to the plot's own through a composite foreign key, the pattern
 `6628f7c0aa3b` introduced for `plot` -> `farm`
-(docs/09-cuellos-de-botella.md#seguridad). No index: every documented query reaches
-the row through `crop_cycle_id` or through the plot's own cycles.
+(docs/09-cuellos-de-botella.md#seguridad). `plot_id` is in turn tied to the cycle's
+own plot through `(crop_cycle_id, plot_id)` -> `crop_cycle(id, plot_id)`, so a
+summary row cannot report one plot's metrics for another plot's cycle. No index:
+every documented query reaches the row through `crop_cycle_id` or through the
+plot's own cycles.
 
 Revision ID: e07a3d92b6f1
 Revises: d5c92e14f8b6
@@ -54,9 +57,15 @@ _NON_NEGATIVE_METRICS = (
 
 def upgrade() -> None:
     """Upgrade schema."""
+    # Referenced by `fk_crop_cycle_summary_crop_cycle_id_plot_id` below, so a summary
+    # row cannot name a cycle of one plot while naming another plot.
+    op.create_unique_constraint('uq_crop_cycle_id_plot_id', 'crop_cycle', ['id', 'plot_id'])
+
     op.create_table(
         'crop_cycle_summary',
-        sa.Column('crop_cycle_id', sa.Uuid(), sa.ForeignKey('crop_cycle.id'), primary_key=True),
+        # No column-level FK: `fk_crop_cycle_summary_crop_cycle_id_plot_id` ties it to
+        # `crop_cycle.id` together with `plot_id`.
+        sa.Column('crop_cycle_id', sa.Uuid(), primary_key=True),
         sa.Column('plot_id', sa.Uuid(), nullable=False),
         sa.Column('org_id', sa.Uuid(), sa.ForeignKey('organization.id'), nullable=False),
         sa.Column('yield_kg_ha', sa.Numeric(), nullable=True),
@@ -84,9 +93,17 @@ def upgrade() -> None:
             ['plot.id', 'plot.org_id'],
             name='fk_crop_cycle_summary_plot_id_org_id',
         ),
+        # The cycle belongs to the plot: without this, one row could report another
+        # plot's metrics for a cycle of this plot.
+        sa.ForeignKeyConstraint(
+            ['crop_cycle_id', 'plot_id'],
+            ['crop_cycle.id', 'crop_cycle.plot_id'],
+            name='fk_crop_cycle_summary_crop_cycle_id_plot_id',
+        ),
     )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_table('crop_cycle_summary')
+    op.drop_constraint('uq_crop_cycle_id_plot_id', 'crop_cycle', type_='unique')

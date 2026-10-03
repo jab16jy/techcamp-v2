@@ -173,6 +173,11 @@ class CropCycleRow(Base):
             "expected_harvest_on is null or expected_harvest_on >= sown_on",
             name="ck_crop_cycle_harvest_not_before_sowing",
         ),
+        # Same role as `uq_farm_id_org_id` and `uq_plot_id_org_id`, one level up: it
+        # lets the metrics module's `crop_cycle_summary` tie `(crop_cycle_id,
+        # plot_id)` to `(crop_cycle.id, crop_cycle.plot_id)`, so a summary row cannot
+        # report one plot's metrics for another plot's cycle (E11 T1).
+        UniqueConstraint("id", "plot_id", name="uq_crop_cycle_id_plot_id"),
         Index(
             "uq_crop_cycle_active_per_plot",
             "plot_id",

@@ -49,10 +49,7 @@ class PlotBaselineRow(Base):
             "irrigation_practice in ('none','drip','sprinkler','gravity')",
             name="ck_plot_baseline_irrigation_practice",
         ),
-        CheckConstraint(
-            "last_yield_kg_ha is null or last_yield_kg_ha >= 0",
-            name="ck_plot_baseline_last_yield_non_negative",
-        ),
+        CheckConstraint("last_yield_kg_ha >= 0", name="ck_plot_baseline_last_yield_non_negative"),
         CheckConstraint(
             "last_cost_cop_ha is null or last_cost_cop_ha >= 0",
             name="ck_plot_baseline_last_cost_non_negative",
@@ -71,12 +68,15 @@ class PlotBaselineRow(Base):
     enrolled_on: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     crop_id: Mapped[int] = mapped_column(ForeignKey("crop.id"), nullable=False)
     """Crop of the last cycle, from the global catalog (docs/03:243)."""
-    last_yield_kg_ha: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
+    last_yield_kg_ha: Mapped[decimal.Decimal] = mapped_column(Numeric, nullable=False)
+    """Required by `PUT /plots/{plot_id}/baseline` (docs/04-api.md:52): only
+    `last_cost_cop_ha` is optional. docs/03:245's "aproximado" annotates the cost, not
+    the yield — this is the figure impact is measured against."""
     last_cost_cop_ha: Mapped[decimal.Decimal | None] = mapped_column(Numeric, nullable=True)
-    """Approximate figures the farmer may not know (docs/03:245)."""
+    """An approximate figure the farmer may not know, so `null` and never `0`."""
     irrigation_practice: Mapped[str] = mapped_column(String, nullable=False)
     """Same closed vocabulary as `plot.irrigation_system` (docs/03:246)."""
-    recorded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"), nullable=True)
+    recorded_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("app_user.id"), nullable=False)
     """Whoever saved the survey last; `PUT` replaces the row, so this moves (D-T0.11)."""
 
 
@@ -191,9 +191,19 @@ class CropCycleSummaryRow(Base):
             ["plot.id", "plot.org_id"],
             name="fk_crop_cycle_summary_plot_id_org_id",
         ),
+        # The cycle belongs to the plot: without this, one row could report another
+        # plot's metrics for a cycle of this plot.
+        ForeignKeyConstraint(
+            ["crop_cycle_id", "plot_id"],
+            ["crop_cycle.id", "crop_cycle.plot_id"],
+            name="fk_crop_cycle_summary_crop_cycle_id_plot_id",
+        ),
     )
 
-    crop_cycle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("crop_cycle.id"), primary_key=True)
+    crop_cycle_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    """No column-level FK: `fk_crop_cycle_summary_crop_cycle_id_plot_id` ties it to
+    `crop_cycle.id` together with `plot_id`, so a summary cannot report another
+    plot's metrics for this cycle."""
     plot_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     """No column-level FK: the composite `fk_crop_cycle_summary_plot_id_org_id` ties
     it to `plot.id` together with `org_id`."""
