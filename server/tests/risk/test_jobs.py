@@ -486,6 +486,30 @@ async def test_a_retried_run_opens_the_alert_the_failed_attempt_left_undecided(
     assert await _alerts_of_plot(db_session, plot_id) == [("flood_risk", "open", "critical")]
 
 
+async def test_a_second_run_of_the_same_month_opens_no_second_alert(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression fix 2 opened: every run of a month hands the same stored
+    prediction over, so a second run that decided it again would put a second
+    `flood_risk` alert on the plot — and after a day of that, a farmer closing one
+    by hand would see the next morning reopen it (docs/06 §3 "cierre manual").
+
+    docs/06 §3: una sola alerta abierta por (`rule_id`, `plot_id`), and a decision
+    taken from a prediction is taken once."""
+    _use_doubles(monkeypatch, alert_evaluation=build_risk_evaluation)
+    cell_id = await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood", "risk_drought")
+    plot_id = (
+        await db_session.execute(select(PlotRow.id).where(PlotRow.weather_cell_id == cell_id))
+    ).scalar_one()
+
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert await _alerts_of_plot(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+
 async def test_the_run_opens_the_model_alert_of_the_cell_it_predicted(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

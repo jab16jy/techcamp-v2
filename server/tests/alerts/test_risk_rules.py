@@ -27,7 +27,7 @@ from techcamp.alerts.adapters.repositories import (
     SqlAlchemyAlertRepository,
     SqlAlchemyAlertRuleRepository,
 )
-from techcamp.alerts.application import evaluate_risk_rules
+from techcamp.alerts.application import acknowledge, evaluate_risk_rules, resolve_manually
 from techcamp.alerts.domain import (
     RISK_RULE_CODES,
     RISK_RULE_EVENTS,
@@ -42,6 +42,7 @@ from techcamp.alerts.domain import (
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.farms.adapters.repositories import SqlAlchemyFarmRepository, SqlAlchemyPlotRepository
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
+from techcamp.identity.adapters.repositories import SqlAlchemyMembershipRepository
 from techcamp.identity.domain.models import Role
 from techcamp.shared.ids import uuid7
 from techcamp.weather.adapters.orm import WeatherCellRow
@@ -70,14 +71,21 @@ def _open_alert(code: str) -> Alert:
     )
 
 
-def _evidence(*, cell_id: int, severity: str = "high", event: str = "flood") -> PredictionEvidence:
+def _evidence(
+    *,
+    cell_id: int,
+    severity: str = "high",
+    event: str = "flood",
+    horizon_start: date = _ISSUE_MONTH,
+    model_version_id: UUID = _VERSION_ID,
+) -> PredictionEvidence:
     """A stored `risk_prediction` as the caller of the rule reads it."""
     return PredictionEvidence.from_stored(
         cell_id=cell_id,
         event=event,
         severity=severity,
-        horizon_start=_ISSUE_MONTH,
-        model_version_id=_VERSION_ID,
+        horizon_start=horizon_start,
+        model_version_id=model_version_id,
     )
 
 
@@ -160,6 +168,7 @@ def test_the_two_events_name_their_own_rule_and_only_those_events_are_risk() -> 
 class Org:
     org_id: UUID
     farm_id: UUID
+    owner_id: UUID
 
 
 async def _make_org(db_session: AsyncSession) -> Org:
@@ -182,7 +191,39 @@ async def _make_org(db_session: AsyncSession) -> Org:
         )
     )
     await db_session.commit()
-    return Org(org_id, farm_id)
+    return Org(org_id, farm_id, owner_id)
+
+
+async def _close_by_hand(
+    db_session: AsyncSession, *, plot_id: UUID, org: Org, at: datetime
+) -> None:
+    """The user closes the alert: acknowledge, then resolve with a note.
+
+    docs/06-diseno-detallado.md §3 (`Acknowledged --> Resolved: condición falsa +
+    histéresis o cierre manual`) and `POST /alerts/{id}:resolve` (docs/04).
+    """
+    alerts = SqlAlchemyAlertRepository(db_session)
+    memberships = SqlAlchemyMembershipRepository(db_session)
+    alert_id = (
+        await db_session.execute(
+            select(AlertRow.id).where(AlertRow.plot_id == plot_id, AlertRow.state == "open")
+        )
+    ).scalar_one()
+    acknowledged = await acknowledge(
+        user_id=org.owner_id,
+        alert_id=alert_id,
+        at=at,
+        alerts=alerts,
+        memberships=memberships,
+    )
+    await resolve_manually(
+        user_id=org.owner_id,
+        alert_id=acknowledged.id,
+        note="Revisado en campo",
+        at=at + timedelta(minutes=1),
+        alerts=alerts,
+        memberships=memberships,
+    )
 
 
 async def _cell(db_session: AsyncSession) -> int:
@@ -270,12 +311,14 @@ async def _own_rule(
 
 
 async def _alerts(db_session: AsyncSession, plot_id: UUID) -> list[tuple[str, str, str]]:
-    """`(rule_code, state, severity)` of the plot's alerts, ordered by rule."""
+    """`(rule_code, state, severity)` of the plot's alerts, ordered by rule and
+    state so two rows of the same rule (the factory one and the org's own, or a
+    resolved one and the one that replaced it) always come back the same way."""
     result = await db_session.execute(
         select(AlertRuleRow.code, AlertRow.state, AlertRow.severity)
         .join(AlertRow, AlertRow.rule_id == AlertRuleRow.id)
         .where(AlertRow.plot_id == plot_id)
-        .order_by(AlertRuleRow.code)
+        .order_by(AlertRuleRow.code, AlertRow.state)
     )
     return [(code, state, severity) for code, state, severity in result]
 
@@ -368,11 +411,16 @@ async def test_the_second_high_prediction_of_the_same_month_opens_no_second_aler
     assert opened.opened_at.replace(tzinfo=UTC) == _AT
 
 
-async def test_the_first_low_prediction_resolves_the_open_alert(
+async def test_a_new_prediction_below_high_resolves_the_open_alert(
     db_session: AsyncSession,
 ) -> None:
     """docs/06 §8: "la resuelve en la primera predicción nueva por debajo de
-    `alto`", with no window to wait out."""
+    `alto`", with no window to wait out.
+
+    "Nueva" is a new ROW: the stored prediction of a month is immutable
+    (docs/03 §Unicidad de la predicción), so what resolves the alert is the next
+    month's row at `bajo`. The same month at another severity would be a
+    prediction that changed after it was stored, which cannot happen."""
     org = await _make_org(db_session)
     cell_id = await _cell(db_session)
     _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
@@ -382,7 +430,7 @@ async def test_the_first_low_prediction_resolves_the_open_alert(
     await _evaluate(
         db_session,
         org_id=org.org_id,
-        predictions=[_evidence(cell_id=cell_id, severity="low")],
+        predictions=[_evidence(cell_id=cell_id, severity="low", horizon_start=date(2026, 11, 1))],
         at=later,
     )
 
@@ -486,4 +534,59 @@ async def test_every_rule_of_the_org_that_is_a_model_rule_is_decided(
     assert await _alerts(db_session, plot_id) == [
         ("flood_risk", "open", "critical"),
         ("flood_risk", "open", "critical"),
+    ]
+
+
+async def test_a_prediction_the_user_closed_by_hand_is_never_decided_again(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06 §3: "Acknowledged --> Resolved: condición falsa + histéresis o
+    **cierre manual**". The daily run of the same month hands the SAME stored
+    prediction over every morning (docs/06 §8, la predicción de una celda, evento
+    y mes se escribe una vez), and the evidence did not change, so re-deciding it
+    would reopen the alert the farmer just closed — every day until the month
+    ends.
+
+    A prediction is therefore decided at most once per plot and rule."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
+    prediction = _evidence(cell_id=cell_id, severity="critical")
+    await _evaluate(db_session, org_id=org.org_id, predictions=[prediction])
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+    await _close_by_hand(db_session, plot_id=plot_id, org=org, at=_AT + timedelta(hours=1))
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "resolved", "critical")]
+
+    # The next two mornings, over the same stored row.
+    for day in (1, 2):
+        await _evaluate(
+            db_session,
+            org_id=org.org_id,
+            predictions=[prediction],
+            at=_AT + timedelta(days=day),
+        )
+
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "resolved", "critical")]
+
+
+async def test_another_versions_prediction_of_the_same_month_is_new_evidence(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06 §8: promoting a version adds its own row for the same cell, event and
+    month (docs/03 §Unicidad de la predicción), and that row is a prediction the
+    rules have not decided: the identity of a decided prediction is the month AND
+    the model that produced it, so a promotion is judged and not skipped."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
+    await _evaluate(db_session, org_id=org.org_id, predictions=[_evidence(cell_id=cell_id)])
+    await _close_by_hand(db_session, plot_id=plot_id, org=org, at=_AT + timedelta(hours=1))
+
+    promoted = _evidence(cell_id=cell_id, severity="critical", model_version_id=uuid7())
+    await _evaluate(db_session, org_id=org.org_id, predictions=[promoted], at=_AT)
+
+    assert await _alerts(db_session, plot_id) == [
+        ("flood_risk", "open", "critical"),
+        ("flood_risk", "resolved", "critical"),
     ]

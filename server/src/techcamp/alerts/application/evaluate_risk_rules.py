@@ -27,6 +27,8 @@ from techcamp.alerts.domain import (
     AlertAction,
     PredictionEvidence,
     decide_risk_rule,
+    prediction_evidence,
+    prediction_identity,
 )
 from techcamp.farms.application.ports import FarmRepository, PlotRepository
 
@@ -95,6 +97,21 @@ async def evaluate_risk_rules(
                 if event is None:
                     continue
                 for prediction in by_cell_event.get((plot.weather_cell_id, event), ()):
+                    # One prediction is decided once per plot and rule. The run
+                    # hands the same stored row over every morning of its month
+                    # (docs/06 §8), so without this the morning after a farmer
+                    # closed the alert by hand (docs/06 §3 "cierre manual") would
+                    # open it again from the very evidence that was already
+                    # judged. Another month, or another model_version_id, is
+                    # another prediction and is decided.
+                    decided = await alerts.get_decided_for_target(
+                        rule_id=rule.id,
+                        org_id=plot.org_id,
+                        plot_id=plot.id,
+                        evidence=prediction_identity(prediction),
+                    )
+                    if decided is not None:
+                        continue
                     # `get_non_resolved_for_target` never returns a resolved alert
                     # (the partial unique index's own scope), so it is the "current"
                     # alert.
@@ -111,14 +128,7 @@ async def evaluate_risk_rules(
                                 at=at,
                                 alerts=alerts,
                                 plot_id=plot.id,
-                                evidence={
-                                    "event": prediction.event,
-                                    "severity": prediction.severity.value,
-                                    "horizon_start": prediction.horizon_start.isoformat(),
-                                    # docs/06 §8: "toda alerta se puede rastrear hasta
-                                    # el modelo exacto".
-                                    "model_version_id": str(prediction.model_version_id),
-                                },
+                                evidence=prediction_evidence(prediction),
                             )
                         case AlertAction.RESOLVE:
                             assert decision.alert is not None, "a resolve carries the alert"

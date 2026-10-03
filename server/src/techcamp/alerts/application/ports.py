@@ -9,10 +9,10 @@ notifications, so this one is separate.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from techcamp.alerts.domain.models import Alert, AlertRule, AlertRuleChanges, AlertState, Severity
@@ -71,6 +71,22 @@ class AlertRepository(Protocol):
         `plot_id` and `node_id` are what the caller evaluated, never guessed
         from the rule code, and exactly one of them is given; the index makes
         the row unique, so the read returns it or nothing.
+        """
+        ...
+
+    async def get_decided_for_target(
+        self, *, rule_id: UUID, org_id: UUID, plot_id: UUID, evidence: Mapping[str, Any]
+    ) -> Alert | None:
+        """The alert already decided from `evidence` for this (rule, target), in
+        ANY state — a resolved one counts.
+
+        `evidence` is matched as a SUBSET of the stored `alert.evidence`, so the
+        caller passes only the keys that identify what was decided and a key
+        stored beyond them does not affect the match. The model rules need it
+        because the daily run hands the same stored prediction over every morning
+        of its month (docs/06-diseno-detallado.md §8): without this read, the
+        morning after a farmer closed the alert by hand (docs/06 §3 "cierre
+        manual") would open it again from the very same evidence.
         """
         ...
 

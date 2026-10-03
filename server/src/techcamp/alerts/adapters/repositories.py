@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import decimal
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -112,6 +112,36 @@ class SqlAlchemyAlertRepository:
         else:
             stmt = stmt.where(AlertRow.node_id == node_id, AlertRow.plot_id.is_(None))
         result = await self._session.execute(stmt)
+        row = result.one_or_none()
+        return _alert_from_row(row) if row is not None else None
+
+    async def get_decided_for_target(
+        self, *, rule_id: UUID, org_id: UUID, plot_id: UUID, evidence: Mapping[str, Any]
+    ) -> Alert | None:
+        """The alert decided from `evidence` for this (rule, plot), resolved ones
+        included.
+
+        `evidence.contains(...)` is JSONB containment: the stored object has to
+        hold the keys asked for, and may hold more. `AlertRow.evidence` is a
+        denormalization of what was decided (the model rules store the predicted
+        month and the `model_version_id`), so the read says "this rule already
+        decided this prediction for this plot" without a column of its own.
+
+        `(rule_id, plot_id)` with the organization is the same scope the partial
+        index has (docs/09 §Seguridad), so no row of another organization is ever
+        a candidate; a node alert carries no `plot_id` and can never match one.
+        """
+        result = await self._session.execute(
+            select(*_ALERT_COLUMNS, _RULE_CODE)
+            .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
+            .where(
+                AlertRow.rule_id == rule_id,
+                AlertRow.org_id == org_id,
+                AlertRow.plot_id == plot_id,
+                AlertRow.evidence.contains(evidence),
+            )
+            .limit(1)
+        )
         row = result.one_or_none()
         return _alert_from_row(row) if row is not None else None
 

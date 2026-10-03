@@ -283,6 +283,36 @@ class PredictionEvidence:
         )
 
 
+def prediction_identity(prediction: PredictionEvidence) -> dict[str, str]:
+    """The keys of `prediction` that make it the SAME prediction: the month it is
+    about and the model that produced it.
+
+    A stored prediction is read back by every run of its month (docs/06 §8), so a
+    rule has to know which predictions it already decided — and these are the two
+    that identify one. They are properties of the stored row, never of the alert
+    that was opened from it, so an alert decided today still matches the identity
+    of a prediction the evaluator formats differently tomorrow.
+    """
+    return {
+        "horizon_start": prediction.horizon_start.isoformat(),
+        "model_version_id": str(prediction.model_version_id),
+    }
+
+
+def prediction_evidence(prediction: PredictionEvidence) -> dict[str, Any]:
+    """The evidence an alert opened from `prediction` stores (docs/06 §8: "toda
+    alerta se puede rastrear hasta el modelo exacto").
+
+    The identity plus what the model said, so the stored `alert.evidence` is the
+    whole of the prediction the decision was taken from.
+    """
+    return {
+        "event": prediction.event,
+        "severity": prediction.severity.value,
+        **prediction_identity(prediction),
+    }
+
+
 FUNGAL_MIN_TEMP_C = 20.0
 FUNGAL_MAX_TEMP_C = 30.0
 """docs/06 §3: `fungal_risk` asks for a mean temperature of 20-30 °C (D19)."""
