@@ -18,7 +18,7 @@ from typing import Any
 
 import pandas as pd
 
-from techcamp_ml.sources.cache import cached_files, manifest_names, read_raw, save_raw
+from techcamp_ml.sources.cache import cached_files, manifest_names, read_raw, save_raw, sha256_of
 from techcamp_ml.sources.elevation import (
     ELEVATION_URL,
     MAX_COORDINATES_PER_REQUEST,
@@ -76,6 +76,12 @@ the walk: the plan is published as open before the walk and rewritten with every
 walked once that happens. The parse refuses an open plan, because a cache whose walk was
 cut short holds pages nobody knows to be the last ones, and parsing it writes a labels
 parquet that reads as complete (#241)."""
+PLAN_TRACE_SUFFIX = ".plan.json"
+"""Beside a plan-governed parquet, the digest of the plan that built it.
+
+The plan lives in the raw cache and the parquet in `ml/data/`, so nothing else connects
+them: without the trace, a parquet left by a parse the current cache would refuse still
+builds a dataset (docs/08:68)."""
 
 
 def _chunk_ready(
@@ -278,6 +284,25 @@ def _downloaded(layout: Layout, source: str, name: str, proven: set[str]) -> boo
     return name in proven and layout.raw_copy(source, name).exists()
 
 
+def plan_trace_path(layout: Layout, source: str) -> Path:
+    """Where the trace of the plan a parquet was built from lives, beside that parquet."""
+    return layout.data / f"{source}{PLAN_TRACE_SUFFIX}"
+
+
+def write_plan_trace(layout: Layout, source: str, plan_name: str) -> None:
+    """Record, beside a plan-governed parquet, the digest of the plan it came from.
+
+    A parquet outlives the cache that produced it: a new fetch rewrites the plan, and a
+    parse that then refuses leaves the previous parquet in place, readable and plausible.
+    Whoever builds the dataset has to tell "built from the plan in this cache" from "left
+    behind by an earlier one" (docs/08:68, "el dataset se arma solo desde esas copias").
+    """
+    digest = sha256_of(read_raw(layout, source, plan_name))
+    path = plan_trace_path(layout, source)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"plan": plan_name, "sha256": digest}, indent=2) + "\n")
+
+
 def _fetch_labels(layout: Layout) -> int:
     written = 0
     proven = manifest_names(layout, "labels")
@@ -382,6 +407,7 @@ def _parse_labels(layout: Layout, codes: Collection[str]) -> Path:
         },
     }
     path = write_parquet(layout, "labels", labels)
+    write_plan_trace(layout, "labels", LABELS_PLAN_RAW)
     path.with_suffix(".drops.json").write_text(json.dumps(report, indent=2) + "\n")
     return path
 
@@ -477,7 +503,9 @@ def _parse_weather(
         unknown = sorted(set(weather["code"]) - set(municipalities["code"]))
         if unknown:
             raise ValueError(f"archive chunks hold codes outside the region: {unknown}")
-    return write_parquet(layout, "weather", weather)
+    path = write_parquet(layout, "weather", weather)
+    write_plan_trace(layout, "weather", PLAN_RAW)
+    return path
 
 
 def _assert_plan_cached(layout: Layout, plan: Sequence[PlannedChunk]) -> None:

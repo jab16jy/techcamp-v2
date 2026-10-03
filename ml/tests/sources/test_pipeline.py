@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from techcamp_ml.sources import pipeline
-from techcamp_ml.sources.cache import read_manifest, read_raw, save_raw
+from techcamp_ml.sources.cache import read_manifest, read_raw, save_raw, sha256_of
 from techcamp_ml.sources.layout import Layout
 from techcamp_ml.sources.pipeline import parse_sources
 from techcamp_ml.sources.weather import (
@@ -545,6 +545,24 @@ def test_the_label_fetch_publishes_the_paging_it_walked_to_the_end(
     ]
     # Negative assertion: the plan owes nothing the cache cannot answer.
     assert [page for page in plan["pages"] if not layout.raw_copy("labels", page).exists()] == []
+
+
+def test_a_parsed_source_records_the_plan_it_was_built_from(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+
+    parse_sources(["labels"], layout=layout)
+
+    trace = json.loads(pipeline.plan_trace_path(layout, "labels").read_bytes())
+    assert trace == {
+        "plan": pipeline.LABELS_PLAN_RAW,
+        "sha256": sha256_of(read_raw(layout, "labels", pipeline.LABELS_PLAN_RAW)),
+    }
+    # Negative assertion: a source with no plan leaves no trace claiming one.
+    assert not pipeline.plan_trace_path(layout, "municipalities").exists()
 
 
 def test_a_cached_payload_the_manifest_never_documented_is_downloaded_again(

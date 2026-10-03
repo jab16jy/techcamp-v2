@@ -21,11 +21,17 @@ uv run --locked --project ml python ml/datasets/flood_m2/build.py
 
 El `build` **se niega** si falta cualquiera de los cuatro parquets de
 `ml/data/flood_m2/sources/`, diciendo cuál y que hay que correr el `parse`: los lee todos
-antes de escribir nada, así que un caché incompleto no deja ni dataset ni manifiesto. El
-parquet se escribe junto a su destino y se renombra, igual que cada copia cruda, para que
-un parquet a medio escribir no lo lea nadie como completo. El manifiesto no lleva fecha:
-el build es función pura de los cuatro parquets, así que el mismo caché da el mismo
-archivo y el mismo `sha256` cualquier día.
+antes de escribir nada, así que un caché incompleto no deja ni dataset ni manifiesto.
+También se niega si un parquet no se puede rastrear hasta el plan del caché actual: el
+`parse` escribe junto a cada parquet gobernado por un plan (`weather.plan.json`,
+`labels.plan.json`) el `sha256` del plan que consumió, y el `build` compara ese digest con
+el del plan que está en `ml/.cache/raw/`. Sin eso, un `fetch` que volvió a correr —o que
+se cortó a medias— dejaba el parquet viejo legible y plausible, y el dataset se armaba
+desde copias que el caché actual ya no respondería (docs/08:68, "el dataset se arma solo
+desde esas copias"). El parquet se escribe junto a su destino y se renombra, igual que cada
+copia cruda, para que un parquet a medio escribir no lo lea nadie como completo. El
+manifiesto no lleva fecha: el build es función pura de los cuatro parquets, así que el
+mismo caché da el mismo archivo y el mismo `sha256` cualquier día.
 
 Cada respuesta cruda queda en `ml/.cache/raw/<fuente>/` (fuera de git) con su URL, su
 fecha de descarga y su `sha256` en `ml/.cache/raw/MANIFEST.tsv`. Los parquets de
@@ -161,12 +167,17 @@ pendiente, ni de la estacionalidad (docs/08 §Reglas de gobierno, "Paridad de fe
 
 ### Cobertura de meses
 
-La tabla arranca en **enero del primer año que declara una fuente de etiquetas** (2019-01):
-la descarga reclama esos años, así que un mes dentro sin reporte es un negativo. Termina
-en **el mes del reporte más nuevo de la región** (2025-12 con los datos reales): la fuente
-que tiene la ventana abierta no ha publicado nada después, y un mes del que nadie reportó
-es desconocido, no un negativo (sesgo 3 arriba). Los meses fuera de esa cobertura **no son
-filas**, con clima o sin él.
+La ventana es **2019-01 → 2025-12**, la que docs/08 §Fuentes de datos de M2 y D-T3.2
+cierran para M2 (los tres consolidados UNGRD, sin DesInventar ni nada anterior a 2019).
+Está **escrita, no medida**: `2343-nuqp` se declara abierta (`year_to=None`) para que la
+consulta nunca esté topada, y el reporte más nuevo del parquet tampoco es una ventana —
+un dataset cuyo horizonte se moviera con sus descargas crecería y menguaría con ellas. Los
+meses de esa ventana son los que la descarga reclama, así que un mes dentro sin reporte es
+un negativo; los de fuera **no son filas**, tengan clima o no.
+
+El retraso de reporte sigue siendo un sesgo (sesgo 3 arriba), no un tope: un municipio que
+reporta tarde aparece con menos eventos de los que tuvo, y los meses de 2026 seguirán sin
+etiqueta hasta que `2343-nuqp` los publique.
 
 ### Contrato de columnas
 
@@ -189,16 +200,21 @@ features nulas — el mes se conoce, lo que falta es la evidencia — y quitarlo
 la región según cómo haya ido la descarga. Los reportes repetidos colapsan en la etiqueta
 binaria del mes (sesgo 4 arriba), y `label` es `int`, no `bool`.
 
+La región se verifica **en el build también**, no sólo en el `parse`: sin la guardia de
+`assert_region` un dataset podría armarse sobre otra región y M2 entrenaría sobre
+municipios que docs/08 §M2 "Región" no nombra.
+
 ### Conteos sobre fixtures
 
-El build está probado sobre dos municipios y diez meses de clima, no sobre el archivo real
-(la cuota de ERA5 no alcanzó, ver arriba):
+El build se prueba sobre la **región completa de 195 municipios** y la ventana completa de
+84 meses, con serie diaria sólo para dos cabeceras y con los reportes de un municipio-mes,
+no sobre el archivo real (la cuota de ERA5 no alcanzó, ver arriba):
 
 | Medida | Fixtures | Esperado con el archivo real |
 |---|---|---|
-| Filas | 6 (2 municipios × 3 meses) | 195 × 84 meses (2019-01 → 2025-12) |
+| Filas | 16 380 (195 municipios × 84 meses) | 16 380 (la misma región y la misma ventana) |
 | Positivos | 1 | los municipio-mes con evento, ~1 508 reportes colapsados |
-| Negativos | 5 | todos los demás, sin submuestreo |
+| Negativos | 16 379 | todos los demás, sin submuestreo |
 | Fechas de horizonte | `2019-03-01`, 31 días | día 1 y longitud de cada mes |
 
 **El dataset real todavía no existe.** Falta que terminen los tres trozos del archivo

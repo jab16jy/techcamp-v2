@@ -41,12 +41,23 @@ from techcamp.risk.domain.features import (
 from techcamp_ml.sources.elevation import NEIGHBOUR_DIRECTIONS
 from techcamp_ml.sources.labels import LABEL_SOURCES, LabelSource
 from techcamp_ml.sources.layout import DEFAULT_LAYOUT, ML_ROOT, Layout
+from techcamp_ml.sources.municipalities import assert_region
+from techcamp_ml.sources.pipeline import LABELS_PLAN_RAW, PLAN_RAW, plan_trace_path
 
 DATASET_NAME = "flood_m2"
 PARQUET_NAME = f"{DATASET_NAME}.parquet"
 MANIFEST_NAME = "manifest.json"
 SOURCE_NAMES = ("municipalities", "weather", "elevation", "labels")
 """The four parquets of the parse step, in the order the table is built from them."""
+
+PLAN_OF_SOURCE = {"weather": PLAN_RAW, "labels": LABELS_PLAN_RAW}
+"""The raw plan that governs each plan-governed parquet. The municipalities and the
+elevation have none: they are a pure function of their own raw copies."""
+
+LABEL_LAST_YEAR = 2025
+LABEL_LAST_MONTH = 12
+"""The closed label window of docs/08 §Fuentes de datos de M2 and D-T3.2: UNGRD 2019-2025,
+no DesInventar and no pre-2019 source."""
 
 IDENTITY_COLUMNS = (
     "code",
@@ -79,13 +90,17 @@ def label_coverage(
     *,
     sources: Sequence[LabelSource] = LABEL_SOURCES,
 ) -> tuple[date, date]:
-    """First and last month whose label is known, in evidence rather than in a guess.
+    """First and last month of the label window docs/08 names, never of the data.
 
-    The first is January of the earliest window a label source declares: the download
-    claims those years (docs/08 §Fuentes de datos de M2), so a month inside them with no
-    report is a negative. The last is the month of the newest report in the region: the
-    source that owns the open window had published nothing past it, and a month nobody
-    reported on is unknown, not a negative (data card, sesgo 3).
+    The window is **2019-2025**: the UNGRD consolidados that docs/08 §Fuentes de datos de
+    M2 and D-T3.2 close for M2, and the months inside it are the ones the download claims,
+    so a month there with no report is a negative.
+
+    It is written down rather than measured. `2343-nuqp` is declared open (`year_to=None`)
+    so the query is never capped, and the newest report in the parquet is not a window
+    either: a dataset whose horizon moved with its downloads would grow and shrink with
+    them, and a month the source had not published yet is unknown, not a negative (data
+    card, sesgo 3 — the reporting lag stays a bias, not a bound).
 
     A month outside this range is left out of the table. Adding it as a `0` would train
     the model on months whose silence nobody vouched for.
@@ -94,11 +109,8 @@ def label_coverage(
         raise ValueError(
             "the labels table holds no flood report: run the parse step for labels and build again"
         )
-    newest = pd.Timestamp(labels["date"].max())
-    return (
-        date(min(source.year_from for source in sources), 1, 1),
-        date(newest.year, newest.month, 1),
-    )
+    first_year = min(source.year_from for source in sources)
+    return date(first_year, 1, 1), date(LABEL_LAST_YEAR, LABEL_LAST_MONTH, 1)
 
 
 def build_table(
@@ -113,7 +125,12 @@ def build_table(
     cached copies alone (docs/08 §Reglas de gobierno). A municipality whose series the
     archive never answered keeps its row with null features: the month is known, only its
     evidence is missing, and dropping it would resample the region by download luck.
+
+    The region is asserted here and not only in the parse: 195 municipalities of
+    docs/08 §M2 "Región" is what makes this table M2's, and a dataset built over any other
+    region would train a model the docs never described (docs/08:68).
     """
+    assert_region(municipalities)
     first, last = label_coverage(labels)
     terrain = _terrain(elevation)
     series = _series_by_code(weather)
@@ -251,6 +268,8 @@ def build_dataset(
     (docs/08 §Reglas de gobierno: "reproducible o no existe").
     """
     frames = {name: _read_source(layout, name) for name in SOURCE_NAMES}
+    for name in PLAN_OF_SOURCE:
+        _assert_built_from_the_cached_plan(layout, name)
     table = build_table(
         frames["municipalities"], frames["weather"], frames["elevation"], frames["labels"]
     )
@@ -296,6 +315,37 @@ def _read_source(layout: Layout, name: str) -> pd.DataFrame:
             "parquets of the parse step, so run it and build again"
         )
     return pd.read_parquet(path)
+
+
+def _assert_built_from_the_cached_plan(layout: Layout, name: str) -> None:
+    """Refuse a parquet that this cache's plan did not build.
+
+    The parse writes the digest of the plan it consumed beside its parquet, because the
+    plan lives in the raw cache and the parquet does not: a fetch that ran again, or one
+    that was cut short, leaves the old parquet readable and plausible (docs/08:68, "el
+    dataset se arma solo desde esas copias"). Without this check a stale parquet builds a
+    dataset that no longer answers the cache it claims to come from.
+    """
+    plan_name = PLAN_OF_SOURCE[name]
+    plan_path = layout.raw_copy(name, plan_name)
+    trace_path = plan_trace_path(layout, name)
+    if not plan_path.exists():
+        raise ValueError(
+            f"the raw cache holds no {plan_name}: the parse needs it to build the {name} "
+            "parquet, so run the fetch step and parse again"
+        )
+    if not trace_path.exists():
+        raise ValueError(
+            f"the {name} parquet records no {plan_name} ({trace_path.name}): a parquet left "
+            "by an earlier parse cannot be traced to this cache, so run the parse step and "
+            "build again"
+        )
+    recorded = json.loads(trace_path.read_bytes()).get("sha256")
+    if recorded != _sha256(plan_path):
+        raise ValueError(
+            f"the {name} parquet was built from another {plan_name} than the one in the cache: "
+            "the download moved on, so run the parse step and build again"
+        )
 
 
 def _manifest(

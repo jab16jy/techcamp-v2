@@ -8,7 +8,10 @@ import pandas as pd
 import pytest
 
 from techcamp_ml.datasets.flood_m2 import COLUMNS, build_dataset, main
+from techcamp_ml.sources import pipeline
+from techcamp_ml.sources.cache import save_raw
 from techcamp_ml.sources.layout import Layout
+from techcamp_ml.sources.pipeline import plan_trace_path
 
 PARQUET = "flood_m2.parquet"
 MANIFEST = "manifest.json"
@@ -34,10 +37,10 @@ def test_the_build_writes_one_parquet_and_the_manifest_that_traces_it(sources: L
     table = pd.read_parquet(built.path)
     assert list(table.columns) == list(COLUMNS)
     assert built.manifest["sha256"] == hashlib.sha256(built.path.read_bytes()).hexdigest()
-    assert built.manifest["rows"] == len(table) == 6
+    assert built.manifest["rows"] == len(table) == 195 * 84
     assert built.manifest["positives"] == 1
-    assert built.manifest["negatives"] == 5
-    assert built.manifest["months"] == {"from": "2019-01", "to": "2019-03"}
+    assert built.manifest["negatives"] == 195 * 84 - 1
+    assert built.manifest["months"] == {"from": "2019-01", "to": "2025-12"}
     assert json.loads(built.manifest_path.read_text()) == built.manifest
 
 
@@ -80,6 +83,33 @@ def test_a_missing_source_parquet_is_refused_before_anything_is_written(
     # Negative assertion: no half dataset and no manifest left behind for the harness.
     assert not _out(sources).exists()
     assert not _card(sources).exists()
+
+
+def test_a_parquet_left_by_a_parse_that_the_current_cache_would_refuse_is_refused(
+    sources: Layout,
+) -> None:
+    # The parquet is still there and still readable; what moved is the plan underneath it.
+    save_raw(
+        sources,
+        "weather",
+        pipeline.PLAN_RAW,
+        "test",
+        json.dumps({"today": "2026-11-02", "chunks": []}).encode(),
+    )
+
+    with pytest.raises(ValueError, match="weather"):
+        _build(sources)
+
+    assert not _out(sources).exists()
+
+
+def test_a_parquet_with_no_record_of_the_plan_it_came_from_is_refused(sources: Layout) -> None:
+    plan_trace_path(sources, "labels").unlink()
+
+    with pytest.raises(ValueError, match="labels"):
+        _build(sources)
+
+    assert not _out(sources).exists()
 
 
 def test_the_build_script_prints_the_manifest_it_wrote(
