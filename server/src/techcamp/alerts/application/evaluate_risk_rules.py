@@ -32,7 +32,7 @@ from techcamp.farms.application.ports import FarmRepository, PlotRepository
 
 _MAX_FARMS_PER_ORG = 500
 """ponytail: one `list_for_org` page covers every farm of one organization at
-this project's scale (the same reasoning and constant as the three evaluators
+this project's scale (the same reasoning and constant as the two evaluators
 already in this package)."""
 
 

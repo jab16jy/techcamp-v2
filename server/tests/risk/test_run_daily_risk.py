@@ -753,6 +753,12 @@ async def test_it_commits_after_every_cell() -> None:
     assert transactions.commits == 3
     assert transactions.rollbacks == 0
     assert run.written == 4
+    # The rows the run kept are exactly the ones it counted, which is what lets
+    # the caller evaluate the alerts over them and nothing else (docs/06 §8
+    # "Alertas"): a path that counted a row without keeping it, or the other way
+    # round, would decide alerts over predictions this run never wrote.
+    assert len(run.predictions) == run.written
+    assert {row.cell_id for row in run.predictions} == {1, 2}
 
 
 async def test_the_read_of_the_served_versions_is_closed_before_the_first_provider_call() -> None:
