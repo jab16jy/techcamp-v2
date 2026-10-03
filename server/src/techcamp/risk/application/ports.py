@@ -101,7 +101,14 @@ class CellTransactions:
     **Rollback before continuing.** A statement the database rejected leaves its
     transaction aborted, and every later statement of an aborted transaction fails
     too — so after a cell's failure the run undoes it and keeps going with the
-    next one instead of failing every cell after it.
+    next one instead of failing every cell after it. What that rollback discards
+    depends on who commits: `SqlAlchemyRiskRepository.insert_prediction` commits
+    every row of its own, so its rows survive a rollback, while an adapter that
+    leaves them to the caller loses them. The run cannot tell which it is talking
+    to, so it counts what the cell committed and stops counting at the rollback
+    (#242 `R3-rollback-leaves-written-count-inflated`): for the first adapter the
+    count of a rolled-back cell is then conservative, and for the second it is
+    exact. Neither direction ever reports a row that is not stored.
     """
 
     commit: Callable[[], Awaitable[None]]

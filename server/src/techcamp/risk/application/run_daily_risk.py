@@ -89,8 +89,13 @@ class DailyRiskRun:
 
     `skipped` counts a pair with no prediction *from this run* — nothing
     registered for it, an archive that did not answer, an ERA5 window still
-    behind M-1, or a month already stored. Each of them is logged with its reason,
-    so a run that predicts nothing says why instead of looking like a quiet one.
+    behind M-1, a month already stored, or a cell that failed after this run
+    wrote part of it. Each of them is logged with its reason, so a run that
+    predicts nothing says why instead of looking like a quiet one.
+
+    `written` and `skipped` add up to the pairs the run was asked about, and
+    `written` never counts a row the cell's own transaction rolled back (#242
+    `R3-rollback-leaves-written-count-inflated`).
     """
 
     issue_month: date
@@ -288,6 +293,7 @@ async def run_daily_risk(
         )
 
         stored_here = 0
+        already_here = 0
         try:
             for event, version, predictor in pending_events:
                 outcome = predictor.predict(version, features)
@@ -304,7 +310,6 @@ async def run_daily_risk(
                     created_at=datetime.now(UTC),
                 )
                 if await versions.insert_prediction(prediction):
-                    written += 1
                     stored_here += 1
                 else:
                     # La predicción de una celda, evento y mes se escribe una vez;
@@ -316,7 +321,7 @@ async def run_daily_risk(
                         event.value,
                         issue_month,
                     )
-                    skipped += 1
+                    already_here += 1
             if transactions is not None:
                 await transactions.commit()
         except Exception:
@@ -330,8 +335,33 @@ async def run_daily_risk(
                 issue_month,
                 exc_info=True,
             )
-            if transactions is not None:
-                await transactions.rollback()
-            skipped += len(pending_events) - stored_here
+            if transactions is None:
+                # Nothing was undone: the repository owns each of its own
+                # transactions, so the rows this cell did store are still stored.
+                written += stored_here
+            else:
+                try:
+                    await transactions.rollback()
+                except Exception:
+                    # Undoing a cell that failed is part of containing it: a
+                    # rollback that raises (a dropped connection) must not take the
+                    # cells after this one down with it. The rows are lost either
+                    # way, so the counts below treat them as never stored (#242
+                    # R3-rollback-leaves-written-count-inflated).
+                    logger.warning(
+                        "risk: the transaction of cell %s could not be undone",
+                        cell.id,
+                        exc_info=True,
+                    )
+            # Every pair of a cell that failed produced nothing stored: the ones it
+            # wrote went back with the transaction, the one that raised was never
+            # stored, and the ones after it were never attempted. So the cell
+            # contributes to `written` nothing at all and to `skipped` all of its
+            # pairs, and `written` never reports a row the rollback discarded (#242
+            # R3-rollback-leaves-written-count-inflated).
+            skipped += len(pending_events)
+        else:
+            written += stored_here
+            skipped += already_here
 
     return DailyRiskRun(issue_month=issue_month, written=written, skipped=skipped)

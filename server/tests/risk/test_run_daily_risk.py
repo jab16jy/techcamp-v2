@@ -645,6 +645,96 @@ async def test_a_failed_cell_is_rolled_back_before_the_run_continues() -> None:
     assert transactions.commits == 2
 
 
+class _TransactionalRiskRepository(FakeRiskRepository):
+    """The rows double of an adapter that does NOT commit each prediction, so a
+    rollback takes the cell's rows with it (#242
+    R3-rollback-leaves-written-count-inflated).
+
+    `SqlAlchemyRiskRepository` commits every row itself, so a rollback there keeps
+    what was written. This double is the other adapter the `CellTransactions`
+    docstring talks about: its rows live only until the run's own commit, which is
+    what makes "what is actually stored" observable in a test.
+    """
+
+    def __init__(self, versions: Mapping[str, ModelVersion]) -> None:
+        super().__init__(versions)
+        self.rollbacks = 0
+        self._pending: list[RiskPrediction] = []
+
+    async def insert_prediction(self, prediction: RiskPrediction) -> bool:
+        if not await super().insert_prediction(prediction):
+            return False
+        self._pending.append(prediction)
+        return True
+
+    async def commit(self) -> None:
+        self._pending.clear()
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
+        for row in self._pending:
+            self.rows.remove(row)
+        self._pending.clear()
+
+
+async def test_a_rolled_back_cell_reports_neither_a_stored_row_nor_a_written_one() -> None:
+    """A cell that wrote one event and failed the next one rolls its written rows
+    back with the transaction, so `written` must stop counting them and `skipped`
+    must take every pair of the failed cell (#242
+    R3-rollback-leaves-written-count-inflated: `written` reported rows the rollback
+    had already discarded, and the lost rows were counted as neither written nor
+    skipped).
+
+    `EventType` walks flood first, so the cell stores its flood prediction and then
+    fails on the drought one."""
+    versions = _TransactionalRiskRepository(
+        {"risk_flood": _version("risk_flood"), "risk_drought": _version("risk_drought")}
+    )
+
+    run = await _run(
+        cells=[_cell(1)],
+        versions=versions,
+        archive=FakeArchive(),
+        predictors=_registry(
+            ("risk_flood", _RecordingPredictor(0.82)),
+            ("risk_drought", _FailingPredictor(0.2, fail_on_call=1)),
+        ),
+        transactions=CellTransactions(commit=versions.commit, rollback=versions.rollback),
+    )
+
+    assert versions.rollbacks == 1
+    # Nothing of the failed cell is stored, so nothing of it was written.
+    assert versions.rows == []
+    assert run.written == 0
+    assert run.skipped == 2
+
+
+async def test_a_rollback_that_itself_fails_does_not_abort_the_run() -> None:
+    """A rollback on a dropped connection raises. The containment of docs/06 §6
+    covers one cell's failure, and that includes failing to undo it: the cells
+    after it still get predicted (#242 R3-rollback-leaves-written-count-inflated)."""
+
+    class _BrokenTransactions(_RecordingTransactions):
+        async def rollback(self) -> None:
+            self.rollbacks += 1
+            raise ConnectionError("the connection went away")
+
+    versions = _FailingInsertRepository({"risk_flood": _version("risk_flood")}, fail_cell_id=1)
+    transactions = _BrokenTransactions()
+
+    run = await _run(
+        cells=[_cell(1), _cell(2)],
+        versions=versions,
+        archive=FakeArchive(),
+        predictors=_registry(("risk_flood", _RecordingPredictor(0.4))),
+        transactions=transactions,
+    )
+
+    assert transactions.rollbacks == 1
+    assert {row.cell_id for row in versions.rows} == {2}
+    assert run.written == 1
+
+
 async def test_it_commits_after_every_cell() -> None:
     """Committing per cell is what limits a late failure to that cell: one
     transaction across the whole run would roll back every cell's predictions when
