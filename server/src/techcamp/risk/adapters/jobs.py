@@ -133,6 +133,7 @@ def _as_evidence(predictions: Sequence[RiskPrediction]) -> list[PredictionEviden
             severity=prediction.severity.value,
             horizon_start=prediction.horizon_start,
             model_version_id=prediction.model_version_id,
+            issued_at=prediction.created_at,
         )
         for prediction in predictions
     ]

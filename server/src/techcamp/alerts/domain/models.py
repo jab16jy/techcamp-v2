@@ -251,7 +251,9 @@ class PredictionEvidence:
     that decides WHICH plots the alert is about (docs/06 §8: "cada parcela de la
     celda"), not the rule. `horizon_start` and `model_version_id` are what the
     alert stores as its evidence, because docs/06 §8 asks every alert to be
-    traceable to the exact model that raised it.
+    traceable to the exact model that raised it. `issued_at` is when the row was
+    stored (`risk_prediction.created_at`), which is the only thing that says
+    whether an alert was already open when this prediction arrived.
 
     `from_stored` is the constructor the calling module uses: it stores `severity`
     as the code docs/03 declares and this module owns the vocabulary, so a stored
@@ -263,6 +265,7 @@ class PredictionEvidence:
     severity: PredictionSeverity
     horizon_start: date
     model_version_id: UUID
+    issued_at: datetime
 
     @classmethod
     def from_stored(
@@ -273,6 +276,7 @@ class PredictionEvidence:
         severity: str,
         horizon_start: date,
         model_version_id: UUID,
+        issued_at: datetime,
     ) -> PredictionEvidence:
         return cls(
             cell_id=cell_id,
@@ -280,6 +284,7 @@ class PredictionEvidence:
             severity=PredictionSeverity(severity),
             horizon_start=horizon_start,
             model_version_id=model_version_id,
+            issued_at=issued_at,
         )
 
 
@@ -303,12 +308,13 @@ def prediction_evidence(prediction: PredictionEvidence) -> dict[str, Any]:
     """The evidence an alert opened from `prediction` stores (docs/06 §8: "toda
     alerta se puede rastrear hasta el modelo exacto").
 
-    The identity plus what the model said, so the stored `alert.evidence` is the
-    whole of the prediction the decision was taken from.
+    The identity plus what the model said and when, so the stored
+    `alert.evidence` is the whole of the prediction the decision was taken from.
     """
     return {
         "event": prediction.event,
         "severity": prediction.severity.value,
+        "issued_at": prediction.issued_at.isoformat(),
         **prediction_identity(prediction),
     }
 

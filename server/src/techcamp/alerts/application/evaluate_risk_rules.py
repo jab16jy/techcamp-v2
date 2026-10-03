@@ -28,7 +28,6 @@ from techcamp.alerts.domain import (
     PredictionEvidence,
     decide_risk_rule,
     prediction_evidence,
-    prediction_identity,
 )
 from techcamp.farms.application.ports import FarmRepository, PlotRepository
 
@@ -101,14 +100,16 @@ async def evaluate_risk_rules(
                     # hands the same stored row over every morning of its month
                     # (docs/06 §8), so without this the morning after a farmer
                     # closed the alert by hand (docs/06 §3 "cierre manual") would
-                    # open it again from the very evidence that was already
-                    # judged. Another month, or another model_version_id, is
-                    # another prediction and is decided.
+                    # open it again from evidence that was already judged — either
+                    # by the alert that carries this prediction's identity, or by
+                    # the alert that was open when the prediction was issued and
+                    # answered it with NO_ACTION. Another month, or another
+                    # model_version_id, is another prediction and is decided.
                     decided = await alerts.get_decided_for_target(
                         rule_id=rule.id,
                         org_id=plot.org_id,
                         plot_id=plot.id,
-                        evidence=prediction_identity(prediction),
+                        prediction=prediction,
                     )
                     if decided is not None:
                         continue

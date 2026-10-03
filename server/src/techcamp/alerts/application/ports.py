@@ -9,13 +9,20 @@ notifications, so this one is separate.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
-from techcamp.alerts.domain.models import Alert, AlertRule, AlertRuleChanges, AlertState, Severity
+from techcamp.alerts.domain.models import (
+    Alert,
+    AlertRule,
+    AlertRuleChanges,
+    AlertState,
+    PredictionEvidence,
+    Severity,
+)
 from techcamp.notifications.application import NotificationDraft
 
 type UnitOfWorkRecovery = Callable[[], Awaitable[None]]
@@ -75,18 +82,27 @@ class AlertRepository(Protocol):
         ...
 
     async def get_decided_for_target(
-        self, *, rule_id: UUID, org_id: UUID, plot_id: UUID, evidence: Mapping[str, Any]
+        self, *, rule_id: UUID, org_id: UUID, plot_id: UUID, prediction: PredictionEvidence
     ) -> Alert | None:
-        """The alert already decided from `evidence` for this (rule, target), in
+        """The alert that already decided `prediction` for this (rule, plot), in
         ANY state — a resolved one counts.
 
-        `evidence` is matched as a SUBSET of the stored `alert.evidence`, so the
-        caller passes only the keys that identify what was decided and a key
-        stored beyond them does not affect the match. The model rules need it
-        because the daily run hands the same stored prediction over every morning
-        of its month (docs/06-diseno-detallado.md §8): without this read, the
-        morning after a farmer closed the alert by hand (docs/06 §3 "cierre
-        manual") would open it again from the very same evidence.
+        Two ways a prediction can already have been decided:
+
+        - an alert carries its identity in the stored `evidence`, which is the
+          prediction that OPENED that alert. The identity is matched as a SUBSET
+          of the stored `alert.evidence`, so the caller never has to keep the two
+          formats in step and a key stored beyond them does not matter.
+        - an alert was already OPEN when the prediction was issued (`issued_at`
+          inside that alert's own `opened_at`..`resolved_at` window), so the
+          decision was NO_ACTION: the open alert already answered this evidence
+          and nothing was recorded about it.
+
+        The model rules need both because the daily run hands the same stored
+        prediction over every morning of its month (docs/06-diseno-detallado.md
+        §8): without them, the morning after a farmer closed the alert by hand
+        (docs/06 §3 "cierre manual") would open it again from evidence the run
+        had already judged.
         """
         ...
 

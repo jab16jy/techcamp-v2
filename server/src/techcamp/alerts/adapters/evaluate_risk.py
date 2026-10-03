@@ -14,6 +14,7 @@ docs/09-cuellos-de-botella.md#seguridad).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import datetime
 
@@ -31,6 +32,8 @@ from techcamp.alerts.application.evaluate_risk_rules import (
 from techcamp.alerts.domain.models import PredictionEvidence
 from techcamp.farms.adapters.repositories import SqlAlchemyFarmRepository, SqlAlchemyPlotRepository
 
+logger = logging.getLogger(__name__)
+
 
 def build_risk_evaluation(session: AsyncSession) -> RiskRuleEvaluation:
     """The evaluation the daily risk job runs right after it wrote its
@@ -45,15 +48,31 @@ def build_risk_evaluation(session: AsyncSession) -> RiskRuleEvaluation:
     async def evaluate(*, at: datetime, predictions: Sequence[PredictionEvidence]) -> None:
         rules = SqlAlchemyAlertRuleRepository(session)
         for org_id in await orgs_with_plots(session):
-            await evaluate_risk_rules(
-                org_id=org_id,
-                at=at,
-                predictions=predictions,
-                rules=rules,
-                farms=SqlAlchemyFarmRepository(session),
-                plots=SqlAlchemyPlotRepository(session),
-                alerts=SqlAlchemyAlertRepository(session),
-            )
-        await session.commit()
+            try:
+                await evaluate_risk_rules(
+                    org_id=org_id,
+                    at=at,
+                    predictions=predictions,
+                    rules=rules,
+                    farms=SqlAlchemyFarmRepository(session),
+                    plots=SqlAlchemyPlotRepository(session),
+                    alerts=SqlAlchemyAlertRepository(session),
+                )
+                # One commit per organization: an organization that fails takes
+                # only its own uncommitted work with it, and the ones decided
+                # before it are published.
+                await session.commit()
+            except Exception:
+                # One organization's failure is its own (docs/06 §6
+                # "Degradación"): the run logs it, puts the shared unit of work
+                # back in a usable state (D24 — a failed statement leaves the
+                # session in a failed-transaction state, so every read after it
+                # would raise) and the organizations after it are still decided.
+                logger.warning(
+                    "alerts: the model rules of org %s could not be evaluated, the others go on",
+                    org_id,
+                    exc_info=True,
+                )
+                await session.rollback()
 
     return evaluate

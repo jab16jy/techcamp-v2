@@ -22,6 +22,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import techcamp.alerts.adapters.evaluate_risk as evaluate_risk_module
+from techcamp.alerts.adapters.evaluate_risk import build_risk_evaluation
 from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
 from techcamp.alerts.adapters.repositories import (
     SqlAlchemyAlertRepository,
@@ -56,6 +58,10 @@ _BOUNDARY = (
     "SRID=4326;POLYGON((-74.10 10.90, -74.10 10.91, -74.09 10.91, -74.09 10.90, -74.10 10.90))"
 )
 _VERSION_ID = uuid7()
+_ISSUED_AT = datetime(2026, 10, 2, 11, tzinfo=UTC)
+"""When the stored prediction was issued: the daily run writes the rows at 06:00
+and evaluates them minutes later, so a prediction is always a little older than
+the alert it opens."""
 
 
 def _open_alert(code: str) -> Alert:
@@ -78,6 +84,7 @@ def _evidence(
     event: str = "flood",
     horizon_start: date = _ISSUE_MONTH,
     model_version_id: UUID = _VERSION_ID,
+    issued_at: datetime = _ISSUED_AT,
 ) -> PredictionEvidence:
     """A stored `risk_prediction` as the caller of the rule reads it."""
     return PredictionEvidence.from_stored(
@@ -86,6 +93,7 @@ def _evidence(
         severity=severity,
         horizon_start=horizon_start,
         model_version_id=model_version_id,
+        issued_at=issued_at,
     )
 
 
@@ -355,6 +363,7 @@ async def test_a_high_flood_prediction_opens_a_critical_alert_on_every_plot_of_t
         "severity": "high",
         "horizon_start": _ISSUE_MONTH.isoformat(),
         "model_version_id": str(_VERSION_ID),
+        "issued_at": _ISSUED_AT.isoformat(),
     }
 
 
@@ -570,6 +579,78 @@ async def test_a_prediction_the_user_closed_by_hand_is_never_decided_again(
     assert await _alerts(db_session, plot_id) == [("flood_risk", "resolved", "critical")]
 
 
+async def test_a_prediction_an_open_alert_absorbed_never_reopens_it_after_the_close(
+    db_session: AsyncSession,
+) -> None:
+    """#246 R3-decided-once-only-recorded-on-open: only an OPENED alert carries a
+    prediction's evidence, so a prediction that ended in NO_ACTION — another
+    month's alert already open, which is the intended behaviour of docs/06 §8 —
+    left no record of having been judged.
+
+    Month M opens the alert; month M+1 is also `alto` and is judged against the
+    open one; the farmer closes that alert during M+1. The next morning the run
+    passes M+1's stored row again, and with no record and no open alert the
+    decision returned OPEN — the alert the farmer closed came back from evidence
+    the run had already judged.
+
+    An alert that was already open when a prediction was ISSUED absorbed that
+    prediction's decision, and the alert's own window (`opened_at`..
+    `resolved_at`) is what keeps that true after the farmer closed it."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
+
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[_evidence(cell_id=cell_id, horizon_start=date(2026, 10, 1))],
+    )
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+    # Month M+1, also `alto`: the open alert is left open and nothing is recorded.
+    next_month = _AT + timedelta(days=30)
+    absorbed = _evidence(cell_id=cell_id, horizon_start=date(2026, 11, 1), issued_at=next_month)
+    await _evaluate(db_session, org_id=org.org_id, predictions=[absorbed], at=next_month)
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+    await _close_by_hand(db_session, plot_id=plot_id, org=org, at=next_month + timedelta(days=4))
+    # The next morning, over the same stored row of M+1.
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[absorbed],
+        at=next_month + timedelta(days=5),
+    )
+
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "resolved", "critical")]
+
+
+async def test_a_prediction_issued_after_a_close_still_opens_its_own_alert(
+    db_session: AsyncSession,
+) -> None:
+    """The other side of the window: a prediction written AFTER the alert was
+    closed was never judged against it, so it decides on its own — the flood is
+    real and unnotified."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
+    await _evaluate(db_session, org_id=org.org_id, predictions=[_evidence(cell_id=cell_id)])
+    await _close_by_hand(db_session, plot_id=plot_id, org=org, at=_AT + timedelta(hours=1))
+
+    after = _ISSUED_AT + timedelta(days=40)
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[_evidence(cell_id=cell_id, horizon_start=date(2026, 11, 1), issued_at=after)],
+        at=_AT + timedelta(days=41),
+    )
+
+    assert await _alerts(db_session, plot_id) == [
+        ("flood_risk", "open", "critical"),
+        ("flood_risk", "resolved", "critical"),
+    ]
+
+
 async def test_another_versions_prediction_of_the_same_month_is_new_evidence(
     db_session: AsyncSession,
 ) -> None:
@@ -590,3 +671,40 @@ async def test_another_versions_prediction_of_the_same_month_is_new_evidence(
         ("flood_risk", "open", "critical"),
         ("flood_risk", "resolved", "critical"),
     ]
+
+
+# -- the composition the daily risk job calls, over one session --
+
+
+async def test_one_organization_that_fails_does_not_stop_the_others(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#246 R3-one-org-failure-aborts-every-org: one failing organization must not
+    abandon the ones after it, and must not take their work with it. The
+    containment is the one every other evaluator has (one cell's failure is its
+    own, docs/06 §6 "Degradación"; `run_daily_risk` contains it per cell) and the
+    fan-out here is per organization, so the containment has to be too.
+
+    The failing organization is created FIRST, so its `uuid7` sorts first and the
+    healthy one runs after the failure — which is what proves the session was
+    recovered (D24), not just that the loop went on."""
+    failing = await _make_org(db_session)
+    healthy = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, failing_plot = await _make_plot(db_session, org=failing, cell_id=cell_id)
+    _, healthy_plot = await _make_plot(db_session, org=healthy, cell_id=cell_id)
+    decide = evaluate_risk_module.evaluate_risk_rules
+
+    async def failing_on_one_org(**kwargs: object) -> None:
+        if kwargs["org_id"] == failing.org_id:
+            raise RuntimeError("this organization's alert write failed")
+        await decide(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(evaluate_risk_module, "evaluate_risk_rules", failing_on_one_org)
+
+    await build_risk_evaluation(db_session)(
+        at=_AT, predictions=[_evidence(cell_id=cell_id, severity="critical")]
+    )
+
+    assert await _alerts(db_session, failing_plot) == []
+    assert await _alerts(db_session, healthy_plot) == [("flood_risk", "open", "critical")]
