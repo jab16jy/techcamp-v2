@@ -424,6 +424,126 @@ async def test_plot_metric_monthly_rejects_a_plot_of_another_organization(
 # -- crop_cycle_summary: the per-cycle impact (D-T0.8, D-T0.9) ----------------
 
 
+# -- Every loop-generated CHECK, proven twice (#243) --------------------------
+# These constraints are built from a tuple in the migration
+# (`_COMPONENTS`, `_NON_NEGATIVE_METRICS`) and hand-copied in the ORM, so a typo in
+# either file is invisible: a wrong name would never be enforced and a wrong
+# expression would enforce the wrong range. Parametrizing over the exact constraint
+# names closes that gap — each one is asserted to reject a bad value BY NAME, and to
+# accept the good one, so the test fails if the migration and the test drift apart.
+
+
+@pytest.mark.parametrize(
+    ("constraint", "column", "bad"),
+    [
+        (f"ck_plot_metric_monthly_{name}_range", name, -0.1)
+        for name in ("monitoring", "record_keeping", "decision", "risk_management")
+    ],
+)
+async def test_every_component_range_rejects_out_of_range_and_accepts_in_range(
+    db_session: AsyncSession, constraint: str, column: str, bad: float
+) -> None:
+    """The four adoption-index components are 0-1 ratios (docs/11-metricas.md:42-52)."""
+    org_id, plot_id, _, _ = await _make_plot(db_session)
+    month = datetime.date(2026, 2, 1)
+
+    await _insert(
+        db_session,
+        "plot_metric_monthly",
+        plot_id=plot_id,
+        month=month,
+        org_id=org_id,
+        computed_at=_COMPUTED_AT,
+        **{column: 0.5},
+    )
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "plot_metric_monthly",
+            plot_id=plot_id,
+            month=datetime.date(2026, 3, 1),
+            org_id=org_id,
+            computed_at=_COMPUTED_AT,
+            **{column: bad},
+        )
+
+    assert constraint in str(exc_info.value.orig)
+
+
+@pytest.mark.parametrize(
+    ("constraint", "column"),
+    [
+        ("ck_crop_cycle_summary_yield_kg_ha_non_negative", "yield_kg_ha"),
+        ("ck_crop_cycle_summary_relative_yield_non_negative", "relative_yield"),
+        ("ck_crop_cycle_summary_water_applied_m3_ha_non_negative", "water_applied_m3_ha"),
+        ("ck_crop_cycle_summary_irrigation_wue_kg_m3_non_negative", "irrigation_wue_kg_m3"),
+        ("ck_crop_cycle_summary_water_stress_days_non_negative", "water_stress_days"),
+        ("ck_crop_cycle_summary_cost_cop_ha_non_negative", "cost_cop_ha"),
+        ("ck_crop_cycle_summary_cost_cop_kg_non_negative", "cost_cop_kg"),
+        ("ck_crop_cycle_summary_yield_kg_per_labor_day_non_negative", "yield_kg_per_labor_day"),
+        ("ck_crop_cycle_summary_loss_kg_non_negative", "loss_kg"),
+        ("ck_crop_cycle_summary_loss_cop_non_negative", "loss_cop"),
+    ],
+)
+async def test_every_non_negative_cycle_metric_rejects_a_negative_value(
+    db_session: AsyncSession, constraint: str, column: str
+) -> None:
+    """The ten cycle quantities that cannot be negative (docs/03-modelo-datos.md:439).
+
+    `yield_change_vs_baseline` and `gross_margin_cop` are deliberately not here: both
+    are legitimately negative and carry no such CHECK.
+    """
+    org_id, plot_id, _, _ = await _make_plot(db_session)
+    cycle_id = await _make_cycle(db_session, plot_id)
+
+    await _insert(
+        db_session,
+        "crop_cycle_summary",
+        crop_cycle_id=cycle_id,
+        plot_id=plot_id,
+        org_id=org_id,
+        computed_at=_COMPUTED_AT,
+        **{column: 1},
+    )
+
+    with pytest.raises(IntegrityError) as exc_info:
+        await _insert(
+            db_session,
+            "crop_cycle_summary",
+            crop_cycle_id=cycle_id,
+            plot_id=plot_id,
+            org_id=org_id,
+            computed_at=_COMPUTED_AT,
+            **{column: -1},
+        )
+
+    assert constraint in str(exc_info.value.orig)
+
+
+async def test_a_declared_zero_yield_is_a_valid_survey(db_session: AsyncSession) -> None:
+    """A season that produced nothing is a real answer, not missing data (#243): the
+    `>= 0` rule stays as it is, and the zero-denominator case is T4's to resolve by
+    storing `yield_change_vs_baseline` as null rather than dividing."""
+    org_id, plot_id, crop_id, user_id = await _make_plot(db_session)
+
+    await _insert(
+        db_session,
+        "plot_baseline",
+        plot_id=plot_id,
+        org_id=org_id,
+        enrolled_on=datetime.date(2026, 2, 10),
+        crop_id=crop_id,
+        last_yield_kg_ha=0,
+        irrigation_practice="none",
+        recorded_by=user_id,
+    )
+
+    stored = await db_session.get(PlotBaselineRow, plot_id)
+    assert stored is not None
+    assert stored.last_yield_kg_ha == 0
+
+
 async def _make_cycle(db_session: AsyncSession, plot_id: Any) -> Any:
     cycle_id = uuid7()
     db_session.add(

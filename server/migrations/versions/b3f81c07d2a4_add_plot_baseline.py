@@ -60,9 +60,12 @@ def upgrade() -> None:
             "irrigation_practice in ('none','drip','sprinkler','gravity')",
             name='ck_plot_baseline_irrigation_practice',
         ),
+        # Byte-identical to the ORM's text for the same name (#243): the column is
+        # NOT NULL, so `is null or` states nothing the column does not already say.
+        # A declared zero yield stays valid; the zero-denominator case belongs to the
+        # T4 formula, which stores `yield_change_vs_baseline` as null for it.
         sa.CheckConstraint(
-            "last_yield_kg_ha is null or last_yield_kg_ha >= 0",
-            name='ck_plot_baseline_last_yield_non_negative',
+            "last_yield_kg_ha >= 0", name='ck_plot_baseline_last_yield_non_negative'
         ),
         sa.CheckConstraint(
             "last_cost_cop_ha is null or last_cost_cop_ha >= 0",
