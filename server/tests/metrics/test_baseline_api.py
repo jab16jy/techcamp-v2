@@ -117,7 +117,13 @@ async def test_an_owner_saves_and_reads_the_survey(db_session: AsyncSession) -> 
 async def test_a_technician_edits_an_existing_survey(db_session: AsyncSession) -> None:
     org_id, plot_id, _user_id, token = await _org_with_plot(db_session, role="owner")
     client = _client()
-    client.put(f"/plots/{plot_id}/baseline", json=_survey(), headers=_auth(token))
+    seeded = client.put(f"/plots/{plot_id}/baseline", json=_survey(), headers=_auth(token))
+
+    # The replace is only proved when the survey really exists first: if this
+    # seeding call failed, the second PUT would insert one row and every
+    # assertion below would still hold (D-T0.11, "PUT replaces").
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json()["last_yield_kg_ha"] == 3200
     technician_id = uuid7()
     db_session.add(AppUserRow(id=technician_id, phone=f"+5730088{next(_phone_seq):05d}"))
     await db_session.commit()
@@ -144,6 +150,14 @@ async def test_a_technician_edits_an_existing_survey(db_session: AsyncSession) -
         )
     ).scalar_one()
     assert rows == 1
+    # Read past the API response: the row itself carries the replaced values, so
+    # an `ON CONFLICT DO UPDATE` regressed to a plain insert cannot pass here.
+    stored = (
+        await db_session.execute(select(PlotBaselineRow).where(PlotBaselineRow.plot_id == plot_id))
+    ).scalar_one()
+    assert float(stored.last_yield_kg_ha) == 2800
+    assert stored.irrigation_practice == "drip"
+    assert stored.recorded_by == technician_id
 
 
 async def test_an_omitted_cost_is_null_and_not_zero(db_session: AsyncSession) -> None:
