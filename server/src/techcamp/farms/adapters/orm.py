@@ -83,6 +83,11 @@ class PlotRow(Base):
             ["farm.id", "farm.org_id"],
             name="fk_plot_farm_id_org_id",
         ),
+        # Same role as `uq_farm_id_org_id`, one level up: it lets the metrics
+        # module's tables (E11 T1) tie `(plot_id, org_id)` to `(plot.id, plot.org_id)`,
+        # so a metric row can never name one organization while pointing at another
+        # organization's plot (docs/09 §Seguridad).
+        UniqueConstraint("id", "org_id", name="uq_plot_id_org_id"),
         Index("ix_plot_boundary", "boundary", postgresql_using="gist"),
         Index("ix_plot_org_farm", "org_id", "farm_id"),
     )
