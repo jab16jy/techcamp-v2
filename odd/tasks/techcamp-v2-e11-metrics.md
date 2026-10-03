@@ -71,9 +71,13 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
 - [x] T0 Decisions into owner docs: docs/03, 04, 05, 07, 11 (no ADR: no accepted decision
   changed; `domain-modeling` skill not installed, existing conventions followed). ~80. Route:
   parent inline (planning is never delegated).
-- [ ] T1 Schema: migration for `plot_baseline`, `plot_metric_monthly`, `crop_cycle_summary`
-  (org_id, FKs, CHECKs), SQLAlchemy tables, import-linter arrows (D-T0.1). ~200. Route: Herdr
-  OpenCode. Depends T0.
+- [x] T1 Schema: migration for `plot_baseline`, `plot_metric_monthly`, `crop_cycle_summary`
+  (org_id, FKs, CHECKs), SQLAlchemy tables. ~200 forecast, **~1170 actual** (prod ~500, tests
+  ~670; 5.9x: one revision per table plus a CHECK test per constraint). Route: Herdr OpenCode.
+  Commits bf70633, aaab75b, 86fa67d, 67965ae (gate fix: NOT NULL yield/recorder, cycle→plot FK),
+  3be6dd6 (#243). Merged 31c6b3e. Evidence: `just gate server/tests/metrics` 38 passed (lane and
+  epic branch), `gate-lane` green on 5 commits. import-linter only checks layers, so the D-T0.1
+  arrows are not enforced; reviewed by hand at each gate.
 - [ ] T2 Enrollment survey: `GET/PUT /plots/{plot_id}/baseline`, use cases, repository, roles,
   isolation tests. ~350. Route: Herdr OpenCode. Depends T1. Parallel with T3.
 - [ ] T3 Read-only SQL views (migration) and the metrics source repository: readings expected vs
@@ -106,7 +110,14 @@ Parallel lanes only with disjoint files and no dependency (owner rule, E9).
 
 ## Review (RDD)
 RDD on (global). OpenCode writers run their own RDD after the parent gate passes; AGY lanes are
-reviewed by the parent. Findings rule (owner, 2026-09-30): blocking → bounded correction; 1–2
+reviewed by the parent.
+- T0 docs (aaa9cfc): `review-38b1d335a3e1bb69` low, no lenses, approved and acknowledged.
+- docs/11 zero-yield rule: `review-b356e7d583127108` low, approved and acknowledged.
+- T1: `review-42eef0b7423540e0` medium, one lens (`review-reliability`), approved, authority
+  burned by the writer. 3 WARNINGs → #243: zero-denominator resolved by the docs/11 rule (T4
+  applies it), CHECK text drift and missing rejection tests fixed in 3be6dd6 (`Refs #243`).
+  Note: the provider computed the base itself (a2bae6b, not the fork point), so the T1 review
+  also covered T0's docs. Findings rule (owner, 2026-09-30): blocking → bounded correction; 1–2
 non-blocking → one issue per round; 3+ → fix the most important with `Refs #N`, file the rest.
 
 ## Progress
@@ -115,4 +126,4 @@ non-blocking → one issue per round; 3+ → fix the most important with `Refs #
   OpenCode docs map, AGY lessons) → `../techcamp-v2-worktrees/e11-briefs/*.md.out`. T0 written.
 
 ## Next step
-T1 brief and Herdr OpenCode writer.
+Wave 2 running: T2 (`e11-t2`, OpenCode) and T3 (`e11-t3`, OpenCode) in their own worktrees and DBs.
