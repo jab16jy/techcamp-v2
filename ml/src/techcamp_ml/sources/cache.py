@@ -57,9 +57,14 @@ def save_raw(
     manifest = read_manifest(layout)
     kept = manifest[~((manifest["source"] == source) & (manifest["file"] == name))]
     layout.manifest.parent.mkdir(parents=True, exist_ok=True)
+    # The manifest is rewritten whole, so it is written beside its target and renamed
+    # like the payload: truncated in place, it would take the provenance of every other
+    # cached file with it.
+    partial = layout.manifest.with_name(f"{layout.manifest.name}.part")
     pd.concat([kept, pd.DataFrame([asdict(entry)])], ignore_index=True).to_csv(
-        layout.manifest, sep="\t", index=False, columns=list(MANIFEST_COLUMNS)
+        partial, sep="\t", index=False, columns=list(MANIFEST_COLUMNS)
     )
+    partial.replace(layout.manifest)
     return entry
 
 
@@ -96,3 +101,14 @@ def cached_files(layout: Layout, source: str) -> list[str]:
     if not directory.is_dir():
         return []
     return sorted(path.name for path in directory.iterdir() if path.is_file())
+
+
+def manifest_names(layout: Layout, source: str) -> set[str]:
+    """The raw copies of `source` the manifest documents.
+
+    A resume trusts this and not the directory: a payload whose row never landed is a
+    download whose URL, fetch date and hash nobody knows, and the next dataset built
+    from it would not be reproducible (docs/08 §Reglas de gobierno).
+    """
+    manifest = read_manifest(layout)
+    return set(manifest.loc[manifest["source"] == source, "file"])

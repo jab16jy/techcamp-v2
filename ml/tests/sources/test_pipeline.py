@@ -416,3 +416,28 @@ def test_parsing_an_elevation_cache_with_nothing_in_it_says_run_fetch_first(
 
     with pytest.raises(ValueError, match="fetch"):
         pipeline.parse_sources(["elevation"], layout=layout, today=date(2026, 10, 2))
+
+
+def test_a_cached_payload_the_manifest_never_documented_is_downloaded_again(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    requested: list[str] = []
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch(requested))
+    today = date(2026, 10, 2)
+    pipeline.fetch_sources(["weather"], layout=layout, today=today)
+    # A crash between the payload and its manifest row leaves bytes nobody can trace.
+    layout.manifest.unlink()
+    requested.clear()
+
+    owed = len(weather_windows(WEATHER_START, last_complete_month(today))) * 2
+    assert pipeline.fetch_sources(["weather"], layout=layout, today=today)["weather"] == owed
+
+    # Negative half: every payload is still sitting on disk, and the resume ignores it.
+    assert all(layout.raw_copy("weather", f"archive_{i:03d}.json").exists() for i in range(owed))
+    assert sorted(name for name in requested if name.startswith("archive_")) == [
+        f"archive_{i:03d}.json" for i in range(owed)
+    ]

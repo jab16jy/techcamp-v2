@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from techcamp_ml.sources.cache import cached_files, read_raw, save_raw
+from techcamp_ml.sources.cache import cached_files, manifest_names, read_raw, save_raw
 from techcamp_ml.sources.elevation import (
     ELEVATION_URL,
     MAX_COORDINATES_PER_REQUEST,
@@ -60,13 +60,24 @@ DIVIPOLA_RAW = "divipola.json"
 MGN_RAW = "mgn317.geojson"
 
 
-def _chunk_ready(layout: Layout, source: str, name: str, sidecar: str) -> bool:
-    """A chunk counts as downloaded only when its response *and* its sidecar landed.
+def _chunk_ready(
+    layout: Layout,
+    source: str,
+    name: str,
+    sidecar: str,
+    proven: set[str],
+) -> bool:
+    """A chunk counts as downloaded only when the manifest documents both of its files.
 
     The sidecar is what tells the parser which coordinates and window the response
-    answers, so a response without it is an interrupted chunk, not a finished one.
+    answers, so a response without it is an interrupted chunk, not a finished one; a
+    payload the manifest never documented is a chunk nobody can trace back to a host.
     """
-    return layout.raw_copy(source, name).exists() and layout.raw_copy(source, sidecar).exists()
+    return (
+        {name, sidecar} <= proven
+        and layout.raw_copy(source, name).exists()
+        and layout.raw_copy(source, sidecar).exists()
+    )
 
 
 def _window_of(layout: Layout, name: str) -> tuple[str, str] | None:
@@ -188,7 +199,8 @@ def _parse_municipalities(layout: Layout) -> pd.DataFrame:
 
 def _fetch_municipalities(layout: Layout) -> int:
     written = 0
-    if not (layout.raw_copy("municipalities", DIVIPOLA_RAW)).exists():
+    proven = manifest_names(layout, "municipalities")
+    if not _downloaded(layout, "municipalities", DIVIPOLA_RAW, proven):
         fetch(
             layout,
             "municipalities",
@@ -199,20 +211,26 @@ def _fetch_municipalities(layout: Layout) -> int:
         written += 1
     # MGN answers `geometry: null` on this layer, so it is the code control, not a
     # geometry source (owner decision D-T3.1).
-    if not (layout.raw_copy("municipalities", MGN_RAW)).exists():
+    if not _downloaded(layout, "municipalities", MGN_RAW, proven):
         fetch(layout, "municipalities", MGN_RAW, MGN_LAYER_URL, params=mgn_params())
         written += 1
     return written
 
 
+def _downloaded(layout: Layout, source: str, name: str, proven: set[str]) -> bool:
+    """Whether the cache holds this raw copy *and* the manifest documents it."""
+    return name in proven and layout.raw_copy(source, name).exists()
+
+
 def _fetch_labels(layout: Layout) -> int:
     written = 0
+    proven = manifest_names(layout, "labels")
     for source in LABEL_SOURCES:
         url = f"{SOCRATA_RESOURCE}/{source.dataset}.json"
         offset = 0
         while True:
             name = f"{source.dataset}.p{offset // SOCRATA_PAGE:03d}.json"
-            cached = layout.raw_copy("labels", name).exists()
+            cached = _downloaded(layout, "labels", name, proven)
             # Resume keeps walking the pages, it does not stop at the first one it has:
             # a cache holding page 0 alone still owes every page after it.
             payload = (
@@ -260,6 +278,7 @@ def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, today: date) ->
     zipped = zip(municipalities["code"], municipalities["lat"], municipalities["lon"], strict=True)
     points = [(str(code), float(lat), float(lon)) for code, lat, lon in zipped]
     written = 0
+    proven = manifest_names(layout, "weather")
     index = 0
     for start, stop in weather_windows(WEATHER_START, last_complete_month(today)):
         for batch in chunks(points, COORDINATE_BATCH):
@@ -267,9 +286,8 @@ def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, today: date) ->
             index += 1
             # A chunk is finished only when its sidecar states the window this day owes:
             # the same file names answer an older window once the months move on.
-            if (
-                _window_of(layout, name) == (str(start), str(stop))
-                and layout.raw_copy("weather", f"{name}.json").exists()
+            if _window_of(layout, name) == (str(start), str(stop)) and _chunk_ready(
+                layout, "weather", f"{name}.json", f"{name}.request.json", proven
             ):
                 continue  # an interrupted fetch resumes here
             params = archive_params(start, stop)
@@ -346,9 +364,10 @@ def _assert_archive_complete(layout: Layout, municipalities: int, today: date) -
 def _fetch_elevation(layout: Layout, municipalities: pd.DataFrame) -> int:
     points = elevation_points(municipalities)
     written = 0
+    proven = manifest_names(layout, "elevation")
     for index, batch in enumerate(chunks(points, MAX_COORDINATES_PER_REQUEST)):
         name = f"elevation_{index:03d}"
-        if _chunk_ready(layout, "elevation", f"{name}.json", f"{name}.points.json"):
+        if _chunk_ready(layout, "elevation", f"{name}.json", f"{name}.points.json", proven):
             continue
         params = {
             "latitude": ",".join(str(point[1]) for point in batch),

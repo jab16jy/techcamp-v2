@@ -2,9 +2,16 @@
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from techcamp_ml.sources.cache import MANIFEST_COLUMNS, cached_files, read_manifest, save_raw
+from techcamp_ml.sources.cache import (
+    MANIFEST_COLUMNS,
+    cached_files,
+    manifest_names,
+    read_manifest,
+    save_raw,
+)
 from techcamp_ml.sources.layout import Layout
 
 
@@ -118,3 +125,29 @@ def test_an_interrupted_raw_write_leaves_no_half_cached_payload(
     # reads as a finished chunk.
     assert cached_files(layout, "weather") == ["archive_000.json.part"]
     assert len(read_manifest(layout)) == 0
+
+
+def test_an_interrupted_manifest_write_keeps_the_provenance_it_had(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A manifest rewritten in place is a manifest that can lose every row it had."""
+    layout = Layout(tmp_path)
+    save_raw(layout, "labels", "wwkg.json", "https://example.test/a", b"{}")
+
+    def truncating_write(self: pd.DataFrame, path: object = None, **kwargs: object) -> None:
+        """The rewrite starts and the process dies: a header, and no rows."""
+        Path(str(path)).write_text("source\tfile\n")
+        raise OSError("the process died mid-write")
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", truncating_write)
+    with pytest.raises(OSError):
+        save_raw(layout, "labels", "other.json", "https://example.test/b", b"{}")
+    monkeypatch.undo()
+
+    manifest = read_manifest(layout)
+    assert list(manifest["file"]) == ["wwkg.json"], "the rows it had survive an interrupted write"
+    assert manifest_names(layout, "labels") == {"wwkg.json"}, "the new payload is unprovenanced"
+    # Negative half: the half-written manifest never lands under the name that is read.
+    assert layout.manifest.with_name(f"{layout.manifest.name}.part").exists()
+    assert len(manifest) == 1

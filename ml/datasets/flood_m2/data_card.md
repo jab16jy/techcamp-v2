@@ -18,7 +18,11 @@ uv run --locked --project ml python -m techcamp_ml.sources parse
 Cada respuesta cruda queda en `ml/.cache/raw/<fuente>/` (fuera de git) con su URL, su
 fecha de descarga y su `sha256` en `ml/.cache/raw/MANIFEST.tsv`. Los parquets de
 `ml/data/flood_m2/sources/` salen **sólo** de esas copias: "reproducible o no existe"
-(docs/08 §Reglas de gobierno).
+(docs/08 §Reglas de gobierno). El manifiesto se escribe entero a un `.part` y se renombra
+—igual que cada copia—, así que una interrupción no se lleva por delante la procedencia de
+los demás archivos. Y un reanudar se guía por el manifiesto, no por el directorio: una
+copia sin fila es una descarga de la que nadie sabe la URL ni el `sha256`, y se vuelve a
+pedir.
 
 ## Fuentes
 
