@@ -116,6 +116,81 @@ RDD on (global). OpenCode writers run their own RDD after the parent gate passes
 reviewed by the parent. Findings rule (owner, 2026-09-30): blocking → bounded correction; 1–2
 non-blocking → one issue per round; 3+ → fix the most important with `Refs #N`, file the rest.
 
+### T3 — lineage `review-9b9197b7eee80109`, escalated (sin recibo)
+
+| Item | Resultado |
+|---|---|
+| Alcance | 6 commits de T3, 11 archivos / 1841 líneas (`assess --base-ref 31c6b3e`) |
+| Lente | `review-reliability`, medium risk, `correction_budget: 200` |
+| Hallazgos | **12** — 2 CRITICAL, 9 WARNING, 1 SUGGESTION |
+| Corrección acotada | `371c0e7` (+71 líneas) |
+| Validación dirigida | **rechazó** la corrección → `state: escalated`, `native_stop_required` |
+| Authority | **no quemada**; sin envelope de acuse |
+
+`review-5fb63a9414658ee5` (primer intento, base `a2bae6b`, 24 archivos / 3301 líneas) también quedó
+escalado y sin tocar. Los tres rechazos iniciales `output_refused` **no** eran un agente
+indespachable: el revisor sí corría y Go rechazaba su salida en la admisión
+(`reviewer finding ID does not match the native ASCII schema` — los ids deben ser `^R[1-4]-…` con el
+prefijo del lente, `R3-` aquí; y `proof_path_out_of_scope` en el primer intento). El schema dice que
+el id es opcional y se lo asigna el harness.
+
+**CRITICAL `R3-reliability.alert-action.cross-plot` — descargado con ruling, no con código.** El
+validador rechazó `371c0e7` por una regla de proceso (*"a test that pins the reported behaviour does
+not remove the reported behaviour"*), no porque el SQL estuviera mal. Ruling del dueño 2026-10-03
+(**D-T3.1**): la acción de `water_stress` es **plot-scoped**, sin qualifier de ciclo, y una entrada
+con `crop_cycle_id = null` cuenta. Escrito en [11 §2](../docs/11-metricas.md) y
+[ADR-0024](../docs/adr/0024-metricas-de-impacto-y-adopcion-digital.md); **el predicado no cambió**
+(solo el docstring de la vista). Commit de doc: `823974d`; commit de pruebas: `a1941ba`.
+
+Commits de T3, en orden: `7cc3dd7` (port), `51052a1` (builders), `09cef3f` (monitoring),
+`407ed2b` (record-keeping + decision), `230289c` (alert action), `429b293` (cycle totals),
+`371c0e7` (corrección acotada), más los dos de cierre.
+
+Los 10 hallazgos no bloqueantes **no** se corrigieron aquí: el cuerpo del issue queda redactado abajo
+y su creación es del orquestador. Nota sobre el conteo: el revisor emitió 12 hallazgos y el refutador
+dejó 1 en `fix_finding_ids`; de los 11 restantes, 4 quedaron cubiertos por el commit `a1941ba` y 7
+siguen vivos (5 sin base en el modelo + `water-balance-date` y la cota del mes en curso).
+
+#### Issue propuesto (no abierto) — `review-follow-up`, `epic:e11`, `area:metrics`, `type:tech-debt`
+
+**Título:** E11 T3: diez hallazgos no bloqueantes de la revisión del lineage `review-9b9197b7eee80109`
+
+**Cuerpo:**
+
+RDD de las vistas de solo lectura de `metrics` (T3), lineage `review-9b9197b7eee80109`, terminó
+escalado sin recibo. El revisor emitió 12 hallazgos y el refutador dejó 1 en `fix_finding_ids`: el
+CRITICAL bloqueante `R3-reliability.alert-action.cross-plot`, que se descargó con el ruling del dueño
+**D-T3.1** (ver §Review de esta feature doc) haciendo explícito el doc que el SQL ya cumplía. Este
+issue recoge los once restantes, que no se corrigieron aquí porque la regla de findings deja la
+decisión al orquestador. De ellos, cuatro quedaron cubiertos por el commit `a1941ba` y siete siguen
+vivos.
+
+**Hallazgos refutados o sin base en el modelo (5)** — conviene registrarlos para que la próxima
+revisión no los levante otra vez:
+
+| id | Por qué no es un defecto |
+|---|---|
+| `R3-reliability.decision-view.duplicate-days` | `uq_irrigation_recommendation_plot_day` hace `(plot_id, day)` único; el empate que el `ORDER BY` tendría que romper no existe. CHECK probado en `test_decision_views.py` |
+| `R3-reliability.cycle-totals.null-sale-price` | `ck_logbook_entry_sold_and_price` exige `sold_kg` y `sale_price_cop_per_kg` juntos; la rama de propagación nula es inalcanzable. CHECK probado en `test_cycle_totals_view.py` |
+| `R3-reliability.alert-action.rule-window` | La ventana de 48 h es una constante de todo el componente por D-T0.6, y `alert_rule` no tiene columna de ventana de acción (`min_duration_min` gobierna cuánto debe durar una violación, no cuánto tiene el productor para responder) |
+| `R3-reliability.alert-action.entry-scope` | docs/03:421 asigna el papel a `alert_id` en *cualquiera* entrada; el filtro por `kind` contradiría el doc |
+| `R3-reliability.alert-action.repeat-entry` | La rama por `alert_id` responde exactamente la alerta que nombra; solo la cláusula de riego plot-scoped puede servir dos, y `uq_alert_non_resolved_plot` permite una alerta no resuelta por (regla, parcela) |
+
+Los cinco están registrados como comentario en `server/tests/metrics/test_alert_action_view.py` y con
+un CHECK probado en los otros casos, para que la próxima revisión no los levante otra vez.
+
+**Hallazgos reales que siguen abiertos (2)**:
+
+| id | Qué falta |
+|---|---|
+| `R3-reliability.cycle-totals.water-balance-date` | Dos ciclos de una misma parcela con ventanas solapadas se reparten los mismos días de balance y se cuenta un día de estrés dos veces. Como `expected_harvest_on` es un plan que suele pasar de la siguiente siembra, el solapamiento es la norma. **No se corrigió a propósito:** es el síntoma del hueco de doc de `crop_cycle` sin fecha de fin; va junto con esa decisión de docs, no suelto. Afecta a `crop_cycle_summary.water_stress_days`, que T4 persiste |
+| `R3-reliability.monitoring.now-dependence` | Rama del mes en curso. **Mitigada** con una aserción de cota en `a1941ba` (el `now()` vive en SQL y no se puede congelar sin un seam de reloj); falta ese seam para un valor exacto |
+
+**Hallazgos reales, cerrados en `a1941ba` (4)** — los cuatro de Tier 1 que sí descongestelan T4/T5:
+dos sensores en un mismo nodo (`monitoring.duplicate-count`), la rama `COALESCE` del ciclo activo
+(`cycle-totals.now-dependence`), el aislamiento por organización del lateral de balance
+(`cycle-totals.plot-isolation`) y la parcela sin recomendaciones (`decision-view.no-evidence`).
+
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
   `origin/main` a2bae6b), CodeGraph index, DB `techcamp-db-e11-metrics`. Explorers (Herdr
