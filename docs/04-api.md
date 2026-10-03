@@ -86,7 +86,7 @@ La parcela pasa por el mismo control de acceso que el resto de `/plots/{plot_id}
 | `open_alerts` | Alertas de la parcela con `state <> 'resolved'` (abiertas y reconocidas), las `critical` primero y luego de la más reciente a la más antigua. |
 | `weather_next_3d` | Las filas de pronóstico de hoy y los dos días siguientes, con su marca `stale`. |
 | `nodes` | Un `NodeHealth` por nodo de la parcela: `{ node_id, status, last_seen_at, completeness_24h }`. La batería y el RSSI quedan fuera hasta que un nodo los reporte. |
-| `digital_adoption_index` | `null` hasta que E11 calcule el índice ([11-metricas](11-metricas.md)). |
+| `digital_adoption_index` | `{ value, month }` de la fila más reciente de `plot_metric_monthly` de la parcela, o `null` si todavía no hay ninguna o su índice es `null` ([11-metricas](11-metricas.md), E11 D-T0.13). |
 
 La composición vive en el módulo `home` ([05 §Módulos](05-arquitectura.md#módulos-c4-nivel-3), D-T0.1).
 
@@ -228,6 +228,14 @@ POST /assistant/messages  { conversation_id?, plot_id?, content } → text/event
 POST /assistant/messages/{message_id}:feedback { helpful: bool } → 204
 ```
 
+**Métricas y encuesta de inscripción** (E11, D-T0.10 a D-T0.12):
+
+- `GET /plots/{plot_id}/baseline` responde a cualquier miembro y devuelve `404` si la parcela no tiene encuesta. `PUT` exige `owner` o `technician` (`403` a otro rol). Crea o reemplaza la encuesta y guarda a quien llama como `recorded_by`. `crop_id` debe ser un cultivo del catálogo (`422` si no).
+- `GET /plots/{plot_id}/metrics?month=YYYY-MM` responde a cualquier miembro con la fila de `plot_metric_monthly`: `{ plot_id, month, monitoring, record_keeping, decision, risk_management, digital_adoption_index, computed_at }`. Un mes sin fila responde `404`. Un `month` mal formado responde `422`.
+- `GET /plots/{plot_id}/cycles/{cycle_id}/summary` responde a cualquier miembro. Un ciclo de otra parcela responde `404`. Un ciclo terminado devuelve su fila guardada; uno activo se calcula al consultarlo. La respuesta trae las columnas de `crop_cycle_summary` y `cycle_status`.
+- `GET /organizations/{org_id}/metrics?month=YYYY-MM` exige `owner` o `technician` (`403` a otro rol, `404` a un no miembro). Devuelve `{ org_id, month, mean_digital_adoption_index, plots_with_index, monitored_plots_ratio, harvested_cycles_ratio, median_hours_to_first_reading }`. Cualquier valor sin datos llega como `null`.
+- Las parcelas pasan por el mismo control de acceso que el resto de `/plots/{plot_id}`: `404` si no existe o es de otra organización.
+
 ### Operación
 
 ```
@@ -250,7 +258,7 @@ GET  /dev/outbox              → Notification[]    # SMS/WhatsApp simulados
 POST /dev/scenarios/{name}:load → 202             # lo usa el simulador para crear datos base y fixtures
 ```
 
-`weather` es el único nombre que encola los dos jobs de su agenda diaria —el refresco del pronóstico y la consolidación de `day` (por defecto, ayer)— y por eso responde `{ job_id, consolidate_job_id }` ([06-diseno-detallado.md §6](06-diseno-detallado.md#6-clima)); los demás nombres encolan un solo job. En `weather`, `day` debe ser un día ya transcurrido: hoy todavía es pronóstico y un día futuro no tiene clima observado, así que ambos se responden `422`. En `irrigation`, un solo job calcula el balance (D−1) y la recomendación (D); `day` toma por defecto el día de hoy (local) y un día posterior a hoy responde `422` porque el día de balance (D−1) debe haber terminado.
+`weather` es el único nombre que encola los dos jobs de su agenda diaria —el refresco del pronóstico y la consolidación de `day` (por defecto, ayer)— y por eso responde `{ job_id, consolidate_job_id }` ([06-diseno-detallado.md §6](06-diseno-detallado.md#6-clima)); los demás nombres encolan un solo job. En `weather`, `day` debe ser un día ya transcurrido: hoy todavía es pronóstico y un día futuro no tiene clima observado, así que ambos se responden `422`. En `irrigation`, un solo job calcula el balance (D−1) y la recomendación (D); `day` toma por defecto el día de hoy (local) y un día posterior a hoy responde `422` porque el día de balance (D−1) debe haber terminado. En `metrics`, un solo job calcula el resumen de los ciclos terminados y luego el índice del mes anterior al de `day` (por defecto, hoy en `America/Bogota`), igual que la corrida del día 1 a las 02:00 ([10-dag](10-dag.md), E11 D-T0.7).
 
 `GET /dev/outbox` lista las filas `notification` de canal `sms` o `whatsapp` —las que el adaptador del perfil `seminar` simula ([06 §4](06-diseno-detallado.md#4-notificaciones-outbox))— de la más reciente a la más antigua, como máximo 50. No pide sesión ni `org_id` (es una bandeja de una sola sala con un solo stack detrás) y no incluye las filas `push`, que las muestra el service worker del navegador. Cada elemento tiene la forma:
 `{ id: string, alert_id: string, user_id: string, org_id: string, channel: "sms"|"whatsapp", status: "pending|sent|failed", attempts: int, rule_code: string, severity: "info|warning|critical", created_at: string, sent_at: string | null, last_error: string | null }`.
