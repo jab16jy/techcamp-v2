@@ -24,13 +24,19 @@ from sqlalchemy import (
     Date,
     Integer,
     MetaData,
+    Numeric,
     Table,
+    Text,
     Uuid,
     select,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from techcamp.metrics.application.ports import NodeMonthReadings
+from techcamp.metrics.application.ports import (
+    DecisionDay,
+    LogbookWeek,
+    NodeMonthReadings,
+)
 
 _view_metadata = MetaData()
 
@@ -48,6 +54,25 @@ NodeMonthReadingsView = _view(
     Column("interval_s", Integer),
     Column("claimed_seconds", BigInteger),
     Column("received_readings", BigInteger),
+)
+
+PlotMonthLogbookView = _view(
+    "metrics_plot_month_logbook",
+    Column("org_id", Uuid),
+    Column("plot_id", Uuid),
+    Column("month", Date),
+    Column("week_start", Date),
+    Column("entry_count", BigInteger),
+)
+
+PlotDayDecisionView = _view(
+    "metrics_plot_day_decision",
+    Column("org_id", Uuid),
+    Column("plot_id", Uuid),
+    Column("day", Date),
+    Column("kind", Text),
+    Column("depth_mm", Numeric),
+    Column("irrigation_mm", Numeric),
 )
 
 
@@ -92,6 +117,78 @@ class SqlAlchemyMetricsSourceRepository:
                 interval_s=row.interval_s,
                 claimed_seconds=row.claimed_seconds,
                 received_readings=row.received_readings,
+            )
+            for row in result
+        ]
+
+    async def logbook_weeks(self, org_id: UUID, plot_id: UUID, *, month: date) -> list[LogbookWeek]:
+        """The ISO weeks of `month` holding at least one entry, oldest first
+        (D-T0.3).
+
+        The count of rows is the `record_keeping` numerator. "Semanas del mes",
+        the denominator, is the same calendar counted over the whole month and
+        is calendar math rather than evidence, so it is not repeated here
+        (docs/11 §2).
+        """
+        stmt = (
+            select(
+                PlotMonthLogbookView.c.plot_id,
+                PlotMonthLogbookView.c.month,
+                PlotMonthLogbookView.c.week_start,
+                PlotMonthLogbookView.c.entry_count,
+            )
+            .where(
+                PlotMonthLogbookView.c.org_id == org_id,
+                PlotMonthLogbookView.c.plot_id == plot_id,
+                PlotMonthLogbookView.c.month == month,
+            )
+            .order_by(PlotMonthLogbookView.c.week_start)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            LogbookWeek(
+                plot_id=row.plot_id,
+                month=row.month,
+                week_start=row.week_start,
+                entry_count=row.entry_count,
+            )
+            for row in result
+        ]
+
+    async def decision_days(
+        self, org_id: UUID, plot_id: UUID, *, from_day: date, to_day: date
+    ) -> list[DecisionDay]:
+        """Every stored recommendation of the plot in `[from_day, to_day]`,
+        paired with the depth applied that day (D-T0.5).
+
+        The kinds docs/11 §2 does not count (`rainfed`, `no_kc`) are returned
+        too: the view reports evidence, and T5's domain code decides what the
+        denominator counts.
+        """
+        stmt = (
+            select(
+                PlotDayDecisionView.c.plot_id,
+                PlotDayDecisionView.c.day,
+                PlotDayDecisionView.c.kind,
+                PlotDayDecisionView.c.depth_mm,
+                PlotDayDecisionView.c.irrigation_mm,
+            )
+            .where(
+                PlotDayDecisionView.c.org_id == org_id,
+                PlotDayDecisionView.c.plot_id == plot_id,
+                PlotDayDecisionView.c.day >= from_day,
+                PlotDayDecisionView.c.day <= to_day,
+            )
+            .order_by(PlotDayDecisionView.c.day)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            DecisionDay(
+                plot_id=row.plot_id,
+                day=row.day,
+                kind=row.kind,
+                depth_mm=row.depth_mm,
+                irrigation_mm=row.irrigation_mm,
             )
             for row in result
         ]
