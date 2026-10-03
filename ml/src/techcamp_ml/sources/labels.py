@@ -46,12 +46,14 @@ class Dropped:
     other_event: int = 0
     unknown_code: int = 0
     bad_date: int = 0
+    outside_window: int = 0
 
     def __add__(self, other: Dropped) -> Dropped:
         return Dropped(
             self.other_event + other.other_event,
             self.unknown_code + other.unknown_code,
             self.bad_date + other.bad_date,
+            self.outside_window + other.outside_window,
         )
 
 
@@ -71,16 +73,26 @@ def normalise_event(value: Any) -> str:
 def label_params(source: LabelSource, *, offset: int = 0) -> dict[str, str]:
     """The SoQL query for one dataset, one page.
 
+    The window is half-open (`>= start and < end`): `between` includes both ends, so an
+    inclusive end would pull the rows stamped the first midnight of the *next* dataset's
+    window, and a year is never assembled from two sources (docs/08 §Fuentes de datos de
+    M2). A dataset with no `year_to` has no upper bound at all: a cap the owner never
+    named would leave its later rows silently out.
+
     The event filter is a loose pattern on purpose: the raw values carry accents and
     odd casing, and an exact `in (...)` would silently drop the variants.
     """
-    end = f"{source.year_to + 1}-01-01T00:00:00" if source.year_to else "2027-01-01T00:00:00"
+    window = f"fecha >= '{source.year_from}-01-01T00:00:00'"
+    if source.year_to is not None:
+        window += f" and fecha < '{source.year_to + 1}-01-01T00:00:00'"
     stems = ("INUNDACI", "CRECIENTE", "AVENIDA")
     events = " or ".join(f"upper(evento) like '%{stem}%'" for stem in stems)
     return {
         "$select": f":id,fecha,evento,{source.code_column}",
-        "$where": (f"fecha between '{source.year_from}-01-01T00:00:00' and '{end}' and ({events})"),
-        "$order": "fecha",
+        "$where": f"{window} and ({events})",
+        # Paging walks an offset, so the order has to be total: `fecha` repeats, `:id`
+        # does not, and a row that moves between pages is a row that is skipped.
+        "$order": "fecha,:id",
         "$limit": str(SOCRATA_PAGE),
         "$offset": str(offset),
     }
@@ -93,7 +105,7 @@ def parse_labels(
 ) -> tuple[pd.DataFrame, Dropped]:
     """One row per flood report inside the region, plus the rows it refused."""
     rows: list[dict[str, Any]] = []
-    other_event = unknown_code = bad_date = 0
+    other_event = unknown_code = bad_date = outside_window = 0
     for record in json.loads(payload):
         event_class = normalise_event(record.get("evento", ""))
         if event_class not in EVENT_CLASSES:
@@ -108,6 +120,13 @@ def parse_labels(
         except (KeyError, ValueError):
             bad_date += 1
             continue
+        # The query already filters on the window, but a downloaded page is evidence in
+        # its own right: a row outside the years its dataset owns belongs to another one.
+        if day.year < source.year_from or (
+            source.year_to is not None and day.year > source.year_to
+        ):
+            outside_window += 1
+            continue
         rows.append(
             {
                 "code": code,
@@ -120,7 +139,7 @@ def parse_labels(
     frame = pd.DataFrame(rows, columns=COLUMNS)
     if not frame.empty:
         frame["date"] = pd.to_datetime(frame["date"])
-    return frame, Dropped(other_event, unknown_code, bad_date)
+    return frame, Dropped(other_event, unknown_code, bad_date, outside_window)
 
 
 def _code_of(value: Any, codes: Collection[str]) -> str | None:

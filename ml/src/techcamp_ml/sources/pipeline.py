@@ -248,6 +248,7 @@ def _parse_labels(layout: Layout, codes: Collection[str]) -> Path:
             "other_event": dropped.other_event,
             "unknown_code": dropped.unknown_code,
             "bad_date": dropped.bad_date,
+            "outside_window": dropped.outside_window,
         },
     }
     path = write_parquet(layout, "labels", labels)

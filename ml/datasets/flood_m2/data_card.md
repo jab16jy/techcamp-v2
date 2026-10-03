@@ -72,7 +72,9 @@ plan de pago (docs/08 §Fuentes de datos de M2).
 
 - **Etiquetas:** ventana de consulta por dataset: 2019-01-01→2022-12-31,
   2023-01-01→2024-12-31 y 2025-01-01→(sin tope), en ese orden y sin mezclar años entre
-  fuentes. Rango de los **datos** de la región: **2019-02-26 → 2025-12-02**.
+  fuentes. La ventana es **semiabierta** (`>= inicio and < fin`): el 1 de enero del
+  dataset siguiente es del siguiente, no de éste. Rango de los **datos** de la región:
+  **2019-02-26 → 2025-12-02**.
 
 ## Conteos
 
@@ -101,8 +103,10 @@ al menos uno.
 
 **Filas descartadas** (`ml/data/flood_m2/sources/labels.drops.json`, regenerado en cada
 `parse`): 8 477 códigos fuera de la región (el dataset es nacional), 0 eventos de otra
-clase, 0 fechas ilegibles. La descarga ya filtra por evento; el parser vuelve a
-clasificar y cuenta, para que una fila perdida por un valor raro sea visible.
+clase, 0 fechas ilegibles, 0 filas fuera de la ventana de su dataset. La descarga ya
+filtra por evento; el parser vuelve a clasificar y cuenta, para que una fila perdida por
+un valor raro sea visible. La cuenta no cambió al pasar la ventana a semiabierta y al
+dejar de tapar `2343-nuqp` en 2027: 1 508 reportes antes y después.
 
 **Otros conteos:** elevación 195 filas (2 a 1 307 m, media 90 m); los cuatro vecinos a
 1 km se piden en la misma llamada y salen en las columnas `east_m`, `west_m`,
