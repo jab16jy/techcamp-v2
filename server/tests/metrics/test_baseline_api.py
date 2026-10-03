@@ -88,6 +88,12 @@ def _survey(**changes: object) -> dict[str, object]:
     return payload
 
 
+async def _stored_row(db_session: AsyncSession, plot_id: UUID) -> PlotBaselineRow | None:
+    return (
+        await db_session.execute(select(PlotBaselineRow).where(PlotBaselineRow.plot_id == plot_id))
+    ).scalar_one_or_none()
+
+
 async def test_an_owner_saves_and_reads_the_survey(db_session: AsyncSession) -> None:
     _org_id, plot_id, user_id, token = await _org_with_plot(db_session, role="owner")
     client = _client()
@@ -229,6 +235,44 @@ async def test_a_read_only_role_cannot_save_the_survey(db_session: AsyncSession,
     assert stored == 0
 
 
+@pytest.mark.parametrize("role", ["producer", "viewer"])
+async def test_a_read_only_role_cannot_overwrite_an_existing_survey(
+    db_session: AsyncSession, role: str
+) -> None:
+    """R3-RELIABILITY-004: the 403 above runs on a plot with no survey, where
+    `stored == 0` proves nothing. Here the survey already exists, so the stored
+    row must come back exactly as the owner left it."""
+    org_id, plot_id, _owner_id, owner_token = await _org_with_plot(db_session, role="owner")
+    client = _client()
+    seeded = client.put(
+        f"/plots/{plot_id}/baseline",
+        json=_survey(last_yield_kg_ha=3200, irrigation_practice="gravity"),
+        headers=_auth(owner_token),
+    )
+    assert seeded.status_code == 200, seeded.text
+    before = await _stored_row(db_session, plot_id)
+    reader_id = uuid7()
+    db_session.add(AppUserRow(id=reader_id, phone=f"+5730066{next(_phone_seq):05d}"))
+    await db_session.commit()
+    db_session.add(MembershipRow(org_id=org_id, user_id=reader_id, role=role))
+    await db_session.commit()
+
+    response = client.put(
+        f"/plots/{plot_id}/baseline",
+        json=_survey(last_yield_kg_ha=9999, irrigation_practice="drip"),
+        headers=_auth(issue_token(str(reader_id))),
+    )
+
+    assert response.status_code == 403
+    after = await _stored_row(db_session, plot_id)
+    assert after is not None
+    assert float(after.last_yield_kg_ha) == float(before.last_yield_kg_ha)
+    assert after.irrigation_practice == before.irrigation_practice
+    assert after.recorded_by == before.recorded_by
+    assert after.enrolled_on == before.enrolled_on
+    assert after.crop_id == before.crop_id
+
+
 async def test_a_viewer_reads_the_survey_of_the_plot(db_session: AsyncSession) -> None:
     org_id, plot_id, _owner_id, owner_token = await _org_with_plot(db_session, role="owner")
     client = _client()
@@ -288,3 +332,63 @@ async def test_a_negative_yield_is_422(db_session: AsyncSession) -> None:
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("literal", ["Infinity", "-Infinity", "NaN"])
+@pytest.mark.parametrize("field", ["last_yield_kg_ha", "last_cost_cop_ha"])
+async def test_a_non_finite_figure_is_422(
+    db_session: AsyncSession, literal: str, field: str
+) -> None:
+    """R3-RELIABILITY-003: `inf`/`nan` pass `ge=0` on the way in and would reach
+    the `Numeric` column as a database error, a 500 instead of the 422 every other
+    invalid figure gets. Frozen decimal columns cannot carry them.
+
+    The body is written as raw JSON: `json.dumps` refuses to encode a non-finite
+    float, but the wire format does carry those literals and Python's decoder on
+    the server accepts them, which is exactly the request an untrusted client can
+    send.
+    """
+    _org_id, plot_id, _user_id, token = await _org_with_plot(db_session, role="owner")
+    client = _client()
+    raw = (
+        f'{{"enrolled_on": "{_ENROLLED_ON}", "crop_id": {_CROP_ID}, '
+        f'"{field}": {literal}, "irrigation_practice": "gravity"}}'
+    )
+
+    response = client.put(
+        f"/plots/{plot_id}/baseline",
+        content=raw,
+        headers={**_auth(token), "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert await _stored_row(db_session, plot_id) is None
+
+
+async def test_a_fractional_figure_round_trips(db_session: AsyncSession) -> None:
+    """R3-RELIABILITY-005: the upsert reads the row back so a caller-visible
+    rounding difference cannot ship silently; whole-number fixtures would hide a
+    lost decimal, so this sends one."""
+    _org_id, plot_id, _user_id, token = await _org_with_plot(db_session, role="owner")
+    client = _client()
+
+    response = client.put(
+        f"/plots/{plot_id}/baseline",
+        json=_survey(last_yield_kg_ha=3200.75, last_cost_cop_ha=1500000.5),
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["last_yield_kg_ha"] == 3200.75
+    assert body["last_cost_cop_ha"] == 1500000.5
+
+    stored = await _stored_row(db_session, plot_id)
+    assert stored is not None
+    assert float(stored.last_yield_kg_ha) == 3200.75
+    assert float(stored.last_cost_cop_ha) == 1500000.5
+
+    read = client.get(f"/plots/{plot_id}/baseline", headers=_auth(token))
+
+    assert read.status_code == 200, read.text
+    assert read.json() == body

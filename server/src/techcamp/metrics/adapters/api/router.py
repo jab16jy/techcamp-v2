@@ -43,9 +43,14 @@ class PlotBaselineInput(BaseModel):
 
     enrolled_on: date
     crop_id: int
-    last_yield_kg_ha: float = Field(ge=0)
-    last_cost_cop_ha: float | None = Field(default=None, ge=0)
+    last_yield_kg_ha: float = Field(ge=0, allow_inf_nan=False)
+    last_cost_cop_ha: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     irrigation_practice: IrrigationPractice
+    """`allow_inf_nan=False` closes a hole `ge=0` leaves open: `inf` and `nan`
+    both satisfy a lower bound, and JSON carries both literals, so without it an
+    untrusted client reaches the `Numeric` column with a figure no frozen decimal
+    can hold and the answer is a database error (500) instead of the 422 every
+    other invalid figure gets (#244, R3-RELIABILITY-003)."""
 
 
 class PlotBaselineView(BaseModel):
