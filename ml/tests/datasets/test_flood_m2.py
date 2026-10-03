@@ -6,6 +6,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
+from techcamp_ml.datasets import flood_m2
 from techcamp_ml.datasets.flood_m2 import COLUMNS, build_table, label_coverage
 
 MUNICIPALITIES = 195
@@ -219,6 +220,39 @@ def test_a_municipality_with_no_elevation_row_is_refused(
 
     with pytest.raises(ValueError, match=absent):
         _build(municipalities_frame, weather_frame, short, labels_frame)
+
+
+def test_the_slope_does_not_depend_on_the_order_the_neighbours_are_listed_in(
+    municipalities_frame: pd.DataFrame,
+    weather_frame: pd.DataFrame,
+    elevation_frame: pd.DataFrame,
+    labels_frame: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    table = _build(municipalities_frame, weather_frame, elevation_frame, labels_frame)
+    expected = _row(table, "13001", 2019, 3)["slope_deg"]
+
+    # The elevation module owns the list of directions; reading the neighbours by position
+    # would swap the slope axes silently if it ever changed the order (#245).
+    monkeypatch.setattr(flood_m2, "NEIGHBOUR_DIRECTIONS", ("east", "north", "west", "south"))
+
+    permuted = _build(municipalities_frame, weather_frame, elevation_frame, labels_frame)
+    assert _row(permuted, "13001", 2019, 3)["slope_deg"] == expected
+    assert expected == pytest.approx(SLOPE_13001)
+
+
+def test_two_weather_rows_for_the_same_day_are_refused(
+    municipalities_frame: pd.DataFrame,
+    weather_frame: pd.DataFrame,
+    elevation_frame: pd.DataFrame,
+    labels_frame: pd.DataFrame,
+) -> None:
+    repeated = weather_frame[weather_frame["code"] == "08001"].head(1)
+    doubled = pd.concat([weather_frame, repeated], ignore_index=True)
+
+    # Which of the two values survived would depend on parquet row order, not on a rule.
+    with pytest.raises(ValueError, match="08001"):
+        _build(municipalities_frame, doubled, elevation_frame, labels_frame)
 
 
 def test_the_label_coverage_is_the_window_the_docs_name(labels_frame: pd.DataFrame) -> None:

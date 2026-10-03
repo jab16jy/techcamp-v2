@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 from calendar import monthrange
@@ -40,11 +41,14 @@ from techcamp.risk.domain.features import (
 
 from techcamp_ml.sources.elevation import NEIGHBOUR_DIRECTIONS
 from techcamp_ml.sources.labels import LABEL_SOURCES, LabelSource
-from techcamp_ml.sources.layout import DEFAULT_LAYOUT, ML_ROOT, Layout
+from techcamp_ml.sources.layout import DEFAULT_LAYOUT, Layout
 from techcamp_ml.sources.municipalities import assert_region
 from techcamp_ml.sources.pipeline import LABELS_PLAN_RAW, PLAN_RAW, plan_trace_path
 
 DATASET_NAME = "flood_m2"
+DATASET_DIRNAME = "dataset"
+"""`ml/data/flood_m2/dataset/`, beside the `sources/` the parse step writes and out of git
+(docs/08 §Estructura de `ml/`)."""
 PARQUET_NAME = f"{DATASET_NAME}.parquet"
 MANIFEST_NAME = "manifest.json"
 SOURCE_NAMES = ("municipalities", "weather", "elevation", "labels")
@@ -186,7 +190,22 @@ def _series_by_code(weather: pd.DataFrame) -> dict[str, tuple[DailySeries, Daily
 
     A NaN stays in the mapping: the shared module reads it as the missing day it is, and
     turning it into 0 mm would claim the weather was dry and the soil empty.
+
+    Two rows for the same municipality and day are refused rather than resolved. A mapping
+    would keep whichever came last, so the value a window sees would depend on parquet row
+    order instead of on a rule — and the parse is where a duplicated day belongs (#245).
     """
+    duplicated = weather[weather.duplicated(subset=["code", "date"], keep=False)]
+    if not duplicated.empty:
+        repeated = duplicated[["code", "date"]].drop_duplicates().head(3)
+        pairs = ", ".join(
+            f"{code} {pd.Timestamp(day).date()}" for code, day in repeated.itertuples(index=False)
+        )
+        raise ValueError(
+            f"the weather parquet holds {len(duplicated)} rows for {len(repeated)}+ repeated "
+            f"(code, date) pairs, e.g. {pairs}; which one a window would read is row order, "
+            "not a rule, so run the parse step and build again"
+        )
     series: dict[str, tuple[DailySeries, DailySeries]] = {}
     for code, frame in weather.groupby("code", sort=False):
         days = [pd.Timestamp(day).date() for day in frame["date"]]
@@ -222,12 +241,20 @@ def _terrain(elevation: pd.DataFrame) -> dict[str, Terrain]:
 def _neighbours(row: Any) -> Neighbours | None:
     """The four neighbours, or `None` when one of them is missing.
 
+    Read by direction name, never by position: `NEIGHBOUR_DIRECTIONS` belongs to the
+    elevation module, and unpacking it in order would swap the slope axes without an error
+    the day its order changed (#245).
+
     A slope built from an invented neighbour is the slope of a hill that does not exist,
     so `slope_deg` stays missing evidence instead (the same rule the serving job applies).
     """
-    east, west, north, south = (
-        _number(getattr(row, f"{direction}_m")) for direction in NEIGHBOUR_DIRECTIONS
-    )
+    readings = {
+        direction: _number(getattr(row, f"{direction}_m")) for direction in NEIGHBOUR_DIRECTIONS
+    }
+    east = readings["east"]
+    west = readings["west"]
+    north = readings["north"]
+    south = readings["south"]
     spacing_m = _number(row.spacing_m)
     if spacing_m is None or east is None or west is None or north is None or south is None:
         return None
@@ -240,6 +267,18 @@ def _number(value: Any) -> float | None:
         return None
     reading = float(value)
     return None if math.isnan(reading) else reading
+
+
+@dataclass(frozen=True, slots=True)
+class Source:
+    """One source parquet: the frame it was read into, and the digest of those bytes.
+
+    The digest belongs to the read, not to the file: a parse that rewrites the file while
+    the build runs cannot change what the table was built from (#245).
+    """
+
+    frame: pd.DataFrame
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,29 +302,38 @@ def build_dataset(
     four parquets leaves no dataset and no manifest behind: the harness must never find a
     parquet it cannot trace.
 
+    `out_dir` and `manifest_dir` default to the directories of **`layout`**, not of the
+    repository: a caller that points the build at another cache publishes into that cache,
+    never over the real dataset with one built from somewhere else.
+
+    The manifest is written whole and renamed **before** the parquet lands, so at no point
+    does a dataset exist without the manifest that traces it, and neither file is ever
+    visible half written (#245).
+
     The build is a pure function of those parquets. Nothing here reads the clock or a
     random seed, so the same cache gives the same file and the same sha256 on any day
     (docs/08 §Reglas de gobierno: "reproducible o no existe").
     """
-    frames = {name: _read_source(layout, name) for name in SOURCE_NAMES}
+    sources = {name: _read_source(layout, name) for name in SOURCE_NAMES}
     for name in PLAN_OF_SOURCE:
         _assert_built_from_the_cached_plan(layout, name)
     table = build_table(
-        frames["municipalities"], frames["weather"], frames["elevation"], frames["labels"]
+        sources["municipalities"].frame,
+        sources["weather"].frame,
+        sources["elevation"].frame,
+        sources["labels"].frame,
     )
 
-    path = (out_dir or DEFAULT_LAYOUT.data.parent / "dataset") / PARQUET_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Written beside its target and renamed, like every raw copy: a half-written parquet
-    # is a dataset a later run reads as complete.
-    partial = path.with_name(f"{path.name}.part")
-    table.to_parquet(partial, index=False)
-    partial.replace(path)
-
-    manifest = _manifest(table, path, layout, frames)
-    manifest_path = (manifest_dir or ML_ROOT / "datasets" / DATASET_NAME) / MANIFEST_NAME
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    path = (out_dir or layout.data.parent / DATASET_DIRNAME) / PARQUET_NAME
+    pending = _write_parquet(table, path)
+    # Hashed and described before either rename, so the manifest records the file that is
+    # about to be published rather than one that was already there.
+    manifest = _manifest(table, path, pending, sources)
+    manifest_path = (manifest_dir or layout.ml_root / "datasets" / DATASET_NAME) / MANIFEST_NAME
+    _write_atomically(
+        manifest_path, (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+    )
+    _rename_into_place(pending, path)
     return Built(path, manifest_path, manifest)
 
 
@@ -302,11 +350,32 @@ def main(argv: Sequence[str] | None = None, *, layout: Layout = DEFAULT_LAYOUT) 
     return 0
 
 
-def _read_source(layout: Layout, name: str) -> pd.DataFrame:
-    """One source parquet, or a refusal naming the step that writes it.
+def month_range(table: pd.DataFrame) -> dict[str, str]:
+    """The first and last month the table predicts for.
+
+    Read from `horizon_start`, which names the month as a whole: the smallest value of the
+    `month` column is January whatever year it belongs to, so a window that opened in
+    March would report a January it never covered (#245).
+    """
+    return {
+        "from": _month_text(table["horizon_start"].min()),
+        "to": _month_text(table["horizon_start"].max()),
+    }
+
+
+def _month_text(stamp: Any) -> str:
+    moment = pd.Timestamp(stamp)
+    return f"{moment.year:04d}-{moment.month:02d}"
+
+
+def _read_source(layout: Layout, name: str) -> Source:
+    """One source parquet and the digest of the bytes it was read from, or a refusal.
 
     The dataset is built from the cached copies alone (docs/08 §Reglas de gobierno), so a
     source the parse never wrote is a step that never ran, not an empty table.
+
+    The bytes are read once and hashed from that read: a parse landing mid-build cannot
+    then make the manifest describe bytes the table was not built from (#245).
     """
     path = layout.data / f"{name}.parquet"
     if not path.exists():
@@ -314,7 +383,36 @@ def _read_source(layout: Layout, name: str) -> pd.DataFrame:
             f"the {name} parquet is missing ({path}): the dataset is built only from the "
             "parquets of the parse step, so run it and build again"
         )
-    return pd.read_parquet(path)
+    payload = path.read_bytes()
+    return Source(pd.read_parquet(io.BytesIO(payload)), _sha256(payload))
+
+
+def _write_parquet(table: pd.DataFrame, path: Path) -> Path:
+    """Write the dataset beside its target and return the pending file, unrenamed.
+
+    The caller publishes it, so that the manifest can describe it first.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_name(f"{path.name}.part")
+    table.to_parquet(pending, index=False)
+    return pending
+
+
+def _write_atomically(path: Path, payload: bytes) -> None:
+    """Write one file beside its target and rename it there.
+
+    The manifest is read together with the dataset, so a truncated one is as useless as a
+    missing one: it lands whole or not at all (#245).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_name(f"{path.name}.part")
+    pending.write_bytes(payload)
+    _rename_into_place(pending, path)
+
+
+def _rename_into_place(pending: Path, path: Path) -> None:
+    """Publish a pending file under its final name."""
+    pending.replace(path)
 
 
 def _assert_built_from_the_cached_plan(layout: Layout, name: str) -> None:
@@ -341,7 +439,7 @@ def _assert_built_from_the_cached_plan(layout: Layout, name: str) -> None:
             "build again"
         )
     recorded = json.loads(trace_path.read_bytes()).get("sha256")
-    if recorded != _sha256(plan_path):
+    if recorded != _sha256(plan_path.read_bytes()):
         raise ValueError(
             f"the {name} parquet was built from another {plan_name} than the one in the cache: "
             "the download moved on, so run the parse step and build again"
@@ -351,10 +449,14 @@ def _assert_built_from_the_cached_plan(layout: Layout, name: str) -> None:
 def _manifest(
     table: pd.DataFrame,
     path: Path,
-    layout: Layout,
-    frames: dict[str, pd.DataFrame],
+    pending: Path,
+    sources: dict[str, Source],
 ) -> dict[str, Any]:
     """What the dataset is, what it cost and what it was built from.
+
+    `pending` is the parquet about to be published, so the digest and the size recorded are
+    the ones the published file will have, and `sources` carries the digest each source was
+    read with rather than a second read of a file a parse may already have rewritten.
 
     No build date: the manifest is part of what has to be reproducible, and a clock would
     make two builds of one cache differ.
@@ -363,30 +465,26 @@ def _manifest(
     return {
         "dataset": DATASET_NAME,
         "file": path.name,
-        "sha256": _sha256(path),
-        "bytes": path.stat().st_size,
+        "sha256": _sha256(pending.read_bytes()),
+        "bytes": pending.stat().st_size,
         "rows": int(len(table)),
         "positives": positives,
         "negatives": int(len(table)) - positives,
         "municipalities": int(table["code"].nunique()),
-        "months": {
-            "from": f"{table['year'].min():04d}-{table['month'].min():02d}",
-            "to": f"{table['year'].max():04d}-{table['month'].max():02d}",
-        },
+        "months": month_range(table),
         "columns": list(COLUMNS),
         "all_null_features": [
             column for column in FEATURE_NAMES if bool(table[column].isna().all())
         ],
         "sources": {
-            name: {
-                "rows": int(len(frame)),
-                "sha256": _sha256(layout.data / f"{name}.parquet"),
-            }
-            for name, frame in frames.items()
+            name: {"rows": int(len(source.frame)), "sha256": source.sha256}
+            for name, source in sources.items()
         },
     }
 
 
-def _sha256(path: Path) -> str:
-    """The hash of a file, the same digest the raw-cache manifest records."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _sha256(payload: bytes) -> str:
+    """The digest of these bytes, the same one the raw-cache manifest and the plan traces
+    record: one function, so the freshness check cannot start refusing valid parquets
+    because two digests drifted apart (#245)."""
+    return hashlib.sha256(payload).hexdigest()

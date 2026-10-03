@@ -28,10 +28,17 @@ También se niega si un parquet no se puede rastrear hasta el plan del caché ac
 el del plan que está en `ml/.cache/raw/`. Sin eso, un `fetch` que volvió a correr —o que
 se cortó a medias— dejaba el parquet viejo legible y plausible, y el dataset se armaba
 desde copias que el caché actual ya no respondería (docs/08:68, "el dataset se arma solo
-desde esas copias"). El parquet se escribe junto a su destino y se renombra, igual que cada
-copia cruda, para que un parquet a medio escribir no lo lea nadie como completo. El
-manifiesto no lleva fecha: el build es función pura de los cuatro parquets, así que el
-mismo caché da el mismo archivo y el mismo `sha256` cualquier día.
+desde esas copias"). Se niega además si el clima trae **dos filas para el mismo
+municipio y el mismo día**: un diccionario se quedaría con la última, así que la ventana
+dependería del orden de filas del parquet y no de una regla.
+
+Los dos archivos se escriben junto a su destino y se renombran, y **el manifiesto se
+publica antes que el dataset**: en ningún momento existe un parquet sin el manifiesto que
+lo describe, y ninguno de los dos aparece a medio escribir. El `build` sin `--out` ni
+`--manifest` publica en los directorios del `layout` que recibió, nunca en el árbol real
+del repositorio. El manifiesto no lleva fecha: el build es función pura de los cuatro
+parquets —cada uno leído una vez y hasheado de esa misma lectura—, así que el mismo caché
+da el mismo archivo y el mismo `sha256` cualquier día.
 
 Cada respuesta cruda queda en `ml/.cache/raw/<fuente>/` (fuera de git) con su URL, su
 fecha de descarga y su `sha256` en `ml/.cache/raw/MANIFEST.tsv`. Los parquets de
