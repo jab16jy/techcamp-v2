@@ -45,7 +45,11 @@ threshold that reaches precision 0.7 in validation, `crítico` the one that reac
 CONFIDENCE = 0.95
 """The interval the gate reads; docs/08 names IC95 and never another."""
 
+Labels = Sequence[int] | npt.NDArray[np.int64]
 Scores = Sequence[float] | npt.NDArray[np.float64]
+"""What the metrics take. They are two aliases because the label is an integer class and the
+score a probability, and a signature that admitted either for both would let a
+probability be scored as a label."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +82,7 @@ class Thresholds:
     critical: Threshold | None
 
 
-def pr_auc(y_true: Scores, y_score: Scores) -> float:
+def pr_auc(y_true: Labels, y_score: Scores) -> float:
     """The average precision of the ranking `y_score` gives over `y_true`.
 
     PR-AUC and not ROC-AUC: with the real frequency of M2 — 1 508 reports over 16 380
@@ -88,13 +92,13 @@ def pr_auc(y_true: Scores, y_score: Scores) -> float:
     return float(average_precision_score(_labels(y_true), _scores(y_score)))
 
 
-def brier(y_true: Scores, y_score: Scores) -> float:
+def brier(y_true: Labels, y_score: Scores) -> float:
     """The mean squared error of the probability itself, the calibration half of the gate."""
     return float(brier_score_loss(_labels(y_true), _scores(y_score)))
 
 
 def paired_improvement_ci95(
-    y_true: Scores,
+    y_true: Labels,
     candidate: Scores,
     baseline: Scores,
     *,
@@ -141,7 +145,7 @@ def paired_improvement_ci95(
 
 
 def operating_thresholds(
-    y_true: Scores,
+    y_true: Labels,
     y_score: Scores,
     *,
     high_precision: float = HIGH_PRECISION,
@@ -182,7 +186,7 @@ def _cut(
     )
 
 
-def _labels(values: Scores) -> npt.NDArray[np.int64]:
+def _labels(values: Labels) -> npt.NDArray[np.int64]:
     return np.asarray(values).astype(np.int64)
 
 

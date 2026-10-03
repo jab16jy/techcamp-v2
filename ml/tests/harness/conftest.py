@@ -8,7 +8,10 @@ reads months and departments, not the size of the region.
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
+from techcamp.risk.domain.features import FEATURE_NAMES
 
 WINDOW_FIRST = "2019-01"
 WINDOW_LAST = "2025-12"
@@ -30,11 +33,41 @@ and a prevalence of 1/84 ≈ 0.012 rather than the real 0.092: the harness never
 frequency, it only refuses to change one (docs/08 §Reglas de gobierno, "Frecuencia real")."""
 
 
+def features(month: int, flooded: bool) -> dict[str, float | None]:
+    """The shared feature vector of docs/08 §M2 "Features", for one issue month.
+
+    A flooded month gets a wet `precip_sum_1m`, because that is the signal docs/08 §M2
+    "Features" says the model sees — accumulated rainfall of one to six months — and it is
+    what lets a test scorer rank the flooded rows above the dry ones from the features
+    alone, the way a fitted estimator would.
+
+    The anomalies are null on purpose: T4 leaves them null because the climatology is the
+    split's (data card §Contrato de columnas) and this split is T5's. A fixture that filled
+    them would test a column the real table does not carry yet.
+    """
+    values: dict[str, float | None] = {name: None for name in FEATURE_NAMES}
+    for name in FEATURE_NAMES:
+        if name.startswith("precip_sum"):
+            values[name] = 40.0 if (name == "precip_sum_1m" and flooded) else float(month) / 2.0
+        elif name.startswith("soil_moisture"):
+            values[name] = 0.4
+        elif name in ("elevation_m", "slope_deg"):
+            values[name] = 30.0
+    values.update(
+        {
+            "month_sin": round(math.sin(2 * math.pi * month / 12), 6),
+            "month_cos": round(math.cos(2 * math.pi * month / 12), 6),
+        }
+    )
+    return values
+
+
 def flood_table() -> pd.DataFrame:
     """Every municipality × month of the window, `label` on the flood months."""
     rows: list[dict[str, object]] = []
     for code, department_code, department_name in MUNICIPALITIES:
         for month, year, number in MONTHS:
+            flooded = month in FLOOD_MONTHS
             rows.append(
                 {
                     "code": code,
@@ -43,8 +76,8 @@ def flood_table() -> pd.DataFrame:
                     "year": year,
                     "month": number,
                     "horizon_start": pd.Timestamp(month + "-01"),
-                    "precip_sum_6m": float(number) / 2.0,
-                    "label": int(month in FLOOD_MONTHS),
+                    **features(number, flooded),
+                    "label": int(flooded),
                 }
             )
     return pd.DataFrame(rows).sort_values(["code", "horizon_start"]).reset_index(drop=True)
