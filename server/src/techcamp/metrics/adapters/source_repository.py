@@ -20,8 +20,10 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     Date,
+    DateTime,
     Integer,
     MetaData,
     Numeric,
@@ -36,6 +38,7 @@ from techcamp.metrics.application.ports import (
     DecisionDay,
     LogbookWeek,
     NodeMonthReadings,
+    PlotAlertAction,
 )
 
 _view_metadata = MetaData()
@@ -73,6 +76,17 @@ PlotDayDecisionView = _view(
     Column("kind", Text),
     Column("depth_mm", Numeric),
     Column("irrigation_mm", Numeric),
+)
+
+PlotAlertActionView = _view(
+    "metrics_plot_alert_action",
+    Column("org_id", Uuid),
+    Column("plot_id", Uuid),
+    Column("alert_id", Uuid),
+    Column("opened_at", DateTime(timezone=True)),
+    Column("opened_day", Date),
+    Column("rule_code", Text),
+    Column("has_timely_action", Boolean),
 )
 
 
@@ -189,6 +203,48 @@ class SqlAlchemyMetricsSourceRepository:
                 kind=row.kind,
                 depth_mm=row.depth_mm,
                 irrigation_mm=row.irrigation_mm,
+            )
+            for row in result
+        ]
+
+    async def plot_alert_actions(
+        self, org_id: UUID, plot_id: UUID, *, from_day: date, to_day: date
+    ) -> list[PlotAlertAction]:
+        """The plot alerts opened in `[from_day, to_day]` and whether each had a
+        timely action (D-T0.6), oldest first.
+
+        The window is the logbook's grain: `occurred_on` is a date, so "timely"
+        runs from the local day of `opened_at` to the local day of
+        `opened_at + 48 h`. Node alerts are never returned — they go to the
+        technician (docs/11 §2). The range filters the view's `opened_day`, the
+        local calendar day, and never `opened_at`: an instant compared against a
+        bare date would be read in the session's zone and move the month by five
+        hours under UTC (D-T0.7).
+        """
+        stmt = (
+            select(
+                PlotAlertActionView.c.plot_id,
+                PlotAlertActionView.c.alert_id,
+                PlotAlertActionView.c.opened_at,
+                PlotAlertActionView.c.rule_code,
+                PlotAlertActionView.c.has_timely_action,
+            )
+            .where(
+                PlotAlertActionView.c.org_id == org_id,
+                PlotAlertActionView.c.plot_id == plot_id,
+                PlotAlertActionView.c.opened_day >= from_day,
+                PlotAlertActionView.c.opened_day <= to_day,
+            )
+            .order_by(PlotAlertActionView.c.opened_at)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            PlotAlertAction(
+                plot_id=row.plot_id,
+                alert_id=row.alert_id,
+                opened_at=row.opened_at,
+                rule_code=row.rule_code,
+                has_timely_action=row.has_timely_action,
             )
             for row in result
         ]

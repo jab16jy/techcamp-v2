@@ -37,8 +37,14 @@ from home.conftest import (
     add_water_balance,
     make_env,
 )
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.alerts.adapters.orm import AlertRuleRow
+from techcamp.alerts.adapters.repositories import SqlAlchemyAlertRepository
+from techcamp.alerts.application import open_alert
+from techcamp.alerts.domain import AlertRule, Severity
+from techcamp.farms.adapters.orm import CropCycleRow, CropRow  # noqa: F401
 from techcamp.logbook.adapters.orm import LogbookEntryRow
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.adapters.orm import NodeRow, ReadingRow
@@ -181,6 +187,46 @@ async def add_logbook_entry(
     )
     await session.commit()
     return entry_id
+
+
+async def add_node_alert(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    node_id: UUID,
+    rule_code: str = "node_battery_low",
+    at: datetime,
+) -> UUID:
+    """One alert on a node, not on a plot.
+
+    Node alerts go to the technician and count for nothing in the plot's index
+    (docs/11 §2), so the plot-alert test needs one of these to prove the view
+    leaves it out.
+    """
+    row = (
+        await session.execute(select(AlertRuleRow).where(AlertRuleRow.code == rule_code))
+    ).scalar_one()
+    rule = AlertRule(
+        id=row.id,
+        org_id=None,
+        code=row.code,
+        metric=row.metric,
+        operator=row.operator,
+        threshold=float(row.threshold) if row.threshold is not None else None,
+        hysteresis=float(row.hysteresis),
+        min_duration=timedelta(minutes=row.min_duration_min),
+        severity=Severity(row.severity),
+        crop_id=row.crop_id,
+    )
+    alert = await open_alert(
+        rule=rule,
+        at=at,
+        alerts=SqlAlchemyAlertRepository(session),
+        node_id=node_id,
+        evidence={"battery_v": 3.1},
+    )
+    assert alert.org_id == org_id
+    return alert.id
 
 
 __all__ = [
