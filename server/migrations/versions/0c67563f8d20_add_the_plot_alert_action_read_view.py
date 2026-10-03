@@ -15,16 +15,19 @@ an irrigated plot is answered by a registered irrigation inside the window, and
 every other plot alert by an entry carrying its `alert_id`. A rainfed plot has no
 irrigation to register, so the clause cannot apply there (ADR-0023).
 
-That irrigation clause is scoped to the **plot**, not to a crop cycle, and that is
-deliberate rather than incidental. docs/11:50 defines the action as "un riego
-registrado" with no cycle qualifier, and `logbook_entry.crop_cycle_id` is nullable
-(docs/03-modelo-datos.md:410), because the phone sends the cycle it happens to have
-cached and often sends none. Scoping the clause to a cycle would therefore discard
-real actions: an irrigation recorded without a cycle, or under a neighbouring cycle,
-is still the farmer answering the alert. `alert` carries no `crop_cycle_id` either,
-so there is no column to scope by without inventing a temporal join the docs never
-state. Bounded correction for `R3-reliability.alert-action.cross-plot`, which asked
-for that narrowing: the behaviour is proven in `test_alert_action_view.py` instead.
+That irrigation clause is scoped to the **plot**, not to a crop cycle. The owner's
+ruling D-T3.1 (2026-10-03) makes that explicit in docs/11-metricas.md §2 and
+docs/adr/0024-metricas-de-impacto-y-adopcion-digital.md: the action is a registered
+irrigation **on that plot**, with **no crop-cycle qualifier**, so an entry whose
+`crop_cycle_id` is null counts too.
+
+The reason is in the model, not in this view. `logbook_entry.crop_cycle_id` is
+nullable (docs/03-modelo-datos.md:410) because the phone sends the cycle it happens
+to have cached and often sends none, and `alert` carries no `crop_cycle_id` at all, so
+scoping the clause by cycle would need a temporal join no doc defines and would discard
+real actions. Proved in `test_alert_action_view.py`. This paragraph closes the escalated
+CRITICAL `R3-reliability.alert-action.cross-plot` by making the doc say what the SQL
+already did; the predicate below is deliberately unchanged.
 
 The window is the logbook's own grain — `occurred_on` is a date, so "timely" runs
 from the *local* day of `opened_at` to the local day of `opened_at + 48 h`

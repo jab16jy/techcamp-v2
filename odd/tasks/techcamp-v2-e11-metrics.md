@@ -54,6 +54,13 @@ Owner approved 2026-10-02.
 - D-T0.8 `crop_cycle_summary` persisted for `harvested`/`lost` cycles, computed on read for an
   active cycle; includes `loss_kg` and `loss_cop` (docs/03, docs/04).
 - D-T0.9 `relative_yield` stays `null`; no `field_record` in E11; follow-up issue.
+- D-T3.1 (owner, 2026-10-03) The `water_stress` action of `risk_management` is **plot-scoped**:
+  a registered irrigation on that plot inside the 48 h window counts, with **no crop-cycle
+  qualifier**, so an entry with `crop_cycle_id = null` counts too. Ruling on the escalated
+  CRITICAL `R3-reliability.alert-action.cross-plot`: `alert` carries no `crop_cycle_id`, and
+  scoping by cycle would discard actions from entries the phone sent without one. Written into
+  [11-metricas §2](../docs/11-metricas.md) and [ADR-0024](../docs/adr/0024-metricas-de-impacto-y-adopcion-digital.md);
+  the SQL is unchanged.
 - D-T0.10 Roles: baseline `PUT` owner/technician, `GET` any member; org metrics owner/technician.
 - D-T0.11 `PUT /plots/{id}/baseline` creates or replaces; `recorded_by` = caller; editable after
   cycles exist.
