@@ -11,7 +11,8 @@ cuatro tablas la tabla municipio × mes; T5 el harness. Nada aquí decide el mod
 ```bash
 # Red: sólo los cuatro hosts de abajo. Reanuda: un trozo ya cacheado no se vuelve a pedir.
 uv run --locked --project ml python -m techcamp_ml.sources fetch
-# Sin red: los parquets se reconstruyen desde ml/.cache/raw.
+# Sin red: los parquets se reconstruyen desde ml/.cache/raw. El rango del clima lo decide
+# el plan que escribió el fetch, no el día en que corre el parse.
 uv run --locked --project ml python -m techcamp_ml.sources parse
 ```
 
@@ -71,8 +72,19 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   copiar los hashes de esta tarjeta. Un trozo cuyo `.request.json` declara otra ventana
   **se vuelve a pedir**: los mismos nombres de archivo respondían la ventana anterior en
   cuanto los meses avanzan, y una serie que termina antes de lo que su nombre promete no
-  puede pasar como completa. `parse` se niega a armar el parquet si falta un trozo o si
-  alguno es de otra ventana, y dice cuál. **T4 no debe correr sobre este parquet.**
+  puede pasar como completa.
+
+  **El rango lo decide el plan, no el reloj.** El `fetch` escribe `archive_plan.json` en
+  `ml/.cache/raw/weather/` —con su fila en el manifiesto— **antes** del primer trozo: la
+  lista completa de trozos que planeó para ese día, cada uno con su ventana y sus códigos.
+  El `parse` no recibe ningún día: lee ese plan y se niega a armar el parquet si falta
+  algún trozo planeado, o si alguno declara otra ventana u otros códigos, diciendo cuál.
+  Mismo caché, mismo parquet, cualquier día en que corra (docs/08 §Reglas de gobierno: "el
+  dataset se arma sólo desde esas copias"). **Este caché, el que T3 cerró, no tiene plan**
+  (los planes no existían todavía), así que `parse --source weather` ahora se niega con
+  `the raw cache holds no archive plan (archive_plan.json)` hasta que el próximo `fetch
+  --source weather` lo escriba; ese fetch no se volvió a correr porque la cuota de
+  Open-Meteo está agotada. **T4 no debe correr sobre este parquet.**
 
 - **Etiquetas:** ventana de consulta por dataset: 2019-01-01→2022-12-31,
   2023-01-01→2024-12-31 y 2025-01-01→(sin tope), en ese orden y sin mezclar años entre

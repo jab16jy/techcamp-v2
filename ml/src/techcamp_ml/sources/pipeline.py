@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from datetime import date
+from itertools import cycle
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -19,6 +22,7 @@ from techcamp_ml.sources.cache import cached_files, manifest_names, read_raw, sa
 from techcamp_ml.sources.elevation import (
     ELEVATION_URL,
     MAX_COORDINATES_PER_REQUEST,
+    POINT,
     elevation_points,
     parse_elevation,
 )
@@ -58,6 +62,12 @@ SOURCE_NAMES = ("municipalities", "weather", "elevation", "labels")
 NEEDS_MUNICIPALITIES = ("weather", "elevation")
 DIVIPOLA_RAW = "divipola.json"
 MGN_RAW = "mgn317.geojson"
+PLAN_RAW = "archive_plan.json"
+"""The range the last weather fetch committed to, cached before its first chunk.
+
+The parse reads it instead of the wall clock: the dataset is built only from the cached
+copies (docs/08 §Reglas de gobierno), so the same cache gives the same parquet on any
+day, and a cache without a plan says so instead of guessing a range."""
 
 
 def _chunk_ready(
@@ -89,24 +99,62 @@ def _window_of(layout: Layout, name: str) -> tuple[str, str] | None:
     return str(sidecar["start_date"]), str(sidecar["end_date"])
 
 
-def _batch_count(total: int) -> int:
-    return -(-total // COORDINATE_BATCH)
+def _codes_of(layout: Layout, name: str) -> tuple[str, ...] | None:
+    """The coordinates an archive chunk answers, `None` when it has no sidecar."""
+    path = layout.raw_copy("weather", f"{name}.request.json")
+    if not path.exists():
+        return None
+    return tuple(str(code) for code in json.loads(path.read_bytes())["codes"])
 
 
-def _expected_chunks(municipalities: int, today: date) -> list[tuple[str, date, date]]:
-    """Every archive chunk the range owes on `today`, in fetch order.
+@dataclass(frozen=True, slots=True)
+class PlannedChunk:
+    """One archive chunk a fetch committed to download for one day."""
+
+    name: str
+    start: date
+    end: date
+    codes: tuple[str, ...]
+
+    def as_json(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "start_date": str(self.start),
+            "end_date": str(self.end),
+            "codes": list(self.codes),
+        }
+
+    @classmethod
+    def from_json(cls, saved: dict[str, Any]) -> PlannedChunk:
+        return cls(
+            str(saved["name"]),
+            date.fromisoformat(str(saved["start_date"])),
+            date.fromisoformat(str(saved["end_date"])),
+            tuple(str(code) for code in saved["codes"]),
+        )
+
+
+def _archive_plan(batches: Sequence[Sequence[POINT]], today: date) -> list[PlannedChunk]:
+    """Every chunk the range owes on `today`, in fetch order.
 
     A pure function of the day it is given: the windows stop at the last month ERA5
     published whole, so they move with `today` and with nothing else (docs/08
     §Fuentes de datos de M2, "ERA5 llega con ~5 días de retraso").
     """
-    owed: list[tuple[str, date, date]] = []
+    plan: list[PlannedChunk] = []
     index = 0
     for start, stop in weather_windows(WEATHER_START, last_complete_month(today)):
-        for _ in range(_batch_count(municipalities)):
-            owed.append((CHUNK_TEMPLATE.format(index=index), start, stop))
+        for batch in batches:
+            plan.append(
+                PlannedChunk(
+                    CHUNK_TEMPLATE.format(index=index),
+                    start,
+                    stop,
+                    tuple(str(code) for code, _, _ in batch),
+                )
+            )
             index += 1
-    return owed
+    return plan
 
 
 def _requested(names: Sequence[str]) -> tuple[str, ...]:
@@ -149,12 +197,12 @@ def parse_sources(
     names: Sequence[str] = SOURCE_NAMES,
     *,
     layout: Layout = DEFAULT_LAYOUT,
-    today: date | None = None,
 ) -> dict[str, Path]:
     """Build the parquets of the named sources from the raw cache alone.
 
-    `today` is the day the range was downloaded for: the same cache answers the same
-    parquet for the same day, whatever day the parse happens to run on.
+    It takes no day: the weather range is the one the fetch planned and cached, so the
+    same cache gives the same parquet whatever day the parse runs on (docs/08
+    §Reglas de gobierno: "el dataset se arma solo desde esas copias").
     """
     requested = _requested(names)
     municipalities = _parse_municipalities(layout)
@@ -163,7 +211,7 @@ def parse_sources(
     if "labels" in requested:
         written["labels"] = _parse_labels(layout, codes)
     if "weather" in requested:
-        written["weather"] = _parse_weather(layout, municipalities, today or date.today())
+        written["weather"] = _parse_weather(layout, municipalities)
     if "elevation" in requested:
         written["elevation"] = _parse_elevation(layout, municipalities)
     return written
@@ -281,59 +329,89 @@ def _parse_labels(layout: Layout, codes: Collection[str]) -> Path:
 def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, today: date) -> int:
     zipped = zip(municipalities["code"], municipalities["lat"], municipalities["lon"], strict=True)
     points = [(str(code), float(lat), float(lon)) for code, lat, lon in zipped]
+    batches = list(chunks(points, COORDINATE_BATCH))
+    plan = _archive_plan(batches, today)
+    # The plan lands in the cache before the first chunk: the parse builds the range this
+    # fetch committed to, so the same cache gives the same parquet on any day (docs/08
+    # §Reglas de gobierno: "el dataset se arma solo desde esas copias").
+    save_raw(
+        layout,
+        "weather",
+        PLAN_RAW,
+        f"{ARCHIVE_URL}?plan_for={today}",
+        json.dumps({"today": str(today), "chunks": [chunk.as_json() for chunk in plan]}).encode(),
+    )
     written = 0
     proven = manifest_names(layout, "weather")
-    index = 0
-    for start, stop in weather_windows(WEATHER_START, last_complete_month(today)):
-        for batch in chunks(points, COORDINATE_BATCH):
-            name = CHUNK_TEMPLATE.format(index=index)
-            index += 1
-            # A chunk is finished only when its sidecar states the window this day owes:
-            # the same file names answer an older window once the months move on.
-            if _window_of(layout, name) == (str(start), str(stop)) and _chunk_ready(
-                layout, "weather", f"{name}.json", f"{name}.request.json", proven
-            ):
-                continue  # an interrupted fetch resumes here
-            params = archive_params(start, stop)
-            query = "&".join(f"{key}={value}" for key, value in params.items())
-            latitude = ",".join(str(lat) for _, lat, _ in batch)
-            longitude = ",".join(str(lon) for _, _, lon in batch)
-            fetch(
+    # The plan fixes the order and the window; every window asks the same batches again,
+    # so the batches cycle under the planned chunks.
+    for planned, batch in zip(plan, cycle(batches), strict=False):
+        # A chunk is finished only when its sidecar states the window the plan gave it:
+        # the same file names answer an older window once the months move on.
+        if _window_of(layout, planned.name) == (str(planned.start), str(planned.end)) and (
+            _chunk_ready(
                 layout,
                 "weather",
-                f"{name}.json",
-                ARCHIVE_URL,
-                params={**params, "latitude": latitude, "longitude": longitude},
-                weight=len(batch),
+                f"{planned.name}.json",
+                f"{planned.name}.request.json",
+                proven,
             )
-            # The archive answers in request order, so the chunk's window and codes
-            # travel with it and the parser never has to guess the request.
-            sidecar = {
-                "start_date": str(start),
-                "end_date": str(stop),
-                "codes": [code for code, _, _ in batch],
-            }
-            save_raw(
-                layout,
-                "weather",
-                f"{name}.request.json",
-                f"{ARCHIVE_URL}?{query}&latitude={latitude}&longitude={longitude}",
-                json.dumps(sidecar).encode(),
-            )
-            written += 1
+        ):
+            continue  # an interrupted fetch resumes here
+        params = archive_params(planned.start, planned.end)
+        query = "&".join(f"{key}={value}" for key, value in params.items())
+        latitude = ",".join(str(lat) for _, lat, _ in batch)
+        longitude = ",".join(str(lon) for _, _, lon in batch)
+        fetch(
+            layout,
+            "weather",
+            f"{planned.name}.json",
+            ARCHIVE_URL,
+            params={**params, "latitude": latitude, "longitude": longitude},
+            weight=len(batch),
+        )
+        # The archive answers in request order, so the chunk's window and codes
+        # travel with it and the parser never has to guess the request.
+        sidecar = {
+            "start_date": str(planned.start),
+            "end_date": str(planned.end),
+            "codes": list(planned.codes),
+        }
+        save_raw(
+            layout,
+            "weather",
+            f"{planned.name}.request.json",
+            f"{ARCHIVE_URL}?{query}&latitude={latitude}&longitude={longitude}",
+            json.dumps(sidecar).encode(),
+        )
+        written += 1
     return written
+
+
+def _read_plan(layout: Layout) -> list[PlannedChunk]:
+    """The range the last fetch committed to, or a refusal naming the step to run."""
+    if not layout.raw_copy("weather", PLAN_RAW).exists():
+        raise ValueError(
+            f"the raw cache holds no archive plan ({PLAN_RAW}): the parse builds the range "
+            "the fetch planned, so run the fetch step and parse again"
+        )
+    saved = json.loads(read_raw(layout, "weather", PLAN_RAW))
+    return [PlannedChunk.from_json(chunk) for chunk in saved["chunks"]]
 
 
 def _parse_weather(
     layout: Layout,
     municipalities: pd.DataFrame,
-    today: date,
 ) -> Path:
-    _assert_archive_complete(layout, len(municipalities), today)
-    frames = []
-    for name, _start, _stop in _expected_chunks(len(municipalities), today):
-        request = json.loads(read_raw(layout, "weather", f"{name}.request.json"))
-        frames.append(parse_archive(read_raw(layout, "weather", f"{name}.json"), request["codes"]))
+    plan = _read_plan(layout)
+    _assert_plan_cached(layout, plan)
+    frames = [
+        parse_archive(
+            read_raw(layout, "weather", f"{planned.name}.json"),
+            list(planned.codes),
+        )
+        for planned in plan
+    ]
     weather = concat_windows(frames)
     if not weather.empty:
         unknown = sorted(set(weather["code"]) - set(municipalities["code"]))
@@ -342,25 +420,26 @@ def _parse_weather(
     return write_parquet(layout, "weather", weather)
 
 
-def _assert_archive_complete(layout: Layout, municipalities: int, today: date) -> None:
-    """Refuse to build a climate parquet out of a range the cache does not answer.
+def _assert_plan_cached(layout: Layout, plan: Sequence[PlannedChunk]) -> None:
+    """Every planned chunk has to be cached, with the window and codes the plan gave it.
 
-    Every window and coordinate batch the range owes has to be cached *and* to state in
-    its sidecar the window it was downloaded for. A chunk fetched for an older window
-    would build a series that stops short of what the parquet's name implies, and a
-    partial one would be shorter for part of the region than for the rest.
+    A chunk fetched for an older window, or for other coordinates, would build a series
+    that is not the one the fetch committed to, and a partial cache would build a series
+    that stops short of what the parquet's name implies.
     """
     missing: list[str] = []
     stale: list[str] = []
-    for name, start, stop in _expected_chunks(municipalities, today):
-        if not layout.raw_copy("weather", f"{name}.json").exists():
-            missing.append(f"{name}.json")
-        elif _window_of(layout, name) != (str(start), str(stop)):
-            stale.append(f"{name}.json")
+    for planned in plan:
+        if not layout.raw_copy("weather", f"{planned.name}.json").exists():
+            missing.append(f"{planned.name}.json")
+        elif _window_of(layout, planned.name) != (str(planned.start), str(planned.end)):
+            stale.append(f"{planned.name}.json (another window)")
+        elif _codes_of(layout, planned.name) != planned.codes:
+            stale.append(f"{planned.name}.json (other codes)")
     if missing or stale:
         raise ValueError(
-            f"the archive download does not answer the range owed on {today}: "
-            f"missing chunks: {missing}; chunks downloaded for another window: {stale}; "
+            f"the archive download does not answer the plan in {PLAN_RAW}: "
+            f"missing chunks: {missing}; chunks downloaded for another window or codes: {stale}; "
             "run the fetch step and parse again"
         )
 

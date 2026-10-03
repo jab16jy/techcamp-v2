@@ -9,11 +9,10 @@ import pandas as pd
 import pytest
 
 from techcamp_ml.sources import pipeline
-from techcamp_ml.sources.cache import save_raw
+from techcamp_ml.sources.cache import read_manifest, save_raw
 from techcamp_ml.sources.layout import Layout
 from techcamp_ml.sources.pipeline import parse_sources
 from techcamp_ml.sources.weather import (
-    CHUNK_TEMPLATE,
     WEATHER_START,
     last_complete_month,
     weather_windows,
@@ -206,9 +205,7 @@ def test_the_weather_fetch_splits_into_windows_and_resumes(
     assert pipeline.fetch_sources(["weather"], layout=layout, today=today)["weather"] == 0
     assert len(requested) == len(windows) * 2 + 2, "plus the two municipality calls, once"
 
-    frame = pd.read_parquet(
-        pipeline.parse_sources(["weather"], layout=layout, today=today)["weather"]
-    )
+    frame = pd.read_parquet(pipeline.parse_sources(["weather"], layout=layout)["weather"])
     assert len(frame) == 195
     assert frame["code"].nunique() == 195
     assert frame["precipitation_sum"].sum() == pytest.approx(195.0)
@@ -272,7 +269,7 @@ def test_parsing_refuses_an_incomplete_archive_download(
     # A partial climate series must not come out as an ordinary parquet: T4 would take
     # it for the whole region.
     with pytest.raises(ValueError, match="archive_005.json"):
-        pipeline.parse_sources(["weather"], layout=layout, today=date(2026, 10, 2))
+        pipeline.parse_sources(["weather"], layout=layout)
 
 
 def _move_sidecar(layout: Layout, name: str, **window: str) -> None:
@@ -294,11 +291,25 @@ def test_parsing_refuses_a_chunk_downloaded_for_another_window(
     today = date(2026, 10, 2)
     pipeline.fetch_sources(["weather"], layout=layout, today=today)
     # A cache downloaded when the range stopped a day earlier: every chunk name is
-    # there, and the days it holds are not the ones this day owes.
+    # there, and the days it holds are not the ones the fetch planned.
     _move_sidecar(layout, "archive_002", end_date="2026-06-27")
 
     with pytest.raises(ValueError, match="archive_002.json"):
-        pipeline.parse_sources(["weather"], layout=layout, today=today)
+        pipeline.parse_sources(["weather"], layout=layout)
+
+    # Negative half: the same chunk with the window the plan gave it parses.
+    _move_sidecar(layout, "archive_002", end_date="2026-06-28")
+    assert (
+        len(pd.read_parquet(pipeline.parse_sources(["weather"], layout=layout)["weather"])) == 195
+    )
+
+    # And a chunk that answers other coordinates than the plan named is refused too.
+    sidecar_path = layout.raw_copy("weather", "archive_002.request.json")
+    sidecar = json.loads(sidecar_path.read_bytes())
+    sidecar["codes"] = sidecar["codes"][:1]
+    sidecar_path.write_bytes(json.dumps(sidecar).encode())
+    with pytest.raises(ValueError, match="archive_002.json"):
+        pipeline.parse_sources(["weather"], layout=layout)
 
 
 def test_the_fetch_replaces_a_chunk_whose_window_moved(
@@ -325,17 +336,35 @@ def test_the_fetch_replaces_a_chunk_whose_window_moved(
     assert (sidecar["start_date"], sidecar["end_date"]) == (str(start), str(stop))
 
 
-class _FrozenClock:
-    """A wall clock pinned years ahead, so a hidden `date.today()` fails loudly."""
-
-    def __init__(self, day: date) -> None:
-        self._day = day
-
-    def today(self) -> date:
-        return self._day
+def _clock(day: date) -> type[date]:
+    """A `date` whose `today()` is pinned to `day`, so a hidden clock read fails loudly."""
+    return type("_FrozenClock", (date,), {"today": classmethod(lambda _cls: day)})
 
 
-def test_the_range_a_parse_owes_comes_from_the_day_it_is_given(
+def test_the_same_cache_builds_the_same_parquet_on_any_day(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The range a parse owes is the one the fetch planned, not the day it runs on."""
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch([]))
+    pipeline.fetch_sources(["weather"], layout=layout, today=date(2026, 10, 2))
+    first = pd.read_parquet(pipeline.parse_sources(["weather"], layout=layout)["weather"])
+    assert len(first) == 195
+    # The plan is a cached copy like any other: the manifest has to document it.
+    assert pipeline.PLAN_RAW in set(read_manifest(layout)["file"])
+
+    for day in (date(2026, 10, 2), date(2026, 11, 20), date(2035, 1, 1)):
+        monkeypatch.setattr(pipeline, "date", _clock(day))
+        again = pd.read_parquet(pipeline.parse_sources(["weather"], layout=layout)["weather"])
+        # Negative half: a later day cannot add a window the fetch never planned, and it
+        # cannot refuse a cache that answers the plan either.
+        assert again.equals(first), f"the parse changed on {day}"
+
+
+def test_parsing_refuses_a_chunk_the_plan_promises_and_the_cache_lacks(
     tmp_path: Path,
     fixture: Callable[[str], bytes],
     monkeypatch: pytest.MonkeyPatch,
@@ -343,22 +372,28 @@ def test_the_range_a_parse_owes_comes_from_the_day_it_is_given(
     layout = Layout(tmp_path)
     _cache(layout, fixture)
     monkeypatch.setattr(pipeline, "fetch", _recording_fetch([]))
-    today = date(2026, 10, 2)
-    pipeline.fetch_sources(["weather"], layout=layout, today=today)
-    monkeypatch.setattr(pipeline, "date", _FrozenClock(date(2035, 1, 1)))
+    pipeline.fetch_sources(["weather"], layout=layout, today=date(2026, 10, 2))
+    (layout.raw_copy("weather", "archive_003.json")).unlink()
 
-    frame = pd.read_parquet(
-        pipeline.parse_sources(["weather"], layout=layout, today=today)["weather"]
-    )
+    with pytest.raises(ValueError, match="archive_003.json"):
+        pipeline.parse_sources(["weather"], layout=layout)
 
-    # Same day in, same parquet out, whatever the clock of the machine says.
-    assert len(frame) == 195
-    # Negative half: the cache still owes a range this day did not ask for, and it is
-    # refused rather than parsed into a series that silently stops earlier.
-    windows = weather_windows(WEATHER_START, last_complete_month(today))
-    moved = f"{CHUNK_TEMPLATE.format(index=(len(windows) - 1) * 2)}.json"
-    with pytest.raises(ValueError, match=moved):
-        pipeline.parse_sources(["weather"], layout=layout, today=date(2027, 6, 1))
+
+def test_parsing_a_cache_with_no_plan_says_run_fetch_first(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cache T3 closed with: three chunks and no plan, because plans did not exist."""
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch([]))
+    pipeline.fetch_sources(["weather"], layout=layout, today=date(2026, 10, 2))
+    layout.raw_copy("weather", pipeline.PLAN_RAW).unlink()
+    assert layout.raw_copy("weather", "archive_000.json").exists(), "the bytes are still there"
+
+    with pytest.raises(ValueError, match="fetch"):
+        pipeline.parse_sources(["weather"], layout=layout)
 
 
 def test_the_elevation_download_asks_for_every_seat_and_its_neighbours(
@@ -377,9 +412,7 @@ def test_the_elevation_download_asks_for_every_seat_and_its_neighbours(
     # Negative half: a resume asks for nothing, the chunks are already in the cache.
     assert pipeline.fetch_sources(["elevation"], layout=layout, today=today)["elevation"] == 0
 
-    frame = pd.read_parquet(
-        pipeline.parse_sources(["elevation"], layout=layout, today=today)["elevation"]
-    )
+    frame = pd.read_parquet(pipeline.parse_sources(["elevation"], layout=layout)["elevation"])
     assert len(frame) == 195
     assert set(frame["code"]) == set(_codes()), "every municipality, and no neighbour row"
     assert not frame.duplicated(subset=["code"]).any()
@@ -401,7 +434,7 @@ def test_parsing_refuses_an_elevation_that_leaves_a_municipality_out(
     # A short slope table would leave T4's neighbour features undefined for the
     # municipalities it lost, with nothing saying so.
     with pytest.raises(ValueError, match="elevation"):
-        pipeline.parse_sources(["elevation"], layout=layout, today=today)
+        pipeline.parse_sources(["elevation"], layout=layout)
     assert not (layout.data / "elevation.parquet").exists(), "no parquet from a short cache"
 
 
@@ -415,7 +448,7 @@ def test_parsing_an_elevation_cache_with_nothing_in_it_says_run_fetch_first(
     save_raw(layout, "municipalities", "mgn317.geojson", "test", mgn)
 
     with pytest.raises(ValueError, match="fetch"):
-        pipeline.parse_sources(["elevation"], layout=layout, today=date(2026, 10, 2))
+        pipeline.parse_sources(["elevation"], layout=layout)
 
 
 def test_parsing_labels_with_nothing_in_the_cache_says_run_fetch_first(
@@ -429,7 +462,7 @@ def test_parsing_labels_with_nothing_in_the_cache_says_run_fetch_first(
 
     # A KeyError on `code` would tell nobody that the step to run is the fetch one.
     with pytest.raises(ValueError, match="fetch"):
-        pipeline.parse_sources(["labels"], layout=layout, today=date(2026, 10, 2))
+        pipeline.parse_sources(["labels"], layout=layout)
 
 
 def test_a_cached_payload_the_manifest_never_documented_is_downloaded_again(
