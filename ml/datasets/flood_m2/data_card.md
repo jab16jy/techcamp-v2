@@ -64,7 +64,11 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   archivo histórico pesa además por la longitud del rango pedido.
   `python -m techcamp_ml.sources fetch --source weather` reanuda donde se quedó y no
   vuelve a pedir lo que ya está en el caché; al terminar hay que reparsear y volver a
-  copiar los hashes de esta tarjeta. **T4 no debe correr sobre este parquet.**
+  copiar los hashes de esta tarjeta. Un trozo cuyo `.request.json` declara otra ventana
+  **se vuelve a pedir**: los mismos nombres de archivo respondían la ventana anterior en
+  cuanto los meses avanzan, y una serie que termina antes de lo que su nombre promete no
+  puede pasar como completa. `parse` se niega a armar el parquet si falta un trozo o si
+  alguno es de otra ventana, y dice cuál. **T4 no debe correr sobre este parquet.**
 
 - **Etiquetas:** ventana de consulta por dataset: 2019-01-01→2022-12-31,
   2023-01-01→2024-12-31 y 2025-01-01→(sin tope), en ese orden y sin mezclar años entre

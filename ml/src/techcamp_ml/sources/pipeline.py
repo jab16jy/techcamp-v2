@@ -69,8 +69,33 @@ def _chunk_ready(layout: Layout, source: str, name: str, sidecar: str) -> bool:
     return layout.raw_copy(source, name).exists() and layout.raw_copy(source, sidecar).exists()
 
 
+def _window_of(layout: Layout, name: str) -> tuple[str, str] | None:
+    """The window an archive chunk states in its sidecar, `None` when it has none."""
+    path = layout.raw_copy("weather", f"{name}.request.json")
+    if not path.exists():
+        return None
+    sidecar = json.loads(path.read_bytes())
+    return str(sidecar["start_date"]), str(sidecar["end_date"])
+
+
 def _batch_count(total: int) -> int:
     return -(-total // COORDINATE_BATCH)
+
+
+def _expected_chunks(municipalities: int, today: date) -> list[tuple[str, date, date]]:
+    """Every archive chunk the range owes on `today`, in fetch order.
+
+    A pure function of the day it is given: the windows stop at the last month ERA5
+    published whole, so they move with `today` and with nothing else (docs/08
+    §Fuentes de datos de M2, "ERA5 llega con ~5 días de retraso").
+    """
+    owed: list[tuple[str, date, date]] = []
+    index = 0
+    for start, stop in weather_windows(WEATHER_START, last_complete_month(today)):
+        for _ in range(_batch_count(municipalities)):
+            owed.append((CHUNK_TEMPLATE.format(index=index), start, stop))
+            index += 1
+    return owed
 
 
 def _requested(names: Sequence[str]) -> tuple[str, ...]:
@@ -86,7 +111,12 @@ def fetch_sources(
     layout: Layout = DEFAULT_LAYOUT,
     today: date | None = None,
 ) -> dict[str, int]:
-    """Download every raw copy the named sources need. Returns raw copies per source."""
+    """Download every raw copy the named sources need. Returns raw copies per source.
+
+    `today` is the day the download is planned for: the archive windows stop at the last
+    month ERA5 published whole, so it decides which chunks are owed. It defaults to the
+    wall clock here and nowhere else.
+    """
     requested = _requested(names)
     counts: dict[str, int] = {}
     municipalities: pd.DataFrame | None = None
@@ -97,9 +127,7 @@ def fetch_sources(
         counts["labels"] = _fetch_labels(layout)
     if "weather" in requested:
         assert municipalities is not None
-        counts["weather"] = _fetch_weather(
-            layout, municipalities, last_complete_month(today or date.today())
-        )
+        counts["weather"] = _fetch_weather(layout, municipalities, today or date.today())
     if "elevation" in requested:
         assert municipalities is not None
         counts["elevation"] = _fetch_elevation(layout, municipalities)
@@ -112,7 +140,11 @@ def parse_sources(
     layout: Layout = DEFAULT_LAYOUT,
     today: date | None = None,
 ) -> dict[str, Path]:
-    """Build the parquets of the named sources from the raw cache alone."""
+    """Build the parquets of the named sources from the raw cache alone.
+
+    `today` is the day the range was downloaded for: the same cache answers the same
+    parquet for the same day, whatever day the parse happens to run on.
+    """
     requested = _requested(names)
     municipalities = _parse_municipalities(layout)
     codes = set(municipalities["code"])
@@ -120,7 +152,7 @@ def parse_sources(
     if "labels" in requested:
         written["labels"] = _parse_labels(layout, codes)
     if "weather" in requested:
-        written["weather"] = _parse_weather(layout, municipalities, today)
+        written["weather"] = _parse_weather(layout, municipalities, today or date.today())
     if "elevation" in requested:
         written["elevation"] = _parse_elevation(layout)
     return written
@@ -223,16 +255,21 @@ def _parse_labels(layout: Layout, codes: Collection[str]) -> Path:
     return path
 
 
-def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, end: date) -> int:
+def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, today: date) -> int:
     zipped = zip(municipalities["code"], municipalities["lat"], municipalities["lon"], strict=True)
     points = [(str(code), float(lat), float(lon)) for code, lat, lon in zipped]
     written = 0
     index = 0
-    for start, stop in weather_windows(WEATHER_START, end):
+    for start, stop in weather_windows(WEATHER_START, last_complete_month(today)):
         for batch in chunks(points, COORDINATE_BATCH):
             name = CHUNK_TEMPLATE.format(index=index)
             index += 1
-            if _chunk_ready(layout, "weather", f"{name}.json", f"{name}.request.json"):
+            # A chunk is finished only when its sidecar states the window this day owes:
+            # the same file names answer an older window once the months move on.
+            if (
+                _window_of(layout, name) == (str(start), str(stop))
+                and layout.raw_copy("weather", f"{name}.json").exists()
+            ):
                 continue  # an interrupted fetch resumes here
             params = archive_params(start, stop)
             query = "&".join(f"{key}={value}" for key, value in params.items())
@@ -267,18 +304,13 @@ def _fetch_weather(layout: Layout, municipalities: pd.DataFrame, end: date) -> i
 def _parse_weather(
     layout: Layout,
     municipalities: pd.DataFrame,
-    today: date | None = None,
+    today: date,
 ) -> Path:
     _assert_archive_complete(layout, len(municipalities), today)
-    names = cached_files(layout, "weather")
     frames = []
-    for name in names:
-        if not name.endswith(".json") or not name.startswith("archive_"):
-            continue
-        if name.endswith(".request.json"):
-            continue
-        request = json.loads(read_raw(layout, "weather", f"{name[:-5]}.request.json"))
-        frames.append(parse_archive(read_raw(layout, "weather", name), request["codes"]))
+    for name, _start, _stop in _expected_chunks(len(municipalities), today):
+        request = json.loads(read_raw(layout, "weather", f"{name}.request.json"))
+        frames.append(parse_archive(read_raw(layout, "weather", f"{name}.json"), request["codes"]))
     weather = concat_windows(frames)
     if not weather.empty:
         unknown = sorted(set(weather["code"]) - set(municipalities["code"]))
@@ -287,21 +319,25 @@ def _parse_weather(
     return write_parquet(layout, "weather", weather)
 
 
-def _assert_archive_complete(layout: Layout, municipalities: int, today: date | None) -> None:
-    """Refuse to build a climate parquet out of a half-downloaded range.
+def _assert_archive_complete(layout: Layout, municipalities: int, today: date) -> None:
+    """Refuse to build a climate parquet out of a range the cache does not answer.
 
-    Every window and coordinate batch of the range has to be cached, or the series
-    would be shorter for part of the region than the parquet's name implies.
+    Every window and coordinate batch the range owes has to be cached *and* to state in
+    its sidecar the window it was downloaded for. A chunk fetched for an older window
+    would build a series that stops short of what the parquet's name implies, and a
+    partial one would be shorter for part of the region than for the rest.
     """
-    windows = weather_windows(WEATHER_START, last_complete_month(today or date.today()))
-    expected = [
-        f"{CHUNK_TEMPLATE.format(index=index)}.json"
-        for index in range(len(windows) * _batch_count(municipalities))
-    ]
-    missing = [name for name in expected if not layout.raw_copy("weather", name).exists()]
-    if missing:
+    missing: list[str] = []
+    stale: list[str] = []
+    for name, start, stop in _expected_chunks(municipalities, today):
+        if not layout.raw_copy("weather", f"{name}.json").exists():
+            missing.append(f"{name}.json")
+        elif _window_of(layout, name) != (str(start), str(stop)):
+            stale.append(f"{name}.json")
+    if missing or stale:
         raise ValueError(
-            f"the archive download is incomplete, missing chunks: {missing}; "
+            f"the archive download does not answer the range owed on {today}: "
+            f"missing chunks: {missing}; chunks downloaded for another window: {stale}; "
             "run the fetch step and parse again"
         )
 

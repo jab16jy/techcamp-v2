@@ -13,6 +13,7 @@ from techcamp_ml.sources.cache import save_raw
 from techcamp_ml.sources.layout import Layout
 from techcamp_ml.sources.pipeline import parse_sources
 from techcamp_ml.sources.weather import (
+    CHUNK_TEMPLATE,
     WEATHER_START,
     last_complete_month,
     weather_windows,
@@ -189,14 +190,21 @@ def test_the_weather_fetch_splits_into_windows_and_resumes(
 
     monkeypatch.setattr(pipeline, "fetch", fake_fetch)
 
-    windows = weather_windows(WEATHER_START, last_complete_month(date(2026, 10, 2)))
-    assert pipeline.fetch_sources(["weather"], layout=layout)["weather"] == len(windows) * 2
+    # The day is given, never taken from the wall clock: the same cache answers the same
+    # question in November that it answered in October.
+    today = date(2026, 10, 2)
+    windows = weather_windows(WEATHER_START, last_complete_month(today))
+    assert pipeline.fetch_sources(["weather"], layout=layout, today=today)["weather"] == (
+        len(windows) * 2
+    )
 
     # A second run asks for nothing at all: the region and every chunk are cached.
-    assert pipeline.fetch_sources(["weather"], layout=layout)["weather"] == 0
+    assert pipeline.fetch_sources(["weather"], layout=layout, today=today)["weather"] == 0
     assert len(requested) == len(windows) * 2 + 2, "plus the two municipality calls, once"
 
-    frame = pd.read_parquet(pipeline.parse_sources(["weather"], layout=layout)["weather"])
+    frame = pd.read_parquet(
+        pipeline.parse_sources(["weather"], layout=layout, today=today)["weather"]
+    )
     assert len(frame) == 195
     assert frame["code"].nunique() == 195
     assert frame["precipitation_sum"].sum() == pytest.approx(195.0)
@@ -261,3 +269,89 @@ def test_parsing_refuses_an_incomplete_archive_download(
     # it for the whole region.
     with pytest.raises(ValueError, match="archive_005.json"):
         pipeline.parse_sources(["weather"], layout=layout, today=date(2026, 10, 2))
+
+
+def _move_sidecar(layout: Layout, name: str, **window: str) -> None:
+    """Rewrite a chunk's sidecar so it states another window than the one it holds."""
+    path = layout.raw_copy("weather", f"{name}.request.json")
+    sidecar = json.loads(path.read_bytes())
+    sidecar.update(window)
+    path.write_bytes(json.dumps(sidecar).encode())
+
+
+def test_parsing_refuses_a_chunk_downloaded_for_another_window(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch([]))
+    today = date(2026, 10, 2)
+    pipeline.fetch_sources(["weather"], layout=layout, today=today)
+    # A cache downloaded when the range stopped a day earlier: every chunk name is
+    # there, and the days it holds are not the ones this day owes.
+    _move_sidecar(layout, "archive_002", end_date="2026-06-27")
+
+    with pytest.raises(ValueError, match="archive_002.json"):
+        pipeline.parse_sources(["weather"], layout=layout, today=today)
+
+
+def test_the_fetch_replaces_a_chunk_whose_window_moved(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    requested: list[str] = []
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch(requested))
+    today = date(2026, 10, 2)
+    pipeline.fetch_sources(["weather"], layout=layout, today=today)
+    _move_sidecar(layout, "archive_000", end_date="2019-06-29")
+    requested.clear()
+
+    assert pipeline.fetch_sources(["weather"], layout=layout, today=today)["weather"] == 1
+
+    # Negative half: a chunk whose sidecar already states the window this day owes is
+    # not requested again.
+    assert requested == ["archive_000.json"]
+    start, stop = weather_windows(WEATHER_START, last_complete_month(today))[0]
+    sidecar = json.loads(layout.raw_copy("weather", "archive_000.request.json").read_bytes())
+    assert (sidecar["start_date"], sidecar["end_date"]) == (str(start), str(stop))
+
+
+class _FrozenClock:
+    """A wall clock pinned years ahead, so a hidden `date.today()` fails loudly."""
+
+    def __init__(self, day: date) -> None:
+        self._day = day
+
+    def today(self) -> date:
+        return self._day
+
+
+def test_the_range_a_parse_owes_comes_from_the_day_it_is_given(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch([]))
+    today = date(2026, 10, 2)
+    pipeline.fetch_sources(["weather"], layout=layout, today=today)
+    monkeypatch.setattr(pipeline, "date", _FrozenClock(date(2035, 1, 1)))
+
+    frame = pd.read_parquet(
+        pipeline.parse_sources(["weather"], layout=layout, today=today)["weather"]
+    )
+
+    # Same day in, same parquet out, whatever the clock of the machine says.
+    assert len(frame) == 195
+    # Negative half: the cache still owes a range this day did not ask for, and it is
+    # refused rather than parsed into a series that silently stops earlier.
+    windows = weather_windows(WEATHER_START, last_complete_month(today))
+    moved = f"{CHUNK_TEMPLATE.format(index=(len(windows) - 1) * 2)}.json"
+    with pytest.raises(ValueError, match=moved):
+        pipeline.parse_sources(["weather"], layout=layout, today=date(2027, 6, 1))
