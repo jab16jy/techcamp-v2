@@ -189,6 +189,37 @@ async def add_logbook_entry(
     return entry_id
 
 
+async def add_cycle(
+    session: AsyncSession,
+    env: HomeEnv,
+    *,
+    sown_on: date,
+    status: str = "active",
+    expected_harvest_on: date | None = None,
+) -> UUID:
+    """A cycle on maize (catalog id 1) with a chosen status and harvest date.
+
+    `expected_harvest_on` is the last day the cycle view's water-stress window
+    reaches, so a test makes it explicit instead of inheriting the shared
+    builder's `sown_on + 90 days`.
+    """
+    crop = await session.get(CropRow, 1)
+    assert crop is not None, "the catalog seed must provide the maize crop"
+    cycle_id = uuid7()
+    session.add(
+        CropCycleRow(
+            id=cycle_id,
+            plot_id=env.plot_id,
+            crop_id=1,
+            sown_on=sown_on,
+            expected_harvest_on=expected_harvest_on,
+            status=status,
+        )
+    )
+    await session.commit()
+    return cycle_id
+
+
 async def add_node_alert(
     session: AsyncSession,
     *,

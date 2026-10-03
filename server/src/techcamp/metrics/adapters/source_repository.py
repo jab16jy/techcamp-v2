@@ -35,6 +35,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.metrics.application.ports import (
+    CycleTotals,
     DecisionDay,
     LogbookWeek,
     NodeMonthReadings,
@@ -87,6 +88,22 @@ PlotAlertActionView = _view(
     Column("opened_day", Date),
     Column("rule_code", Text),
     Column("has_timely_action", Boolean),
+)
+
+CropCycleTotalsView = _view(
+    "metrics_crop_cycle_totals",
+    Column("org_id", Uuid),
+    Column("crop_cycle_id", Uuid),
+    Column("plot_id", Uuid),
+    Column("yield_kg", Numeric),
+    Column("sold_kg", Numeric),
+    Column("revenue_cop", Numeric),
+    Column("labor_days", Numeric),
+    Column("cost_cop", Numeric),
+    Column("irrigation_mm", Numeric),
+    Column("loss_kg", Numeric),
+    Column("loss_cop", Numeric),
+    Column("water_stress_days", BigInteger),
 )
 
 
@@ -248,3 +265,41 @@ class SqlAlchemyMetricsSourceRepository:
             )
             for row in result
         ]
+
+    async def cycle_totals(self, org_id: UUID, crop_cycle_id: UUID) -> CycleTotals | None:
+        """One cycle's raw totals, before any per-hectare or per-kilogram
+        division (docs/11 §1).
+
+        `None` when the cycle does not exist or belongs to another organization
+        (docs/09 §Seguridad): the caller cannot tell the two apart, and neither
+        may leak the other's existence.
+
+        `water_stress_days` covers the days from `sown_on` to
+        `LEAST(expected_harvest_on, today)`. `crop_cycle` carries no end date to
+        join on, so that window is the view's own documented choice and not a
+        foreign key: the future is never inside a cycle, which makes it right for
+        an active cycle measured on read (D-T0.8) and for a finished one measured
+        up to the harvest date it carries. It is `None` when the cycle has no
+        assimilated balance at all, and 0 when the window holds balance days that
+        are simply never stressed.
+        """
+        stmt = select(CropCycleTotalsView).where(
+            CropCycleTotalsView.c.org_id == org_id,
+            CropCycleTotalsView.c.crop_cycle_id == crop_cycle_id,
+        )
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None:
+            return None
+        return CycleTotals(
+            crop_cycle_id=row.crop_cycle_id,
+            plot_id=row.plot_id,
+            yield_kg=row.yield_kg,
+            sold_kg=row.sold_kg,
+            revenue_cop=row.revenue_cop,
+            labor_days=row.labor_days,
+            cost_cop=row.cost_cop,
+            irrigation_mm=row.irrigation_mm,
+            loss_kg=row.loss_kg,
+            loss_cop=row.loss_cop,
+            water_stress_days=row.water_stress_days,
+        )
