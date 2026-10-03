@@ -36,12 +36,13 @@ from __future__ import annotations
 
 import datetime
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 
 from procrastinate import RetryStrategy
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from techcamp.alerts.application import PredictionEvidence, RiskRuleEvaluation
 from techcamp.risk.adapters.open_meteo_archive import (
     OpenMeteoArchiveAdapter,
     get_risk_archive_adapter,
@@ -50,6 +51,7 @@ from techcamp.risk.adapters.open_meteo_archive import (
 from techcamp.risk.adapters.repositories import SqlAlchemyRiskRepository
 from techcamp.risk.application.ports import CellTransactions, PredictorRegistry, RiskCell
 from techcamp.risk.application.run_daily_risk import run_daily_risk
+from techcamp.risk.domain.models import RiskPrediction
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.dates import local_today
 from techcamp.shared.db import async_session_factory
@@ -67,7 +69,14 @@ opened (docs/05 §Solo la fachada pública): `risk` may name
 `weather.application`'s port and never `weather.adapters`, so `techcamp/worker.py`
 builds the concrete repository and injects it here."""
 
+type AlertEvaluationFactory = Callable[[AsyncSession], RiskRuleEvaluation]
+"""How the composition root builds the model-rule evaluation on the session this
+task opened, for the same reason: `risk` may name `alerts.application`'s protocol
+and never `alerts.adapters`, so `techcamp/worker.py` builds the concrete
+evaluator and injects it here (docs/06-diseno-detallado.md §8 "Alertas")."""
+
 _weather_cells: WeatherCellsFactory | None = None
+_alert_evaluation: AlertEvaluationFactory | None = None
 
 
 def configure_weather_cells(factory: WeatherCellsFactory) -> None:
@@ -75,6 +84,18 @@ def configure_weather_cells(factory: WeatherCellsFactory) -> None:
     worker starts (docs/05 §Solo la fachada pública)."""
     global _weather_cells
     _weather_cells = factory
+
+
+def configure_alert_evaluation(factory: AlertEvaluationFactory) -> None:
+    """Inject the evaluation of `flood_risk` / `drought_risk`. Called once by
+    `techcamp/worker.py` before the worker starts, for the same reason as the cell
+    reader (docs/05 §Solo la fachada pública).
+
+    Not optional: the run writes predictions and nothing else would turn them into
+    alerts, so a worker that never called this would store a month of risk and
+    raise no alert at all (docs/06 §8 "Alertas")."""
+    global _alert_evaluation
+    _alert_evaluation = factory
 
 
 def _cells_source(session: AsyncSession) -> WeatherRepository:
@@ -85,6 +106,36 @@ def _cells_source(session: AsyncSession) -> WeatherRepository:
             "§Solo la fachada pública)."
         )
     return _weather_cells(session)
+
+
+def _alerts_source(session: AsyncSession) -> RiskRuleEvaluation:
+    if _alert_evaluation is None:
+        raise RuntimeError(
+            "risk: no alert evaluation configured. techcamp/worker.py must call "
+            "configure_alert_evaluation() before the worker starts (docs/05-arquitectura.md "
+            "§Solo la fachada pública)."
+        )
+    return _alert_evaluation(session)
+
+
+def _as_evidence(predictions: Sequence[RiskPrediction]) -> list[PredictionEvidence]:
+    """The run's own rows as the alert rules read them.
+
+    The values cross into `alerts` through its application facade, which is the
+    only package of that module `risk` may import (docs/05 §Solo la fachada
+    pública). The stored `severity` code is turned into `alerts`' own vocabulary
+    there, so this module never names it.
+    """
+    return [
+        PredictionEvidence.from_stored(
+            cell_id=prediction.cell_id,
+            event=prediction.event_type.value,
+            severity=prediction.severity.value,
+            horizon_start=prediction.horizon_start,
+            model_version_id=prediction.model_version_id,
+        )
+        for prediction in predictions
+    ]
 
 
 @lru_cache(maxsize=1)
@@ -148,10 +199,19 @@ async def predict_active_cells(timestamp: int, day: str | None = None) -> None:
     The cron is read in the worker's own local time (procrastinate evaluates it
     with `croniter` on a naive local clock), so the `worker` service runs in
     `America/Bogota`, the zone docs/10-dag.md §3 fixes every job hour to.
+
+    The run is followed by the model rules, in the same task and the same session:
+    docs/06-diseno-detallado.md §8 "Alertas" puts the evaluation after the
+    predictions are written, and the row it needs is the one this run just wrote
+    (`DailyRiskRun.predictions`), never a read back of the month.
     """
     target = datetime.date.fromisoformat(day) if day else local_today()
     async with async_session_factory() as session:
         cells = await risk_cells(_cells_source(session))
+        # Both composition seams are resolved before the first write, so a worker
+        # that was never configured fails before it stores a month of risk it
+        # could never alert on.
+        alerts = _alerts_source(session)
         # Close the read transaction before the first provider call: a transaction
         # must not stay open across the archive calls of the cells, which are two
         # HTTP requests each with a 10 s timeout and up to three retries. The run
@@ -166,6 +226,9 @@ async def predict_active_cells(timestamp: int, day: str | None = None) -> None:
             archive=_archive(),
             predictors=_predictors(),
             transactions=CellTransactions(commit=session.commit, rollback=session.rollback),
+        )
+        await alerts(
+            at=datetime.datetime.now(datetime.UTC), predictions=_as_evidence(run.predictions)
         )
     logger.info(
         "risk: %s predictions for %s over %s cells (%s cell/event pairs skipped)",

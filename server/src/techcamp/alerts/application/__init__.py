@@ -8,7 +8,7 @@ stay behind it.
 from techcamp.alerts.application.escalate import escalate_due_alerts
 from techcamp.alerts.application.evaluate_node_health import evaluate_node_health
 from techcamp.alerts.application.evaluate_readings import evaluate_landed_readings
-from techcamp.alerts.application.evaluate_risk_rules import evaluate_risk_rules
+from techcamp.alerts.application.evaluate_risk_rules import RiskRuleEvaluation, evaluate_risk_rules
 from techcamp.alerts.application.evaluate_water_stress import evaluate_balance_rules
 from techcamp.alerts.application.evaluate_weather_rules import evaluate_weather_rules
 from techcamp.alerts.application.manage_rules import create_rule, list_rules, update_rule
@@ -35,6 +35,7 @@ __all__ = [
     "AlertTarget",
     "EscalationTarget",
     "PredictionEvidence",
+    "RiskRuleEvaluation",
     "acknowledge",
     "create_rule",
     "escalate_due_alerts",

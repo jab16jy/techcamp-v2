@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Protocol
 from uuid import UUID
 
 from techcamp.alerts.application.ports import AlertRepository, AlertRuleRepository
@@ -33,6 +34,25 @@ _MAX_FARMS_PER_ORG = 500
 """ponytail: one `list_for_org` page covers every farm of one organization at
 this project's scale (the same reasoning and constant as the three evaluators
 already in this package)."""
+
+
+class RiskRuleEvaluation(Protocol):
+    """What the daily risk job calls once per run, after it wrote its predictions.
+
+    A protocol rather than a bare function so the calling module names what it
+    needs without importing the concrete repositories that satisfy it (ADR-0002):
+    `risk` may depend on `alerts.application` and never `alerts.adapters`
+    (docs/05-arquitectura.md §Solo la fachada pública), so the composition root
+    builds the implementation and injects it.
+    """
+
+    async def __call__(self, *, at: datetime, predictions: Sequence[PredictionEvidence]) -> None:
+        """Decide every rule of the predictions `at` decides, and return nothing.
+
+        `predictions` are the rows the caller JUST wrote: nothing else is
+        evidence, so an implementation must not read back what is stored.
+        """
+        ...
 
 
 async def evaluate_risk_rules(
