@@ -148,17 +148,26 @@ def monitoring_component(nodes: list[NodeEvidence] | tuple[NodeEvidence, ...]) -
     time it never had. Both totals are summed across nodes **before** dividing:
     one loud node cannot offset a silent one by averaging ratios.
 
-    `None` when nothing was expected — no claimed node at all, or a node whose
-    claimed seconds inside the month are zero. That is missing evidence, not a
-    plot that failed to report (docs/11:57).
+    A node whose `interval_s` is zero or negative defines no expected count at
+    all, so it is dropped from **both** sides of the ratio rather than divided
+    by (#251). Dropping its readings too is the point: keeping a numerator
+    without its denominator would let a misconfigured node inflate the
+    component, and an inverted denominator would hand back a negative one that
+    the table's CHECK rejects outright. What is left is missing evidence, and
+    missing evidence is `None` (docs/11:57, D-T0.3) — never `0`, which would
+    read as a plot that failed to report.
+
+    `None` when nothing was expected — no claimed node at all, no node with a
+    usable interval, or a node whose claimed seconds inside the month are zero.
     """
+    sound = [node for node in nodes if node.interval_s > 0]
     expected = sum(
-        (Decimal(node.claimed_seconds) / Decimal(node.interval_s) for node in nodes),
+        (Decimal(node.claimed_seconds) / Decimal(node.interval_s) for node in sound),
         start=Decimal(0),
     )
     if expected == 0:
         return None
-    received = sum((Decimal(node.received_readings) for node in nodes), start=Decimal(0))
+    received = sum((Decimal(node.received_readings) for node in sound), start=Decimal(0))
     return min(_ONE, received / expected)
 
 

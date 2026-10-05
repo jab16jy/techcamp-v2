@@ -82,6 +82,46 @@ def test_monitoring_caps_above_one_instead_of_exceeding_the_range() -> None:
     assert monitoring_component([node]) == Decimal(1)
 
 
+def test_monitoring_is_none_for_a_node_with_a_zero_interval() -> None:
+    # `interval_s <= 0` cannot define expected readings, so the node carries no
+    # evidence: a division by zero is not a component of 0 % (#251).
+    node = _node(interval_s=0, claimed_seconds=4320 * 300, received=4320)
+
+    assert monitoring_component([node]) is None
+
+
+def test_monitoring_is_none_for_a_node_with_a_negative_interval() -> None:
+    # A negative interval inverts the denominator and would hand back a negative
+    # component; the CHECK forbids it and the plot is not to blame for it (#251).
+    node = _node(interval_s=-300, claimed_seconds=4320 * 300, received=4320)
+
+    assert monitoring_component([node]) is None
+
+
+def test_monitoring_scores_the_sound_nodes_and_ignores_an_invalid_one() -> None:
+    # One sound node at half, plus a node whose interval is broken and whose
+    # readings are numerous. Absent evidence is absent on both sides of the
+    # ratio: counting its readings without its denominator would inflate the
+    # numerator and cap the component at 1 instead of reporting the half the
+    # sound node actually delivered.
+    sound = _node(interval_s=300, claimed_seconds=4320 * 300, received=2160)
+    broken = _node(interval_s=0, claimed_seconds=4320 * 300, received=4320)
+
+    assert monitoring_component([sound, broken]) == Decimal("0.5")
+
+
+def test_monitoring_is_none_when_every_node_has_an_invalid_interval() -> None:
+    assert (
+        monitoring_component(
+            [
+                _node(interval_s=0, claimed_seconds=4320 * 300, received=100),
+                _node(interval_s=-300, claimed_seconds=4320 * 300, received=100),
+            ]
+        )
+        is None
+    )
+
+
 def test_monitoring_is_none_without_a_claimed_node() -> None:
     assert monitoring_component([]) is None
 
