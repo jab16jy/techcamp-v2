@@ -67,6 +67,11 @@ Owner approved 2026-10-02.
 - D-T4.2 (owner, 2026-10-05) Single authorization channel: `consent/v3` and any audited
   authorization go through the orchestrator (complete envelope, STOP, wait); never
   `ask_user_question` to whoever is at the keyboard.
+- D-T4.3 (owner, 2026-10-05) A work unit stays ≤ ~400 authored lines (additions + deletions,
+  generated excluded), and complementary functions ship as **separate** work units — hooks/queries
+  apart from UI, screen apart from route wiring, read apart from write. Review granularity follows
+  work units, so commit granularity and review granularity are the same boundary (AGENTS.md
+  §Workflow; T1 forecast 200 → 1170 actual is the counterexample this rule answers).
 - D-T0.10 Roles: baseline `PUT` owner/technician, `GET` any member; org metrics owner/technician.
 - D-T0.11 `PUT /plots/{id}/baseline` creates or replaces; `recorded_by` = caller; editable after
   cycles exist.
@@ -80,6 +85,15 @@ Owner approved 2026-10-02.
   and `median_hours_to_first_reading` ship as `null` (missing-evidence-is-null convention) until a
   new lane lands the two `metrics_*` views plus `source_repository` methods (migration +
   frozen-port change, outside T7's surfaces). T7 closes against this decision.
+- D-T9.1 (owner, 2026-10-05) T9b ships the plot section and the org section; the **cycle summary
+  section is deferred**. Its endpoint needs a `crop_cycle_id` that `ActiveCycleView` does not expose
+  (docs/04-api.md:64) and there is no cycle listing, so the web has no way to name a cycle; exposing
+  the id is a separate server task plus a docs/04 change. Registered as a follow-up, not silently
+  dropped.
+- D-T9.2 (owner, 2026-10-05) The default month for both metrics queries is the **previous calendar
+  month in America/Bogota**, computed client-side, matching the job's own cadence (day 1 at 02:00
+  computes the prior month). No month picker in this lane; a null row renders "Sin datos este mes"
+  (docs/07:147), never 0 (docs/11:57).
 
 ## Tasks
 Forecasts are authored lines (additions + deletions, generated excluded). Route = writer and reason.
@@ -132,23 +146,37 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
 - [x] T6 Monthly job (day 1, 02:00; cycles then index; per-plot containment) +
   `/dev/jobs/metrics:run` + worker registration + periodic-schedule test. Route: Herdr
   OpenCode. Depended T4, T5. Commit `a207c95` (single work unit: jobs 265 + dev trigger 56 +
-  worker/main +2/+2, tests 402). Evidence: `just gate server/tests/metrics` 194 passed (lane
-  and epic branch after merge); RDD `review-a6aca8f6f1f43b9c` (reliability, 1 WARNING
-  `R3-DATE-MIN`, approved, authority burned); follow-up #252; report
+  worker/main +2/+2, tests 402 — prod 325 ≤ D-T4.3 budget, one unit). Evidence: `just gate
+  server/tests/metrics` 194 passed (lane and epic branch after merge); RED observed: route not
+  mounted / `app.periodic` absent, plus one genuine assertion failure
+  (`assert Decimal('0') is None` — the test was wrong: `record_keeping` is calendar math and never
+  null, docs/11 §2); docs cited: docs/10:178-180, docs/04:261, docs/03:128-135/438-443,
+  docs/11 §2, D-T0.2/0.3/0.7/0.8/0.13, ADR-0012, ADR-0021. RDD `review-a6aca8f6f1f43b9c`
+  (reliability, 1 WARNING `R3-DATE-MIN`, approved, authority burned); follow-up #252; report
   `../e11-briefs/e11-t6-rdd.md`. Merged `1765cf5`; worktree/rama/DB de `e11-t6` eliminados.
 - [x] T7 Metrics read API: plot metrics, cycle summary, org metrics (D-T0.10, D-T0.12). Route:
   Herdr OpenCode. Depended T4, T5. Commits `00869b8` (plot metrics), `21d909e` (cycle summary),
-  `821f8d7` (org metrics, D-T7.1 partial). Evidence: `just gate server/tests/metrics
+  `821f8d7` (org metrics, D-T7.1 partial — a third unit, kept separate because it is a different
+  feature with its own roles). Evidence: `just gate server/tests/metrics
   server/tests/test_openapi_schema_names.py` 219 + 1 passed (lane and epic branch after merge),
-  `gate-lane` 3/3; RDD `review-fd40d9db212cbb50` (medium, reliability, 1 WARNING
-  `R3-cycle-status-fallback` refuted as unreachable premise, approved, authority burned — the
-  frozen target already spanned all three units); no follow-up issue; report
-  `../e11-briefs/e11-t7-rdd.md`. Merged `3f613ca`; worktree/rama/DB de `e11-t7` eliminados.
+  `gate-lane` 3/3; RED observed: `assert 404 == 200` on the three new routes (not mounted) and the
+  006 of #244 (anonymous request) had no test at all until this lane; docs cited: docs/04:233-237,
+  docs/03:432-443, docs/11 §1-2, docs/09#seguridad, D-T0.8/0.10/0.12, D-T7.1. RDD
+  `review-fd40d9db212cbb50` (medium, reliability, 1 WARNING `R3-cycle-status-fallback` refuted as
+  unreachable premise, approved, authority burned — the frozen target already spanned all three
+  units); no follow-up issue; report `../e11-briefs/e11-t7-rdd.md`. Merged `3f613ca`;
+  worktree/rama/DB de `e11-t7` eliminados.
 - [x] T8 `/status` index from `metrics` (D-T0.13). Route: Herdr OpenCode (quick lane).
-  Depended T5. Commit `2786e4c` (single work unit, 5 files). Evidence: `just gate
-  server/tests/home server/tests/metrics/test_monthly_repository.py` 39 + 14 passed (lane and
-  epic branch after merge); RDD `review-727e456fcf63bb7d` (reliability, 0 findings, approved,
-  authority burned); no follow-up issue; report `../e11-briefs/e11-t8-rdd.md`. Merged `997a016`.
+  Depended T5. Commit `2786e4c` (single work unit, 5 files, 274 líneas ≤ D-T4.3). Evidence:
+  `just gate server/tests/home server/tests/metrics/test_monthly_repository.py` 39 + 14 passed
+  (lane and epic branch after merge); RED observed twice: `ImportError: cannot import name
+  'DigitalAdoption' from 'techcamp.home.application'`, then with the router reverted
+  `TypeError: build_plot_status() missing 1 required keyword-only argument: 'metrics'`; 7 new
+  tests (`month` order not `computed_at`, no month → null, null index ≠ 0, cross-org negative);
+  docs cited: docs/04:63-71/89, docs/03:438, docs/07:152, docs/09#seguridad, docs/11 §2,
+  D-T0.1/0.2/0.13. RDD `review-727e456fcf63bb7d` (reliability, 0 findings, approved,
+  authority burned); no follow-up issue; report `../e11-briefs/e11-t8-rdd.md`. Merged `997a016`;
+  worktree/rama/DB de `e11-t8` eliminados.
 - [ ] T9a Web enrollment survey form in plot detail (`impeccable`). ~300. Route: Herdr OpenCode.
   Depends T2.
 - [ ] T9b Web indicators screen + index line on Inicio (`impeccable`). ~400. Route: Herdr

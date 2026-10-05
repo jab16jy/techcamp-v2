@@ -752,6 +752,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plots/{plot_id}/baseline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Baseline
+         * @description Any member reads the survey of a plot they can see
+         *     (docs/04-api.md:233).
+         */
+        get: operations["get_baseline_api_v1_plots__plot_id__baseline_get"];
+        /**
+         * Put Baseline
+         * @description Save or replace the survey; the caller becomes its `recorded_by`
+         *     (docs/04-api.md:233; D-T0.11).
+         */
+        put: operations["put_baseline_api_v1_plots__plot_id__baseline_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plots/{plot_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plot Metrics
+         * @description The plot's adoption index for one month, as the job stored it.
+         *
+         *     Any member reads it (D-T0.10), a month with no stored row is `404`, and a
+         *     plot in another organization is the same `404`
+         *     (docs/04-api.md:234, 237; docs/09-cuellos-de-botella.md#seguridad).
+         */
+        get: operations["get_plot_metrics_api_v1_plots__plot_id__metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/{org_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Metrics
+         * @description The organization's indicators for one month, computed on read
+         *     (docs/04-api.md:236; D-T0.12, D-T0.10).
+         *
+         *     Owner or technician (`403` for any other member); a caller who is not a
+         *     member of the organization is `404`, so the endpoint never reveals that it
+         *     exists.
+         *
+         *     A month with no stored report is `200` with every figure `null`, not `404`:
+         *     the organization exists and the month simply has nothing to say yet
+         *     (docs/03-modelo-datos.md:441). `harvested_cycles_ratio` and
+         *     `median_hours_to_first_reading` are `null` in every answer of this lane
+         *     (D-T7.1) and unlock in the follow-up lane that adds their views.
+         */
+        get: operations["get_organization_metrics_api_v1_organizations__org_id__metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plots/{plot_id}/cycles/{crop_cycle_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cycle Summary
+         * @description One cycle's impact: the stored row of a finished cycle, the same figures
+         *     computed on read for an active one (D-T0.8).
+         *
+         *     A cycle of another plot or another organization is `404`, and a finished
+         *     cycle with no stored row yet is `404` too — a read never summarizes
+         *     (docs/04-api.md:235).
+         */
+        get: operations["get_cycle_summary_api_v1_plots__plot_id__cycles__crop_cycle_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dev/auth/otp": {
         parameters: {
             query?: never;
@@ -814,6 +920,23 @@ export interface paths {
         put?: never;
         /** Run Irrigation Jobs */
         post: operations["run_irrigation_jobs_api_v1_dev_jobs_irrigation_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dev/jobs/metrics:run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Metrics Jobs */
+        post: operations["run_metrics_jobs_api_v1_dev_jobs_metrics_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1073,6 +1196,63 @@ export interface components {
          * @enum {string}
          */
         CropCycleStatus: "active" | "harvested" | "lost";
+        /**
+         * CropCycleSummaryView
+         * @description `crop_cycle_summary` on the wire plus the cycle's own status
+         *     (docs/04-api.md:235, docs/03-modelo-datos.md:439).
+         *
+         *     `cycle_status` is not a column of the summary: it lives on `crop_cycle`, and
+         *     it is what tells a reader whether these figures were stored (a finished
+         *     cycle) or computed for the moment (D-T0.8).
+         */
+        CropCycleSummaryView: {
+            /**
+             * Crop Cycle Id
+             * Format: uuid
+             */
+            crop_cycle_id: string;
+            /**
+             * Plot Id
+             * Format: uuid
+             */
+            plot_id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /** Cycle Status */
+            cycle_status: string;
+            /** Yield Kg Ha */
+            yield_kg_ha: number | null;
+            /** Yield Change Vs Baseline */
+            yield_change_vs_baseline: number | null;
+            /** Relative Yield */
+            relative_yield: number | null;
+            /** Water Applied M3 Ha */
+            water_applied_m3_ha: number | null;
+            /** Irrigation Wue Kg M3 */
+            irrigation_wue_kg_m3: number | null;
+            /** Water Stress Days */
+            water_stress_days: number | null;
+            /** Cost Cop Ha */
+            cost_cop_ha: number | null;
+            /** Cost Cop Kg */
+            cost_cop_kg: number | null;
+            /** Yield Kg Per Labor Day */
+            yield_kg_per_labor_day: number | null;
+            /** Gross Margin Cop */
+            gross_margin_cop: number | null;
+            /** Loss Kg */
+            loss_kg: number | null;
+            /** Loss Cop */
+            loss_cop: number | null;
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
+        };
         /** CropCycleView */
         CropCycleView: {
             /**
@@ -1128,6 +1308,25 @@ export interface components {
             code: string;
             /** Name Es */
             name_es: string;
+        };
+        /**
+         * DigitalAdoptionIndexView
+         * @description The stored index with the month it belongs to (D-T0.13).
+         *
+         *     `value` is a float, not the stored `Decimal`: this is the display number
+         *     docs/07 §Inicio renders as "Adopción digital: 72 · septiembre", and
+         *     Pydantic would refuse to serialize a `Decimal` into a float field without
+         *     the cast done at the boundary. `month` is the bucket's first day, an ISO
+         *     date on the wire, which is what the web formats as the month name.
+         */
+        DigitalAdoptionIndexView: {
+            /** Value */
+            value: number;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
         };
         /** ExtensionVisitChangeBody */
         ExtensionVisitChangeBody: {
@@ -1411,6 +1610,15 @@ export interface components {
             job_id: number;
         };
         /**
+         * IrrigationPractice
+         * @description How the plot was irrigated before TechCamp (docs/03-modelo-datos.md:246).
+         *
+         *     The same closed vocabulary as `plot.irrigation_system`, so the survey
+         *     compares like with like; `none` is a rainfed plot.
+         * @enum {string}
+         */
+        IrrigationPractice: "none" | "drip" | "sprinkler" | "gravity";
+        /**
          * IrrigationRecommendationView
          * @description Irrigation recommendation for a plot on a specific day.
          */
@@ -1644,6 +1852,25 @@ export interface components {
             /** Role */
             role: string;
         };
+        /**
+         * MetricsJobsRunRequest
+         * @description `{ day? }`: the day the run resolves its month from, defaulting to local today
+         *     (docs/04-api.md:261). A `date` field, so a malformed value is FastAPI's 422 rather
+         *     than a `fromisoformat` failure inside the worker.
+         */
+        MetricsJobsRunRequest: {
+            /** Day */
+            day?: string | null;
+        };
+        /**
+         * MetricsJobsRunResponse
+         * @description The queued run. One id because this route queues a single job
+         *     (docs/04-api.md:261: `metrics` is not `weather`).
+         */
+        MetricsJobsRunResponse: {
+            /** Job Id */
+            job_id: number;
+        };
         /** MqttCredentials */
         MqttCredentials: {
             /** Username */
@@ -1789,6 +2016,42 @@ export interface components {
             /** Resolution Note */
             resolution_note: string | null;
         };
+        /**
+         * OrgMetricsView
+         * @description The organization's indicators for one month
+         *     (docs/04-api.md:236, docs/11-metricas.md:69-75; D-T0.12, D-T7.1).
+         *
+         *     Named for the module, like `PlotMetricMonthlyView`: `OrgMetrics` is the
+         *     application value and a response model sharing that name would collide in
+         *     the OpenAPI components (`tests/test_openapi_schema_names.py`).
+         *
+         *     `harvested_cycles_ratio` and `median_hours_to_first_reading` are always `null`
+         *     in this lane (D-T7.1): the org-month listing carries neither cycles nor node
+         *     instants, and `0` would report "no cycle was harvested" and "every node
+         *     answered instantly" instead.
+         */
+        OrgMetricsView: {
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
+            /** Mean Digital Adoption Index */
+            mean_digital_adoption_index: number | null;
+            /** Plots With Index */
+            plots_with_index: number | null;
+            /** Monitored Plots Ratio */
+            monitored_plots_ratio: number | null;
+            /** Harvested Cycles Ratio */
+            harvested_cycles_ratio: number | null;
+            /** Median Hours To First Reading */
+            median_hours_to_first_reading: number | null;
+        };
         /** OtpRequest */
         OtpRequest: {
             /** Phone */
@@ -1856,6 +2119,66 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * PlotBaselineInput
+         * @description The survey body of `PUT /plots/{plot_id}/baseline` (docs/04-api.md:52).
+         *
+         *     `last_cost_cop_ha` is optional because the figure is approximate and a
+         *     farmer often does not know it; omitting it stores `null`, which is missing
+         *     evidence and not a free plot (docs/03-modelo-datos.md:426-430).
+         */
+        PlotBaselineInput: {
+            /**
+             * Enrolled On
+             * Format: date
+             */
+            enrolled_on: string;
+            /** Crop Id */
+            crop_id: number;
+            /** Last Yield Kg Ha */
+            last_yield_kg_ha: number;
+            /** Last Cost Cop Ha */
+            last_cost_cop_ha?: number | null;
+            irrigation_practice: components["schemas"]["IrrigationPractice"];
+        };
+        /**
+         * PlotBaselineView
+         * @description `PlotBaseline` on the wire.
+         *
+         *     Named for the module, not the table: `farms` already declares a `PlotView`
+         *     and two routers sharing a response-model name make FastAPI qualify both in
+         *     the OpenAPI components (`tests/test_openapi_schema_names.py`).
+         */
+        PlotBaselineView: {
+            /**
+             * Plot Id
+             * Format: uuid
+             */
+            plot_id: string;
+            /**
+             * Org Id
+             * Format: uuid
+             */
+            org_id: string;
+            /**
+             * Enrolled On
+             * Format: date
+             */
+            enrolled_on: string;
+            /** Crop Id */
+            crop_id: number;
+            /** Last Yield Kg Ha */
+            last_yield_kg_ha: number;
+            /** Last Cost Cop Ha */
+            last_cost_cop_ha: number | null;
+            /** Irrigation Practice */
+            irrigation_practice: string;
+            /**
+             * Recorded By
+             * Format: uuid
+             */
+            recorded_by: string;
+        };
         /** PlotCreateRequest */
         PlotCreateRequest: {
             /** Name */
@@ -1866,6 +2189,41 @@ export interface components {
             irrigation_efficiency?: number | null;
             /** System Flow Lph */
             system_flow_lph?: number | null;
+        };
+        /**
+         * PlotMetricMonthlyView
+         * @description `plot_metric_monthly` on the wire (docs/04-api.md:234).
+         *
+         *     The four components and the index are `null` when the plot had no evidence
+         *     for them that month (D-T0.3): a component without a denominator is not a
+         *     component that scored zero.
+         */
+        PlotMetricMonthlyView: {
+            /**
+             * Plot Id
+             * Format: uuid
+             */
+            plot_id: string;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
+            /** Monitoring */
+            monitoring: number | null;
+            /** Record Keeping */
+            record_keeping: number | null;
+            /** Decision */
+            decision: number | null;
+            /** Risk Management */
+            risk_management: number | null;
+            /** Digital Adoption Index */
+            digital_adoption_index: number | null;
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
         };
         /**
          * PlotNodeHealthView
@@ -1908,8 +2266,7 @@ export interface components {
             weather_next_3d: components["schemas"]["WeatherDayView"][];
             /** Nodes */
             nodes: components["schemas"]["PlotNodeHealthView"][];
-            /** Digital Adoption Index */
-            digital_adoption_index?: null;
+            digital_adoption_index: components["schemas"]["DigitalAdoptionIndexView"] | null;
         };
         /**
          * PlotSummaryView
@@ -3694,6 +4051,182 @@ export interface operations {
             };
         };
     };
+    get_baseline_api_v1_plots__plot_id__baseline_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlotBaselineView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_baseline_api_v1_plots__plot_id__baseline_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlotBaselineInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlotBaselineView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plot_metrics_api_v1_plots__plot_id__metrics_get: {
+        parameters: {
+            query: {
+                /** @description Month as YYYY-MM */
+                month: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlotMetricMonthlyView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_metrics_api_v1_organizations__org_id__metrics_get: {
+        parameters: {
+            query: {
+                /** @description Month as YYYY-MM */
+                month: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgMetricsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cycle_summary_api_v1_plots__plot_id__cycles__crop_cycle_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+                crop_cycle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CropCycleSummaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     request_otp_api_v1_dev_auth_otp_post: {
         parameters: {
             query?: never;
@@ -3811,6 +4344,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IrrigationJobsRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_metrics_jobs_api_v1_dev_jobs_metrics_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MetricsJobsRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricsJobsRunResponse"];
                 };
             };
             /** @description Validation Error */
