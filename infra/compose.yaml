@@ -40,8 +40,11 @@ services:
       - minio-data:/data
 
   minio-init:
-    # One-shot: create the logbook photo bucket (ADR-0021: MinIO in the seminar
-    # profile; ADR-0018: the presigned upload the API emits needs it to exist).
+    # One-shot: create the logbook photo bucket AND the ML artifact bucket
+    # (ADR-0021: MinIO in the seminar profile; ADR-0018: the presigned upload the
+    # API emits needs the first to exist, and docs/08-ml.md puts datasets and
+    # model artifacts under `datasets/<name>/<hash>/` and `models/<name>/<version>/`
+    # in their own bucket, separate from photos).
     # `--ignore-existing` makes it a repair rather than a race, so restarting
     # the stack over a kept volume is a no-op.
     # Floating on purpose: no `minio/mc` release tag could be verified from the
@@ -64,19 +67,21 @@ services:
       - |
         for attempt in 1 2 3 4 5 6 7 8 9 10; do
           if mc alias set seminar http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" \
-            && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_BUCKET}"; then
-            echo "bucket $${TECHCAMP_S3_BUCKET} is ready"
+            && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_BUCKET}" \
+            && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_ML_BUCKET}"; then
+            echo "buckets $${TECHCAMP_S3_BUCKET} and $${TECHCAMP_S3_ML_BUCKET} are ready"
             exit 0
           fi
           echo "minio not ready yet (attempt $${attempt}/10)"
           sleep 2
         done
-        echo "minio never became ready; the photo bucket was not created" >&2
+        echo "minio never became ready; the photo and ML buckets were not created" >&2
         exit 1
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-techcamp}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-techcamp123}
       TECHCAMP_S3_BUCKET: ${TECHCAMP_S3_BUCKET:-logbook-photos}
+      TECHCAMP_S3_ML_BUCKET: ${TECHCAMP_S3_ML_BUCKET:-ml}
     depends_on:
       - minio
 
@@ -165,10 +170,23 @@ services:
       # unset (D31: a channel nobody can send is not even claimed).
       TECHCAMP_VAPID_PRIVATE_KEY: ${TECHCAMP_VAPID_PRIVATE_KEY:-}
       TECHCAMP_VAPID_SUBJECT: ${TECHCAMP_VAPID_SUBJECT:-mailto:notificaciones@techcamp.local}
+      # ML artifacts for the daily flood job (docs/08-ml.md). The URL is NOT the
+      # public one the browser uploads photos to: inside this container
+      # `localhost:9000` is the container itself, so the public URL would point
+      # the worker at nothing — MinIO answers on the service name from in here.
+      # The bucket is separate from the photos on purpose (ADR-0018): one
+      # service, one bucket per kind of object. `api` gets neither variable
+      # because it never reads a model artifact.
+      TECHCAMP_S3_INTERNAL_URL: ${TECHCAMP_S3_INTERNAL_URL:-http://minio:9000}
+      TECHCAMP_S3_ML_BUCKET: ${TECHCAMP_S3_ML_BUCKET:-ml}
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      # The daily job loads its artifact from this bucket; without it the first
+      # run after a fresh volume has nothing to download.
+      minio-init:
         condition: service_completed_successfully
 
   web:
