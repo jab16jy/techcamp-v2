@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.metrics.adapters.orm import PlotMetricMonthlyRow
 from techcamp.metrics.domain.adoption import AdoptionComponents, PlotMonthlyMetric
-from techcamp.metrics.domain.errors import PlotMonthOwnedByAnotherOrganizationError
 
 
 def _metric_from_row(row: PlotMetricMonthlyRow) -> PlotMonthlyMetric:
@@ -88,18 +87,15 @@ class SqlAlchemyMonthlyMetricRepository:
         await self._session.execute(stmt)
         await self._session.commit()
         # Read back what the database stored, never what the caller sent: a
-        # `Numeric` column may hand back a value the caller never computed.
+        # `Numeric` column may hand back a value the caller never computed. A
+        # refused upsert stored nothing under the caller's own `org_id`, so this
+        # read is empty and the month is left where its owner keeps it.
         result = await self._session.execute(
             _for_plot(metric.org_id, metric.plot_id).where(
                 PlotMetricMonthlyRow.month == metric.month
             )
         )
-        row = result.scalar_one_or_none()
-        if row is None:
-            # The conflict update was skipped above, so this upsert stored
-            # nothing: the month belongs to another organization.
-            raise PlotMonthOwnedByAnotherOrganizationError(metric.plot_id, metric.month)
-        return _metric_from_row(row)
+        return _metric_from_row(result.scalar_one())
 
     async def get(self, org_id: UUID, plot_id: UUID, *, month: date) -> PlotMonthlyMetric | None:
         row = (

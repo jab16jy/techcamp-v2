@@ -25,12 +25,12 @@ from uuid import uuid4
 import pytest
 from metrics.conftest import MONTH, add_claimed_node, add_reading_row, add_sensor, make_env
 from sqlalchemy import select
+from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.metrics.adapters.monthly_repository import SqlAlchemyMonthlyMetricRepository
 from techcamp.metrics.adapters.orm import PlotMetricMonthlyRow
 from techcamp.metrics.domain.adoption import AdoptionComponents, PlotMonthlyMetric
-from techcamp.metrics.domain.errors import PlotMonthOwnedByAnotherOrganizationError
 
 pytestmark = pytest.mark.anyio
 
@@ -162,13 +162,14 @@ async def test_upsert_does_not_take_over_another_organizations_month(
 ) -> None:
     # `(plot_id, month)` is unique across organizations, so a foreign `org_id`
     # collides with a month the caller does not own. The upsert must refuse it
-    # instead of transferring the row to the new tenant
+    # instead of transferring the row to the new tenant: nothing is written
+    # under the caller's `org_id`, so the read-back finds no row
     # (docs/09-cuellos-de-botella.md#seguridad).
     env = await make_env(db_session)
     repo = SqlAlchemyMonthlyMetricRepository(db_session)
     await repo.upsert(_metric(env, index=Decimal(90)))
 
-    with pytest.raises(PlotMonthOwnedByAnotherOrganizationError):
+    with pytest.raises(NoResultFound):
         await repo.upsert(replace(_metric(env, index=Decimal(10)), org_id=uuid4()))
 
     rows = (await db_session.execute(select(PlotMetricMonthlyRow))).scalars().all()
