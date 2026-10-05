@@ -298,3 +298,7 @@ def _append(register: Path | None, rows: tuple[Entry, ...]) -> tuple[Entry, ...]
     if register is None:
         return rows
     return tuple(experiments.append_register(register, row) for row in rows)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
