@@ -127,6 +127,67 @@ class SqlAlchemyRiskRepository:
                 return _version_from_row(row)
         return None
 
+    async def insert_version(self, version: ModelVersion) -> ModelVersion:
+        """Store one registered model or baseline and return the row as it reads back.
+
+        ADR-0020 paso 10, docs/08-ml.md §Reglas de gobierno "Trazabilidad". The row is
+        written after its artifact is already in object storage, so a version a
+        prediction names exists before anything points at it.
+
+        There is no `ON CONFLICT` clause and there is no unique index on
+        `(name, version)` to hang one on: `served_version` is what decides which row
+        serves an event, and it breaks a tie deterministically (most recent first). Two
+        rows claiming the same version string would therefore be decided by
+        `created_at`, not refused here, so `insert_version` returns what it wrote and
+        leaves that choice to the caller that asked to register twice — registration
+        checks `versions_for` first and refuses on its own.
+        """
+        row_id = version.id
+        result = await self._session.execute(
+            pg_insert(ModelVersionRow)
+            .values(
+                id=row_id,
+                name=version.name,
+                version=version.version,
+                artifact_uri=version.artifact_uri,
+                metrics=version.metrics,
+                baseline_metrics=version.baseline_metrics,
+                is_baseline=version.is_baseline,
+                artifact_sha256=version.artifact_sha256,
+                dataset_hash=version.dataset_hash,
+                git_commit=version.git_commit,
+                thresholds=dict(version.thresholds),
+                promoted=version.promoted,
+                promotion_reason=version.promotion_reason,
+                created_at=version.created_at,
+            )
+            .returning(ModelVersionRow.id)
+        )
+        await self._session.commit()
+        stored = await self._session.execute(
+            select(*_VERSION_COLUMNS).where(ModelVersionRow.id == result.scalar_one())
+        )
+        return _version_from_row(stored.one())
+
+    async def versions_for(self, name: str) -> list[ModelVersion]:
+        """Every registered version of one event, most recent first.
+
+        Registration reads this before writing, so a version string already registered is
+        never taken twice by a second run (ADR-0020 paso 10): docs/08 §Reglas de gobierno
+        "Reversión" keeps the artifacts, so re-registering is a new version string, never
+        an overwrite.
+
+        The order is `created_at` then `id`, the same one `served_version` uses, so
+        "most recent" means one thing in both reads: `uuid7` sorts by creation time, which
+        is why no extra column is needed.
+        """
+        result = await self._session.execute(
+            select(*_VERSION_COLUMNS)
+            .where(ModelVersionRow.name == name)
+            .order_by(ModelVersionRow.created_at.desc(), ModelVersionRow.id.desc())
+        )
+        return [_version_from_row(row) for row in result]
+
     async def insert_prediction(self, prediction: RiskPrediction) -> bool:
         """Store one prediction, reporting whether this call wrote it.
 

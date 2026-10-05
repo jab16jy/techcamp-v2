@@ -72,6 +72,28 @@ class RiskRepository(Protocol):
 
     async def served_version(self, name: str) -> ModelVersion | None: ...
 
+    async def insert_version(self, version: ModelVersion) -> ModelVersion:
+        """Store one registered model or baseline (ADR-0020 paso 10, docs/08-ml.md §Reglas
+        de gobierno "Trazabilidad").
+
+        The row registration (T9) writes after the artifact is in object storage: the
+        version a prediction names has to exist before anything points at it. The stored
+        row is returned, read back through the same mapper `served_version` uses, so the
+        caller reports what is really in the table rather than what it meant to write.
+        """
+        ...
+
+    async def versions_for(self, name: str) -> Sequence[ModelVersion]:
+        """Every registered version of one event, most recent first.
+
+        Registration asks this before writing, so a version string that is already
+        registered is never taken twice by a second run (ADR-0020 paso 10). Ordered by
+        `created_at` then `id` for the same reason `served_version` orders: `uuid7` sorts
+        by creation time, so the order is deterministic without inventing a column the
+        docs do not have.
+        """
+        ...
+
     async def insert_prediction(self, prediction: RiskPrediction) -> bool: ...
 
     async def stored_predictions(
@@ -152,6 +174,26 @@ class PredictionOutcome:
     top_factors: list[dict[str, Any]]
 
 
+type PredictorFactory = Callable[[ModelVersion], Predictor | None]
+"""How one event's predictor is built from the `model_version` row that serves it
+(ADR-0020 paso 10: el artefacto, su hash y sus umbrales viajan juntos).
+
+An argument rather than a constructor detail because the row is what names the artifact
+and carries its `artifact_sha256` (docs/03-modelo-datos.md §Integridad del artefacto): the
+factory cannot know which bytes to load before the row that names them has been read.
+
+It may answer `None`, and that is the honest answer rather than a failure: a row whose
+artifact does not verify against its registered `artifact_sha256`, or is not a body this
+model can read, is a version this run cannot serve (docs/06-diseno-detallado.md §8 "Sin
+modelo promovido"). `PredictorRegistry` caches a predictor it gets and caches nothing for
+a `None`, so a version fixed by a re-registration is picked up instead of staying
+unanswerable for the life of the process.
+
+`type` and not a plain assignment because it names `Predictor`, which is declared below:
+an assignment evaluates that name at import time and raises before the class exists.
+"""
+
+
 class Predictor(Protocol):
     """One registered version's own inference (docs/06-diseno-detallado.md §8
     "predict_proba → calibrador → probabilidad"; ADR-0020 paso 10).
@@ -180,15 +222,45 @@ class PredictorRegistry:
     points were never validated. A version nothing is registered for resolves to
     `None`, which the job reports as "no prediction for that cell this run"
     instead of inventing a probability (docs/06 §8 "Sin modelo promovido").
+
+    A registered **factory** is the second way in, and the one serving uses (T9). The job
+    resolves one served row per event and never reads the whole registry out of the
+    database itself, so what a factory is given is the row that already names the artifact
+    and its `artifact_sha256`: the artifact is loaded and verified the first time that row
+    is resolved and cached afterwards, so one process fetches it once no matter how many
+    cells the run walks (docs/03 §Integridad del artefacto, ADR-0021: the seminar profile
+    has no internet and the bucket has to be local).
     """
 
     def __init__(self, predictors: Mapping[tuple[str, str], Predictor] | None = None) -> None:
         self._predictors: dict[tuple[str, str], Predictor] = dict(predictors or {})
+        self._factories: dict[str, PredictorFactory] = {}
 
     def register(self, name: str, version: str, predictor: Predictor) -> None:
         """Registers the predictor of one `model_version` (T9, step 10)."""
         self._predictors[(name, version)] = predictor
 
+    def register_factory(self, name: str, factory: PredictorFactory) -> None:
+        """Registers how any `model_version` of `name` is answered, from its own row.
+
+        A factory is asked only for a version nothing is registered for, and only once:
+        the predictor it builds is cached under that version's key like a registered one.
+        A factory that cannot answer returns `None` and nothing is cached, so a version
+        whose artifact is missing now and present after a re-registration is picked up
+        instead of being answered `None` for the life of the process.
+        """
+        self._factories[name] = factory
+
     def resolve(self, version: ModelVersion) -> Predictor | None:
         """The predictor of `version`, or `None` when none is registered."""
-        return self._predictors.get((version.name, version.version))
+        found = self._predictors.get((version.name, version.version))
+        if found is not None:
+            return found
+        factory = self._factories.get(version.name)
+        if factory is None:
+            return None
+        built = factory(version)
+        if built is None:
+            return None
+        self._predictors[(version.name, version.version)] = built
+        return built
