@@ -17,7 +17,7 @@ irrigation to register, so the clause cannot apply there (ADR-0023).
 
 That irrigation clause is scoped to the **plot**, not to a crop cycle. The owner's
 ruling D-T3.1 (2026-10-03) makes that explicit in docs/11-metricas.md §2 and
-docs/adr/0024-metricas-de-impacto-y-adopcion-digital.md: the action is a registered
+docs/adr/0025-la-accion-de-water-stress-es-de-la-parcela.md: the action is a registered
 irrigation **on that plot**, with **no crop-cycle qualifier**, so an entry whose
 `crop_cycle_id` is null counts too.
 

@@ -153,43 +153,40 @@ siguen vivos (5 sin base en el modelo + `water-balance-date` y la cota del mes e
 
 #### Issue propuesto (no abierto) — `review-follow-up`, `epic:e11`, `area:metrics`, `type:tech-debt`
 
-**Título:** E11 T3: diez hallazgos no bloqueantes de la revisión del lineage `review-9b9197b7eee80109`
+**Título:** E11 T3: cuatro WARNING no bloqueantes de la revisión aprobada (`review-82b031d38b733383`)
 
 **Cuerpo:**
 
-RDD de las vistas de solo lectura de `metrics` (T3), lineage `review-9b9197b7eee80109`, terminó
-escalado sin recibo. El revisor emitió 12 hallazgos y el refutador dejó 1 en `fix_finding_ids`: el
-CRITICAL bloqueante `R3-reliability.alert-action.cross-plot`, que se descargó con el ruling del dueño
-**D-T3.1** (ver §Review de esta feature doc) haciendo explícito el doc que el SQL ya cumplía. Este
-issue recoge los once restantes, que no se corrigieron aquí porque la regla de findings deja la
-decisión al orquestador. De ellos, cuatro quedaron cubiertos por el commit `a1941ba` y siete siguen
-vivos.
+RDD del work unit de cierre de T3 (`371c0e7..HEAD`, 9 paths / 466 líneas),
+lineage `review-82b031d38b733383`: captura admitida, **aprobado, autoridad quemada**.
+El revisor emitió 4 WARNING, ningún BLOCKER ni CRITICAL. Ninguno requiere corrección
+acotada: por la política congelada solo BLOCKER/CRITICAL la exigen, y por la regla de
+findings del repo (1–2 no bloqueantes → un issue por ronda) se recogen aquí.
 
-**Hallazgos refutados o sin base en el modelo (5)** — conviene registrarlos para que la próxima
-revisión no los levante otra vez:
+El CRITICAL de la ronda anterior (`R3-reliability.alert-action.cross-plot`,
+lineage `review-9b9197b7eee80109`, escalado) quedó descargado por el ruling del dueño
+**D-T3.1** (ver §Review de esta feature doc): la acción de `water_stress` es plot-scoped,
+escrito en docs/11-metricas.md §2 y en ADR-0025, SQL sin cambios.
 
-| id | Por qué no es un defecto |
-|---|---|
-| `R3-reliability.decision-view.duplicate-days` | `uq_irrigation_recommendation_plot_day` hace `(plot_id, day)` único; el empate que el `ORDER BY` tendría que romper no existe. CHECK probado en `test_decision_views.py` |
-| `R3-reliability.cycle-totals.null-sale-price` | `ck_logbook_entry_sold_and_price` exige `sold_kg` y `sale_price_cop_per_kg` juntos; la rama de propagación nula es inalcanzable. CHECK probado en `test_cycle_totals_view.py` |
-| `R3-reliability.alert-action.rule-window` | La ventana de 48 h es una constante de todo el componente por D-T0.6, y `alert_rule` no tiene columna de ventana de acción (`min_duration_min` gobierna cuánto debe durar una violación, no cuánto tiene el productor para responder) |
-| `R3-reliability.alert-action.entry-scope` | docs/03:421 asigna el papel a `alert_id` en *cualquiera* entrada; el filtro por `kind` contradiría el doc |
-| `R3-reliability.alert-action.repeat-entry` | La rama por `alert_id` responde exactamente la alerta que nombra; solo la cláusula de riego plot-scoped puede servir dos, y `uq_alert_non_resolved_plot` permite una alerta no resuelta por (regla, parcela) |
+**Los 4 WARNING (vivos):**
 
-Los cinco están registrados como comentario en `server/tests/metrics/test_alert_action_view.py` y con
-un CHECK probado en los otros casos, para que la próxima revisión no los levante otra vez.
-
-**Hallazgos reales que siguen abiertos (2)**:
-
-| id | Qué falta |
-|---|---|
-| `R3-reliability.cycle-totals.water-balance-date` | Dos ciclos de una misma parcela con ventanas solapadas se reparten los mismos días de balance y se cuenta un día de estrés dos veces. Como `expected_harvest_on` es un plan que suele pasar de la siguiente siembra, el solapamiento es la norma. **No se corrigió a propósito:** es el síntoma del hueco de doc de `crop_cycle` sin fecha de fin; va junto con esa decisión de docs, no suelto. Afecta a `crop_cycle_summary.water_stress_days`, que T4 persiste |
-| `R3-reliability.monitoring.now-dependence` | Rama del mes en curso. **Mitigada** con una aserción de cota en `a1941ba` (el `now()` vive en SQL y no se puede congelar sin un seam de reloj); falta ese seam para un valor exacto |
-
-**Hallazgos reales, cerrados en `a1941ba` (4)** — los cuatro de Tier 1 que sí descongestelan T4/T5:
-dos sensores en un mismo nodo (`monitoring.duplicate-count`), la rama `COALESCE` del ciclo activo
-(`cycle-totals.now-dependence`), el aislamiento por organización del lateral de balance
-(`cycle-totals.plot-isolation`) y la parcela sin recomendaciones (`decision-view.no-evidence`).
+1. `test_monitoring_view.py:206` — el test del mes en curso contrasta los segundos
+   transcurridos contra la constante de 30 días (`2_592_000`). En el último día de
+   cualquier mes de 31 días en America/Bogota ese cargo llega a ~2_688_000 y la
+   aserción falla. La cantidad bajo prueba depende del calendario; la cota no.
+2. `test_monitoring_view.py:200` — `elapsed_full_month` mide los segundos que tardó
+   el propio test en correr, no la longitud del mes en curso. Solo prueba que el test
+   terminó en menos de treinta días; el docstring que promete que un nodo "nunca
+   alcanza la longitud completa del mes" no tiene aserción detrás.
+3. `test_cycle_totals_view.py:269` — el docstring dice que la aserción es una cota y
+   no un conteo exacto porque `now()` vive en SQL, pero el test fija el conteo exacto
+   `water_stress_days == 3`. Una corrida que cruce la medianoche de Bogotá entre el
+   setup y la query admite la fila insertada para `today + 1` y el conteo da 4.
+4. Migración `0c67563f8d20` docstring — decía que D-T3.1 está explícito en ADR-0024,
+   archivo que el candidato no tocaba (bytes idénticos en base y candidato). El texto
+   vive en ADR-0025. **Ya corregido después de la revisión** (commit pendiente en la
+   rama, junto con el mismo puntero en esta feature doc): el registro que impide
+   re-levantar el CRITICAL ahora apunta al documento que sí lo lleva.
 
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
