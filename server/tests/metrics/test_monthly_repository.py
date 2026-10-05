@@ -18,6 +18,7 @@ the numbers the views produced rather than hand-written fixtures.
 from __future__ import annotations
 
 import datetime
+from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
 
@@ -29,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from techcamp.metrics.adapters.monthly_repository import SqlAlchemyMonthlyMetricRepository
 from techcamp.metrics.adapters.orm import PlotMetricMonthlyRow
 from techcamp.metrics.domain.adoption import AdoptionComponents, PlotMonthlyMetric
+from techcamp.metrics.domain.errors import PlotMonthOwnedByAnotherOrganizationError
 
 pytestmark = pytest.mark.anyio
 
@@ -153,6 +155,26 @@ async def test_get_of_another_organizations_plot_is_none(db_session: AsyncSessio
         await SqlAlchemyMonthlyMetricRepository(db_session).get(uuid4(), env.plot_id, month=MONTH)
         is None
     )
+
+
+async def test_upsert_does_not_take_over_another_organizations_month(
+    db_session: AsyncSession,
+) -> None:
+    # `(plot_id, month)` is unique across organizations, so a foreign `org_id`
+    # collides with a month the caller does not own. The upsert must refuse it
+    # instead of transferring the row to the new tenant
+    # (docs/09-cuellos-de-botella.md#seguridad).
+    env = await make_env(db_session)
+    repo = SqlAlchemyMonthlyMetricRepository(db_session)
+    await repo.upsert(_metric(env, index=Decimal(90)))
+
+    with pytest.raises(PlotMonthOwnedByAnotherOrganizationError):
+        await repo.upsert(replace(_metric(env, index=Decimal(10)), org_id=uuid4()))
+
+    rows = (await db_session.execute(select(PlotMetricMonthlyRow))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].org_id == env.org_id
+    assert rows[0].digital_adoption_index == Decimal(90)
 
 
 async def test_latest_returns_the_most_recent_month(db_session: AsyncSession) -> None:

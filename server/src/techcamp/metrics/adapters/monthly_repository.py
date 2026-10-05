@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.metrics.adapters.orm import PlotMetricMonthlyRow
 from techcamp.metrics.domain.adoption import AdoptionComponents, PlotMonthlyMetric
+from techcamp.metrics.domain.errors import PlotMonthOwnedByAnotherOrganizationError
 
 
 def _metric_from_row(row: PlotMetricMonthlyRow) -> PlotMonthlyMetric:
@@ -75,7 +76,15 @@ class SqlAlchemyMonthlyMetricRepository:
         stmt = insert(PlotMetricMonthlyRow).values(
             plot_id=metric.plot_id, month=metric.month, **values
         )
-        stmt = stmt.on_conflict_do_update(index_elements=key, set_=values)
+        # Ownership never moves. `org_id` is not part of the conflict update, and
+        # a month that already belongs to another organization is left as it is
+        # rather than adopted, so a conflicting upsert cannot transfer the row
+        # across tenants (docs/09-cuellos-de-botella.md#seguridad).
+        stmt = stmt.on_conflict_do_update(
+            index_elements=key,
+            set_={column: value for column, value in values.items() if column != "org_id"},
+            where=PlotMetricMonthlyRow.org_id == metric.org_id,
+        )
         await self._session.execute(stmt)
         await self._session.commit()
         # Read back what the database stored, never what the caller sent: a
@@ -85,7 +94,12 @@ class SqlAlchemyMonthlyMetricRepository:
                 PlotMetricMonthlyRow.month == metric.month
             )
         )
-        return _metric_from_row(result.scalar_one())
+        row = result.scalar_one_or_none()
+        if row is None:
+            # The conflict update was skipped above, so this upsert stored
+            # nothing: the month belongs to another organization.
+            raise PlotMonthOwnedByAnotherOrganizationError(metric.plot_id, metric.month)
+        return _metric_from_row(row)
 
     async def get(self, org_id: UUID, plot_id: UUID, *, month: date) -> PlotMonthlyMetric | None:
         row = (
