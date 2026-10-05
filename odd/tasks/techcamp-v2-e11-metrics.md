@@ -269,6 +269,23 @@ escrito en docs/11-metricas.md §2 y en ADR-0025, SQL sin cambios.
    rama, junto con el mismo puntero en esta feature doc): el registro que impide
    re-levantar el CRITICAL ahora apunta al documento que sí lo lleva.
 
+### T5 — units `review-31fa8e99789190a3`, `review-466f6005dbbfc761`, `review-45c7b4986f91457c`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Unidades | `9d9b3b2` dominio (590), `f05e8db` use case (539), `d8de405` repo (418) + corrección `f45b0bc`→`ce779ac` + fix `e8d975b` (`Refs #251`) |
+| Unit 1 | medium, 3 WARNING, recibo `781b21ad…` |
+| Unit 2 | 2 WARNING, recibo `3ea9b1fd…` (consent ratificado post-hoc por el owner) |
+| Unit 3 | 1 CRITICAL (`R3-cross-org-upsert`, corregido en acotada ruteada por scope: revert a 2 paths) + 1 WARNING, recibo `74a1e77a…` |
+| Fix #251 | `R3-UncheckedMonitoringInterval`, 59 líneas, `under_budget` sin lineage (disposición, no fallo) |
+| Follow-up | Issue #251 (`review-follow-up`, `epic:e11`, `area:server`, `type:chore`) con los 6 WARNING; el #1 ya resuelto en `e8d975b` |
+| Merge | `e04cde3` a `feat/e11-metrics`; worktree/rama/DB de `e11-t5` eliminados tras verificar |
+
+Rung by Pi (host-relay), lineages nuevos tras el `binding_mismatch` del self-review OpenCode.
+Ruta elegida por el owner entre revert-2-paths / recover / dejar-así: revert (recomendación
+del orquestador por la convención cross-org-404). Consent del teclado ratificado por el owner;
+desde D-T4.2 todo consent va por el canal del orquestador (T5 unit 1 ya lo cumplió).
+
 ### T4 — unit 2 `review-24ee776a961efc72` + lane completa `review-15dcaac22de5ade7`, **aprobado, autoridad quemada** (2026-10-05)
 
 | Item | Resultado |
