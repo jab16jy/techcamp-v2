@@ -179,8 +179,15 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
   worktree/rama/DB de `e11-t8` eliminados.
 - [ ] T9a Web enrollment survey form in plot detail (`impeccable`). ~300. Route: Herdr OpenCode.
   Depends T2.
-- [ ] T9b Web indicators screen + index line on Inicio (`impeccable`). ~400. Route: Herdr
-  OpenCode. Depends T7, T8.
+- [x] T9b Web indicators screen + index line on Inicio (`impeccable`). Route: Herdr OpenCode.
+  Depended T7, T8 (waves collapsed). Commits after re-slice: `f2d378e` (hooks + test),
+  `7270d60` (figures as ruled rows), `876de18` (screen), `06ed187` (route under Más),
+  `2fb59d6` (Inicio line, `CACHE_BUSTER` 3→4), `8155512` (post-review docstring fix, F2).
+  Lane re-slice: U2 landed at 695 lines and was split into component / container / route wiring
+  (D-T4.3), no test or comment dropped. Evidence: `just gate web/src/features/metrics
+  web/src/features/plot-status web/src/app` EXIT=0 (metrics 25, plot-status 86, app 15),
+  `gate-lane` 5/5; RDD `review-4b39d1bd807fbd23` (reliability, 0 native findings, approved,
+  authority burned); follow-up #255; report `../e11-briefs/e11-t9b-rdd.md`. Merged `228666d`.
 - [ ] T10 Close: `just gate-release`, follow-up issue (`field_record` / `relative_yield`), delivery
   plan. Route: parent.
 
@@ -432,6 +439,23 @@ toda la lane). El `assess` combinado devolvió `review_due: false / already_revi
 `target_identity`: el recibo de U1 ya cubría la lane entera, así que no hubo segunda revisión ni
 segundo lineage. Per-unit scoping no aísla; batchear una feature coherente en un candidato.
 
+### T9b — lineage `review-4b39d1bd807fbd23`, **aprobado, 0 findings, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | Lane completa `edf176b..8155512`, 12 files / ~1150 líneas, web only, un candidato combinado |
+| Lente | `review-reliability`, 0 findings nativos |
+| Recibo | `terminal-consumption/v1`, target `sha256:74841f65…`, lineage quemada, `mutation_outcome: committed` |
+| F1 (MEDIUM) | `CACHE_BUSTER` 3→4 — el reviewer pidió revertirlo; **el dueño lo mantiene**: la forma persistida de `/status` cambió en T8 y esta lane es la primera que la lee en web, y el `?? null` evita el crash pero no el "Sin datos" sobre datos reales |
+| F2 (LOW) | Corregido en `8155512`: el docstring invertía la dirección del desfase y citaba un instante que en Bogotá es 18:30 del día 30 |
+| F3/F4/F6/F5 | Follow-up #255 (extraer `MetricRow`, rama de ausencia para las 2 ratios de D-T7.1, coma es-CO, ventana de 02:00) |
+| Merge | `228666d`; gate post-merge EXIT=0 |
+
+Impeccable aplicado de verdad y **verificado**: el context加载 hizo descartar `MetricTile` porque su
+`status` es vocabulario del balance hídrico y "The Two Vocabularies Rule" (DESIGN.md:133) prohíbe
+cruzar los dos vocabularios. El revisor validó esa decisión por código, no por el reporte del autor.
+Full report: `../e11-briefs/e11-t9b-rdd.md`.
+
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
   `origin/main` a2bae6b), CodeGraph index, DB `techcamp-db-e11-metrics`. Explorers (Herdr
@@ -457,8 +481,15 @@ segundo lineage. Per-unit scoping no aísla; batchear una feature coherente en u
 - 2026-10-05: follow-up lane pending for D-T7.1: two `metrics_*` views + `source_repository`
   methods to unlock `harvested_cycles_ratio` and `median_hours_to_first_reading` (migration +
   frozen-port change).
+- 2026-10-05: `schema.d.ts` regenerated on the epic branch (`edf176b`) before forking T9, which is
+  what made T9a ‖ T9b possible (neither lane touches the generated file).
+- 2026-10-05: T9b merged (`228666d`): review `review-4b39d1bd807fbd23` approved + burned, 0 native
+  findings; owner kept the `CACHE_BUSTER` bump over the reviewer's revert recommendation; F2 fixed
+  in-lane (`8155512`); issue #255; report `../e11-briefs/e11-t9b-rdd.md`.
 
 ## Next step
-## Next step
-Wave 4 closed (T6 `1765cf5`, T7 `3f613ca`, T8 `997a016`). Open: the D-T7.1 follow-up lane (two
-views + source methods), T9a (pending since wave 3), then Wave 5 T9b (depends T7+T8, both merged).
+T9b merged. T9a is finishing its impeccable craft-floor pass (its first run skipped
+`reference/craft-floor.md` and the autonomy probe; owner rule is "impeccable sí o sí"), then a
+`gate-lane` re-run over the final history and its own Pi RDD. After T9a: the D-T7.1 follow-up lane
+(two views + source methods), then T10 close (`gate-release`, `field_record`/`relative_yield`
+follow-up, delivery plan).
