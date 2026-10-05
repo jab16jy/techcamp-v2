@@ -21,10 +21,13 @@ const BOGOTA_MONTH_PARTS = { timeZone: 'America/Bogota', year: 'numeric', month:
  * has not run yet: asking for it would show "no data" on every first of the
  * month for a reason that has nothing to do with the plot.
  *
- * Read through `Intl` instead of `getMonth()`, because a phone on UTC-5 is up
- * to five hours into tomorrow's month at UTC midnight — on 2026-09-30T23:30Z a
- * `new Date()` in Bogotá is already October 1st, and the naive subtraction
- * would ask for August.
+ * Read through `Intl` instead of `getMonth()`, because Bogotá is five hours
+ * **behind** UTC: at 2026-10-01T02:00Z UTC has entered October while the phone
+ * in Bogotá still reads 21:00 on September 30. A naive `getMonth() - 1` on that
+ * `Date` answers September while the plot's own calendar month is still
+ * September's month-to-date, so it asks for a month the job has not computed
+ * yet. `Intl` with `timeZone: 'America/Bogota'` reads the month the user is
+ * actually in.
  */
 export function previousMonthInBogota(now: Date = new Date()): MonthParam {
   const parts = new Intl.DateTimeFormat('en-US', BOGOTA_MONTH_PARTS).formatToParts(now)
