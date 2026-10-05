@@ -118,10 +118,16 @@ class SqlAlchemyAlertRepository:
         return _alert_from_row(row) if row is not None else None
 
     async def get_decided_for_target(
-        self, *, rule_id: UUID, org_id: UUID, plot_id: UUID, prediction: PredictionEvidence
+        self,
+        *,
+        rule_id: UUID,
+        org_id: UUID,
+        plot_id: UUID,
+        prediction: PredictionEvidence,
+        exclude_alert_id: UUID | None = None,
     ) -> Alert | None:
         """The alert that already decided `prediction` for this (rule, plot),
-        resolved ones included.
+        resolved ones included, other than the one the caller excludes.
 
         `evidence.contains(...)` is JSONB containment: the stored object has to
         hold the keys asked for, and may hold more, so the identity is matched
@@ -134,11 +140,18 @@ class SqlAlchemyAlertRepository:
         manual close final: after the alert is resolved, the window still says the
         prediction was judged while it was open.
 
+        `exclude_alert_id` is the alert the caller is deciding about RIGHT NOW.
+        That alert is the one that absorbed this prediction and is also the one a
+        RESOLVE has to reach, and it matches this very predicate — so without the
+        exclusion a legitimate resolve is suppressed by the record of the
+        NO_ACTION it absorbed (#246), and WITH it, a replayed row still finds the
+        OTHER alerts that already decided it (#247).
+
         `(rule_id, plot_id)` with the organization is the scope of the partial
         index (docs/09 §Seguridad), so no row of another organization is a
         candidate and a node alert, which carries no `plot_id`, never matches.
         """
-        result = await self._session.execute(
+        stmt = (
             select(*_ALERT_COLUMNS, _RULE_CODE)
             .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
             .where(
@@ -156,8 +169,10 @@ class SqlAlchemyAlertRepository:
                     ),
                 ),
             )
-            .limit(1)
         )
+        if exclude_alert_id is not None:
+            stmt = stmt.where(AlertRow.id != exclude_alert_id)
+        result = await self._session.execute(stmt.limit(1))
         row = result.one_or_none()
         return _alert_from_row(row) if row is not None else None
 

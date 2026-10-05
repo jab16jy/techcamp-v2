@@ -82,7 +82,13 @@ class AlertRepository(Protocol):
         ...
 
     async def get_decided_for_target(
-        self, *, rule_id: UUID, org_id: UUID, plot_id: UUID, prediction: PredictionEvidence
+        self,
+        *,
+        rule_id: UUID,
+        org_id: UUID,
+        plot_id: UUID,
+        prediction: PredictionEvidence,
+        exclude_alert_id: UUID | None = None,
     ) -> Alert | None:
         """The alert that already decided `prediction` for this (rule, plot), in
         ANY state — a resolved one counts.
@@ -104,11 +110,23 @@ class AlertRepository(Protocol):
         (docs/06 §3 "cierre manual") would open it again from evidence the run
         had already judged.
 
-        It answers for an OPENING or a NO-ACTION only. A decision of RESOLVE never
-        consults it, because the resolving row of the next month is issued while
-        the alert it must resolve is still open — the absorbed case above — and
-        honouring the record there would leave the alert open for the rest of the
-        month (see `evaluate_risk_rules`).
+        It is consulted for EVERY action, and `exclude_alert_id` is what keeps two
+        cases the record used to conflate apart.
+
+        The alert that was open when the prediction was issued ABSORBED it
+        (NO_ACTION above), and when that same alert is still open and the
+        prediction now resolves it, it must not match itself: the run STORES a
+        prediction and evaluates it minutes later, so the resolving row of the next
+        month is always issued while the alert it has to resolve is still open
+        (docs/06 §8: "la resuelve en la primera predicción nueva por debajo de
+        `alto`"), and honouring the record there would leave the alert open for the
+        rest of the month. The caller passes that alert as `exclude_alert_id`.
+
+        What is left to match is a DIFFERENT alert that already decided this
+        prediction, and skipping it is what keeps a replayed row harmless: the run
+        hands the same stored row over every morning of its month, so a `bajo`
+        that already resolved one alert would otherwise resolve whatever a later
+        month's `alto` opened in its place (#247).
         """
         ...
 

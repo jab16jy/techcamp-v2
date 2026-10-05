@@ -642,6 +642,74 @@ async def test_a_low_prediction_stored_after_the_alert_opened_still_resolves_it(
     assert _ISSUED_AT < stored < later
 
 
+async def test_a_prediction_that_already_resolved_an_alert_is_never_replayed_against_another(
+    db_session: AsyncSession,
+) -> None:
+    """#247 R3-replayed-resolution-bypasses-decided-check: a stored prediction is
+    decided once per (plot, rule), and the record of that decision is the only
+    thing that tells a REPLAYED row from a new one — the daily run hands the same
+    stored row over every morning of its month (docs/06 §8), so by the time it
+    comes back a later month may have opened a different alert.
+
+    Month M opens the alert and month M+1's `bajo` resolves it, which is exactly
+    what docs/06 §8 asks for. A RESOLVE used to skip the decided record entirely,
+    so when M+1's row came back on the next morning it resolved whatever was open
+    by THEN: alert B, opened by M+2's `alto`. A `bajo` from a month that ended is
+    not evidence that the flood of the month after it cleared, and it resolved a
+    real alert the farmer had never seen close."""
+    org = await _make_org(db_session)
+    cell_id = await _cell(db_session)
+    _, plot_id = await _make_plot(db_session, org=org, cell_id=cell_id)
+
+    # Month M: `alto` opens the alert.
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[_evidence(cell_id=cell_id, horizon_start=date(2026, 10, 1))],
+    )
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+    # Month M+1: `bajo`, stored before it is evaluated, resolves it.
+    resolving_day = _AT + timedelta(days=1)
+    resolving_row = _evidence(
+        cell_id=cell_id,
+        severity="low",
+        horizon_start=date(2026, 11, 1),
+        issued_at=resolving_day - timedelta(minutes=5),
+    )
+    await _evaluate(db_session, org_id=org.org_id, predictions=[resolving_row], at=resolving_day)
+    assert await _alerts(db_session, plot_id) == [("flood_risk", "resolved", "critical")]
+
+    # Month M+2: `alto` again, so a second alert opens on the same plot and rule.
+    next_month = _AT + timedelta(days=2)
+    await _evaluate(
+        db_session,
+        org_id=org.org_id,
+        predictions=[
+            _evidence(
+                cell_id=cell_id,
+                horizon_start=date(2026, 12, 1),
+                issued_at=next_month - timedelta(minutes=5),
+            )
+        ],
+        at=next_month,
+    )
+    assert await _alerts(db_session, plot_id) == [
+        ("flood_risk", "open", "critical"),
+        ("flood_risk", "resolved", "critical"),
+    ]
+
+    # The next morning the run hands month M+1's stored `bajo` row over again.
+    await _evaluate(
+        db_session, org_id=org.org_id, predictions=[resolving_row], at=_AT + timedelta(days=3)
+    )
+
+    assert await _alerts(db_session, plot_id) == [
+        ("flood_risk", "open", "critical"),
+        ("flood_risk", "resolved", "critical"),
+    ]
+
+
 async def test_a_prediction_an_open_alert_absorbed_never_reopens_it_after_the_close(
     db_session: AsyncSession,
 ) -> None:
