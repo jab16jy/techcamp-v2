@@ -136,8 +136,14 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
   and epic branch after merge); RDD `review-a6aca8f6f1f43b9c` (reliability, 1 WARNING
   `R3-DATE-MIN`, approved, authority burned); follow-up #252; report
   `../e11-briefs/e11-t6-rdd.md`. Merged `1765cf5`; worktree/rama/DB de `e11-t6` eliminados.
-- [ ] T7 Metrics read API: plot metrics, cycle summary, org metrics (D-T0.10, D-T0.12). ~350.
-  Route: Herdr OpenCode. Depends T4, T5. Parallel with T6, T8.
+- [x] T7 Metrics read API: plot metrics, cycle summary, org metrics (D-T0.10, D-T0.12). Route:
+  Herdr OpenCode. Depended T4, T5. Commits `00869b8` (plot metrics), `21d909e` (cycle summary),
+  `821f8d7` (org metrics, D-T7.1 partial). Evidence: `just gate server/tests/metrics
+  server/tests/test_openapi_schema_names.py` 219 + 1 passed (lane and epic branch after merge),
+  `gate-lane` 3/3; RDD `review-fd40d9db212cbb50` (medium, reliability, 1 WARNING
+  `R3-cycle-status-fallback` refuted as unreachable premise, approved, authority burned — the
+  frozen target already spanned all three units); no follow-up issue; report
+  `../e11-briefs/e11-t7-rdd.md`. Merged `3f613ca`; worktree/rama/DB de `e11-t7` eliminados.
 - [x] T8 `/status` index from `metrics` (D-T0.13). Route: Herdr OpenCode (quick lane).
   Depended T5. Commit `2786e4c` (single work unit, 5 files). Evidence: `just gate
   server/tests/home server/tests/metrics/test_monthly_repository.py` 39 + 14 passed (lane and
@@ -381,6 +387,23 @@ Full report: `../e11-briefs/e11-t8-rdd.md`.
 Rung by Pi (host-relay), base-ref exclusivo full `442ef91…`. Full report:
 `../e11-briefs/e11-t6-rdd.md` (+ findings JSON pre-burn).
 
+### T7 — lineage `review-fd40d9db212cbb50`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | 3 work units en un candidato: `442ef91..821f8d7`, 5 paths / 1404 líneas, medium |
+| Lente | `review-reliability`, 1 WARNING (`R3-cycle-status-fallback`) **refutado**: `CropCycleStatus` solo tiene ACTIVE/HARVESTED/LOST, la rama computada solo alcanza ACTIVE |
+| Recibo | `terminal-consumption/v1` `458d07fc…78d9`, target `sha256:b995bd95…7352d2`, lineage quemada |
+| Follow-up | Ninguno; 2 figuras de OrgMetrics quedan `null` hasta la lane de D-T7.1 |
+| Merge | `3f613ca` a `feat/e11-metrics`; lane (worktree+rama+DB) eliminada |
+
+**Granularity lesson (owner ruling 2026-10-05).** El brief pidió 3 lineages por work unit; el
+orquestador lo corrigió a **un candidato combinado** porque el scope congelado de cada unidad
+alcanza HEAD (U1 surfaces un hallazgo de U2, y el freeze de U1 resultó ser los 1404 renglones de
+toda la lane). El `assess` combinado devolvió `review_due: false / already_reviewed` con el mismo
+`target_identity`: el recibo de U1 ya cubría la lane entera, así que no hubo segunda revisión ni
+segundo lineage. Per-unit scoping no aísla; batchear una feature coherente en un candidato.
+
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
   `origin/main` a2bae6b), CodeGraph index, DB `techcamp-db-e11-metrics`. Explorers (Herdr
@@ -400,10 +423,14 @@ Rung by Pi (host-relay), base-ref exclusivo full `442ef91…`. Full report:
 - 2026-10-05: T6 merged (`1765cf5`): review `review-a6aca8f6f1f43b9c` approved + burned with
   1 WARNING, issue #252, report `../e11-briefs/e11-t6-rdd.md`; gate post-merge 194 green; lane
   removed (worktree+rama+DB).
-- 2026-10-05: T7 lane partially done (plot metrics + cycle summary in `00869b8`/`21d909e`):
-  org-metrics endpoint stopped on a frozen-store gap, owner ruled D-T7.1 (partial + new lane),
-  writer resumed.
+- 2026-10-05: T7 merged (`3f613ca`): review `review-fd40d9db212cbb50` approved + burned covering
+  the whole lane (per-unit scoping corrected to one combined candidate), 1 WARNING refuted, no
+  follow-up issue, report `../e11-briefs/e11-t7-rdd.md`; lane removed. Wave 4 closed (T6, T7, T8).
+- 2026-10-05: follow-up lane pending for D-T7.1: two `metrics_*` views + `source_repository`
+  methods to unlock `harvested_cycles_ratio` and `median_hours_to_first_reading` (migration +
+  frozen-port change).
 
 ## Next step
-T8 merged. T6 merged (#252 filed). T7 resumed under D-T7.1 (partial OrgMetrics + follow-up
-lane for the 2 views); its RDD runs when its lane closes. Then Wave 5: T9b (T9a still pending).
+## Next step
+Wave 4 closed (T6 `1765cf5`, T7 `3f613ca`, T8 `997a016`). Open: the D-T7.1 follow-up lane (two
+views + source methods), T9a (pending since wave 3), then Wave 5 T9b (depends T7+T8, both merged).
