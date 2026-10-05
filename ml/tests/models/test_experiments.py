@@ -9,6 +9,8 @@ number the real table never had.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,9 +20,14 @@ from techcamp_ml.harness.metrics import BOOTSTRAP_RESAMPLES, BOOTSTRAP_SEED
 from techcamp_ml.models.flood_m2 import experiments
 from techcamp_ml.models.flood_m2.experiments import (
     BASELINE,
+    CANDIDATE,
+    LOG_COLUMNS,
+    LOG_PATH,
     MODEL,
     TUNING_SEED,
     Search,
+    append_register,
+    entry_for,
     lightgbm_search,
     logistic_search,
     pr_auc_ci95,
@@ -241,3 +248,96 @@ def test_every_rung_answers_the_two_column_matrix_the_gate_reads() -> None:
         assert ((matrix >= 0.0) & (matrix <= 1.0)).all()
         assert np.allclose(matrix.sum(axis=1), 1.0)
         assert np.array_equal(matrix[:, 1], rung.score(validation_frame()))
+
+
+def _rung(name: str, kind: str, pr_auc: float, brier: float) -> Search:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=16)
+    template = ladder[0]
+    return Search(name, kind, template.scorer, pr_auc, template.interval, brier)
+
+
+def test_a_register_row_carries_the_hypothesis_the_score_and_what_the_run_did() -> None:
+    rung = _rung("rainfall_6m", BASELINE, 0.21, 0.04)
+    entry = entry_for(
+        rung,
+        date="2026-10-05",
+        hypothesis="accumulated rainfall alone orders the risk",
+        change="five bins of precip_sum_6m fitted on train",
+        decision=BASELINE,
+    )
+
+    assert entry.row() == {
+        "id": "0",
+        "date": "2026-10-05",
+        "hypothesis": "accumulated rainfall alone orders the risk",
+        "change": "five bins of precip_sum_6m fitted on train",
+        "model": "rainfall_6m",
+        "val_pr_auc": "0.210000",
+        "val_pr_auc_ci_low": f"{rung.interval.lower:.6f}",
+        "val_pr_auc_ci_high": f"{rung.interval.upper:.6f}",
+        "val_brier": "0.040000",
+        "decision": BASELINE,
+        "note": rung.note,
+    }
+
+
+def test_a_row_that_says_nothing_about_its_decision_is_refused() -> None:
+    rung = _rung("lightgbm", MODEL, 0.3, 0.04)
+    entry = entry_for(rung, date="2026-10-05", hypothesis="h", change="c", decision="probably")
+
+    with pytest.raises(ValueError, match="not one of"):
+        entry.row()
+
+
+def test_the_register_is_created_with_the_fixed_header_and_ids_that_never_repeat(
+    tmp_path: Path,
+) -> None:
+    register = tmp_path / "experiments" / "log.csv"
+    first = _rung("rainfall_6m", BASELINE, 0.2, 0.04)
+    second = _rung("lightgbm", MODEL, 0.3, 0.03)
+
+    one = append_register(
+        register,
+        entry_for(first, date="2026-10-05", hypothesis="h1", change="c", decision=BASELINE),
+    )
+    two = append_register(
+        register,
+        entry_for(second, date="2026-10-05", hypothesis="h2", change="c", decision=CANDIDATE),
+    )
+
+    assert (one.id, two.id) == (1, 2)
+    assert register.read_text().splitlines()[0] == ",".join(LOG_COLUMNS)
+    assert len(register.read_text().splitlines()) == 3
+
+
+def test_a_register_whose_header_is_not_the_fixed_one_is_refused(tmp_path: Path) -> None:
+    register = tmp_path / "log.csv"
+    register.write_text("id,date,model,test_pr_auc\n", encoding="utf-8")
+    rung = _rung("rainfall_6m", BASELINE, 0.2, 0.04)
+
+    with pytest.raises(ValueError, match="the register is read with"):
+        append_register(
+            register,
+            entry_for(rung, date="2026-10-05", hypothesis="h", change="c", decision=BASELINE),
+        )
+
+
+def test_a_register_row_holds_no_test_number(tmp_path: Path) -> None:
+    """There is no column for it, and there will not be one: the header is fixed and a test
+    column is where leakage accumulates."""
+    register = tmp_path / "log.csv"
+    rung = _rung("lightgbm", MODEL, 0.3, 0.03)
+    append_register(
+        register, entry_for(rung, date="2026-10-05", hypothesis="h", change="c", decision=CANDIDATE)
+    )
+
+    header, row = register.read_text().splitlines()
+    assert header == ",".join(LOG_COLUMNS)
+    assert len(row.split(",")) == len(LOG_COLUMNS)
+    assert not any("test" in column for column in LOG_COLUMNS)
+
+
+def test_the_register_of_the_repository_is_the_one_this_module_writes() -> None:
+    assert LOG_PATH.name == "log.csv"
+    assert LOG_PATH.parent.name == "experiments"
+    assert LOG_PATH.read_text(encoding="utf-8").splitlines()[0] == ",".join(LOG_COLUMNS)

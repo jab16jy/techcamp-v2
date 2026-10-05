@@ -32,14 +32,23 @@ reuses the harness's `BOOTSTRAP_SEED` and `BOOTSTRAP_RESAMPLES`, so both interva
 same candidate are resamples of one rule, and it left out — rather than read as a zero — any
 resample that holds one class only.
 
+`append_register` writes one row of `ml/experiments/log.csv` per rung, with the header the
+file was scaffolded with. Every rung is written, including the ones that lose: ADR-0020
+("Todo experimento del agente queda en el registro con su hipótesis, aunque no mejore") and
+a register that holds only the winner is a register nobody can tell apart from one where the
+other twelve draws never ran. There is no column for a test metric and none is added: the
+header is fixed, and a column of test numbers would be a place for leakage to accumulate.
+
 `design` is the shared feature contract and nothing else, because that is exactly what
 `harness.promotion._design` hands to `predict_proba` at the gate.
 """
 
 from __future__ import annotations
 
+import csv
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -99,6 +108,36 @@ INTEGER_HYPERPARAMETERS = ("num_leaves", "min_child_samples")
 LINEAR_HYPERPARAMETERS = ("subsample", "colsample_bytree")
 """The two fractions are drawn linearly: they are proportions of a whole, so a log scale
 would spend most of its draws on a difference no rainfall fraction notices."""
+
+LOG_PATH = Path(__file__).resolve().parents[4] / "experiments" / "log.csv"
+"""`ml/experiments/log.csv`, the register ADR-0020 step 5 names. Its header was scaffolded
+with T1 and is not this module's to change."""
+
+LOG_COLUMNS: tuple[str, ...] = (
+    "id",
+    "date",
+    "hypothesis",
+    "change",
+    "model",
+    "val_pr_auc",
+    "val_pr_auc_ci_low",
+    "val_pr_auc_ci_high",
+    "val_brier",
+    "decision",
+    "note",
+)
+"""The header as T1 wrote it. `DECIMALS` figures, and never a test column."""
+
+BASELINE, CANDIDATE, DISCARDED = "baseline", "candidate", "discarded"
+DECISIONS: tuple[str, ...] = (BASELINE, CANDIDATE, DISCARDED)
+"""What the run did with a rung: the one the gate compares against, the one it promotes
+nothing yet, and every other. A rung that was fitted and not kept is still in the register
+with the reason, which is what makes the discard auditable."""
+
+DECIMALS = 6
+"""Figures per metric. Six is more than the gate's Brier needs and few enough that the same
+run produces byte-identical rows on any platform (docs/08 §Reglas de gobierno,
+"Reproducible o no existe")."""
 
 SUBSAMPLE_FREQUENCY = 1
 """`subsample` is silent in LightGBM unless `subsample_freq` is on, so drawing it without
@@ -434,3 +473,105 @@ def _scored(
         params=dict(params or {}),
         note=note,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class Entry:
+    """One row of the register: a hypothesis, the one change it made, and what validation
+    said."""
+
+    date: str
+    hypothesis: str
+    change: str
+    model: str
+    val_pr_auc: float
+    interval: Interval
+    val_brier: float
+    decision: str
+    note: str
+    id: int = 0
+
+    def row(self) -> dict[str, str]:
+        """The row as the CSV holds it, `id` included."""
+        if self.decision not in DECISIONS:
+            raise ValueError(
+                f"the decision {self.decision!r} is not one of {list(DECISIONS)}; a register "
+                "row has to say what the run did with the rung"
+            )
+        return {
+            "id": str(self.id),
+            "date": self.date,
+            "hypothesis": self.hypothesis,
+            "change": self.change,
+            "model": self.model,
+            "val_pr_auc": _figure(self.val_pr_auc),
+            "val_pr_auc_ci_low": _figure(self.interval.lower),
+            "val_pr_auc_ci_high": _figure(self.interval.upper),
+            "val_brier": _figure(self.val_brier),
+            "decision": self.decision,
+            "note": self.note,
+        }
+
+
+def entry_for(
+    rung: Search,
+    *,
+    date: str,
+    hypothesis: str,
+    change: str,
+    decision: str,
+    note: str = "",
+) -> Entry:
+    """One rung as one register row: its validation score, its interval, and what the run
+    did with it."""
+    return Entry(
+        date=date,
+        hypothesis=hypothesis,
+        change=change,
+        model=rung.name,
+        val_pr_auc=rung.pr_auc,
+        interval=rung.interval,
+        val_brier=rung.brier,
+        decision=decision,
+        note="; ".join(part for part in (rung.note, note) if part),
+    )
+
+
+def append_register(path: Path, entry: Entry) -> Entry:
+    """Append one row, creating the register with its fixed header when it is not there yet.
+
+    Returns the row as written, with the id the file gave it: ids are assigned by the file,
+    so two runs cannot claim the same one and a row's place in the register is its id and
+    not its line number.
+
+    A header that is not `LOG_COLUMNS` is refused rather than extended. The header was
+    scaffolded with T1 and is the shape every reader of the register expects; adding a
+    column here would make two readers disagree about what a row means, and the natural
+    column to add is a test metric.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not path.is_file()
+    last = 0
+    if not fresh:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            rows = list(reader)
+        if header is not None and tuple(header) != LOG_COLUMNS:
+            raise ValueError(
+                f"{path} opens with {header} and the register is read with "
+                f"{list(LOG_COLUMNS)}; a header that changed under its readers is not a "
+                "register"
+            )
+        last = max((int(row[0]) for row in rows if row and row[0].isdigit()), default=0)
+    numbered = replace(entry, id=last + 1)
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(LOG_COLUMNS), lineterminator="\n")
+        if fresh:
+            writer.writeheader()
+        writer.writerow(numbered.row())
+    return numbered
+
+
+def _figure(value: float) -> str:
+    return f"{value:.{DECIMALS}f}"
