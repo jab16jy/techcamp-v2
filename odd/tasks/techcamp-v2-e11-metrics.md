@@ -54,6 +54,13 @@ Owner approved 2026-10-02.
 - D-T0.8 `crop_cycle_summary` persisted for `harvested`/`lost` cycles, computed on read for an
   active cycle; includes `loss_kg` and `loss_cop` (docs/03, docs/04).
 - D-T0.9 `relative_yield` stays `null`; no `field_record` in E11; follow-up issue.
+- D-T3.1 (owner, 2026-10-03) The `water_stress` action of `risk_management` is **plot-scoped**:
+  a registered irrigation on that plot inside the 48 h window counts, with **no crop-cycle
+  qualifier**, so an entry with `crop_cycle_id = null` counts too. Ruling on the escalated
+  CRITICAL `R3-reliability.alert-action.cross-plot`: `alert` carries no `crop_cycle_id`, and
+  scoping by cycle would discard actions from entries the phone sent without one. Written into
+  [11-metricas §2](../docs/11-metricas.md) and [ADR-0025](../docs/adr/0025-la-accion-de-water-stress-es-de-la-parcela.md);
+  the SQL is unchanged.
 - D-T0.10 Roles: baseline `PUT` owner/technician, `GET` any member; org metrics owner/technician.
 - D-T0.11 `PUT /plots/{id}/baseline` creates or replaces; `recorded_by` = caller; editable after
   cycles exist.
@@ -136,27 +143,125 @@ reviewed by the parent.
 Findings rule (owner, 2026-09-30): blocking → bounded correction; 1–2 non-blocking → one issue per
 round; 3+ → fix the most important with `Refs #N`, file the rest.
 
-### How a lane runs RDD (the T2 procedure; binding for T4 onwards)
+### How a lane runs RDD (the T2 procedure, corrected by the T3 resolution; binding for T4 onwards)
 1. After the parent gate passes, the writer runs
-   `gentle-ai review assess --cwd <lane> --agent opencode --base-ref <fork point> --committed-only --json`.
+   `gentle-ai review assess --cwd <lane> --agent <runtime> --base-ref <fork point> --committed-only --json`.
    Never start from the selectorless `review status`: it binds the merge-base with `main`
    (a2bae6b) and freezes the whole epic as the candidate (T1, T3 attempt 1).
 2. Execute the returned `next_transition.command` verbatim (the preflight STATUS with the same
    selectors), then the START it returns.
 3. A consent envelope is relayed to the parent complete; the parent relays it to the owner with
    `AskUserQuestion`; the writer runs only the invocation of the chosen answer, verbatim.
-4. Each `review.capture-result` slot is dispatched once through OpenCode's `subagent` tool with the
-   provider's agent and prompt copied verbatim. Never author, edit or rewrite reviewer output.
-5. `output_refused` means Go refused the reviewer's JSON at admission, not that the agent is
-   missing. Read the newest file in `<main repo>/.git/gentle-ai/rejected-results/<lineage>/` for the
-   exact reason (T3: finding ids without the `R3-` lens prefix; `proof_path_out_of_scope`). Run the
-   bound STATUS and relaunch only when it re-offers the same slot.
-6. `correction_required` → follow its `status_continuation` (one bounded correction);
+4. The native review candidate is a work-unit commit or PR slice, **never the accumulated lane
+   branch**. Scope with `--base-ref` at the work unit's first commit, not the lane fork point
+   (T3: the 2353-line lane stalled; the 466-line close-out `371c0e7..HEAD` burned).
+5. Runtime rule: **Pi runs RDD (host-relay `pi_host_relay`)**. OpenCode's relay contract is
+   fixed at `gentle-ai.opencode-relay/v2-staged` and refuses `workspace`-projection bindings
+   (`binding_mismatch`); Claude Code is org-blocked on this machine.
+   `OpenCode writers run their own RDD` is superseded for the review step only — OpenCode still
+   writes the code.
+6. Each `review.capture-result` slot is dispatched once with the provider's agent and prompt
+   copied verbatim. Never author, edit or rewrite reviewer output. Finding `id` is optional and
+   harness-assigned — never write it (T3: invented ids got the whole capture rejected).
+7. Verify receipts in `review-transactions/terminal-consumption/v1/`, **not** by listing `v2/`.
+   On burn Go prunes the lineage directory; absence of the directory is the signature of a
+   successful burn. Empty `rejected-results/` means the capture was admitted.
+8. The bound STATUS needs all three together: `--agent <runtime>` + `--lineage` +
+   `--repository-context <rc>`. That flips `applicability` from `unrelated` to `current_target`.
+9. The admitted result body does NOT survive the burn — copy findings to the issue/doc **before**
+   acknowledging.
+10. `correction_required` → follow its `status_continuation` (one bounded correction);
    approval → run the exact `review.acknowledge-approved` once and report the
    `gentle-ai.review-acknowledged/v1` envelope.
 7. The writer writes its full report (outcome, ack envelope, every finding with id, severity,
    location, full claim) to `../techcamp-v2-worktrees/e11-briefs/<lane>-rdd.md`; the parent files
    the follow-up issue and records the lineage here.
+
+### T3 — lineage `review-82b031d38b733383`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | Work unit de cierre `371c0e7..HEAD`, 9 paths / 466 líneas (`assess --base-ref 371c0e7`) |
+| Lente | `review-reliability`, medium risk |
+| Hallazgos | **4 WARNING**, ningún BLOCKER ni CRITICAL |
+| Recibo | `terminal-consumption/v1`, target `sha256:d2c09ecd60ad97b55d07de7fb2e1db4d5cfac4ab3ee3c62024ce163507dfd07a` (base tree `dff067d3` → candidate `7d2f97d7`) |
+| Follow-up | Issue #248 (`review-follow-up`, `area:server`) con los 4 WARNING |
+| Verificación | `uv run pytest tests/metrics -q` → 61 passed; `gate-fast` verde |
+
+Corrido por un agente Pi fresco (runtime host-relay), lineage nuevo, consentimiento del dueño.
+El WARNING 4 (docstring apuntando a ADR-0024) ya quedó corregido en esta rama antes del merge.
+
+### T3 — lineage `review-9b9197b7eee80109`, escalated (sin recibo)
+
+| Item | Resultado |
+|---|---|
+| Alcance | 6 commits de T3, 11 archivos / 1841 líneas (`assess --base-ref 31c6b3e`) |
+| Lente | `review-reliability`, medium risk, `correction_budget: 200` |
+| Hallazgos | **12** — 2 CRITICAL, 9 WARNING, 1 SUGGESTION |
+| Corrección acotada | `371c0e7` (+71 líneas) |
+| Validación dirigida | **rechazó** la corrección → `state: escalated`, `native_stop_required` |
+| Authority | **no quemada**; sin envelope de acuse |
+
+`review-5fb63a9414658ee5` (primer intento, base `a2bae6b`, 24 archivos / 3301 líneas) también quedó
+escalado y sin tocar. Los tres rechazos iniciales `output_refused` **no** eran un agente
+indespachable: el revisor sí corría y Go rechazaba su salida en la admisión
+(`reviewer finding ID does not match the native ASCII schema` — los ids deben ser `^R[1-4]-…` con el
+prefijo del lente, `R3-` aquí; y `proof_path_out_of_scope` en el primer intento). El schema dice que
+el id es opcional y se lo asigna el harness.
+
+**CRITICAL `R3-reliability.alert-action.cross-plot` — descargado con ruling, no con código.** El
+validador rechazó `371c0e7` por una regla de proceso (*"a test that pins the reported behaviour does
+not remove the reported behaviour"*), no porque el SQL estuviera mal. Ruling del dueño 2026-10-03
+(**D-T3.1**): la acción de `water_stress` es **plot-scoped**, sin qualifier de ciclo, y una entrada
+con `crop_cycle_id = null` cuenta. Escrito en [11 §2](../docs/11-metricas.md) y
+[ADR-0025](../docs/adr/0025-la-accion-de-water-stress-es-de-la-parcela.md); **el predicado no cambió**
+(solo el docstring de la vista). Commit de doc: `823974d`; commit de pruebas: `a1941ba`.
+
+Commits de T3, en orden: `7cc3dd7` (port), `51052a1` (builders), `09cef3f` (monitoring),
+`407ed2b` (record-keeping + decision), `230289c` (alert action), `429b293` (cycle totals),
+`371c0e7` (corrección acotada), más los dos de cierre.
+
+Los 10 hallazgos no bloqueantes **no** se corrigieron aquí: el cuerpo del issue queda redactado abajo
+y su creación es del orquestador. Nota sobre el conteo: el revisor emitió 12 hallazgos y el refutador
+dejó 1 en `fix_finding_ids`; de los 11 restantes, 4 quedaron cubiertos por el commit `a1941ba` y 7
+siguen vivos (5 sin base en el modelo + `water-balance-date` y la cota del mes en curso).
+
+#### Issue propuesto (no abierto) — `review-follow-up`, `epic:e11`, `area:metrics`, `type:tech-debt`
+
+**Título:** E11 T3: cuatro WARNING no bloqueantes de la revisión aprobada (`review-82b031d38b733383`)
+
+**Cuerpo:**
+
+RDD del work unit de cierre de T3 (`371c0e7..HEAD`, 9 paths / 466 líneas),
+lineage `review-82b031d38b733383`: captura admitida, **aprobado, autoridad quemada**.
+El revisor emitió 4 WARNING, ningún BLOCKER ni CRITICAL. Ninguno requiere corrección
+acotada: por la política congelada solo BLOCKER/CRITICAL la exigen, y por la regla de
+findings del repo (1–2 no bloqueantes → un issue por ronda) se recogen aquí.
+
+El CRITICAL de la ronda anterior (`R3-reliability.alert-action.cross-plot`,
+lineage `review-9b9197b7eee80109`, escalado) quedó descargado por el ruling del dueño
+**D-T3.1** (ver §Review de esta feature doc): la acción de `water_stress` es plot-scoped,
+escrito en docs/11-metricas.md §2 y en ADR-0025, SQL sin cambios.
+
+**Los 4 WARNING (vivos):**
+
+1. `test_monitoring_view.py:206` — el test del mes en curso contrasta los segundos
+   transcurridos contra la constante de 30 días (`2_592_000`). En el último día de
+   cualquier mes de 31 días en America/Bogota ese cargo llega a ~2_688_000 y la
+   aserción falla. La cantidad bajo prueba depende del calendario; la cota no.
+2. `test_monitoring_view.py:200` — `elapsed_full_month` mide los segundos que tardó
+   el propio test en correr, no la longitud del mes en curso. Solo prueba que el test
+   terminó en menos de treinta días; el docstring que promete que un nodo "nunca
+   alcanza la longitud completa del mes" no tiene aserción detrás.
+3. `test_cycle_totals_view.py:269` — el docstring dice que la aserción es una cota y
+   no un conteo exacto porque `now()` vive en SQL, pero el test fija el conteo exacto
+   `water_stress_days == 3`. Una corrida que cruce la medianoche de Bogotá entre el
+   setup y la query admite la fila insertada para `today + 1` y el conteo da 4.
+4. Migración `0c67563f8d20` docstring — decía que D-T3.1 está explícito en ADR-0024,
+   archivo que el candidato no tocaba (bytes idénticos en base y candidato). El texto
+   vive en ADR-0025. **Ya corregido después de la revisión** (commit pendiente en la
+   rama, junto con el mismo puntero en esta feature doc): el registro que impide
+   re-levantar el CRITICAL ahora apunta al documento que sí lo lleva.
 
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
