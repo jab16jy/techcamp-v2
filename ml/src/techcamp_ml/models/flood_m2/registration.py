@@ -333,7 +333,12 @@ async def register(
 
     A `version` that `versions_for` already holds returns that row and writes nothing:
     the artifacts are never deleted, so a second row would be a second claim about the
-    same bytes.
+    same bytes. The claim is taken under `lock_version`, which is what makes that
+    idempotence real rather than merely documented: the read and the write have to see
+    each other, or two registrations of one version both observe no row, both upload to
+    the same key — and the second upload leaves the object holding bytes the committed
+    row's `artifact_sha256` does not describe, which is a version every later prediction
+    refuses as unverified.
 
     `repository` and `client` are seams for the tests, which bring a double instead of a
     database and a bucket (ADR-0002: external I/O needs a test double).
@@ -343,6 +348,7 @@ async def register(
     version = version_for(rung, today or gate_run_on(layout))
     store = repository or risk_repository(session)
 
+    await store.lock_version(name, version)
     existing = next((row for row in await store.versions_for(name) if row.version == version), None)
     if existing is not None:
         return existing

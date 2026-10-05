@@ -188,3 +188,49 @@ def test_the_predictor_reads_only_the_shared_feature_contract() -> None:
     sin, cos = seasonality(10)
     assert features["month_sin"] == sin
     assert features["month_cos"] == cos
+
+
+@pytest.mark.parametrize("malformed", [None, [1, 2], "octubre", 7])
+def test_a_by_month_that_is_not_an_object_is_refused_not_crashed(malformed: object) -> None:
+    """A malformed member is refused with `ValueError`, never an `AttributeError`.
+
+    The serving factory answers an unreadable artifact by returning `None` so the daily
+    job skips that version and carries on with the rest of the run (docs/06 §8 "Sin modelo
+    promovido"), and it catches `ValueError` to do it. A `by_month` of `null` or of a list
+    has no `.items()`, so parsing it with a bare comprehension raised `AttributeError`
+    instead — which escapes that handler and takes the whole resolution down, turning one
+    bad registration into a failed day of risk.
+    """
+    payload = {
+        "kind": "climatology",
+        "version": _VERSION,
+        "train_years": [2019, 2020, 2021, 2022],
+        "prevalence": 0.13,
+        "by_month": malformed,
+        "fitted_rows": 1404,
+        "fitted_positives": 182,
+    }
+
+    with pytest.raises(ValueError, match="by_month is a"):
+        ClimatologyPredictor.from_payload(payload)  # type: ignore[arg-type]
+
+
+def test_a_by_month_of_an_object_is_still_read_after_the_refusal() -> None:
+    """The negative of the refusal: the shape that works keeps working.
+
+    Without this, "refuse anything that is not a dict" could be satisfied by refusing
+    everything.
+    """
+    payload = {
+        "kind": "climatology",
+        "version": _VERSION,
+        "train_years": [2019, 2020, 2021, 2022],
+        "prevalence": 0.13,
+        "by_month": {str(month): 0.2 + month / 100 for month in range(1, 13)},
+        "fitted_rows": 1404,
+        "fitted_positives": 182,
+    }
+
+    predictor = ClimatologyPredictor.from_payload(payload)
+
+    assert len(predictor.by_month) == 12

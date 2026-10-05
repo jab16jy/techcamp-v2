@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
-from sqlalchemy import Row, case, select
+from sqlalchemy import Row, case, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,6 +187,29 @@ class SqlAlchemyRiskRepository:
             .order_by(ModelVersionRow.created_at.desc(), ModelVersionRow.id.desc())
         )
         return [_version_from_row(row) for row in result]
+
+    async def lock_version(self, name: str, version: str) -> None:
+        """Take the registration claim on one version string, held until the session
+        closes.
+
+        `pg_advisory_lock` on the 64-bit hash of `name` and `version` together, so two
+        processes registering the SAME version serialise and two registering different
+        versions never wait for each other. Session-scoped, not transaction-scoped,
+        because the claim has to survive the commits `insert_version` makes in the
+        middle of registration: the whole read-check-upload-write is what must not
+        interleave, and a transaction lock would be released at the first of them.
+
+        The key is derived from the two strings rather than assigned, so no coordinate
+        has to be agreed anywhere: `hashtextextended` is the same function for every
+        writer of this table.
+        """
+        await self._session.execute(
+            select(
+                text("pg_advisory_lock(hashtextextended(:claim, 0))").bindparams(
+                    claim=f"{name}:{version}"
+                )
+            )
+        )
 
     async def insert_prediction(self, prediction: RiskPrediction) -> bool:
         """Store one prediction, reporting whether this call wrote it.

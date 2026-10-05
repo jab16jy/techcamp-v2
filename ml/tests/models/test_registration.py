@@ -53,14 +53,18 @@ TRAIN_POSITIVES = len(FLOODED_MONTHS) * len(MUNICIPALITIES)
 
 
 class RecordingRepository:
-    """The `RiskRepository` port's two methods step 10 calls, and nothing else."""
+    """The `RiskRepository` port's methods step 10 calls, and nothing else."""
 
     def __init__(self, existing: Sequence[ModelVersion] = ()) -> None:
         self.existing = list(existing)
         self.inserted: list[ModelVersion] = []
+        self.locks: list[tuple[str, str]] = []
 
     async def versions_for(self, name: str) -> Sequence[ModelVersion]:
         return tuple(self.existing)
+
+    async def lock_version(self, name: str, version: str) -> None:
+        self.locks.append((name, version))
 
     async def insert_version(self, version: ModelVersion) -> ModelVersion:
         self.inserted.append(version)
@@ -148,7 +152,7 @@ def _register(layout: Layout, repository: RecordingRepository, client: Recording
         registration.register(
             UNUSED_SESSION,  # type: ignore[arg-type]
             layout=layout,
-            bucket="ml",
+            bucket="ml-artifacts",
             today=DATE,
             repository=repository,
             client=client,
@@ -161,7 +165,7 @@ def _registered_version() -> ModelVersion:
         id=uuid.uuid4(),
         name="risk_flood",
         version=VERSION,
-        artifact_uri=f"s3://ml/{KEY}",
+        artifact_uri=f"s3://ml-artifacts/{KEY}",
         is_baseline=True,
         thresholds={},
         promoted=False,
@@ -338,7 +342,7 @@ def test_the_row_is_a_served_baseline_without_thresholds(tmp_path: Path) -> None
     assert version.promoted is False
     assert version.thresholds == {}
     assert version.metrics is None
-    assert version.artifact_uri == f"s3://ml/{KEY}"
+    assert version.artifact_uri == f"s3://ml-artifacts/{KEY}"
     assert version.artifact_sha256 == registration.artifact_sha256(
         registration.export_artifact(VERSION, train_frame())
     )
@@ -382,7 +386,7 @@ def test_the_artifact_is_uploaded_under_its_key_with_the_sha_of_the_body(tmp_pat
 
     assert len(client.objects) == 1
     (call,) = client.objects
-    assert call["Bucket"] == "ml"
+    assert call["Bucket"] == "ml-artifacts"
     assert call["Key"] == KEY
     assert call["ContentType"] == "application/json"
     body = call["Body"]
@@ -463,3 +467,56 @@ def test_the_client_the_registry_will_read_is_never_the_public_one() -> None:
     """
     assert s3_public_url().startswith("http://localhost:9000")
     assert s3_internal_url().startswith("http://minio:9000")
+
+
+def test_registration_takes_the_claim_on_the_version_before_it_reads_or_writes(
+    tmp_path: Path,
+) -> None:
+    """The claim is taken FIRST, before the existence read and before the upload.
+
+    Registration is a read followed by a write, and two processes doing that at once both
+    read "nothing registered": two rows claiming one version, and — worse — two uploads
+    to the same object key, where the second is what the bucket keeps. The surviving
+    row's `artifact_sha256` would then describe bytes that are not there, and every
+    prediction of that version is refused as unverified (docs/03-modelo-datos.md
+    §Integridad del artefacto). The order is the whole fix, so it is what is pinned.
+    """
+    layout = _layout(tmp_path, train_frame(), promote=False)
+    store = RecordingRepository()
+    client = RecordingS3()
+
+    asyncio.run(
+        registration.register(  # type: ignore[arg-type]
+            None, layout=layout, bucket="ml-artifacts", repository=store, client=client
+        )
+    )
+
+    assert store.locks == [("risk_flood", VERSION)]
+    assert len(store.inserted) == 1
+    assert len(client.objects) == 1
+
+
+def test_a_version_that_is_already_registered_still_takes_the_claim_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """The negative of the order above: holding the claim is not itself a write.
+
+    A re-run of a version that is already there returns the row it found and uploads
+    nothing, so the object the committed row describes is never overwritten (docs/08
+    §Reglas de gobierno, "Reversión": los artefactos no se borran).
+    """
+    layout = _layout(tmp_path, train_frame(), promote=False)
+    already = _registered_version()
+    store = RecordingRepository(existing=[already])
+    client = RecordingS3()
+
+    returned = asyncio.run(
+        registration.register(  # type: ignore[arg-type]
+            None, layout=layout, bucket="ml-artifacts", repository=store, client=client
+        )
+    )
+
+    assert returned is already
+    assert store.locks == [("risk_flood", VERSION)]
+    assert store.inserted == []
+    assert client.objects == []

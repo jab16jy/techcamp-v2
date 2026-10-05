@@ -94,6 +94,24 @@ class RiskRepository(Protocol):
         """
         ...
 
+    async def lock_version(self, name: str, version: str) -> None:
+        """Take the registration claim on one version string, held to the end of the
+        session.
+
+        ADR-0020 paso 10 registers by reading and then writing, and two processes doing
+        that at once both read "nothing registered" — the write skew that leaves two rows
+        claiming one version. It also leaves the object and the row disagreeing: both
+        registrations upload to the same key and the second upload is what the bucket
+        keeps, so the surviving row's `artifact_sha256` describes bytes that are no longer
+        there and every prediction of that version is refused as unverified.
+
+        A lock, and not a unique index, because `model_version` declares no unique
+        constraint on `(name, version)` and adding one is a migration over a table
+        ADR-0020's protocol does not own. `pg_advisory_lock` is session-scoped, so the
+        caller must use a session it closes: registration opens one per run and ends.
+        """
+        ...
+
     async def insert_prediction(self, prediction: RiskPrediction) -> bool: ...
 
     async def stored_predictions(

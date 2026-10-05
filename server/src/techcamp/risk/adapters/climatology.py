@@ -122,9 +122,19 @@ class ClimatologyPredictor:
             raise ValueError(f"the climatology artifact has no {missing}")
         if payload["kind"] != ARTIFACT_KIND:
             raise ValueError(f"the artifact is a {payload['kind']!r}, not a {ARTIFACT_KIND!r}")
-        by_month = {
-            int(month): float(frequency) for month, frequency in payload["by_month"].items()
-        }
+        raw_by_month = payload["by_month"]
+        # Refused as a VALUE and not merely iterated: a `by_month` of null or of a
+        # list has no `.items()`, so the comprehension below would raise
+        # AttributeError — and the serving factory answers a malformed artifact by
+        # returning None so the daily job skips that version and carries on
+        # (docs/06-diseno-detallado.md §8 "Sin modelo promovido"). An
+        # AttributeError escapes that instead and takes the run down.
+        if not isinstance(raw_by_month, dict):
+            raise ValueError(
+                f"the artifact by_month is a {type(raw_by_month).__name__}, not an object of "
+                f"calendar months"
+            )
+        by_month = {int(month): float(frequency) for month, frequency in raw_by_month.items()}
         outside = sorted(month for month in by_month if month not in CALENDAR_MONTHS)
         if outside:
             raise ValueError(f"the climatology artifact has frequencies for {outside}")
