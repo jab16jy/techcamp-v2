@@ -156,11 +156,22 @@ round; 3+ → fix the most important with `Refs #N`, file the rest.
    (a2bae6b) and freezes the whole epic as the candidate (T1, T3 attempt 1).
 2. Execute the returned `next_transition.command` verbatim (the preflight STATUS with the same
    selectors), then the START it returns.
-3. A consent envelope is relayed to the parent complete; the parent relays it to the owner with
-   `AskUserQuestion`; the writer runs only the invocation of the chosen answer, verbatim.
-4. The native review candidate is a work-unit commit or PR slice, **never the accumulated lane
-   branch**. Scope with `--base-ref` at the work unit's first commit, not the lane fork point
-   (T3: the 2353-line lane stalled; the 466-line close-out `371c0e7..HEAD` burned).
+3. A consent envelope is relayed to the parent complete; the parent relays it to the owner
+   through the orchestrator channel; the writer runs only the invocation of the chosen answer,
+   verbatim. **D-T4.2 (owner, 2026-10-05): single authorization channel** — `consent/v3` and any
+   audited authorization go through the orchestrator (complete envelope, STOP, wait); never
+   `ask_user_question` to whoever is at the keyboard (T4/T5 keyboard grants were ratified
+   post-hoc once; since then the hard rule holds).
+4. The review granularity is **work-unit commits, not a line limit**. The native review candidate
+   is one work unit or several work units forming one coherent behavior, **never the accumulated
+   lane branch and never past the lane**. Scope with `--base-ref` at the candidate's first commit,
+   not the lane fork point (T3: the 2353-line lane stalled; the 466-line close-out `371c0e7..HEAD`
+   burned). **D-T4.1 (owner, 2026-10-05): RDD without slice budget** — a candidate may span several
+   work-unit commits; `under_budget` slices with no offered START are covered by the combined
+   candidate instead of PR slices (T4: units 1+3 `under_budget`, lane-combined `104608c..c01fd2e`
+   1175 lines approved with 0 findings). Do not overshoot: one lane max, no merge commits, no
+   unrelated tasks. `--base-ref` is EXCLUSIVE: it covers `X..HEAD` without `X` (verified:
+   `f7d808e..HEAD` = 779 lines).
 5. Runtime rule: **Pi runs RDD (host-relay `pi_host_relay`)**. OpenCode's relay contract is
    fixed at `gentle-ai.opencode-relay/v2-staged` and refuses `workspace`-projection bindings
    (`binding_mismatch`); Claude Code is org-blocked on this machine.
@@ -182,6 +193,15 @@ round; 3+ → fix the most important with `Refs #N`, file the rest.
 7. The writer writes its full report (outcome, ack envelope, every finding with id, severity,
    location, full claim) to `../techcamp-v2-worktrees/e11-briefs/<lane>-rdd.md`; the parent files
    the follow-up issue and records the lineage here.
+11. Each lane attaches ODD evidence that what it built is what the feature doc asks: the task IDs
+    it closes with observed outcomes and checks (RED first line, GREEN, REFACTOR), the exact gate
+    commands with observed results (including seeds for `pytest-randomly` failures), every work-unit
+    commit identity, and the docs/ sections or ADRs it cites. The parent records the commits and the
+    verification evidence in this document before merging; checkboxes grant no approval or receipt.
+12. Wave 4 (T6 ‖ T7 ‖ T8) review plan: T8 (~120) one candidate; T6 (~200) one candidate, two only
+    if two genuinely separate work units emerge; T7 (~350) per work unit, combined only when the
+    units form one coherent behavior per step 4. Pi (host-relay) runs every RDD; OpenCode writers
+    never run reviews.
 
 ### T3 — lineage `review-82b031d38b733383`, **aprobado, autoridad quemada** (2026-10-05)
 
