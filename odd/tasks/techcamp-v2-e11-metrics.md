@@ -75,6 +75,11 @@ Owner approved 2026-10-02.
 - D-T0.13 Web: one "Indicadores de tecnificación" screen (plot + org section for owner/technician),
   enrollment survey form in plot detail, index line on Inicio (`impeccable`); `/status` returns the
   latest `plot_metric_monthly` row.
+- D-T7.1 (owner, 2026-10-05) OrgMetrics ships partial: `mean_digital_adoption_index`,
+  `plots_with_index` and `monitored_plots_ratio` from `list_for_org_month`; `harvested_cycles_ratio`
+  and `median_hours_to_first_reading` ship as `null` (missing-evidence-is-null convention) until a
+  new lane lands the two `metrics_*` views plus `source_repository` methods (migration +
+  frozen-port change, outside T7's surfaces). T7 closes against this decision.
 
 ## Tasks
 Forecasts are authored lines (additions + deletions, generated excluded). Route = writer and reason.
