@@ -85,6 +85,15 @@ Owner approved 2026-10-02.
   and `median_hours_to_first_reading` ship as `null` (missing-evidence-is-null convention) until a
   new lane lands the two `metrics_*` views plus `source_repository` methods (migration +
   frozen-port change, outside T7's surfaces). T7 closes against this decision.
+- D-T9.1 (owner, 2026-10-05) T9b ships the plot section and the org section; the **cycle summary
+  section is deferred**. Its endpoint needs a `crop_cycle_id` that `ActiveCycleView` does not expose
+  (docs/04-api.md:64) and there is no cycle listing, so the web has no way to name a cycle; exposing
+  the id is a separate server task plus a docs/04 change. Registered as a follow-up, not silently
+  dropped.
+- D-T9.2 (owner, 2026-10-05) The default month for both metrics queries is the **previous calendar
+  month in America/Bogota**, computed client-side, matching the job's own cadence (day 1 at 02:00
+  computes the prior month). No month picker in this lane; a null row renders "Sin datos este mes"
+  (docs/07:147), never 0 (docs/11:57).
 
 ## Tasks
 Forecasts are authored lines (additions + deletions, generated excluded). Route = writer and reason.
