@@ -1,1 +1,5 @@
 id,date,hypothesis,change,model,val_pr_auc,val_pr_auc_ci_low,val_pr_auc_ci_high,val_brier,decision,note
+1,2026-10-05,the historical frequency of the calendar month already orders the risk,"the frequency of the label by calendar month, fitted on train",climatology_month,0.098390,0.079492,0.122723,0.048885,baseline,fitted on train only
+2,2026-10-05,the interaction between rainfall and soil moisture beats the linear model,"LightGBM over the same contract, tuned on train and validation",lightgbm,0.107727,0.085272,0.138898,0.048774,candidate,"quasirandom draw 10, seed 20261005, 11 rounds kept by early stopping on validation"
+3,2026-10-05,a linear model over the whole feature contract beats both baselines,a logistic regression over FEATURE_NAMES with a train-fitted median,logistic_regression,0.079444,0.064833,0.101407,0.204120,discarded,
+4,2026-10-05,accumulated rainfall of six months alone orders the risk,"the flood frequency of five bins of precip_sum_6m, forced monotone",rainfall_6m,0.052085,0.044023,0.060815,0.049724,discarded,fitted on train only
