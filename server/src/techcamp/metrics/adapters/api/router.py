@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from techcamp.farms.adapters.api.deps import CropCycleRepoDep, CropRepoDep, PlotRepoDep
 from techcamp.farms.domain.errors import CropCycleNotFoundError, PlotNotFoundError
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
+from techcamp.identity.domain.errors import NotAMemberError
 from techcamp.metrics.adapters.api.deps import (
     BaselineRepoDep,
     CycleSummaryRepoDep,
@@ -37,8 +38,14 @@ from techcamp.metrics.adapters.api.deps import (
     MonthlyMetricRepoDep,
 )
 from techcamp.metrics.application.baseline import get_plot_baseline, put_plot_baseline
-from techcamp.metrics.application.metrics_read import CycleSummaryRead, get_plot_month
+from techcamp.metrics.application.metrics_read import (
+    CycleSummaryRead,
+    OrgMetrics,
+    OrgMetricsForbiddenError,
+    get_plot_month,
+)
 from techcamp.metrics.application.metrics_read import get_cycle_summary as read_cycle_summary
+from techcamp.metrics.application.metrics_read import get_org_metrics as read_org_metrics
 from techcamp.metrics.domain.adoption import PlotMonthlyMetric
 from techcamp.metrics.domain.errors import (
     InsufficientRoleError,
@@ -242,6 +249,41 @@ def _month_view(metric: PlotMonthlyMetric) -> PlotMetricMonthlyView:
     )
 
 
+class OrgMetricsView(BaseModel):
+    """The organization's indicators for one month
+    (docs/04-api.md:236, docs/11-metricas.md:69-75; D-T0.12, D-T7.1).
+
+    Named for the module, like `PlotMetricMonthlyView`: `OrgMetrics` is the
+    application value and a response model sharing that name would collide in
+    the OpenAPI components (`tests/test_openapi_schema_names.py`).
+
+    `harvested_cycles_ratio` and `median_hours_to_first_reading` are always `null`
+    in this lane (D-T7.1): the org-month listing carries neither cycles nor node
+    instants, and `0` would report "no cycle was harvested" and "every node
+    answered instantly" instead.
+    """
+
+    org_id: UUID
+    month: date
+    mean_digital_adoption_index: float | None
+    plots_with_index: int | None
+    monitored_plots_ratio: float | None
+    harvested_cycles_ratio: float | None
+    median_hours_to_first_reading: float | None
+
+
+def _org_metrics_view(metrics: OrgMetrics) -> OrgMetricsView:
+    return OrgMetricsView(
+        org_id=metrics.org_id,
+        month=metrics.month,
+        mean_digital_adoption_index=_as_float(metrics.mean_digital_adoption_index),
+        plots_with_index=metrics.plots_with_index,
+        monitored_plots_ratio=_as_float(metrics.monitored_plots_ratio),
+        harvested_cycles_ratio=_as_float(metrics.harvested_cycles_ratio),
+        median_hours_to_first_reading=_as_float(metrics.median_hours_to_first_reading),
+    )
+
+
 def _summary_view(read: CycleSummaryRead) -> CropCycleSummaryView:
     summary = read.summary
     return CropCycleSummaryView(
@@ -304,6 +346,44 @@ async def get_plot_metrics(
     if metric is None:
         raise ProblemError(status=404, title="Plot has no metrics for that month")
     return _month_view(metric)
+
+
+@router.get("/organizations/{org_id}/metrics", response_model=OrgMetricsView)
+async def get_organization_metrics(
+    month: Annotated[str, Query(pattern=_MONTH_QUERY, description="Month as YYYY-MM")],
+    org_id: UUID,
+    user_id: CurrentUserId,
+    metrics: MonthlyMetricRepoDep,
+    memberships: MembershipRepoDep,
+) -> OrgMetricsView:
+    """The organization's indicators for one month, computed on read
+    (docs/04-api.md:236; D-T0.12, D-T0.10).
+
+    Owner or technician (`403` for any other member); a caller who is not a
+    member of the organization is `404`, so the endpoint never reveals that it
+    exists.
+
+    A month with no stored report is `200` with every figure `null`, not `404`:
+    the organization exists and the month simply has nothing to say yet
+    (docs/03-modelo-datos.md:441). `harvested_cycles_ratio` and
+    `median_hours_to_first_reading` are `null` in every answer of this lane
+    (D-T7.1) and unlock in the follow-up lane that adds their views.
+    """
+    try:
+        org_metrics = await read_org_metrics(
+            user_id=user_id,
+            org_id=org_id,
+            month=_month_start(month),
+            metrics=metrics,
+            memberships=memberships,
+        )
+    except NotAMemberError as exc:
+        raise ProblemError(status=404, title="Organization not found") from exc
+    except OrgMetricsForbiddenError as exc:
+        raise ProblemError(
+            status=403, title="Role cannot read the organization's indicators"
+        ) from exc
+    return _org_metrics_view(org_metrics)
 
 
 @router.get("/plots/{plot_id}/cycles/{crop_cycle_id}/summary", response_model=CropCycleSummaryView)
