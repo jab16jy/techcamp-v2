@@ -16,6 +16,7 @@ from techcamp_ml.harness.promotion import (
     CI_LOWER_BOUND_ABOVE_ZERO,
     PromotionDecision,
     Scored,
+    SpentTestBlocks,
     decide_promotion,
 )
 from techcamp_ml.harness.split import TEST_FIRST, TRAIN_LAST, VAL_LAST
@@ -202,6 +203,7 @@ def test_there_is_no_force_promote_anywhere_in_the_gate() -> None:
         "baseline",
         "seed",
         "resamples",
+        "reads",
     }
 
 
@@ -253,6 +255,112 @@ def test_a_dataset_with_no_test_block_is_refused() -> None:
 
     with pytest.raises(ValueError, match="nothing to decide on"):
         decide_promotion(early, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+
+
+def test_a_fragment_of_the_labelled_year_is_not_promoted() -> None:
+    """Negative: docs/08 §M2 "Partición" calls the test "el año etiquetado completo más
+    reciente", and a gate that scored any nonempty slice of it would promote off two rows
+    and a half. The two months kept here are enough for a PR-AUC, a paired interval and a
+    Brier, so only the declared completeness can refuse this block."""
+    table = flood_table()
+    kept = pd.to_datetime(["2025-04-01", "2025-05-01"])
+    fragment = table[
+        (table["horizon_start"] < pd.Timestamp(TEST_FIRST)) | table["horizon_start"].isin(kept)
+    ]
+    assert len(fragment[fragment["horizon_start"] >= pd.Timestamp(TEST_FIRST)]) == 8
+
+    with pytest.raises(ValueError, match="complete labelled year"):
+        decide_promotion(fragment, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+
+
+def test_the_test_block_is_read_once_per_final_candidate() -> None:
+    """docs/08 §Reglas de gobierno, "Test intocable": "El test se usa una vez por
+    candidato final. Iterar mirando el test es fuga." A gate that answers again on the same
+    candidate is exactly that iteration, so the second call has to be refused rather than
+    rescore the block."""
+    table = flood_table()
+    candidate = HeavyRain()
+    reads = SpentTestBlocks()
+
+    first = decide_promotion(
+        table, candidate=candidate, baseline=Fixed(0.5), resamples=200, reads=reads
+    )
+    assert first.report.test_rows == 48
+
+    with pytest.raises(ValueError, match="has already been read"):
+        decide_promotion(
+            table, candidate=candidate, baseline=Fixed(0.5), resamples=200, reads=reads
+        )
+
+
+def test_a_copied_block_is_still_the_same_read() -> None:
+    """Negative: the guard keys on the CONTENT of the block, not on the object it arrived
+    in. `table.copy()` is a different object holding the same rows, so an identity key lets
+    it through by construction — and copying a frame is exactly what an agent reaching for
+    the test twice would do (ADR-0020: "el agente no puede modificar ... el dataset de test
+    ni la compuerta")."""
+    table = flood_table()
+    reads = SpentTestBlocks()
+    decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=reads)
+
+    with pytest.raises(ValueError, match="has already been read"):
+        decide_promotion(
+            table.copy(), candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=reads
+        )
+
+
+def test_a_reordered_block_is_still_the_same_read() -> None:
+    """Negative: reordering the rows is another cheap way to present the same block again,
+    and a digest taken in arrival order would read it as a new one."""
+    table = flood_table()
+    reads = SpentTestBlocks()
+    decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=reads)
+
+    shuffled = table.iloc[::-1].reset_index(drop=True)
+
+    with pytest.raises(ValueError, match="has already been read"):
+        decide_promotion(
+            shuffled, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=reads
+        )
+
+
+def test_a_second_candidate_on_the_same_block_is_refused() -> None:
+    """The block is the scarce resource, not the candidate. Once it has answered one
+    promotion decision it cannot answer another, because a second answer over the same rows
+    is the iteration docs/08 §Reglas de gobierno, "Test intocable", calls "fuga" — and
+    sharing one block across candidates is what makes that iteration easy."""
+    table = flood_table()
+    reads = SpentTestBlocks()
+    decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=reads)
+
+    with pytest.raises(ValueError, match="has already been read"):
+        decide_promotion(
+            table,
+            candidate=HeavyRain(confidence=0.6),
+            baseline=Fixed(probability=PRECEDENCE),
+            resamples=200,
+            reads=reads,
+        )
+
+
+def test_an_independent_run_may_score_the_same_block() -> None:
+    """The guard belongs to a run, not to the process. State kept in a module-level
+    collection outlives the run that made it and refuses an unrelated later run that happens
+    to score the same rows, which is why the caller owns it: a new run means a new
+    `SpentTestBlocks`, and making one is a visible act rather than a reset nobody sees."""
+    table = flood_table()
+
+    first = decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+    second = decide_promotion(
+        table,
+        candidate=HeavyRain(),
+        baseline=Fixed(0.5),
+        resamples=200,
+        reads=SpentTestBlocks(),
+    )
+
+    assert first.promote == second.promote
+    assert first.report.test_rows == second.report.test_rows == 48
 
 
 def test_the_gate_accepts_anything_that_answers_predict_proba() -> None:

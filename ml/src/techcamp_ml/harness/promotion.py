@@ -21,7 +21,8 @@ can see what it was judged on.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -45,6 +46,60 @@ BRIER_NOT_WORSE = "brier_worse_than_the_best_baseline"
 """The two reasons this gate can refuse a candidate, in the order docs/08 names them. They
 are slugs rather than sentences so a report can be compared across candidates without
 re-reading prose, and neither of them is `None`."""
+
+
+@dataclass(slots=True)
+class SpentTestBlocks:
+    """The test blocks one harness run has already spent.
+
+    This is harness state and it is owned by the caller, not by the process. A module-level
+    collection would be wrong twice over: it would outlive the run that made it, and — as the
+    tests showed — it would refuse an unrelated later run that happens to score the same
+    block. The caller creates one, passes it to every `decide_promotion` of that run, and
+    cannot quietly reset it: making a new object is a visible act, not a side effect.
+
+    What is stored is a digest of the block's content, never a row of the block itself.
+    """
+
+    digests: set[str] = field(default_factory=set)
+
+
+def _read_once(blocked: pd.DataFrame, reads: SpentTestBlocks) -> None:
+    """Spend this block's single read in this run, or refuse the second one.
+
+    The key is the **content** of the blocked rows, never the identity of the frame they
+    arrived in. That distinction is the whole guard: `table.copy()` is a different object
+    with a different `id` holding exactly the same rows, so an identity key lets a second
+    read through by construction — and copying a frame is precisely what an agent reaching
+    for the test twice would do (ADR-0020: "el agente no puede modificar ... el dataset de
+    test ni la compuerta"). Rows are put in a canonical order before they are hashed, so
+    presenting the same block reordered is the same read too.
+
+    Called before `_design` builds anything, so a repeat call is refused while the rows are
+    still just rows: no design matrix is built and no scorer is asked anything.
+    """
+    digest = _block_digest(blocked)
+    if digest in reads.digests:
+        raise ValueError(
+            "the blocked test block has already been read, and docs/08 §Reglas de gobierno, "
+            '"Test intocable", allows one read per final candidate; a second answer over the '
+            "same rows is iterating against the test set"
+        )
+    reads.digests.add(digest)
+
+
+def _block_digest(blocked: pd.DataFrame) -> str:
+    """A content key for the blocked block, canonical over row order and index.
+
+    Only the label and the shared feature columns are hashed, because those are the columns
+    the decision is made of; hashing the whole frame would let an unrelated column decide
+    whether two identical blocks count as the same read.
+    """
+    columns = [LABEL_COLUMN, *FEATURE_NAMES]
+    canonical = blocked[columns].sort_values(by=columns, kind="mergesort")
+    return hashlib.sha256(
+        pd.util.hash_pandas_object(canonical, index=False).to_numpy().tobytes()
+    ).hexdigest()
 
 
 @runtime_checkable
@@ -105,6 +160,7 @@ def decide_promotion(
     baseline: Scored,
     seed: int = BOOTSTRAP_SEED,
     resamples: int = BOOTSTRAP_RESAMPLES,
+    reads: SpentTestBlocks | None = None,
 ) -> PromotionDecision:
     """Run the gate of ADR-0020 step 8 once over the blocked test block.
 
@@ -112,7 +168,9 @@ def decide_promotion(
     names that one, not the trivial one), and it is scored on the same rows as the candidate
     so the paired interval compares like with like.
     """
-    labels, features = _test_block(table)
+    blocked = _test_block(table)
+    _read_once(blocked, reads or SpentTestBlocks())
+    labels, features = _design(blocked)
     candidate_scores = _positive_class(candidate.predict_proba(features), features)
     baseline_scores = _positive_class(baseline.predict_proba(features), features)
 
@@ -145,13 +203,15 @@ def decide_promotion(
     )
 
 
-def _test_block(table: pd.DataFrame) -> tuple[npt.NDArray[np.int64], pd.DataFrame]:
-    """The labels and the design matrix of the blocked block, and nothing else.
+def _test_block(table: pd.DataFrame) -> pd.DataFrame:
+    """The blocked block itself, proved to be the whole of the labelled year.
 
-    The design matrix is the shared feature contract of T2 and not one column more: an
-    identity column would let a model score a municipality it was fitted on, and a column
-    the dataset does not hold would be a feature the serving job cannot build
-    (docs/08 §Reglas de gobierno, "Paridad de features").
+    It returns the frame rather than the model-facing arrays on purpose: `_read_once` has to
+    be able to refuse a second read before a design matrix exists, so the two steps are kept
+    apart. What is checked here is that the block is the complete declared year and not a
+    fragment of it — every metric below answers happily on whatever rows it is handed, and two
+    rows carrying one positive and one negative are enough for a PR-AUC, a paired interval and
+    a Brier, so the gate could return `promote` off an arbitrarily incomplete test set.
     """
     _require(table, (*FEATURE_NAMES, LABEL_COLUMN))
     months = pd.PeriodIndex(table["horizon_start"], freq="M")
@@ -163,10 +223,45 @@ def _test_block(table: pd.DataFrame) -> tuple[npt.NDArray[np.int64], pd.DataFram
             f"the dataset holds no row between {TEST_FIRST} and {TEST_LAST}; the gate has "
             "nothing to decide on, and a gate that scored zero rows would promote anything"
         )
+    _require_complete_year(months)
+    return blocked
+
+
+def _design(blocked: pd.DataFrame) -> tuple[npt.NDArray[np.int64], pd.DataFrame]:
+    """The labels and the design matrix of the blocked block, and nothing else.
+
+    The design matrix is the shared feature contract of T2 and not one column more: an
+    identity column would let a model score a municipality it was fitted on, and a column
+    the dataset does not hold would be a feature the serving job cannot build
+    (docs/08 §Reglas de gobierno, "Paridad de features").
+    """
     return (
         blocked[LABEL_COLUMN].to_numpy(dtype=np.int64),
         blocked[list(FEATURE_NAMES)],
     )
+
+
+def _require_complete_year(months: pd.PeriodIndex) -> None:
+    """Refuse a block that is not the whole of the labelled year the test block declares.
+
+    docs/08 §M2 "Partición" calls the test "el año etiquetado completo más reciente", and
+    every number the gate reports would be computed happily on a fragment of it: a PR-AUC, a
+    paired interval and a Brier all need only a nonempty frame, and two rows — one positive,
+    one negative — are enough for a candidate to win all three. So completeness is checked
+    here rather than left to the size of the table, because the caller does not choose it and
+    must not be able to shrink it.
+    """
+    expected = pd.period_range(TEST_FIRST, TEST_LAST, freq="M")
+    present = months[(months >= expected[0]) & (months <= expected[-1])].unique()
+    missing = expected.difference(present)
+    if len(missing):
+        named = ", ".join(str(month) for month in missing[:3])
+        raise ValueError(
+            f"the test block holds {len(expected) - len(missing)} of the {len(expected)} "
+            f"months of the complete labelled year {TEST_FIRST} to {TEST_LAST}, and is "
+            f"missing {named}; the gate promotes off that whole year, not off a fragment of "
+            "it, because every metric below would answer on whatever rows it was given"
+        )
 
 
 def _require(table: pd.DataFrame, columns: tuple[str, ...]) -> None:
