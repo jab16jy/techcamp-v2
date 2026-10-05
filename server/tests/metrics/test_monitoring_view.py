@@ -28,6 +28,7 @@ from metrics.conftest import (
     bogota_midnight,
     make_env,
 )
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.metrics.adapters.source_repository import SqlAlchemyMetricsSourceRepository
@@ -38,6 +39,30 @@ _FULL_MONTH_SECONDS = 2_592_000
 """September 2026 has 30 days: 30 x 86400."""
 _HALF_MONTH_SECONDS = 1_296_000
 """From local midnight of Sep 16 to local midnight of Oct 1: 15 x 86400."""
+_WEST_OF_BOGOTA = "America/Los_Angeles"
+"""A session zone seven hours west of UTC in September (PDT), three hours west of
+Bogota. The only zones that move the label are those west of UTC-5: under UTC or
+UTC-5 the instant of a Bogota month start lands on the same date, so the bug is
+invisible on this worktree's own container and only appears on a host configured
+further west."""
+
+
+async def _set_session_timezone(session: AsyncSession, tz: str) -> None:
+    """Move the session's `TimeZone` and read it back the same way.
+
+    `set_config` takes a bound parameter where `SET TIME ZONE` takes a literal,
+    and the GUC it sets is exactly the one `timestamptz::date` resolves in, so
+    this is the seam the finding is about rather than a lookalike. `false` is
+    session scope, not `SET LOCAL`, because the fixture commits and a local
+    setting would be discarded by the first commit inside the test.
+    """
+    applied = await session.execute(text("SELECT set_config('TimeZone', :tz, false)"), {"tz": tz})
+    assert applied.scalar_one() == tz
+
+
+async def _session_timezone(session: AsyncSession) -> str:
+    """The session's current `TimeZone`, so the test can put it back."""
+    return (await session.execute(text("SHOW TIME ZONE"))).scalar_one()
 
 
 async def test_monitoring_view_reports_claimed_seconds_and_received_readings(
@@ -158,6 +183,53 @@ async def test_monitoring_view_counts_one_reading_per_uplink_not_per_sensor(
     )
 
     assert [(r.received_readings, r.claimed_seconds) for r in rows] == [(2, _FULL_MONTH_SECONDS)]
+
+
+async def test_the_month_label_does_not_follow_the_session_timezone(
+    db_session: AsyncSession,
+) -> None:
+    """The window arithmetic was never the problem; the `month` **label** was.
+
+    `bdc469490565` selected `bounds.month_start::date`, and `bounds.month_start`
+    is a `timestamptz`: casting one to `date` resolves it in the session's
+    `TimeZone`, while the module docstring claims month boundaries are built
+    "never from the session's `TimeZone`". A node claimed at Bogota midnight on
+    Sep 1 is the instant `2026-09-01T05:00Z`, which is 22:00 on **Aug 31** in
+    Los Angeles, so the row was labelled August and a September query found
+    nothing while an August query found a September's worth of evidence.
+
+    The window itself cannot move: `month_start`/`month_end`/`claimed_at` are
+    subtracted as absolute instants, so `claimed_seconds` is identical in either
+    zone. That is why the assertion is about the label alone, and why the same
+    full month of seconds is the correct figure for the September row.
+
+    The negative is the other side of the same single label: a node that was never
+    claimed in August must not appear under August just because the session ran
+    west of UTC-5.
+
+    The zone is set explicitly rather than read from the ambient configuration,
+    so the test proves the view is immune to it instead of passing on a host that
+    happens to run at UTC.
+    """
+    source = SqlAlchemyMetricsSourceRepository(db_session)
+    env = await make_env(db_session)
+    node_id = await add_claimed_node(
+        db_session, env, claim_code="node-tz", claimed_at=bogota_midnight(MONTH), interval_s=3600
+    )
+    original = await _session_timezone(db_session)
+
+    try:
+        await _set_session_timezone(db_session, _WEST_OF_BOGOTA)
+
+        september = await source.node_month_readings(env.org_id, env.plot_id, month=MONTH)
+        august = await source.node_month_readings(env.org_id, env.plot_id, month=date(2026, 8, 1))
+    finally:
+        await _set_session_timezone(db_session, original)
+
+    assert [(r.node_id, r.month, r.claimed_seconds) for r in september] == [
+        (node_id, MONTH, _FULL_MONTH_SECONDS)
+    ]
+    assert august == []
 
 
 async def test_monitoring_view_caps_the_current_month_at_now(

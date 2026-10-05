@@ -2,27 +2,26 @@
 
 The HTTP shape only: pydantic out, `PlotNotFoundError` mapped to
 `problem+json`, and `home.application.build_plot_status` decides every field's
-rule (D-T0.1). The repositories come from each module's own `deps` — the
-wiring that already `weather`, `irrigation`, `telemetry` and `logbook` do —
-so nothing is built twice.
+rule (D-T0.1). Every repository comes from the module that owns it, through
+that module's own `deps` — the wiring that already `weather`, `irrigation`,
+`telemetry` and `logbook` do, and that `metrics` does too since it ships its
+own `MonthlyMetricRepoDep`. Nothing is built twice here, and no metrics SQL
+adapter crosses a module boundary from this file.
 
-`metrics` is the one exception, and it is temporary: E11 T5 shipped
-`SqlAlchemyMonthlyMetricRepository` without a dep, and `metrics`
-`adapters/api/deps.py` is T7's file (T8 runs in parallel with it), so this
-module builds the repository over its own `SessionDep` instead of importing a
-dep that does not exist yet. The `home` application layer still reaches
-`metrics` only through its `application` facade, and the moment T7's
-`MonthlyMetricRepoDep` lands, this provider becomes a plain import like every
-other one here.
+Each dep is annotated with the adapter class its own module returns, as every
+dep in this file is. The boundary `home` actually owns is one layer down:
+`build_plot_status` takes `metrics.application.adoption.MonthlyMetricRepository`,
+the port, so `home` still reaches `metrics` only through its use case and
+never through its SQL.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated, Any
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from techcamp.alerts.adapters.api.deps import AlertRepoDep
@@ -47,9 +46,7 @@ from techcamp.irrigation.adapters.api.deps import (
     WaterBalanceRepoDep,
 )
 from techcamp.logbook.adapters.api.deps import VisitRepoDep
-from techcamp.metrics.adapters.monthly_repository import SqlAlchemyMonthlyMetricRepository
-from techcamp.metrics.application.adoption import MonthlyMetricRepository
-from techcamp.shared.db import SessionDep
+from techcamp.metrics.adapters.api.deps import MonthlyMetricRepoDep
 from techcamp.shared.errors import ProblemError
 from techcamp.telemetry.adapters.api.deps import (
     CalibrationRepoDep,
@@ -60,24 +57,6 @@ from techcamp.telemetry.adapters.api.deps import (
 from techcamp.weather.adapters.api.deps import WeatherRepoDep
 
 router = APIRouter(tags=["home"])
-
-
-async def get_monthly_metric_repository(
-    session: SessionDep,
-) -> SqlAlchemyMonthlyMetricRepository:
-    """The monthly metrics store for `/status` (D-T0.13).
-
-    Local wiring, not the pattern: see this module's docstring. T7 owns
-    `metrics/adapters/api/deps.py` and ships the shared
-    `MonthlyMetricRepoDep`; until it lands, this keeps the lane disjoint from
-    that file instead of guessing at a symbol two lanes would define at once.
-    """
-    return SqlAlchemyMonthlyMetricRepository(session)
-
-
-MonthlyMetricRepoDep = Annotated[MonthlyMetricRepository, Depends(get_monthly_metric_repository)]
-"""The port, not the concrete class: `home` depends on the metrics use case,
-never on its SQL."""
 
 
 class PlotSummaryView(BaseModel):

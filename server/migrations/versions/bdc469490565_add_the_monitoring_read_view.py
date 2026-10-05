@@ -30,6 +30,11 @@ not happened yet. Month boundaries are built in America/Bogota (D-T0.7) with
 `AT TIME ZONE`, never from the session's `TimeZone`, so a session running under
 UTC cannot shift a window by five hours.
 
+**Corrected by `270d5f102dff`.** That sentence above was true of the window
+arithmetic and false of the `month` label, which read `bounds.month_start::date`
+on a `timestamptz` and therefore resolved in the session's `TimeZone`. The SQL of
+this revision is unchanged; only this note and the successor's view differ.
+
 Revision ID: bdc469490565
 Revises: e07a3d92b6f1
 Create Date: 2026-10-02 14:12:03.884215
