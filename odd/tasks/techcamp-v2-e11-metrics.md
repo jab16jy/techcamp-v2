@@ -31,7 +31,7 @@ no impact metric.
 - Lessons from E4–E10 (`../techcamp-v2-worktrees/e11-briefs/explore-lessons.md.out`): org filter
   on every query with isolation tests; America/Bogota days via `shared.dates`; missing evidence is
   `null`; per-item error containment in batch jobs; no transaction across I/O; frozen test
-  clocks; unique OpenAPI schema names; commits ≤ ~400 authored lines, lockfiles apart;
+  clocks; unique OpenAPI schema names; work-unit commits, lockfiles apart;
   periodic tasks take `timestamp: int = 0`; savepoint around queueing-lock deferrals.
 - `metrics` reads other modules' data through read-only SQL views (docs/05 §Reglas); plot access
   and cycles through the `farms` facade.
@@ -67,11 +67,12 @@ Owner approved 2026-10-02.
 - D-T4.2 (owner, 2026-10-05) Single authorization channel: `consent/v3` and any audited
   authorization go through the orchestrator (complete envelope, STOP, wait); never
   `ask_user_question` to whoever is at the keyboard.
-- D-T4.3 (owner, 2026-10-05) A work unit stays ≤ ~400 authored lines (additions + deletions,
-  generated excluded), and complementary functions ship as **separate** work units — hooks/queries
-  apart from UI, screen apart from route wiring, read apart from write. Review granularity follows
-  work units, so commit granularity and review granularity are the same boundary (AGENTS.md
-  §Workflow; T1 forecast 200 → 1170 actual is the counterexample this rule answers).
+- D-T4.3 (owner, 2026-10-05) Work units are cut by **function, not by line count**: complementary
+  functions ship as separate work units — hooks/queries apart from UI, screen apart from route
+  wiring, read apart from write. A unit that grows over what its function needs is re-sliced by
+  function, never shrunk; no budget constrains the code, so tests, docs and comments are never
+  dropped or compressed to fit a size (AGENTS.md §Workflow; T1's forecast 200 → 1170 actual is why
+  the forecast never sizes a unit).
 - D-T0.10 Roles: baseline `PUT` owner/technician, `GET` any member; org metrics owner/technician.
 - D-T0.11 `PUT /plots/{id}/baseline` creates or replaces; `recorded_by` = caller; editable after
   cycles exist.
@@ -266,8 +267,9 @@ Full report: `../e11-briefs/e11-t7b-rdd.md`.
 - [ ] T10 Close: `just gate-release`, follow-up issue (`field_record` / `relative_yield`), delivery
   plan. Route: parent.
 
-Forecast total ~3150 authored lines. Delivery strategy: stacked-to-main chained PRs of about
-400 authored lines (AGENTS.md §Workflow), on the owner's word.
+Forecast total ~3150 authored lines (T1–T7b+T9 landed ~14.7k, so forecasts undershoot by ~5×).
+Delivery strategy: stacked-to-main chained PRs, **one per work unit** — per task when the task is a
+single unit (AGENTS.md §Workflow), on the owner's word.
 
 ## Lanes
 Wave 1: T1. Wave 2: T2 ‖ T3. Wave 3: T4 ‖ T5 ‖ T9a. Wave 4: T6 ‖ T7 ‖ T8. Wave 5: T9b. Wave 6: T10.
