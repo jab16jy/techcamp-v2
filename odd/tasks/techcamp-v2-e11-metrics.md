@@ -143,22 +143,34 @@ reviewed by the parent.
 Findings rule (owner, 2026-09-30): blocking → bounded correction; 1–2 non-blocking → one issue per
 round; 3+ → fix the most important with `Refs #N`, file the rest.
 
-### How a lane runs RDD (the T2 procedure; binding for T4 onwards)
+### How a lane runs RDD (the T2 procedure, corrected by the T3 resolution; binding for T4 onwards)
 1. After the parent gate passes, the writer runs
-   `gentle-ai review assess --cwd <lane> --agent opencode --base-ref <fork point> --committed-only --json`.
+   `gentle-ai review assess --cwd <lane> --agent <runtime> --base-ref <fork point> --committed-only --json`.
    Never start from the selectorless `review status`: it binds the merge-base with `main`
    (a2bae6b) and freezes the whole epic as the candidate (T1, T3 attempt 1).
 2. Execute the returned `next_transition.command` verbatim (the preflight STATUS with the same
    selectors), then the START it returns.
 3. A consent envelope is relayed to the parent complete; the parent relays it to the owner with
    `AskUserQuestion`; the writer runs only the invocation of the chosen answer, verbatim.
-4. Each `review.capture-result` slot is dispatched once through OpenCode's `subagent` tool with the
-   provider's agent and prompt copied verbatim. Never author, edit or rewrite reviewer output.
-5. `output_refused` means Go refused the reviewer's JSON at admission, not that the agent is
-   missing. Read the newest file in `<main repo>/.git/gentle-ai/rejected-results/<lineage>/` for the
-   exact reason (T3: finding ids without the `R3-` lens prefix; `proof_path_out_of_scope`). Run the
-   bound STATUS and relaunch only when it re-offers the same slot.
-6. `correction_required` → follow its `status_continuation` (one bounded correction);
+4. The native review candidate is a work-unit commit or PR slice, **never the accumulated lane
+   branch**. Scope with `--base-ref` at the work unit's first commit, not the lane fork point
+   (T3: the 2353-line lane stalled; the 466-line close-out `371c0e7..HEAD` burned).
+5. Runtime rule: **Pi runs RDD (host-relay `pi_host_relay`)**. OpenCode's relay contract is
+   fixed at `gentle-ai.opencode-relay/v2-staged` and refuses `workspace`-projection bindings
+   (`binding_mismatch`); Claude Code is org-blocked on this machine.
+   `OpenCode writers run their own RDD` is superseded for the review step only — OpenCode still
+   writes the code.
+6. Each `review.capture-result` slot is dispatched once with the provider's agent and prompt
+   copied verbatim. Never author, edit or rewrite reviewer output. Finding `id` is optional and
+   harness-assigned — never write it (T3: invented ids got the whole capture rejected).
+7. Verify receipts in `review-transactions/terminal-consumption/v1/`, **not** by listing `v2/`.
+   On burn Go prunes the lineage directory; absence of the directory is the signature of a
+   successful burn. Empty `rejected-results/` means the capture was admitted.
+8. The bound STATUS needs all three together: `--agent <runtime>` + `--lineage` +
+   `--repository-context <rc>`. That flips `applicability` from `unrelated` to `current_target`.
+9. The admitted result body does NOT survive the burn — copy findings to the issue/doc **before**
+   acknowledging.
+10. `correction_required` → follow its `status_continuation` (one bounded correction);
    approval → run the exact `review.acknowledge-approved` once and report the
    `gentle-ai.review-acknowledged/v1` envelope.
 7. The writer writes its full report (outcome, ack envelope, every finding with id, severity,
