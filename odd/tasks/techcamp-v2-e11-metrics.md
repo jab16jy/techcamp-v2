@@ -61,6 +61,12 @@ Owner approved 2026-10-02.
   scoping by cycle would discard actions from entries the phone sent without one. Written into
   [11-metricas §2](../docs/11-metricas.md) and [ADR-0025](../docs/adr/0025-la-accion-de-water-stress-es-de-la-parcela.md);
   the SQL is unchanged.
+- D-T4.1 (owner, 2026-10-05) RDD without slice budget: a candidate may span several
+  work-unit commits; `under_budget` slices with no offered START are covered by the
+  combined candidate instead of PR slices.
+- D-T4.2 (owner, 2026-10-05) Single authorization channel: `consent/v3` and any audited
+  authorization go through the orchestrator (complete envelope, STOP, wait); never
+  `ask_user_question` to whoever is at the keyboard.
 - D-T0.10 Roles: baseline `PUT` owner/technician, `GET` any member; org metrics owner/technician.
 - D-T0.11 `PUT /plots/{id}/baseline` creates or replaces; `recorded_by` = caller; editable after
   cycles exist.
@@ -262,6 +268,25 @@ escrito en docs/11-metricas.md §2 y en ADR-0025, SQL sin cambios.
    vive en ADR-0025. **Ya corregido después de la revisión** (commit pendiente en la
    rama, junto con el mismo puntero en esta feature doc): el registro que impide
    re-levantar el CRITICAL ahora apunta al documento que sí lo lleva.
+
+### T4 — unit 2 `review-24ee776a961efc72` + lane completa `review-15dcaac22de5ade7`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Unidades | `f7d808e` dominio (396), `d3f6e72` use case (440), `c01fd2e` repo (339) |
+| Unit 2 | medium, `review-reliability`, 1 SUGGESTION (`R3-missing-plot-path-coverage`), cero correcciones, recibo `86019dee…f3a5e` |
+| Units 1+3 | `under_budget` sin lineage (provider no ofrece START); el combinado de 836 se declinó por sobre-presupuesto (regla vigente ese día) |
+| Lane completa | `104608c..c01fd2e`, 6 paths / 1175 líneas, **0 findings**, recibo `cee683fa…68f72f` (regla sin-presupuesto del dueño, ver Decisiones) |
+| Follow-up | Issue #250 (`review-follow-up`, `epic:e11`, `area:server`, `type:chore`) con el SUGGESTION (la lane completa no lo re-levantó: registrado no resuelto) |
+| Merge | `465e1bd` a `feat/e11-metrics`; worktree/rama/DB de `e11-t4` eliminados tras verificar |
+
+Rung by Pi (host-relay). El self-review OpenCode murió en captura con
+`opencode_review_transport_relay_refused (reason: binding_mismatch)`, prompt
+byte-idéntico: el relay v2-staged no ejecuta proyecciones `workspace` (precedente T3,
+confirmado ×2 más en T4/T5). Consent y abandon salieron al teclado y el owner los
+ratificó post-hoc (granted sin verificar); desde entonces rige la REGLA DURA: consent y
+autorizaciones auditadas solo por el canal del orquestador. El id de lineage deriva del
+`target_identity` (mismo target ⇒ mismo id tras `abandon` + re-mint con `runtime_agent: pi`).
 
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
