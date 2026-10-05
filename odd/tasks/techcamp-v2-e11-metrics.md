@@ -244,6 +244,11 @@ preflight por no ser ancestros del base.
   aunque su status sea `lost`. La asimetría con el denominador (que sí exige
   `status IN (harvested, lost)`) es **intencional**: ante datos contradictorios, la bitácora del
   productor es la evidencia más fuerte. Queda escrito en docs/11 §2 para que nadie lo lea como bug.
+- **D-T10.1 (owner, 2026-10-05, Option A)** Un ciclo cerrado cuenta en **un solo mes**: el de su
+  entrada de cierre. Antes `d2c8f4a1b3e7` agrupaba por `date_trunc('month', e.occurred_on)`, así que
+  un ciclo con dos entradas de cierre salía en dos meses y entraba en dos denominadores, y la razón
+  ya no era una fracción de ciclos. D-T7.3 se preserva literal: el numerador sigue **sin filtro de
+  status**, solo cambió el mes (que es el del ciclo, no el de cada entrada).
 
 ### T7b — lineage `review-d1dff3698a655e8c`, **aprobado, 0 findings, autoridad quemada** (2026-10-05)
 
@@ -266,6 +271,29 @@ procedimiento §"How a lane runs RDD" paso 1 ahora exige un base-ref **ancestro*
 Full report: `../e11-briefs/e11-t7b-rdd.md`.
 - [ ] T10 Close: `just gate-release`, follow-up issue (`field_record` / `relative_yield`), delivery
   plan. Route: parent.
+
+### T10 — hallazgos de CodeRabbit sobre las vistas y los docs de E11 (2026-10-05)
+
+Cuatro hallazgos verificados, más el ruling D-T10.1. Tres revisiones nuevas, **una sola cadena
+lineal** para no producir dos heads: `98cab252bfb3` → `270d5f102dff` → `43c9c5cc68c9`.
+
+| Work unit | Commit | Qué cambió |
+|---|---|---|
+| 1 | `ef5181a` | docs/11:42 — la ecuación impresa (`25 × cada componente`) contradecía la regla de normalizar sobre los no nulos; el código ya implementaba 100 × Σ/cuenta (D-T0.3) |
+| 2 | `a92c298` | docs/05:143 — `metrics` faltaba en la lista de fachadas de `home`, aunque el mismo doc ya lo decía en `:151` y en la arista `home --> metrics` |
+| 3 | `e7a2b9e` | `c1fb5c6dcdd2` — la ventana de estrés de un ciclo terminado caía a `today` cuando `expected_harvest_on` es nulo (crop sin etapas FAO-56, y `_reject_explicit_null` exime ese campo), así que el ciclo seguía acumulando días, incluso los del ciclo siguiente de la misma parcela. Ahora termina en la entrada que registra el cierre, y sin esa entrada la cifra es `null` |
+| 4 | `84b6ad9` | `bdc469490565` — `month` salía de `bounds.month_start::date`, un cast de `timestamptz` que resuelve en el `TimeZone` de la sesión: bajo `America/Los_Angeles` la fila de septiembre quedaba etiquetada el 31 de agosto. La etiqueta sale ahora de `month_start_local` (naive, Bogotá); la aritmética de la ventana nunca estuvo mal |
+| 5 | `9e0ed4d` | `d2c8f4a1b3e7` + docs/11 §2 — D-T10.1: un ciclo cerrado en un solo mes |
+
+Dos falsos positivos ya verificados que **no** se tocaron: el cron de procrastinate (`infra/compose.yaml:156`
+pone `TZ: America/Bogota` a propósito; croniter respeta el TZ del proceso) y el import cross-module de
+`metrics/application/cycle_summary.py` a `farms.domain`, que sigue el precedente de `alerts` con
+`telemetry.domain` e `identity.domain`.
+
+Falsos positivos del propio hallazgo 3: el reporte decía que `expected_harvest_on` "siempre es null
+porque POST solo toma `{crop_id, sown_on}`". Es falso — `manage_cycles.py:70` lo deriva y
+`router.py:543` lo documenta — pero el hallazgo igual se sostiene por el caso sin etapas FAO-56 y
+por la exención de `_reject_explicit_null`.
 
 Forecast total ~3150 authored lines (T1–T7b+T9 landed ~14.7k, so forecasts undershoot by ~5×).
 Delivery strategy: stacked-to-main chained PRs, **one per work unit** — per task when the task is a

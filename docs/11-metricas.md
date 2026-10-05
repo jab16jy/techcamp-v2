@@ -30,17 +30,31 @@ Hay cinco grupos:
 | **Margen bruto** | `Σ (sold_kg × sale_price_cop_per_kg) − Σ costos` | Bitácora (venta registrada en la cosecha) | Por ciclo |
 | **Pérdidas por evento** | `Σ quantity` (kg) y `Σ cost_cop` (COP) de las observaciones con `alert_id` | Bitácora | Por evento |
 
+**Ventana de los días en estrés hídrico.** El balance asimilado es diario **por parcela** y no lleva ciclo ([03](03-modelo-datos.md)), así que se lee sobre una ventana, y la ventana es parte de la cifra:
+
+- Un ciclo `active` se mide desde `sown_on` hasta `min(expected_harvest_on, hoy)` en `America/Bogota`: un ciclo abierto no tiene cierre que lo acote, y su única esperanza de fin es la fecha esperada.
+- Un ciclo terminado (`harvested` o `lost`) se mide hasta el `occurred_on` de la entrada de bitácora que **registra su cierre**, que es la misma entrada y el mismo ancla que le dan su mes a un ciclo cerrado (§2, D-T7.2). Una `expected_harvest_on` equivocada o tardía no puede extender la ventana más allá del día en que el ciclo se cerró, y un ciclo cerrado no sigue contando días que ya pertenecen al siguiente ciclo de la misma parcela.
+- Un ciclo terminado **sin entrada de cierre no tiene ventana**, y la cifra es `null`: evidencia faltante, no un conteo truncado a hoy ([03:441](03-modelo-datos.md)).
+
+El futuro nunca está dentro de un ciclo: una entrada de cierre fechada hacia adelante no respalda días que todavía no ocurren.
+
 **Parcelas de secano** (`irrigation_system = none`, [ADR-0023](adr/0023-parcelas-con-riego-y-secano.md); brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). No tienen agua aplicada ni productividad del agua de riego: su resultado hídrico se reporta con el rendimiento y los días en estrés hídrico.
 
 **Encuesta de inscripción** (`plot_baseline`). Al inscribir una parcela se registra una encuesta corta: cultivo y rendimiento del último ciclo, costos aproximados y práctica de riego ([03](03-modelo-datos.md#plot_baseline-encuesta-de-inscripción)). El impacto se mide contra esa encuesta (antes y después por parcela) y, en un piloto, contra parcelas de control del mismo municipio sin TechCamp (diferencias en diferencias). No se mide contra la media municipal: los productores que adoptan se autoseleccionan y EVA no es una muestra comparable, así que el rendimiento relativo municipal solo da contexto (brechas G04 y G11 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
 
 ## 2. Adopción: índice de adopción digital
 
-Es un índice de 0 a 100 por parcela, calculado cada mes con cuatro componentes de igual peso. Mide el **uso de la plataforma**, no la tecnificación en sí (brecha G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
+Es un índice de 0 a 100 por parcela, calculado cada mes con cuatro componentes que pesan lo mismo entre sí. Mide el **uso de la plataforma**, no la tecnificación en sí (brecha G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
+
+El índice **reparte los 100 puntos entre los componentes que sí tienen evidencia**, con el mismo peso cada uno (100/4 con los cuatro, 100/3 con uno nulo, 100/2 con dos, 100 con uno):
 
 ```
-digital_adoption_index = 25 × monitoring + 25 × record_keeping + 25 × decision + 25 × risk_management
+con_evidencia = los componentes cuyo valor NO es null
+digital_adoption_index = 100 × (Σ con_evidencia) / (cantidad de con_evidencia)
+digital_adoption_index = null    si los cuatro componentes son null
 ```
+
+Con los cuatro componentes presentes, `100 × (monitoring + record_keeping + decision + risk_management) / 4` es el mismo número que el promedio ponderado fijo de 25 puntos, así que los dos enunciados coinciden cuando no falta evidencia; difieren en cuanto un componente vale `null`, que es lo que fija la regla de cálculo más abajo (D-T0.3).
 
 | Componente | Fórmula (0–1) | Qué significa |
 |---|---|---|
@@ -74,10 +88,14 @@ Otras métricas de adopción:
 
 Estas tres, junto con el promedio del índice de las parcelas con índice, forman `OrgMetrics` (`GET /organizations/{org_id}/metrics`, D-T0.12). Se calculan al consultar: cuentan sobre el mes pedido y la mediana del tiempo a primera lectura toma los nodos reclamados en ese mes, un valor por nodo y no la mediana de las medianas de parcela.
 
-**En qué mes cuenta un ciclo** (D-T7.2). `crop_cycle` no tiene fecha de cierre ([03:128-135](03-modelo-datos.md)), así que el mes de un ciclo es el de la entrada de bitácora que **registra su cierre**, por su `occurred_on`: la fecha que escribió el productor, nunca la que llegó la sincronización offline.
+**En qué mes cuenta un ciclo** (D-T7.2, y D-T10.1). `crop_cycle` no tiene fecha de cierre ([03:128-135](03-modelo-datos.md)), así que el mes de un ciclo es el de la entrada de bitácora que **registra su cierre**, por su `occurred_on`: la fecha que escribió el productor, nunca la que llegó la sincronización offline.
 
-- **Numerador:** ciclos con una entrada `harvest` en el mes.
-- **Denominador:** ciclos con una entrada que registre el cierre en el mes y `status` en `harvested` o `lost`. Una entrada `harvest` registra el cierre de un ciclo cosechado, y una `observation` con `alert_id` registra el cierre de uno perdido (esa observación *es* el registro de la pérdida, [03:424](03-modelo-datos.md)).
+**Un ciclo cerrado cuenta en un solo mes** (D-T10.1, ruling del dueño, 2026-10-05): el de su entrada de cierre, y ningún otro. Un ciclo no entra en el denominador de dos meses, ni su cosecha aparece en el numerador de un mes que no es el suyo. Las reglas de numerador y denominador se leen sobre ese único mes, no sobre "el mes".
+
+Cuando varias entradas podrían registrar el cierre, la elige el `status` del ciclo, que es la misma regla: una entrada `harvest` registra el cierre de un ciclo cosechado, y una `observation` con `alert_id` el de uno perdido (esa observación *es* el registro de la pérdida, [03:424](03-modelo-datos.md)). Con varias entradas del mismo tipo, la más antigua.
+
+- **Denominador:** ciclos cerrados cuyo mes es el pedido y `status` en `harvested` o `lost`.
+- **Numerador:** de esos ciclos, los que tienen una entrada `harvest` **en su mes**, **sin filtro de `status`**. La asimetría con el denominador es deliberada: ante datos contradictorios —un cosechero que registró la cosecha y después anotó la pérdida— el registro del productor es la evidencia más fuerte disponible, así que el mes reporta la cosecha en vez de discutir el `status`.
 - **Un ciclo `active` no cuenta ni en el numerador ni en el denominador**, aunque tenga una cosecha registrada: el denominador son ciclos **terminados**, así que la fracción es de ciclos cerrados y registrados, no de ciclos con cosecha anotada.
 - **Evidencia faltante, no cero.** Un ciclo `lost` sin observación de pérdida, y un ciclo cerrado por `PATCH` sin ninguna entrada de bitácora, no aparecen en ningún mes. Un mes sin ciclos terminados vale `null`, nunca `0`.
 
