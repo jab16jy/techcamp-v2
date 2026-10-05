@@ -34,6 +34,13 @@ const TrayScreen = lazy(() =>
   })),
 )
 
+// eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
+const IndicatorsScreen = lazy(() =>
+  import('../features/metrics/containers/IndicatorsScreen').then((module) => ({
+    default: module.IndicatorsScreen,
+  })),
+)
+
 /**
  * Inicio tab wrapper: renders TrayScreen when the caller has the technician role
  * in the active organization, and PlotStatusScreen for any other role (D-T0.9, docs/07).
@@ -125,22 +132,63 @@ function PlotsTab() {
   )
 }
 
+/**
+ * Más tab wrapper (replaces the `PlaceholderPage`, E11 D-T0.13): the entries
+ * docs/07's screen map hangs off `Más`, starting with the technification
+ * indicators, plus the sign-out action and the notification switch that were
+ * already here. The other three entries in the map are still placeholders, so
+ * this screen does not claim them.
+ *
+ * A grouped row with a trailing chevron rather than a button: it navigates to
+ * another screen in this tab, which is what a list row is for.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
+function MasTab() {
+  return (
+    <div className="px-0 pt-6">
+      <div className="px-4">
+        <h1 className="font-serif text-2xl">Más</h1>
+      </div>
+      <ul className="mx-4 mt-4 divide-y divide-text/10 rounded-lg bg-surface-raised">
+        <li>
+          <Link
+            to="/mas/indicadores"
+            className="flex min-h-12 items-center justify-between gap-3 px-4 py-3"
+          >
+            <span className="text-base text-text">Indicadores de tecnificación</span>
+            <ChevronDownIcon
+              className="size-5 shrink-0 -rotate-90 text-text-muted"
+              aria-hidden="true"
+            />
+          </Link>
+        </li>
+      </ul>
+      <div className="px-4">
+        <SignOutButton />
+        {/* docs/07's screen map: "Ajustes y notificaciones" hangs off `Más`. */}
+        <NotificationsCard />
+      </div>
+    </div>
+  )
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
+function IndicatorsRoute() {
+  return (
+    <Suspense fallback={null}>
+      <IndicatorsScreen />
+    </Suspense>
+  )
+}
+
 const tabRoutes: RouteObject[] = [
   { index: true, element: <InicioTab /> },
   { path: 'estado', element: <EstadoRoute /> },
   { path: 'alertas', element: <PlaceholderPage title="Alertas" /> },
   { path: 'bitacora', element: <BitacoraTab /> },
   { path: 'parcelas', element: <PlotsTab /> },
-  {
-    path: 'mas',
-    element: (
-      <PlaceholderPage title="Más">
-        <SignOutButton />
-        {/* docs/07's screen map: "Ajustes y notificaciones" hangs off `Más`. */}
-        <NotificationsCard />
-      </PlaceholderPage>
-    ),
-  },
+  { path: 'mas', element: <MasTab /> },
+  { path: 'mas/indicadores', element: <IndicatorsRoute /> },
 ]
 
 /**
