@@ -1,8 +1,16 @@
-"""The enrollment-survey endpoints (docs/04-api.md:51-52, 233; D-T0.10, D-T0.11).
+"""The metrics endpoints: the enrollment survey and the reads behind the
+"Indicadores de tecnificación" screen (docs/04-api.md:51-52, 224-226, 233-235;
+D-T0.8, D-T0.10, D-T0.11).
 
-`GET` answers any member and `404`s a plot with no survey; `PUT` creates or
-replaces it for an owner or technician (`403` otherwise), with `crop_id`
-validated against the catalog (`422`).
+The survey endpoints are `GET` any member and `404` a plot with no survey, and
+`PUT` creates or replaces it for an owner or technician (`403` otherwise), with
+`crop_id` validated against the catalog (`422`).
+
+The reads answer only what was stored: `GET /plots/{id}/metrics` the adoption
+month the job wrote, `GET /plots/{id}/cycles/{id}/summary` the impact a finished
+cycle stored — an active cycle is computed on read and never written (D-T0.8).
+Neither read writes, and a plot outside the caller's organizations is `404` for
+every role (docs/04-api.md:237).
 
 Pydantic stays at this boundary (AGENTS.md): the closed `irrigation_practice`
 vocabulary and the non-negative figures are request validation here, while the
@@ -11,7 +19,7 @@ database `CHECK`s of T1's migration are the second line of defense.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -31,6 +39,11 @@ from techcamp.metrics.domain.models import IrrigationPractice, PlotBaseline
 from techcamp.shared.errors import ProblemError
 
 router = APIRouter(tags=["metrics"])
+
+_MONTH_QUERY = r"^\d{4}-(0[1-9]|1[0-2])$"
+"""`YYYY-MM`, and a real month of the calendar: `2026-13` is a malformed query,
+not a missing row, so it is `422` from the query validation rather than a `404`
+from the store (docs/04-api.md:234)."""
 
 
 class PlotBaselineInput(BaseModel):
@@ -142,3 +155,25 @@ async def put_baseline(
     except UnknownCropError as exc:
         raise ProblemError(status=422, title="crop_id is not a valid crop") from exc
     return _baseline_view(baseline)
+
+
+class PlotMetricMonthlyView(BaseModel):
+    """`plot_metric_monthly` on the wire (docs/04-api.md:234).
+
+    The four components and the index are `null` when the plot had no evidence
+    for them that month (D-T0.3): a component without a denominator is not a
+    component that scored zero.
+    """
+
+    plot_id: UUID
+    month: date
+    """The stored bucket, the first day of the month (docs/03-modelo-datos.md:438).
+
+    The query takes `YYYY-MM` and the row answers with the date it stores, so the
+    figure the screen shows is the month the job actually computed."""
+    monitoring: float | None
+    record_keeping: float | None
+    decision: float | None
+    risk_management: float | None
+    digital_adoption_index: float | None
+    computed_at: datetime
