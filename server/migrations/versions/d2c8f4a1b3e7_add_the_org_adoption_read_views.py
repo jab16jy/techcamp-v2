@@ -36,12 +36,22 @@ no zone shift. `claimed_at`, by contrast, is an instant, and its month is built
 with `AT TIME ZONE 'America/Bogota'` like every other view here, so a session
 running under UTC cannot move a claim by five hours (D-T0.7).
 
-"Primera lectura válida" is the validity rule docs/04-api.md:83 already documents
-and `telemetry`'s `query_valid_raw` already implements — calibrated (`value IS
-NOT NULL`, which is exactly what "no calibration was valid at that instant"
-leaves null, docs/03-modelo-datos.md:461) and without the out-of-range bit 2 of
-`quality`. It is not restated per module: the same predicate decides a reading the
-dashboard shows and the one that ends the enrollment clock.
+"Primera lectura válida" is the rule docs/04-api.md:83 states: **calibrated,
+`value` not null, and without the out-of-range bit of `quality` (values 2 and 3,
+docs/03-modelo-datos.md)**. A calibrated reading is exactly one whose `value` is
+not null — that is what "no calibration was valid at that instant" leaves behind
+(docs/03-modelo-datos.md:461) — so the view filters `value IS NOT NULL` and
+`(quality & 2) = 0`.
+
+That predicate is **restated here**, not reused, because a SQL view cannot call a
+repository method: `telemetry`'s `ReadingRepository.query_valid_raw` is the
+nearest existing implementation and reads the same bit, but it filters only bit 2
+and never tests `value`, so this view adds that clause. No other `metrics_*` view
+encoded a validity predicate to copy: T3's `metrics_node_month_readings` counts
+every received reading whatever its `quality`, because the `monitoring` component
+measures that the plot is being measured and an out-of-range value is already
+covered by the node alerts (docs/11-metricas.md §2). docs/04:83 is the spec here,
+not that view.
 
 A node's first valid reading is taken **from its claim onwards**: a reading
 timestamped before `claimed_at` was not received after the node was enrolled, so
