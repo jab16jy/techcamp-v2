@@ -475,6 +475,35 @@ def test_a_candidate_that_mutates_the_design_matrix_cannot_reach_the_baseline() 
     assert mutating.report.candidate.brier != control.report.candidate.brier
 
 
+def test_a_scorer_that_answered_something_other_than_probabilities_is_refused() -> None:
+    """Negative: a two-column matrix of the right shape is not yet a probability. Values off
+    the unit interval, columns that do not sum to one and non-finite entries all pass a shape
+    check and then reach the Brier rule, which would compare a calibration figure against
+    numbers that cannot be a calibration figure."""
+
+    class OutOfRange:
+        def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+            return np.column_stack([np.full(len(features), -0.5), np.full(len(features), 3.0)])
+
+    class NotNormalised:
+        def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+            return np.column_stack([np.full(len(features), 0.2), np.full(len(features), 0.9)])
+
+    class NotFinite:
+        def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+            return np.full((len(features), 2), np.nan)
+
+    for scorer in (OutOfRange(), NotNormalised(), NotFinite()):
+        with pytest.raises(ValueError, match="probabilit"):
+            decide_promotion(
+                flood_table(),
+                candidate=scorer,
+                baseline=Fixed(0.5),
+                resamples=200,
+                reads=SpentTestBlocks(),
+            )
+
+
 def test_a_block_padded_with_duplicated_rows_is_refused() -> None:
     """Negative: the completeness bar counts rows, and rows can be manufactured. Padding a
     thinned month with copies of the one municipality that survived restores its count while

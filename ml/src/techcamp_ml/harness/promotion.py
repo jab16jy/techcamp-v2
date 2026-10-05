@@ -332,14 +332,39 @@ def _positive_class(
     """The probability of the positive class, refusing anything that is not one row per
     block row in two columns.
 
-    The check is here and not in the caller because the paired interval below is only
+    The shape check is here and not in the caller because the paired interval below is only
     defined when both scorers answered every row of the same block; a scorer that answered
     a different number of rows would otherwise be compared against nothing.
+
+    The values are checked too, and that is not pedantry: a matrix of the right shape can
+    still hold numbers that are not probabilities — values off the unit interval, columns
+    that do not sum to one, non-finite entries. Every metric below answers on whatever it
+    is handed, so those numbers reach the Brier rule and the paired interval as
+    calibration figures and decide a promotion on them. Refused here, the caller hears
+    which scorer answered what; left to `roc_auc_score`, it hears a message about a metric
+    two calls later and about a column of a matrix it never validated.
     """
     if probabilities.shape != (len(features), 2):
         raise ValueError(
             f"predict_proba answered {probabilities.shape} for the {len(features)} rows of "
             "the blocked test block; the gate reads the positive class of a two-column "
             "probability matrix, one row per block row"
+        )
+    if not np.isfinite(probabilities).all():
+        raise ValueError(
+            "predict_proba answered values that are not finite; a probability that is NaN or "
+            "infinite cannot enter the Brier rule or the paired interval"
+        )
+    if not ((probabilities >= 0.0) & (probabilities <= 1.0)).all():
+        raise ValueError(
+            f"predict_proba answered values off the unit interval, from "
+            f"{probabilities.min()} to {probabilities.max()}; the gate reads probabilities, "
+            "and a number outside [0, 1] is not one"
+        )
+    if not np.allclose(probabilities.sum(axis=1), 1.0):
+        raise ValueError(
+            "predict_proba answered a row that does not sum to one; a probability matrix is "
+            "one distribution per row, and an unnormalised one cannot be compared with "
+            "another model's"
         )
     return probabilities[:, 1]
