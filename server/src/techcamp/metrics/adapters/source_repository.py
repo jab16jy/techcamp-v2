@@ -38,7 +38,9 @@ from techcamp.metrics.application.ports import (
     CycleTotals,
     DecisionDay,
     LogbookWeek,
+    NodeFirstReading,
     NodeMonthReadings,
+    OrgMonthCycle,
     PlotAlertAction,
 )
 
@@ -104,6 +106,26 @@ CropCycleTotalsView = _view(
     Column("loss_kg", Numeric),
     Column("loss_cop", Numeric),
     Column("water_stress_days", BigInteger),
+)
+
+OrgMonthCyclesView = _view(
+    "metrics_org_month_cycles",
+    Column("org_id", Uuid),
+    Column("month", Date),
+    Column("crop_cycle_id", Uuid),
+    Column("plot_id", Uuid),
+    Column("closed_on", Date),
+    Column("has_harvest", Boolean),
+)
+
+OrgNodeFirstReadingView = _view(
+    "metrics_org_node_first_reading",
+    Column("org_id", Uuid),
+    Column("plot_id", Uuid),
+    Column("node_id", Uuid),
+    Column("month", Date),
+    Column("claimed_at", DateTime(timezone=True)),
+    Column("first_reading_at", DateTime(timezone=True)),
 )
 
 
@@ -303,3 +325,74 @@ class SqlAlchemyMetricsSourceRepository:
             loss_cop=row.loss_cop,
             water_stress_days=row.water_stress_days,
         )
+
+    async def org_month_cycles(self, org_id: UUID, *, month: date) -> list[OrgMonthCycle]:
+        """Every cycle closed inside `month`, oldest closure first
+        (docs/11-metricas.md:72, D-T7.2).
+
+        The month and the organization are both enforced here rather than left to
+        the caller: `crop_cycle` has no end date, so the view's `month` column —
+        the `occurred_on` of the entry that registered the closure — is the only
+        thing that decides which cycles belong to this answer, and it has to
+        arrive in the query.
+        """
+        stmt = (
+            select(
+                OrgMonthCyclesView.c.crop_cycle_id,
+                OrgMonthCyclesView.c.plot_id,
+                OrgMonthCyclesView.c.closed_on,
+                OrgMonthCyclesView.c.has_harvest,
+            )
+            .where(
+                OrgMonthCyclesView.c.org_id == org_id,
+                OrgMonthCyclesView.c.month == month,
+            )
+            .order_by(OrgMonthCyclesView.c.closed_on, OrgMonthCyclesView.c.crop_cycle_id)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            OrgMonthCycle(
+                crop_cycle_id=row.crop_cycle_id,
+                plot_id=row.plot_id,
+                closed_on=row.closed_on,
+                has_harvest=row.has_harvest,
+            )
+            for row in result
+        ]
+
+    async def node_first_readings(self, org_id: UUID, *, month: date) -> list[NodeFirstReading]:
+        """Every node claimed inside `month` with its first valid reading
+        (docs/11-metricas.md:73-75, D-T7.2).
+
+        The population is the nodes **claimed in this month**, which is why the
+        `month` column is the claim's own Bogota month and not the month of the
+        reading: a node claimed on Sep 30 that first answers on Oct 2 is a
+        September node, and its hours are the whole latency of getting a claimed
+        node to talk.
+
+        Ordered by node id so a re-read returns the same sequence: the caller
+        takes a median over these rows and must not see them reshuffle.
+        """
+        stmt = (
+            select(
+                OrgNodeFirstReadingView.c.node_id,
+                OrgNodeFirstReadingView.c.plot_id,
+                OrgNodeFirstReadingView.c.claimed_at,
+                OrgNodeFirstReadingView.c.first_reading_at,
+            )
+            .where(
+                OrgNodeFirstReadingView.c.org_id == org_id,
+                OrgNodeFirstReadingView.c.month == month,
+            )
+            .order_by(OrgNodeFirstReadingView.c.node_id)
+        )
+        result = await self._session.execute(stmt)
+        return [
+            NodeFirstReading(
+                node_id=row.node_id,
+                plot_id=row.plot_id,
+                claimed_at=row.claimed_at,
+                first_reading_at=row.first_reading_at,
+            )
+            for row in result
+        ]
