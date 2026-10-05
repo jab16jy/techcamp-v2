@@ -200,6 +200,47 @@ async def test_a_cycle_counts_in_exactly_one_month_when_two_entries_qualify(
     ]
 
 
+async def test_the_earliest_entry_of_the_closing_kind_is_the_one_that_closed_it(
+    db_session: AsyncSession,
+) -> None:
+    """Closes `R3-closure-entry-minimum-untested` (RDD review-888d4b51618ad801,
+    WARNING): `MIN(occurred_on)` is documented as the tie-break when a cycle has
+    several entries of the kind that registers its closure, and nothing pinned it.
+
+    This harvested cycle has two harvest entries, Sep 28 and Oct 5. The earliest
+    is when the closure was registered, so September owns the cycle -- and
+    October does not see it at all, which is the same one-cycle-one-month rule as
+    the qualifying-entries case with the extra step that here *both* entries are
+    of the closing kind, so the choice between them is the only thing under test.
+
+    It also pins that the September harvest makes it a numerator in September:
+    the earliest of two qualifying entries is still a qualifying entry.
+    """
+    env = await make_env(db_session)
+    cycle_id = await add_cycle(db_session, env, sown_on=_SOWN_ON, status="harvested")
+    await add_logbook_entry(
+        db_session,
+        env,
+        kind="harvest",
+        occurred_on=date(2026, 10, 5),
+        yield_kg=120,
+        crop_cycle_id=cycle_id,
+    )
+    await add_logbook_entry(
+        db_session,
+        env,
+        kind="harvest",
+        occurred_on=date(2026, 9, 28),
+        yield_kg=500,
+        crop_cycle_id=cycle_id,
+    )
+
+    rows = await _cycles(db_session, env.org_id)
+
+    assert rows == [(MONTH, cycle_id, env.plot_id, date(2026, 9, 28), True)]
+    assert await _cycles(db_session, env.org_id) == rows, "the view is stable on re-read"
+
+
 async def test_a_lost_cycle_harvested_in_its_own_month_still_counts_as_harvested(
     db_session: AsyncSession,
 ) -> None:
