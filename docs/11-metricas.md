@@ -69,10 +69,19 @@ Otras métricas de adopción:
 | Métrica | Fórmula |
 |---|---|
 | Parcelas monitoreadas | `parcelas con nodo activo / parcelas` |
-| Ciclos cerrados con cosecha | `ciclos con cosecha registrada / ciclos terminados` |
+| Ciclos cerrados con cosecha | `ciclos con cosecha registrada / ciclos terminados` (el mes de un ciclo es el de la entrada de bitácora que registra su cierre; ver §2) |
 | Tiempo a primera lectura | Horas entre el alta del nodo y su primera lectura válida |
 
-Estas tres, junto con el promedio del índice de las parcelas con índice, forman `OrgMetrics` (`GET /organizations/{org_id}/metrics`, D-T0.12). Se calculan al consultar: cuentan sobre el mes pedido y la mediana del tiempo a primera lectura toma los nodos reclamados en ese mes.
+Estas tres, junto con el promedio del índice de las parcelas con índice, forman `OrgMetrics` (`GET /organizations/{org_id}/metrics`, D-T0.12). Se calculan al consultar: cuentan sobre el mes pedido y la mediana del tiempo a primera lectura toma los nodos reclamados en ese mes, un valor por nodo y no la mediana de las medianas de parcela.
+
+**En qué mes cuenta un ciclo** (D-T7.2). `crop_cycle` no tiene fecha de cierre ([03:128-135](03-modelo-datos.md)), así que el mes de un ciclo es el de la entrada de bitácora que **registra su cierre**, por su `occurred_on`: la fecha que escribió el productor, nunca la que llegó la sincronización offline.
+
+- **Numerador:** ciclos con una entrada `harvest` en el mes.
+- **Denominador:** ciclos con una entrada que registre el cierre en el mes y `status` en `harvested` o `lost`. Una entrada `harvest` registra el cierre de un ciclo cosechado, y una `observation` con `alert_id` registra el cierre de uno perdido (esa observación *es* el registro de la pérdida, [03:424](03-modelo-datos.md)).
+- **Un ciclo `active` no cuenta ni en el numerador ni en el denominador**, aunque tenga una cosecha registrada: el denominador son ciclos **terminados**, así que la fracción es de ciclos cerrados y registrados, no de ciclos con cosecha anotada.
+- **Evidencia faltante, no cero.** Un ciclo `lost` sin observación de pérdida, y un ciclo cerrado por `PATCH` sin ninguna entrada de bitácora, no aparecen en ningún mes. Un mes sin ciclos terminados vale `null`, nunca `0`.
+
+La mediana del tiempo a primera lectura usa la lectura válida según [04:83](04-api.md): calibrada, con `value` no nulo y sin el bit de fuera de rango en `quality`. Un nodo reclamado en el mes que todavía no tiene lectura válida no aporta valor a la mediana, y no es lo mismo que aportar un cero.
 
 ## 3. Calidad de decisión
 
