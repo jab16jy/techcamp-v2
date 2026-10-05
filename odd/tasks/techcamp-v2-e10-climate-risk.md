@@ -96,6 +96,13 @@ feeds E12 (assistant cites risk) and E15 (risk rules), off the critical path (do
   endpoint docs/04 §Solo perfil seminario answers is a single `{ job_id }`, and an archive outage
   skips its cell and the run goes on (docs/06 §8). Owner, 2026-10-02.
 
+- D-T5.1 The harness lock `ml/harness/LOCK.sha256` is **re-frozen** (owner, 2026-10-05). It pins
+  the five `ml/src/techcamp_ml/harness/**` files, so the two blocking CRITICALs in `promotion.py`
+  were unfixable inside a bounded correction without it. Re-freezing changes what "approved and
+  frozen" means for the rest of E10, so it is recorded as a decision rather than a mechanical step.
+  `F3` (#249) stayed outside that correction even though the lock was being re-frozen anyway: adding
+  a third finding to a bounded correction destroys the discipline that makes it bounded.
+
 ## Tasks
 Forecasts are authored lines (additions + deletions, generated excluded). Route = writer and reason.
 
@@ -123,8 +130,9 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   `e10-t3` (`ml/.cache/raw`, gitignored) — do not remove that worktree before the cache is moved.
   `parse` refuses the current cache (no `archive_plan.json`); the next real `fetch` writes the plan.
   Route: Herdr writers (Pi, then OpenCode space-bunny high). Depends T1.
-- [ ] T4 Dataset build: municipality × month table through T2 features, all negatives, hash.
-  ~200. Route: Herdr writer. Depends T2, T3.
+- [x] T4 Dataset build: municipality × month table through T2 features, all negatives, hash.
+  ~200. Route: Herdr writer. Depends T2, T3. Merged `fefeb00`, receipt `review-4b11cb9d8f8faa8c`
+  (4 lenses). Built and tested on fixtures; the real build is unblocked but not run (D-T3.3).
 - [ ] T5 Harness + gate (owner approval gate): split with gap, department hold-out, real frequency,
   bootstrap CI95, locked test, `decide_promotion`; own tests; freeze hashes after approval.
   ~400. Route: Herdr writer. Depends T1 (schema from T4 for wiring).
@@ -132,8 +140,10 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   `risk_prediction`), baseline heuristics (flood: accumulated rainfall; drought: SPI-3), archive
   client, daily job, `/dev/jobs/risk:run`, `GET /plots/{plot_id}/risk`. ~400. Route: Herdr writer.
   Depends T2. Parallel with T3–T5.
-- [ ] T7 Alerts: `flood_risk` / `drought_risk` evaluator from `risk_prediction` (pattern:
-  `fungal_risk` sweep). ~200. Route: Herdr writer. Depends T6.
+- [x] T7 Alerts: `flood_risk` / `drought_risk` evaluator from `risk_prediction` (pattern:
+  `fungal_risk` sweep). ~200. Route: Herdr writer. Depends T6. Landed `e6f3060` (9 commits on
+  `cd270ad`), receipt `review-c73397a8bb8c3785` + the round-3 approval of `cd48e0d`. Two CRITICALs
+  found by the parent gate and by the round-2 review on the way; see §Review (RDD).
 - [ ] T8 Experiments (steps 4–9): ladder, tuning, calibration/threshold, one gate run, robustness.
   ~400. Route: Herdr writer. Depends T4, T5 approved.
 - [ ] T9 Registration + promotion (step 10): artifact to MinIO, `model_version` row, serving loads
@@ -171,6 +181,85 @@ Branch point: `a2bae6b` (main). RDD on (global). Per work-unit commit: `gentle-a
   `R3-json-decode-escapes-contract` → #239, fixed `a45ec55` (unreviewed: Pi capture defect).
   Merged `515f399`. Owner rules from this round: RDD is the Pi writer's own job; work units
   ≤ ~400 lines, lockfiles alone.
+- T4 (Pi; `ff92197`, `9581e02`, `5fac554`, `4eae2f3`, lane `e10-t4`): lineage
+  `review-4b11cb9d8f8faa8c` over `2794932..5fac554`, 4 lenses, APPROVED and acknowledged. 14
+  non-blocking findings → #245; the four WARNINGs (manifest published **before** the dataset,
+  outputs that follow the given layout, neighbour axes read by name, month range from
+  `horizon_start`) plus the duplicate `(code, date)` refusal fixed in `4eae2f3`, with the data card
+  updated in the same unit. Merged `fefeb00`. `4eae2f3` (321 authored lines) is unreviewed by
+  budget, not by omission: `review_due: false`, `under_budget`.
+- T7 (Pi; 9 commits on `cd270ad`, lane `e10-t7`): round 1 lineage `review-c73397a8bb8c3785` over
+  `cd270ad..1f247b7`, reliability lens, APPROVED and acknowledged; 2 WARNING + 1 SUGGESTION →
+  #246, both WARNINGs fixed in `db967d6`.
+  **The parent gate found a CRITICAL in that fix round.** `db967d6` added a branch to
+  `get_decided_for_target` — the alert that was open when the prediction was issued absorbed it —
+  and `evaluate_risk_rules` skipped the decided-record lookup *before* deciding. Production stores
+  predictions at 06:00 and evaluates minutes later, so the resolving LOW row of the next month is
+  always issued while the alert is still open, matched that record, and was skipped:
+  `flood_risk`/`drought_risk` could never resolve, against docs/06 §8. The lane's own test passed
+  only because its fixture placed `issued_at` BEFORE the alert's `opened_at`, an ordering production
+  never produces. Fixed in `ae735b8` by deciding first and letting the record suppress OPEN and
+  NO_ACTION only.
+  Round 2, lineage `review-ebf79c2f6891e708` over `1f247b7..ae735b8`, ended **escalated**,
+  `unknown_causality`: the lens was admitted and raised `R3-replayed-resolution-bypasses-decided-check`
+  (CRITICAL), downgraded at admission on `unverified_location` → **#247**, owner-filed.
+  **That CRITICAL was introduced by the parent's own brief.** Suppressing nothing on RESOLVE meant
+  that branch never consulted the record at all, so a stored prediction that had already resolved
+  one alert could replay and resolve a different open one. Fixed in `cd48e0d` by consulting the
+  record on EVERY action and excluding the currently open alert from the match — a better shape
+  than the parent prescribed, and the second mirror of the same bug. Round 3 over
+  `1f247b7..cd48e0d` APPROVED and acknowledged. Merged `e6f3060`.
+  Round 2's escalation approves nothing, burned no authority, and does not block the merge.
+- T5 (Pi; `e73867c`, `6b093cd`, `7fc6498`, `376ac14`, lane `e10-t5`): lineage
+  `review-6cd12d59a63983e9` over `fefeb00..376ac14`, medium, 9 paths / 1237 lines, reliability
+  lens. Two blocking CRITICALs, both in `promotion.py`, both `introduced` and `deterministic`:
+  `R3-test-read-repeatable` — the one-read gate kept no consumed state, so a second
+  `decide_promotion` rescored the blocked test, and the existing call-count assertion could only
+  prove one pass within ONE invocation; and `R3-incomplete-test-accepted` — any nonempty fragment
+  of the labelled year passed as the complete test block, and two rows (one positive, one negative)
+  are enough for a candidate to win the paired interval and the Brier, so `promote` was reachable
+  from an arbitrarily incomplete test set. That is the exact failure ADR-0020 exists to prevent.
+  Non-blocking `R3-validation-boundary-bypass` (`val_first` can move or empty the validation block
+  while passing the gap checks) → **#249**, deliberately outside the bounded correction.
+  Owner re-froze the harness lock (D-T5.1). The first correction closed F2 — `_require_complete_year`
+  demands all twelve months — and only half of F1; reviewing the correction, the reviewer found the
+  guard keyed on `(id(table), id(candidate))`, which an equivalent copy of the table defeats by
+  construction, so the invariant cannot rest on object identity → **escalated**
+  (`review-b34713697b28f808`, `unknown_causality`). Separate dead end: the correction plan for
+  `review-6cd12d59a63983e9` was unadmittable because the facade cannot see base-diff lineages.
+  **T5 has no approved receipt.** Correction in flight.
+
+### Six dead ends in the RDD lifecycle, so they stay dead
+
+Every one of these cost a full round on T5 or T7. Each is stated with the evidence that
+distinguished it from the next one, because that is the part that is expensive to rediscover.
+
+1. **`capture-binding-rejected` is the binding SHAPE, not the runtime.** The facade emits
+   `collectBindings` in camelCase from `gentle_review {status}`; passing the CLI-shaped binding is
+   refused. The capture also needs `reviewerRunAcknowledged: true` to close into
+   `native-last-event-closure`. Cost three rounds.
+2. **`--agent` takes a RUNTIME identity, not a model or a provider.** `claude-code`, `codex`, `pi`.
+   `opencode` is a provider name and is rejected outright with `unassessable`.
+3. **Pi is eligible only inside the gentle-pi host.** `--agent pi` works only while
+   `GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1` is exported, which the host does on
+   every invocation it relays. From any other shell the assessment returns `unassessable`, and the
+   `high_risk` it then reports is the runtime declining, not the candidate's tier.
+4. **Three refusal layers with different storage.** `output_refused` is admission-stage, AFTER a
+   reviewer ran, and stores its output under `<common-git-dir>/gentle-ai/rejected-results/<lineage>/`.
+   `binding_mismatch` is at the relay and stores nothing. Binding validation is pre-dispatch and
+   stores nothing. The absence of a `rejected-results` directory is evidence, not silence.
+5. **A new target does NOT give an independent lineage.** Target identity is a deterministic
+   function of `(base_tree, candidate_tree, paths_digest, intended_untracked_proof)` — not of the
+   attempt number. The same bounded assess from the same worktree reproduces it byte for byte and Go
+   re-binds to the existing lineage.
+6. **The facade cannot see base-diff lineages for a correction plan.** It admits them for the
+   review itself and then refuses the plan.
+
+Two more that are not refusals but cost the same: the relay process is spawned with
+`ctx.location.directory`, the SESSION's directory, not the lifecycle `--cwd`, so a shell `cd` cannot
+fix a binding that does not match; and the selectorless `review status` binds the merge-base with
+`main` and freezes the whole epic as the candidate, which burned E11 T1 and E11 T3's first attempt.
+Use `assess --base-ref <boundary> --committed-only`, then the transition it returns.
 
 ## Calibration
 
@@ -234,12 +323,30 @@ Forecast ≈ 2950 authored lines — **already stale**: T1+T2+T3 alone measure ~
   preserved: 3 complete chunks (`archive_00{0,1,2}.json` + `.request.json`, 12M), 0 `.part`.
   Agent `e10-t3` left idle and interactive rather than killed, to keep its 15-commit context.
   Consequence: T3 closable, **T4 blocked** on the real archive data.
+- 2026-10-03: **D-T3.3 unblocked.** The free Open-Meteo archive completed on the first daily-quota
+  attempt after the decision: `archive_003`, `004`, `005` cached, 6 of 6 chunks, 0 `.part`,
+  `archive_plan.json` written. `parse` then produced all four source parquets with real data:
+  `weather` 582,075 rows over 195 codes and 2018-06-30..2026-08-31 (`precipitation_sum`,
+  `soil_moisture_0_to_7cm_mean` — the two variables docs/08 §M2 declares), `labels` 1,508 events
+  over 180 municipalities and 2019–2025, `municipalities` 195, `elevation` 195.
+  `labels.drops.json` records 8,477 rows dropped as `unknown_code`.
+- 2026-10-05: T7 merged `e6f3060`; lane DB dropped. T5's correction in flight (no receipt yet).
+- 2026-10-05: **T4's real build is unblocked and NOT run.** It writes a tracked
+  `ml/datasets/flood_m2/manifest.json`, so it is implementation with its own commit, not a parent
+  step. It needs the epic-branch worktree carrying `ml/.cache/raw` and `ml/data/flood_m2/sources`.
 
 ## Next step
-- T3 data (D-T3.3), once per day until complete, from worktree `e10-t3` (`ml/`):
-  `uv run --locked python -m techcamp_ml.sources fetch --source weather`, then
-  `uv run --locked python -m techcamp_ml.sources parse` — it refuses until every planned chunk is
-  cached. When it passes: T4's real build, its hash in the dataset manifest, the real counts into
-  the data card, then the `just ml-lock` of T5 after the owner approves the harness.
-- T4 (lane `e10-t4`) and T7 (lane `e10-t7`, sent back at the gate) in progress; T5 after T4 fixes
-  the column contract.
+- **T5 is the only open lane.** Its one-read guard must stop resting on object identity: key it on
+  something derived from the contract, and refuse BEFORE the test block is read, not after. Then one
+  more bounded review over `fefeb00..HEAD` to earn T5 a receipt. Both prior rounds on that lane are
+  parked (`review-6cd12d59a63983e9` `correction_required`, `review-b34713697b28f808` escalated);
+  neither burns authority and neither blocks delivery.
+- **T4's real build**, now that D-T3.3 is unblocked. Needs the epic-branch worktree carrying
+  `ml/.cache/raw` and `ml/data/flood_m2/sources`, then `uv run --locked --project ml python
+  ml/datasets/flood_m2/build.py`. Its hash lands in the manifest and the real counts replace the
+  fixture counts in the data card.
+- **Dispositions the owner still owns:** the parked escalated lineages (T5 round 1 over the
+  correction, T7 round 2 over `ae735b8`) and `review-c73397a8bb8c3785`'s already-acknowledged state.
+  None of them blocks anything; escalation approves nothing.
+- T8 experiments need T4's real build and T5's approved harness. T9 needs T8. T10 is `just
+  gate-full`, the demo, and the delivery plan.
