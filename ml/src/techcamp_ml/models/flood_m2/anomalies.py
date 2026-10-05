@@ -1,14 +1,19 @@
-"""The train climatology of M2, and the anomaly of every municipality-month (ADR-0020).
+"""The train climatology of M2, the anomaly of every municipality-month, and the derived
+table that carries them (ADR-0020).
 
 `flood_m2.parquet` holds `precip_anomaly_1m/3m/6m` as null columns, because T4 built the
 table without a climatology: the years the anomalies are measured against are the **split's**
 (data card §Contrato de columnas), and the harness is what names them —
 `split.train_climatology_years()` is 2019–2022 and a year the gate decides on never appears
 in it. This module is the experiment step that finally derives them, from the weather
-source and those years only.
+source and those years only, and owns the parquet they land in.
 
-Two properties are worth the reader's attention:
+Three properties are worth the reader's attention:
 
+* **The manifest is not touched.** The anomalies land in their own parquet under
+  `ml/data/flood_m2/derived/`, out of git beside the dataset, because the dataset's hash is
+  published and a column added to it would be a dataset the data card no longer describes
+  (owner, 2026-10-05).
 * **No label and no test boundary enters the derivation.** An anomaly is a difference of two
   rainfall accumulations and the train climatology; it reads the weather archive, which
   covers every month equally, and never the `label` column. The rows of the blocked test
@@ -23,6 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Container, Mapping
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -32,6 +38,10 @@ from techcamp.risk.domain.features import (
     monthly_climatology,
     precip_anomaly,
 )
+
+from techcamp_ml.datasets.flood_m2 import DATASET_DIRNAME, PARQUET_NAME
+from techcamp_ml.harness.split import train_climatology_years
+from techcamp_ml.sources.layout import Layout
 
 ANOMALY_WINDOWS = ANOMALY_WINDOWS_MONTHS
 """The anomaly windows of docs/08 §M2 "Features", read from the shared module rather than
@@ -43,6 +53,10 @@ ANOMALY_COLUMNS: tuple[str, ...] = tuple(f"precip_anomaly_{months}m" for months 
 KEY_COLUMNS = ("code", "horizon_start")
 """What a municipality-month is: the same unit docs/08 §M2 "Unidad" names, read off the
 dataset's own columns rather than rebuilt from the year and the month."""
+
+WEATHER_NAME = "weather"
+DERIVED_DIRNAME = "derived"
+DERIVED_NAME = "anomalies.parquet"
 
 Climatologies = Mapping[str, Mapping[int, float]]
 SeriesByCode = Mapping[str, DailySeries]
@@ -118,3 +132,97 @@ def anomaly_features(
         )
     keys = table[list(KEY_COLUMNS)].reset_index(drop=True)
     return pd.concat([keys, *columns], axis=1)
+
+
+def attach_anomalies(table: pd.DataFrame, derived: pd.DataFrame) -> pd.DataFrame:
+    """The dataset with the derived anomalies in its own three null columns.
+
+    Full coverage is required and refused otherwise. A missing row cannot be told from a
+    missing value once the columns are joined — both are `None` — so a derived table that
+    does not cover every municipality-month would quietly leave a block of the model
+    without its features, which is the failure a null-filled join would hide.
+    """
+    _require_columns(derived, ANOMALY_COLUMNS)
+    repeated = derived[derived.duplicated(subset=list(KEY_COLUMNS), keep=False)]
+    if not repeated.empty:
+        offenders = repeated[list(KEY_COLUMNS)].drop_duplicates()
+        raise ValueError(
+            f"the derived anomaly table holds {len(offenders)} municipality-months more "
+            "than once; a repeated key joins one dataset row to two anomaly rows, and which "
+            "of them wins is row order"
+        )
+    uncovered = table[list(KEY_COLUMNS)].merge(
+        derived[list(KEY_COLUMNS)], on=list(KEY_COLUMNS), how="left", indicator=True
+    )
+    missing = uncovered[uncovered["_merge"] == "left_only"]
+    if not missing.empty:
+        first = missing.iloc[0]
+        raise ValueError(
+            f"the derived anomaly table covers {len(table) - len(missing)} of the {len(table)} "
+            f"municipality-months of the dataset and misses {len(missing)}, e.g. "
+            f"{first['code']} {pd.Timestamp(first['horizon_start']).date()}; a row with no "
+            "derived anomaly is a row with no evidence, not a row with a zero one"
+        )
+    joined = table.drop(columns=list(ANOMALY_COLUMNS), errors="ignore").merge(
+        derived, on=list(KEY_COLUMNS), how="left", validate="one_to_one", sort=False
+    )
+    # The dataset's own order first, so a frame that already carried the null anomaly
+    # columns keeps them where it had them, and a column the dataset did not carry is
+    # appended rather than dropped.
+    kept = [column for column in table.columns if column in joined.columns]
+    return joined[[*kept, *[column for column in joined.columns if column not in kept]]]
+
+
+def derived_path(layout: Layout) -> Path:
+    """`ml/data/flood_m2/derived/anomalies.parquet`: a build product, out of git, beside the
+    dataset whose hash it does not change."""
+    return layout.data.parent / DERIVED_DIRNAME / DERIVED_NAME
+
+
+def dataset_path(layout: Layout) -> Path:
+    """`ml/data/flood_m2/dataset/flood_m2.parquet`, the hashed dataset T4 built."""
+    return layout.data.parent / DATASET_DIRNAME / PARQUET_NAME
+
+
+def build_anomalies(layout: Layout, *, years: Container[int] | None = None) -> Path:
+    """Derive the anomalies of every dataset row and write them to `derived_path(layout)`."""
+    weather = pd.read_parquet(layout.data / f"{WEATHER_NAME}.parquet")
+    table = pd.read_parquet(dataset_path(layout))
+    wanted = _years(years)
+    derived = anomaly_features(
+        table,
+        precipitation_by_code(weather),
+        climatologies(weather, years=wanted),
+    )
+    path = derived_path(layout)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    derived.to_parquet(path, index=False)
+    return path
+
+
+def load_features(layout: Layout, *, years: Container[int] | None = None) -> pd.DataFrame:
+    """The dataset with its anomalies attached, deriving and writing them when missing.
+
+    The years default to the split's and never to a constant of this module's own: an
+    anomaly measured against a climatology another experiment chose would be a different
+    feature, and the gate scores the same columns the ladder trained on.
+    """
+    table = pd.read_parquet(dataset_path(layout))
+    path = derived_path(layout)
+    if not path.is_file():
+        build_anomalies(layout, years=years)
+    return attach_anomalies(table, pd.read_parquet(path))
+
+
+def _years(years: Container[int] | None) -> Container[int]:
+    """`train_climatology_years()` when the caller names none."""
+    return train_climatology_years() if years is None else years
+
+
+def _require_columns(frame: pd.DataFrame, columns: tuple[str, ...]) -> None:
+    missing = [column for column in columns if column not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"the derived anomaly table is missing {missing}; it has to carry the shared "
+            "contract of techcamp.risk.domain.features.FEATURE_NAMES for the gate to score"
+        )

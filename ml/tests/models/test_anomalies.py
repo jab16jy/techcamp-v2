@@ -12,13 +12,16 @@ the assertions are the ones a reader can check with a calendar.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
 from techcamp.risk.domain.features import ANOMALY_WINDOWS_MONTHS, monthly_climatology
 
+from techcamp_ml.harness.split import train_climatology_years
 from techcamp_ml.models.flood_m2 import anomalies
 from techcamp_ml.models.flood_m2.anomalies import anomaly_features, climatologies
+from techcamp_ml.sources.layout import Layout
 
 TRAIN_YEARS = (2019, 2020)
 """Two train years, so a third one can be the control: the 2021 rain must not move a
@@ -153,3 +156,70 @@ def test_a_repeated_municipality_day_is_refused_rather_than_resolved() -> None:
 
     with pytest.raises(ValueError, match="repeated"):
         anomalies.precipitation_by_code(weather)
+
+
+def _with_null_anomalies() -> pd.DataFrame:
+    """The dataset as T4 wrote it: the three anomaly columns present and null."""
+    table = table_frame()
+    for column in anomalies.ANOMALY_COLUMNS:
+        table[column] = None
+    return table
+
+
+def test_attaching_the_anomalies_fills_the_null_columns_and_keeps_the_rest() -> None:
+    table = _with_null_anomalies()
+    table["precip_sum_1m"] = 12.0
+
+    joined = anomalies.attach_anomalies(table, derived_frame())
+
+    assert list(joined.columns) == list(table.columns)
+    assert joined["precip_sum_1m"].tolist() == [12.0] * len(table)
+    assert joined["label"].tolist() == table["label"].tolist()
+    february_2020 = joined[
+        (joined["code"] == "08002") & (joined["horizon_start"] == pd.Timestamp("2020-03-01"))
+    ].iloc[0]
+    assert february_2020["precip_anomaly_1m"] == pytest.approx(30.5)
+
+
+def test_a_derived_table_that_misses_a_row_is_refused_not_zero_filled() -> None:
+    with pytest.raises(ValueError, match="covers 8 of the 9"):
+        anomalies.attach_anomalies(_with_null_anomalies(), derived_frame().iloc[:-1])
+
+
+def test_a_derived_table_that_repeats_a_key_is_refused() -> None:
+    doubled = pd.concat([derived_frame(), derived_frame().head(1)], ignore_index=True)
+
+    with pytest.raises(ValueError, match="more than once"):
+        anomalies.attach_anomalies(_with_null_anomalies(), doubled)
+
+
+def test_the_written_table_reloads_the_same_features(tmp_path: Path) -> None:
+    layout = Layout(tmp_path)
+    layout.data.mkdir(parents=True, exist_ok=True)
+    weather_frame().to_parquet(layout.data / "weather.parquet", index=False)
+    anomalies.dataset_path(layout).parent.mkdir(parents=True, exist_ok=True)
+    _with_null_anomalies().to_parquet(anomalies.dataset_path(layout), index=False)
+
+    written = anomalies.build_anomalies(layout, years=TRAIN_YEARS)
+    loaded = anomalies.load_features(layout, years=TRAIN_YEARS)
+
+    assert written.is_file()
+    assert list(loaded.columns) == list(_with_null_anomalies().columns)
+    february_2020 = loaded[
+        (loaded["code"] == "08002") & (loaded["horizon_start"] == pd.Timestamp("2020-03-01"))
+    ].iloc[0]
+    assert february_2020["precip_anomaly_1m"] == pytest.approx(30.5)
+
+
+def test_the_derived_table_is_a_build_product_outside_the_hashed_dataset() -> None:
+    """The manifest hashes `flood_m2.parquet` and its sha256 is not touched (owner,
+    2026-10-05): the anomalies go to their own parquet, out of git."""
+    layout = Layout(Path("/repo"))
+
+    assert anomalies.derived_path(layout) == Path("/repo/data/flood_m2/derived/anomalies.parquet")
+    assert anomalies.derived_path(layout) != anomalies.dataset_path(layout)
+    assert anomalies.derived_path(layout).parent.parent != anomalies.dataset_path(layout).parent
+
+
+def test_the_years_the_prepass_reads_are_the_split_ones() -> None:
+    assert train_climatology_years() == (2019, 2020, 2021, 2022)
