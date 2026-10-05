@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../../../lib/api/session'
 import { BaselineSection } from './BaselineSection'
@@ -33,6 +33,22 @@ const SURVEY = {
   last_cost_cop_ha: null,
   irrigation_practice: 'drip',
   recorded_by: 'user-1',
+}
+
+/** Opens the invitation's form and answers every required question, then saves. */
+async function openFormAndSave(cropName: string, yieldKgHa: string, practice: string) {
+  fireEvent.click(await screen.findByRole('button', { name: 'Registrar encuesta' }))
+  fireEvent.change(await screen.findByLabelText('Fecha de inscripción'), {
+    target: { value: '2026-01-15' },
+  })
+  fireEvent.click(screen.getByLabelText('Cultivo del último ciclo'))
+  fireEvent.click(await screen.findByRole('option', { name: cropName }))
+  fireEvent.change(screen.getByLabelText(/Rendimiento del último ciclo/), {
+    target: { value: yieldKgHa },
+  })
+  fireEvent.click(screen.getByLabelText('¿Cómo se regaba antes?'))
+  fireEvent.click(await screen.findByRole('option', { name: practice }))
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar encuesta' }))
 }
 
 function renderSection(role: 'owner' | 'technician' | 'producer' | null = 'owner') {
@@ -148,18 +164,7 @@ describe('BaselineSection', () => {
     })
     renderSection('owner')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Registrar encuesta' }))
-    fireEvent.change(await screen.findByLabelText('Fecha de inscripción'), {
-      target: { value: '2026-01-15' },
-    })
-    fireEvent.click(screen.getByLabelText('Cultivo del último ciclo'))
-    fireEvent.click(await screen.findByRole('option', { name: 'Ñame' }))
-    fireEvent.change(screen.getByLabelText(/Rendimiento del último ciclo/), {
-      target: { value: '2400' },
-    })
-    fireEvent.click(screen.getByLabelText('¿Cómo se regaba antes?'))
-    fireEvent.click(await screen.findByRole('option', { name: 'Goteo' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Guardar encuesta' }))
+    await openFormAndSave('Ñame', '2400', 'Goteo')
 
     // The form closes on a successful save. Waiting for it matters: while the
     // sheet is still open its own "Goteo" (the chosen option) is in the
@@ -182,7 +187,6 @@ describe('BaselineSection', () => {
     })
     renderSection('owner')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Registrar encuesta' }))
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = requestOf(input as Request).url
       if (url.includes('/crops')) return jsonResponse(CROPS)
@@ -192,17 +196,7 @@ describe('BaselineSection', () => {
       return problemResponse(404, 'Plot has no enrollment survey')
     })
 
-    fireEvent.change(await screen.findByLabelText('Fecha de inscripción'), {
-      target: { value: '2026-01-15' },
-    })
-    fireEvent.click(screen.getByLabelText('Cultivo del último ciclo'))
-    fireEvent.click(await screen.findByRole('option', { name: 'Maíz' }))
-    fireEvent.change(screen.getByLabelText(/Rendimiento del último ciclo/), {
-      target: { value: '1500' },
-    })
-    fireEvent.click(screen.getByLabelText('¿Cómo se regaba antes?'))
-    fireEvent.click(await screen.findByRole('option', { name: 'Secano' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Guardar encuesta' }))
+    await openFormAndSave('Maíz', '1500', 'Secano')
 
     // The server's detail names a Python field; the producer gets the field's
     // own name and the way out instead (docs/07:14).
@@ -210,6 +204,79 @@ describe('BaselineSection', () => {
       await screen.findByText('Ese cultivo no está en la lista. Elige otro de la lista de cultivos.'),
     ).toBeInTheDocument()
     expect(screen.queryByText(/crop_id/)).not.toBeInTheDocument()
+  })
+
+  it('never names the crop for a 422 that names no field', async () => {
+    routeFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/baseline': () => problemResponse(404, 'Plot has no enrollment survey'),
+    })
+    renderSection('owner')
+
+    // A `422` the form cannot attribute to a field is not this form's to
+    // explain: guessing "the crop" sends the producer after a field the server
+    // never refused.
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = requestOf(input as Request).url
+      if (url.includes('/crops')) return jsonResponse(CROPS)
+      if (requestOf(input as Request).method === 'PUT') {
+        return problemResponse(422, 'Input should be a valid number')
+      }
+      return problemResponse(404, 'Plot has no enrollment survey')
+    })
+
+    await openFormAndSave('Maíz', '1500', 'Secano')
+
+    expect(
+      await screen.findByText('No se pudo guardar la encuesta. Revisa los datos e intenta de nuevo.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Ese cultivo no está en la lista/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/crop_id/)).not.toBeInTheDocument()
+  })
+
+  it('announces a read failure a screen reader can hear', async () => {
+    routeFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/baseline': () => problemResponse(500, 'Server error'),
+    })
+    renderSection('owner')
+
+    // Nothing else on the page changes when a read fails, so without an
+    // announcement the failure is silent: the same repair the save error got.
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Ocurrió un error. Intenta de nuevo.')
+  })
+
+  it('does not offer a form it cannot fill when the crop catalog fails', async () => {
+    routeFetch({
+      '/crops': () => problemResponse(500, 'Catalog unavailable'),
+      '/baseline': () => problemResponse(404, 'Plot has no enrollment survey'),
+    })
+    const queryClient = renderSection('owner')
+
+    expect(await screen.findByText(/Sin encuesta todavía se puede sembrar/)).toBeInTheDocument()
+    // A crop Select with no items plus a required crop leaves the submit
+    // disabled forever, so the block is announced and the invitation waits
+    // instead of opening a dead form. No retry is added: `cropsQuery` is the
+    // sheet's shared catalog and that sheet already offers one recovery.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La lista de cultivos no cargó, así que la encuesta no se puede llenar todavía.',
+    )
+    expect(screen.queryByRole('button', { name: 'Registrar encuesta' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument()
+
+    // Whenever the shared catalog recovers — by the sheet's retry or any other
+    // refetch of the same query — the invitation comes back.
+    routeFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/baseline': () => problemResponse(404, 'Plot has no enrollment survey'),
+    })
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['crops'] })
+    })
+
+    expect(await screen.findByRole('button', { name: 'Registrar encuesta' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('prints the enrollment date the way a Colombian reads it, not a day early', async () => {

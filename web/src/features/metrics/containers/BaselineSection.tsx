@@ -48,23 +48,72 @@ function canFill(role: Role | null): boolean {
 }
 
 /**
- * Spanish copy for what the server refused, naming the problem and the way out.
+ * Field-specific copy for a `422`, keyed by the wire field the server named.
  *
- * The `422` body is the one case that cannot be shown raw: the server names the
- * Python field (`crop_id is not a valid crop`), and an internal code is not an
- * error message a producer can act on (docs/07:14 plain Spanish; the rule that
- * an actionable error names the problem and the recovery). The only `422` this
- * endpoint can raise is the unknown crop, so the message names that field and
- * what to do instead of forwarding the wire text.
+ * The body cannot be shown raw: it names the Python field (`crop_id is not a
+ * valid crop`), and an internal code is not something a producer can act on
+ * (docs/07:14 plain Spanish). Only a field the body actually names earns a
+ * message about that field: `client.ts` folds a Pydantic validation body into
+ * its `title`/`detail` strings and drops `loc`, so a `422` that names no field
+ * cannot be attributed and must not be guessed.
+ */
+const FIELD_422_MESSAGES: Record<string, string> = {
+  crop_id: 'Ese cultivo no está en la lista. Elige otro de la lista de cultivos.',
+}
+
+/** Names no field on purpose: a refused figure the server did not attribute is
+ * not this form's to explain, so the message names the save and the retry. */
+const NEUTRAL_422_MESSAGE = 'No se pudo guardar la encuesta. Revisa los datos e intenta de nuevo.'
+
+/**
+ * Spanish copy for what the server refused, naming the problem and the way out.
  */
 function describeBaselineError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 403) return 'Tu rol no puede cambiar esta encuesta.'
     if (err.status === 422) {
-      return 'Ese cultivo no está en la lista. Elige otro de la lista de cultivos.'
+      const body = `${err.title} ${err.detail ?? ''}`
+      // Word-bounded so a field named inside another field's message cannot
+      // borrow this one's copy.
+      const field = Object.keys(FIELD_422_MESSAGES).find((name) =>
+        new RegExp(`\\b${name}\\b`).test(body),
+      )
+      return field === undefined ? NEUTRAL_422_MESSAGE : FIELD_422_MESSAGES[field]
     }
   }
   return describeApiError(err)
+}
+
+/**
+ * Why the crop select cannot be used yet, when the section needs it: the
+ * catalog is the only source of the crop a required question demands, so an
+ * empty or failed catalog would offer a form whose submit never enables. The
+ * form is not rendered until the catalog answers.
+ *
+ * No retry of its own: `cropsQuery` is the sheet's shared catalog, and the
+ * sheet already offers one recovery for that failure, so a second button here
+ * would show the same problem and the same way out twice. This says what is
+ * blocked; the recovery on the same screen is the shared one.
+ */
+function cropCatalogBlocker(
+  cropCount: number,
+  query: { isPending: boolean; isError: boolean },
+  needed: boolean,
+): { message: string; critical: boolean } | null {
+  if (!needed || cropCount > 0) return null
+  if (query.isError) {
+    return {
+      message: 'La lista de cultivos no cargó, así que la encuesta no se puede llenar todavía.',
+      critical: true,
+    }
+  }
+  if (query.isPending) return { message: 'Cargando la lista de cultivos…', critical: false }
+  // A catalog that answered with no crops is a configuration a producer cannot
+  // act on, so it reads as a failure rather than as an empty choice list.
+  return {
+    message: 'La lista de cultivos está vacía, así que la encuesta no se puede llenar.',
+    critical: false,
+  }
 }
 
 function SurveySummary({ baseline, cropName }: { baseline: PlotBaselineView; cropName: string }) {
@@ -115,9 +164,12 @@ export function BaselineSection({ plotId, callerRole = null }: BaselineSectionPr
   /** docs/04-api.md:233 answers `404` when the plot has no survey yet: an
    * invitation to register one, not a failure to report. */
   const missing = baselineQuery.isError && baselineQuery.error instanceof ApiError && baselineQuery.error.status === 404
+  const crops = cropsQuery.data ?? []
   const cropName =
-    cropsQuery.data?.find((crop) => crop.id === baseline?.crop_id)?.name_es ??
+    crops.find((crop) => crop.id === baseline?.crop_id)?.name_es ??
     (baseline ? `Cultivo ${baseline.crop_id}` : '')
+  /** The crop select needs the catalog, so the invitation waits for it. */
+  const catalogBlocker = cropCatalogBlocker(crops.length, cropsQuery, Boolean(baseline) || missing)
 
   async function handleSubmit(input: PlotBaselineInput) {
     setError(null)
@@ -144,9 +196,24 @@ export function BaselineSection({ plotId, callerRole = null }: BaselineSectionPr
         </p>
       )}
       {!baseline && baselineQuery.isError && !missing && (
-        <p className="text-base text-severity-critical">{describeBaselineError(baselineQuery.error)}</p>
+        // Nothing else on the page moves when a read fails, so without an
+        // announcement a screen reader never learns the survey is unavailable
+        // (same repair as the save error in `BaselineSurvey`).
+        <p role="alert" className="text-base text-severity-critical">
+          {describeBaselineError(baselineQuery.error)}
+        </p>
       )}
-      {mayFill && (baseline || missing) && !editing && (
+      {catalogBlocker !== null && (
+        <p
+          role={catalogBlocker.critical ? 'alert' : undefined}
+          className={
+            catalogBlocker.critical ? 'text-base text-severity-critical' : 'text-base text-text-muted'
+          }
+        >
+          {catalogBlocker.message}
+        </p>
+      )}
+      {mayFill && catalogBlocker === null && (baseline || missing) && !editing && (
         <div>
           <Button type="button" variant="ghost" onClick={() => setEditing(true)}>
             {baseline ? 'Editar encuesta' : 'Registrar encuesta'}
@@ -162,7 +229,7 @@ export function BaselineSection({ plotId, callerRole = null }: BaselineSectionPr
         <BaselineSurvey
           open
           onOpenChange={(open) => !open && setEditing(false)}
-          crops={(cropsQuery.data ?? []).map((crop) => ({ id: crop.id, nameEs: crop.name_es }))}
+          crops={crops.map((crop) => ({ id: crop.id, nameEs: crop.name_es }))}
           initial={
             baseline
               ? {
