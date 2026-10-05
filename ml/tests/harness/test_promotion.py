@@ -21,14 +21,18 @@ from techcamp_ml.harness.promotion import (
     _forget_spent_reads,
     decide_promotion,
 )
-from techcamp_ml.harness.split import TEST_FIRST, TRAIN_LAST, VAL_LAST
+from techcamp_ml.harness.split import TEST_FIRST, TEST_LAST, TRAIN_LAST, VAL_LAST
 
 
 @pytest.fixture(autouse=True)
 def unspent_test_block() -> Iterator[None]:
     """Every test here builds the same block from the same fixture, so each of them is a
     first read and the harness's process-level receipt has to be emptied around it. Without
-    this the guard would refuse every test but the first, which is the guard working."""
+    this the guard would refuse every test but the first, which is the guard working.
+
+    `_forget_spent_reads` is out of contract and only ever called from here; see its docstring
+    for why the repository, and not the runtime, is what keeps a caller out of it.
+    """
     _forget_spent_reads()
     yield
     _forget_spent_reads()
@@ -630,6 +634,43 @@ def test_a_thinned_test_month_is_refused() -> None:
     with pytest.raises(ValueError, match="complete labelled year"):
         decide_promotion(
             thinned,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
+
+
+def test_the_completeness_bar_is_not_computed_from_the_block_it_judges() -> None:
+    """Negative: the bar has to come from somewhere the gate is not judging. docs/08 §M2
+    "Partición" makes the test the most recent complete labelled year and train the block an
+    experiment may see, so the typical month is a **train** month. A bar read off the whole
+    label window lowers itself when the test year is thin enough to move that window's mode,
+    which is the block deciding how complete it has to be.
+
+    The window here is trimmed to the tail of train plus the test year so the thin test
+    months outnumber the full ones: the window's own mode reads 3, and a train-referenced bar
+    still refuses the block.
+    """
+    table = flood_table()
+    months = table["horizon_start"].dt.to_period("M")
+    late_train = (months >= pd.Period("2022-01", freq="M")) & (
+        months <= pd.Period(TRAIN_LAST, freq="M")
+    )
+    test_year = (months >= pd.Period(TEST_FIRST, freq="M")) & (
+        months <= pd.Period(TEST_LAST, freq="M")
+    )
+    block = pd.concat(
+        [table[late_train], table[test_year & (table["code"] != "13002")]], ignore_index=True
+    )
+    counts = pd.PeriodIndex(block["horizon_start"], freq="M").value_counts()
+
+    assert int(counts.mode().iloc[0]) == 3, "the whole window's own mode would read 3"
+    assert int(counts[pd.Period("2025-01", freq="M")]) == 3, "the test year is the thin one"
+
+    with pytest.raises(ValueError, match="typical month of train"):
+        decide_promotion(
+            block,
             candidate=HeavyRain(),
             baseline=Fixed(0.5),
             resamples=200,

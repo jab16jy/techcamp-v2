@@ -39,7 +39,7 @@ from techcamp_ml.harness.metrics import (
     paired_improvement_ci95,
     pr_auc,
 )
-from techcamp_ml.harness.split import TEST_FIRST, TEST_LAST
+from techcamp_ml.harness.split import TEST_FIRST, TEST_LAST, TRAIN_LAST
 
 CI_LOWER_BOUND_ABOVE_ZERO = "improvement_ic95_lower_bound_not_above_zero"
 BRIER_NOT_WORSE = "brier_worse_than_the_best_baseline"
@@ -79,13 +79,21 @@ final candidate, and the gate is only ever called for that candidate."""
 
 
 def _forget_spent_reads() -> None:
-    """Empty the process-level read receipt.
+    """Empty the process-level read receipt. **Out of contract.**
 
-    The test suite's seam, and nothing else. Every test in this module builds the same block
-    from the same fixture, so each of them is legitimately a first read and none of them can
-    be the second one the guard refuses. It is not reachable from `decide_promotion`, it is
-    not exported, and nothing in the gate calls it; a caller with a block to read has no use
-    for it, because the receipt it clears is the one standing between it and a second answer.
+    Every test in this module builds the same block from the same fixture, so each of them is
+    legitimately a first read and the process-level receipt has to be emptied around them.
+    Thirty independent cases over one fixture is not thirty reads of the test set, and refusing
+    all but the first would be the guard working rather than a fault to route around with
+    subprocess isolation.
+
+    It is here because of that, and not as an affordance. A caller holding a block it has not
+    read gains nothing here, and reaching for it is modifying the harness — which ADR-0020
+    ("el agente no puede modificar el harness, el dataset de test ni la compuerta"),
+    `CODEOWNERS` and `ml/harness/LOCK.sha256` already forbid at review and hash-check time. The
+    guard therefore holds against every way of reaching the block through the gate's own API:
+    a second ledger, a cleared frame, a rebuilt frame, a reordered frame. The one move left is
+    not part of that API, and the repository already refuses it.
     """
     _SPENT_READS.clear()
 
@@ -294,18 +302,28 @@ def _require_complete_year(blocked: pd.DataFrame, months: pd.PeriodIndex) -> Non
 
     # Presence of every month is a shape, not a population: a block thinned to a fraction of
     # the year still has all twelve months and can still decide. The bar is the **modal** month
-    # of the whole label window rather than the fullest one, because the last month of a
-    # window is incomplete by construction and comparing against the maximum would refuse
-    # legitimate datasets. The window is the reference because it is what the dataset itself
-    # says a month holds, so nothing about the shape of the data has to be maintained here.
+    # of train rather than of the whole label window, because a bar read off the window is a
+    # bar the block lowers for itself: thin the test year enough and the window's own mode
+    # becomes the thin count, after which the block is complete by its own standard. Train is
+    # the reference because it is not the scarce resource — docs/08 §M2 "Partición" gives the
+    # experiment train and validation to work on and reserves the test year for this gate — and
+    # the mode of a count does not depend on the size of the dataset, so the bar is the same
+    # on the unit fixture and on the 195 municipalities of the real table.
+    #
+    # What this cannot catch is a window that is thin everywhere, train included: there the
+    # mode is low because the data is, and no in-gate reference can tell a small region from a
+    # truncated one. That limit belongs to the dataset build, which refuses to assemble a
+    # table missing any municipality (ml/datasets/flood_m2, data card §Contrato de columnas),
+    # and not to a gate that would have to trust the very rows it is judging.
+    train_counts = months[months <= pd.Period(TRAIN_LAST, freq="M")].value_counts()
+    typical = int(train_counts.mode().iloc[0])
     counts = months.value_counts()
-    typical = int(counts.mode().iloc[0])
     thin = sorted(str(month) for month in expected if int(counts.get(month, 0)) < typical)
     if thin:
         raise ValueError(
             f"the complete labelled year {TEST_FIRST} to {TEST_LAST} is thin in {len(thin)} "
             f"of its {len(expected)} months ({', '.join(thin[:3])}), each holding fewer than "
-            f"the {typical} rows a typical month of the label window holds; a thinned month is "
+            f"the {typical} rows a typical month of train holds; a thinned month is "
             "a truncated block wearing a complete one's shape"
         )
 
