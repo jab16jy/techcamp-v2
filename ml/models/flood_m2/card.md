@@ -82,6 +82,25 @@ Bloque de 2 340 filas con 63 positivos (2,69 %). Mejora pareada: **+0,004990**, 
 
 No es un fallo de la corrida: con 63 positivos en 2 340 meses, el IC95 pareado de una mejora de 0,005 no puede separarse de cero, y la línea base además gana en Brier. Que la validación sugiriera una mejora y el test no la confirme es exactamente lo que la brecha de seis meses y el bloqueo del test existen para detectar.
 
+### Registro y servicio (ADR-0020 paso 10)
+
+La versión registrada es `risk_flood@2026-10-05-climatology_month`, con `is_baseline=true` y `promoted=false`: la compuerta no promovió, y lo que se registra es lo que ella dejó sirviendo (`GateRun.served`).
+
+| Campo | Valor |
+| --- | --- |
+| `artifact_uri` | `s3://ml-artifacts/models/risk_flood/2026-10-05-climatology_month/climatology.json` |
+| `artifact_sha256` | `a5cf94c4f89b3f77fdeb90efc3765c978a65c773ac2cf9789d4da45e92a427fb` (596 bytes) |
+| `dataset_hash` | `7916e97fb4ea7bdc50b4d4cb1bb244683c5dcbf1bf32421ea8c32788983d0be5` (el manifiesto de T4) |
+| `git_commit` | `89ee0a6` |
+| `baseline_metrics` | PR-AUC 0,098390 [0,079492, 0,122723] · Brier 0,048885 |
+| `thresholds` | `{}` |
+
+La línea base se fitteó sobre las 8 190 filas de train (377 positivos, prevalencia 4,60 %), que es donde se vive la climatología por mes que sirve; la validación y el test nunca entraron al fit.
+
+**`thresholds` va vacío a propósito, y toda predicción de esta versión queda en `low`.** Los cortes de arriba (`alto=0,356862`) son del LightGBM calibrado, no de una climatología que nunca se calibró. docs/08 §M2 "Severidad" dice que los umbrales viajan con la versión del modelo: una versión sin cortes calibrados no tiene cortes, y `severity_for` lee un umbral ausente como evidencia faltante, con el techo en la severidad inferior. Poner un umbral aquí sería inventar un número que ninguna validación produjo, y con la prevalencia real de la región (octubre 8,5 %, enero 0,0 %) ningún corte promisorio cambiaría el hecho de que la señal de esta línea base es la estacionalidad.
+
+El artefacto viaja en el bucket `ml-artifacts`, separado del de fotos (ADR-0018; docs/08 §Estructura de `ml/`). El worker lo baja por el endpoint **interno** de la red y verifica su `sha256` contra el de la fila antes de deserializarlo (docs/03 §Integridad del artefacto: un objeto cambiado en el bucket no se ejecuta).
+
 ### Robustez (ADR-0020 paso 9; train y validación, nunca test)
 
 Reporte adicional dejando fuera un departamento a la vez (docs/08 §M2 "Partición"), con la configuración elegida reentrenada en el train de cada pliegue (PR-AUC):

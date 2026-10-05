@@ -84,6 +84,60 @@ feeds E12 (assistant cites risk) and E15 (risk rules), off the critical path (do
   2022-06-30..2026-06-28, ~one day of quota) and `archive_004/005` (195 codes, 2026-06-29..last
   complete month, small) — about 26% of the municipality-days, an estimated 2 days of fetch.
 
+### Decisions (T9)
+- D-T9.1 Se registra y se sirve **`climatology_month`** con `is_baseline=true` y `promoted=false`
+  (owner, 2026-10-06). La compuerta de T8 dio `promote=false`, y `GateRun.served` devuelve
+  `baseline.name` cuando no promovió: docs/08 §M2 "Línea base servida" manda la mejor línea base de
+  validación a producción, no un candidato. La fila es un `model_version` más, así que toda
+  `risk_prediction` tiene `model_version_id` igual (D-T0.5).
+- D-T9.2 La fila de la baseline va con **`thresholds={}`**. Los cortes publicados en la model card
+  §9 (`alto=0,356862`, `crítico` en el mismo umbral) son del LightGBM **calibrado**, no de la
+  climatología: la climatología no tiene calibración que publicar. Un umbral ausente es evidencia
+  faltante y `severity_for` (domain/models.py:145) lo trata como techo en la severidad inferior, así
+  que toda predicción de esta versión queda en `low`. Es el comportamiento que docs/08 §M2 "Severidad"
+  ya describe ("los umbrales viajan con la versión del modelo"): una versión sin cortes calibrados no
+  tiene cortes. **No se inventa un umbral** para forzar alertas.
+- D-T9.3 **Sólo `risk_flood`.** La sequía (M3) no se registra en esta lane: la línea base de sequía de
+  docs/06 §8 es SPI-3 y `SPI-3 no existe en código` todavía. El job ya trata el caso sin versión
+  registrada como lo que es —lo loguea y se saltea ese evento
+  (`run_daily_risk.py:192`, docs/06 §8 "Sin modelo promovido")—, así que la sequía queda sin
+  predicciones hasta que M3 exista, sin ningún camino nuevo que este código tenga que inventar.
+- D-T9.4 El artefacto se publica en el **bucket `ml`** bajo
+  `models/risk_flood/<version>/climatology.json` y la fila guarda
+  `artifact_sha256` + `dataset_hash` + `git_commit` + los años de train (2019–2022,
+  `split.train_climatology_years()`) (docs/08 §Estructura de `ml/`; ADR-0018 pide buckets separados
+  para artefactos; docs/03 §Integridad del artefacto y §Trazabilidad). `train_years` viaja en el
+  artefacto porque es lo que responde la pregunta que D-T6b.1 dejó abierta: de dónde salen los años
+  de climatología de una versión servida.
+- D-T9.5 El **endpoint MinIO es interno, no público**. El navegador sube fotos por
+  `TECHCAMP_S3_PUBLIC_URL` (`localhost:9000` publicado); el worker que lee el artefacto necesita
+  `minio:9000`, porque dentro del contenedor `localhost` es el propio contenedor. Por eso hay un
+  ajuste nuevo (`s3_internal_url()` / `TECHCAMP_S3_INTERNAL_URL`) y no se reutiliza el público.
+  `ml/` corre en el host del desarrollador, fuera de la red de compose, así que para subir usa la
+  URL pública. ADR-0018/ADR-0021.
+- D-T9.6 El **registry resuelve por fila, no por tabla**. `PredictorRegistry` gana
+  `register_factory(name, factory)`: la factory recibe el `ModelVersion` que `run_daily_risk` ya
+  leyó con `served_version(name)` y de ahí saca `artifact_uri` y `artifact_sha256`. El motivo es
+  concreto, no una preferencia: los tests del job monkeypatchean `jobs._predictors` con un
+  `lambda:` **síncrono y sin argumentos**, así que `_predictors()` no puede leer Postgres; y un
+  artefacto se baja y verifica **una vez por proceso** (el primer `resolve` lo carga, el registry lo
+  cachea). Un sha que no coincide NO se deserializa: se devuelve `None` y el job loguea que no hay
+  predictor para esa versión (docs/03 §Integridad del artefacto).
+- D-T9.7 `model_version` es **global, sin `org_id`**, por diseño (docs/03 §org_id;
+  adapters/orm.py:6-9). El predictor cacheado NO se filtra por organización: el aislamiento vive
+  en el endpoint que sirve la predicción.
+- D-T9.8 El bucket de ML se llama **`ml-artifacts`**, no `ml` (owner, 2026-10-06). Un nombre de
+  bucket S3 va de 3 a 63 caracteres y el MinIO del perfil seminario responde
+  `InvalidBucketName` a `ml` (comprobado contra el bucket de este worktree), así que el nombre
+  que fijaba docs/08 §Estructura de `ml/` no podía guardar los objetos que esa misma sección
+  describe. Se actualizan juntos docs/08, `shared/config.py::s3_ml_bucket` y los defaults de
+  compose, con el motivo escrito en los tres (AGENTS.md §Docs are the primary source).
+- D-T9.9 Un artefacto **verificado pero de otro modelo** se rechaza entero. Si una compuerta
+  futura promoviera `lightgbm`, el exportador de la climatología no puede escribir sus bytes
+  bajo ese nombre: la fila llevaría un artefacto, un `sha256` y unas `baseline_metrics` que
+  describen la climatología mientras su nombre afirma servir otra cosa. `serve_name` se niega
+  ante un `promote: true` y el peldaño promovido necesita su propio exportador.
+
 ### Decisions (T6b)
 - D-T6b.1 Serving builds the M2 features **without** a climatology, so `precip_anomaly_*` is `None`
   (missing evidence, never `0`). No doc says where a served version's train years live, and T6b does
@@ -168,8 +222,20 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   found by the parent gate and by the round-2 review on the way; see §Review (RDD).
 - [ ] T8 Experiments (steps 4–9): ladder, tuning, calibration/threshold, one gate run, robustness.
   ~400. Route: Herdr writer. Depends T4, T5 approved.
-- [ ] T9 Registration + promotion (step 10): artifact to MinIO, `model_version` row, serving loads
+- [x] T9 Registration + promotion (step 10): artifact to MinIO, `model_version` row, serving loads
   the promoted model or keeps the baseline. ~250. Route: Herdr writer. Depends T6, T8.
+  **Código listo en la lane `e10-t9`** (base `d0155c1`, 8 commits). Con promote=false, "promotion" es
+  registrar la línea base que la compuerta dejó sirviendo (D-T9.1) y cablear el job para que la sirva
+  de verdad: cargar el artefacto, verificar su sha y predecir (D-T9.4, D-T9.6).
+  **Corrida real verificada** contra los datos reales y el MinIO local: se registró
+  `risk_flood@2026-10-05-climatology_month`, `sha256 a5cf94c4…`, objeto de 596 bytes en
+  `s3://ml-artifacts/models/risk_flood/2026-10-05-climatology_month/climatology.json`, y el server lo
+  bajó yRespondió: octubre 0,085470, que es exactamente el `by_month[10]` del artefacto. Las
+  predicciones salen en `low` porque `thresholds={}` (D-T9.2).
+  **Dos defectos que sólo aparecieron al correr de verdad**, no en los tests: el bucket `ml` de
+  docs/08 lo rechaza el almacén (D-T9.8) y el cliente boto3 se construía con `Config(s=…)` en vez
+  de `s3=…`, que es `TypeError` en cada corrida real porque todos los tests lo duplicaban.
+  Pendiente: RDD de la lane, y T10.
 - [ ] T10 Close: `just gate-full`, demo run, follow-up issues (risk screen), delivery plan. Route:
   parent.
 
