@@ -59,7 +59,7 @@ Owner approved 2026-10-02.
   qualifier**, so an entry with `crop_cycle_id = null` counts too. Ruling on the escalated
   CRITICAL `R3-reliability.alert-action.cross-plot`: `alert` carries no `crop_cycle_id`, and
   scoping by cycle would discard actions from entries the phone sent without one. Written into
-  [11-metricas §2](../docs/11-metricas.md) and [ADR-0024](../docs/adr/0024-metricas-de-impacto-y-adopcion-digital.md);
+  [11-metricas §2](../docs/11-metricas.md) and [ADR-0025](../docs/adr/0025-la-accion-de-water-stress-es-de-la-parcela.md);
   the SQL is unchanged.
 - D-T0.10 Roles: baseline `PUT` owner/technician, `GET` any member; org metrics owner/technician.
 - D-T0.11 `PUT /plots/{id}/baseline` creates or replaces; `recorded_by` = caller; editable after
@@ -139,7 +139,7 @@ validador rechazó `371c0e7` por una regla de proceso (*"a test that pins the re
 not remove the reported behaviour"*), no porque el SQL estuviera mal. Ruling del dueño 2026-10-03
 (**D-T3.1**): la acción de `water_stress` es **plot-scoped**, sin qualifier de ciclo, y una entrada
 con `crop_cycle_id = null` cuenta. Escrito en [11 §2](../docs/11-metricas.md) y
-[ADR-0024](../docs/adr/0024-metricas-de-impacto-y-adopcion-digital.md); **el predicado no cambió**
+[ADR-0025](../docs/adr/0025-la-accion-de-water-stress-es-de-la-parcela.md); **el predicado no cambió**
 (solo el docstring de la vista). Commit de doc: `823974d`; commit de pruebas: `a1941ba`.
 
 Commits de T3, en orden: `7cc3dd7` (port), `51052a1` (builders), `09cef3f` (monitoring),
