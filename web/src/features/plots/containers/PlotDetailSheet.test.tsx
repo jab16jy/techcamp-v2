@@ -45,7 +45,10 @@ const NODE = {
   status: 'online',
 }
 
-function renderSheet(onOpenChange: (open: boolean) => void = vi.fn()) {
+function renderSheet(
+  onOpenChange: (open: boolean) => void = vi.fn(),
+  callerRole: 'owner' | 'technician' | 'producer' | null = null,
+) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={queryClient}>
@@ -55,6 +58,7 @@ function renderSheet(onOpenChange: (open: boolean) => void = vi.fn()) {
         plotId="plot-1"
         farmId="farm-1"
         plotName="Lote Norte"
+        callerRole={callerRole}
       />
     </QueryClientProvider>,
   )
@@ -67,6 +71,9 @@ type Route = () => Response | Promise<Response>
 const DEFAULT_ROUTES: Record<string, Route> = {
   '/nodes?': () => jsonResponse({ items: [], next_cursor: null }),
   '/readings': () => jsonResponse({ series: [] }),
+  // The enrollment survey section asks on every render; a plot without one is
+  // the common case, so the default is the 404 that invites to register it.
+  '/baseline': () => jsonResponse({ type: 'about:blank', title: 'Plot has no enrollment survey', status: 404 }, 404),
   // A stream that never settles is an open farm stream.
   '/stream': () => new Promise<Response>(() => {}),
 }
@@ -111,6 +118,40 @@ describe('PlotDetailSheet', () => {
     renderSheet()
 
     expect(screen.getByText('Todavía no hay datos de suelo en esta sesión.')).toBeInTheDocument()
+  })
+
+  // docs/07:150: the survey lives in the plot detail, owner or technician fills
+  // it, and while the plot has none the detail invites to register it.
+  it('offers the enrollment survey in the plot detail to a role that may fill it', async () => {
+    mockFetch({ '/crops': () => jsonResponse(CROPS) })
+    renderSheet(vi.fn(), 'owner')
+
+    expect(await screen.findByRole('heading', { name: 'Encuesta de inscripción' })).toBeInTheDocument()
+    // The invitation only appears once the read has answered `404`, so it is
+    // awaited: the heading is there from the first render, this is not.
+    expect(await screen.findByRole('button', { name: 'Registrar encuesta' })).toBeInTheDocument()
+  })
+
+  it('shows the recorded survey in the plot detail', async () => {
+    mockFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/baseline': () =>
+        jsonResponse({
+          plot_id: 'plot-1',
+          org_id: 'org-1',
+          enrolled_on: '2026-01-15',
+          crop_id: 2,
+          last_yield_kg_ha: 2400,
+          last_cost_cop_ha: null,
+          irrigation_practice: 'drip',
+          recorded_by: 'user-1',
+        }),
+    })
+    renderSheet(vi.fn(), 'producer')
+
+    expect(await screen.findByText('Ñame')).toBeInTheDocument()
+    expect(screen.getByText('2.400 kg/ha')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Editar encuesta' })).not.toBeInTheDocument()
   })
 
   it('lists the plot nodes with their health in the Nodos section', async () => {

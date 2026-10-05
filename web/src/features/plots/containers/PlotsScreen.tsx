@@ -138,6 +138,7 @@ export function PlotsScreen({ callerRole = null, renderNewVisitSheet }: PlotsScr
           plotId={selectedPlot.id}
           farmId={selectedPlot.farm_id}
           plotName={selectedPlot.name}
+          callerRole={callerRole}
         />
       )}
     </div>

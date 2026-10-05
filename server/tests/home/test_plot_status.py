@@ -7,19 +7,25 @@ comes from the plot's representative sensor, docs/06 §5).
 Every test carries its negative assertion: what a sibling case must NOT
 produce (a zero for missing data, an `irrigate` on a rainfed plot, a stage for
 a future sowing, an alert that is resolved, a reading at the wrong depth).
+
+`digital_adoption_index` is E11 T8 (D-T0.13): the plot's latest stored
+`plot_metric_monthly` row, read through the real metrics repository the monthly
+job writes, never a recomputation and never a zero.
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.domain.errors import PlotNotFoundError
-from techcamp.home.application import build_plot_status
+from techcamp.home.application import DigitalAdoption, build_plot_status
 from techcamp.irrigation.adapters.orm import WaterBalanceDailyRow
+from techcamp.metrics.adapters.monthly_repository import SqlAlchemyMonthlyMetricRepository
+from techcamp.metrics.domain.adoption import AdoptionComponents, PlotMonthlyMetric
 from techcamp.shared.ids import uuid7
 from techcamp.telemetry.domain.models import ReadingQuality
 
@@ -44,6 +50,38 @@ from .conftest import (
 
 pytestmark = pytest.mark.anyio
 
+AUGUST = date(2026, 8, 1)
+SEPTEMBER = date(2026, 9, 1)
+"""Real calendar month starts: `month` is the first day (docs/03:438) and the
+table checks it, so a test bucket has to be one too."""
+
+
+async def add_month_row(
+    env: HomeEnv,
+    *,
+    month: date,
+    index: Decimal | None,
+    computed_at: datetime,
+) -> None:
+    """One `plot_metric_monthly` row, written the way the monthly job writes
+    it: the same adapter and the same upsert key `(plot_id, month)`
+    (docs/03:438, D-T0.2). What the home screen reads is what T5 stored."""
+    await SqlAlchemyMonthlyMetricRepository(env.session).upsert(
+        PlotMonthlyMetric(
+            plot_id=env.plot_id,
+            org_id=env.org_id,
+            month=month,
+            components=AdoptionComponents(
+                monitoring=Decimal("0.5"),
+                record_keeping=Decimal(1),
+                decision=Decimal(1),
+                risk_management=None,
+            ),
+            digital_adoption_index=index,
+            computed_at=computed_at,
+        )
+    )
+
 
 async def _status(env: HomeEnv) -> object:
     return await build_plot_status(
@@ -51,6 +89,7 @@ async def _status(env: HomeEnv) -> object:
         plot_id=env.plot_id,
         now=NOW,
         **repos(env.session),
+        metrics=SqlAlchemyMonthlyMetricRepository(env.session),
     )
 
 
@@ -447,6 +486,7 @@ async def test_a_plot_of_another_org_raises_plot_not_found(db_session: AsyncSess
             plot_id=other.plot_id,
             now=NOW,
             **repos(db_session),
+            metrics=SqlAlchemyMonthlyMetricRepository(db_session),
         )
 
     # Negative: an id nobody owns raises the same error, so the two cases are
@@ -457,4 +497,67 @@ async def test_a_plot_of_another_org_raises_plot_not_found(db_session: AsyncSess
             plot_id=uuid7(),
             now=NOW,
             **repos(db_session),
+            metrics=SqlAlchemyMonthlyMetricRepository(db_session),
         )
+
+
+async def test_the_index_is_the_latest_stored_month_not_the_last_computed_one(
+    db_session: AsyncSession,
+) -> None:
+    """D-T0.13: ordered by `month` descending, never by `computed_at`.
+
+    A re-run of an old month carries the newest `computed_at`, and reading that
+    instead of the bucket would show a stale month as the plot's adoption.
+    """
+    env = await make_env(db_session)
+    await add_month_row(env, month=AUGUST, index=Decimal("50"), computed_at=NOW)
+    await add_month_row(
+        env, month=SEPTEMBER, index=Decimal("75"), computed_at=NOW - timedelta(days=300)
+    )
+
+    index = (await _status(env)).digital_adoption_index
+
+    # Negative: ordered by `computed_at` this would be August's 50.
+    assert index == DigitalAdoption(value=75.0, month=SEPTEMBER)
+
+
+async def test_a_plot_with_no_stored_month_reports_a_null_index(
+    db_session: AsyncSession,
+) -> None:
+    """docs/04 §Estado: null "si todavía no hay ninguna" — the job has not run
+    for this plot yet, which is not an error and not an index of zero."""
+    env = await make_env(db_session)
+
+    index = (await _status(env)).digital_adoption_index
+
+    assert index is None
+
+
+async def test_a_latest_month_whose_own_index_is_null_reports_null_not_zero(
+    db_session: AsyncSession,
+) -> None:
+    """docs/04 §Estado: null "o su índice es `null`"; D-T0.2: a month with no
+    evidence at all has no index, and storing or serving 0 would read as
+    "adopted nothing" (docs/11 §2)."""
+    env = await make_env(db_session)
+    await add_month_row(env, month=AUGUST, index=Decimal("50"), computed_at=NOW)
+    await add_month_row(env, month=SEPTEMBER, index=None, computed_at=NOW - timedelta(days=300))
+
+    index = (await _status(env)).digital_adoption_index
+
+    # Negative: an older month does have 50, and September is not 0 either.
+    assert index is None
+
+
+async def test_another_organizations_month_is_never_read(db_session: AsyncSession) -> None:
+    other = await make_env(db_session, name="Finca Ajena")
+    mine = await make_env(db_session, name="Finca Mía")
+    await add_month_row(other, month=SEPTEMBER, index=Decimal("90"), computed_at=NOW)
+
+    # Negative: the row exists and 90 is readable by its own owner, so a null
+    # here is the `org_id` filter working, not missing data
+    # (docs/09-cuellos-de-botella.md#seguridad).
+    assert (await _status(mine)).digital_adoption_index is None
+    assert (await _status(other)).digital_adoption_index == DigitalAdoption(
+        value=90.0, month=SEPTEMBER
+    )
