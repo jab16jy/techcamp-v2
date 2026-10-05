@@ -218,6 +218,13 @@ preflight por no ser ancestros del base.
   web/src/features/plot-status web/src/app` EXIT=0 (metrics 25, plot-status 86, app 15),
   `gate-lane` 5/5; RDD `review-4b39d1bd807fbd23` (reliability, 0 native findings, approved,
   authority burned); follow-up #255; report `../e11-briefs/e11-t9b-rdd.md`. Merged `228666d`.
+- [ ] T7b OrgMetrics complete (D-T7.1 follow-up lane, added 2026-10-05): the two locked figures
+  get their read views (`ciclos con cosecha registrada / ciclos terminados`, and the median hours to
+  first reading over **nodes claimed in the requested month**, docs/11:69-75), new `source_repository`
+  methods, and the `null` branches in `metrics_read.py` replaced by the real rule. Route: Herdr
+  OpenCode. Unfreezes `ports.py`, `source_repository.py` and a new migration revision by owner
+  authorization. Work units: views+migration, repository, on-read wiring. Parallel hazard: the
+  single Alembic head with E10.
 - [ ] T10 Close: `just gate-release`, follow-up issue (`field_record` / `relative_yield`), delivery
   plan. Route: parent.
 
