@@ -129,7 +129,11 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
   OpenCode. Depends T4, T5.
 - [ ] T7 Metrics read API: plot metrics, cycle summary, org metrics (D-T0.10, D-T0.12). ~350.
   Route: Herdr OpenCode. Depends T4, T5. Parallel with T6, T8.
-- [ ] T8 `/status` index from `metrics` (D-T0.13). ~120. Route: Herdr AGY (quick). Depends T5.
+- [x] T8 `/status` index from `metrics` (D-T0.13). Route: Herdr OpenCode (quick lane).
+  Depended T5. Commit `2786e4c` (single work unit, 5 files). Evidence: `just gate
+  server/tests/home server/tests/metrics/test_monthly_repository.py` 39 + 14 passed (lane and
+  epic branch after merge); RDD `review-727e456fcf63bb7d` (reliability, 0 findings, approved,
+  authority burned); no follow-up issue; report `../e11-briefs/e11-t8-rdd.md`. Merged `997a016`.
 - [ ] T9a Web enrollment survey form in plot detail (`impeccable`). ~300. Route: Herdr OpenCode.
   Depends T2.
 - [ ] T9b Web indicators screen + index line on Inicio (`impeccable`). ~400. Route: Herdr
@@ -341,6 +345,20 @@ ratificó post-hoc (granted sin verificar); desde entonces rige la REGLA DURA: c
 autorizaciones auditadas solo por el canal del orquestador. El id de lineage deriva del
 `target_identity` (mismo target ⇒ mismo id tras `abandon` + re-mint con `runtime_agent: pi`).
 
+### T8 — lineage `review-727e456fcf63bb7d`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | Work unit único `2786e4c`, 5 paths (`home/application/plot_status.py` + `__init__.py` export, `home/adapters/api/router.py`, 2 tests) |
+| Lente | `review-reliability`, 0 findings, correction budget intacto |
+| Recibo | `terminal-consumption/v1`, target `sha256:0c5042f2…`, lineage `review-727e456fcf63bb7d` |
+| Follow-up | Ninguno (cero findings); handoff a T9b: `web/src/lib/api/schema.d.ts` sigue `null` hasta `npm run gen:api` |
+| Merge | `997a016` a `feat/e11-metrics`; gate post-merge 39 + 14 verde |
+
+Rung by Pi (host-relay), base-ref exclusivo `442ef91`. Surface delta declarada (2 líneas de export
+en `home/application/__init__.py`): in-scope por convención del módulo, sin flag del revisor.
+Full report: `../e11-briefs/e11-t8-rdd.md`.
+
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
   `origin/main` a2bae6b), CodeGraph index, DB `techcamp-db-e11-metrics`. Explorers (Herdr
@@ -355,6 +373,14 @@ autorizaciones auditadas solo por el canal del orquestador. El id de lineage der
   Herdr panes + OpenCode writers briefed with disjoint surfaces, DBs up, RDD procedure patched
   with D-T4.1/D-T4.2 + work-unit granularity (`a20dfbd`).
 
+- 2026-10-05: T8 merged (`997a016`): review `review-727e456fcf63bb7d` approved + burned with
+  0 findings, no follow-up issue, report `../e11-briefs/e11-t8-rdd.md`; gate post-merge green.
+- 2026-10-05: T6 lane done (single commit `a207c95`, gates green): Pi RDD delegated. T7 lane
+  partially done (plot metrics + cycle summary in `00869b8`/`21d909e`): org-metrics endpoint
+  stopped on a frozen-store gap, owner decision pending (see Next step).
+
 ## Next step
-Wave 4 in progress (T6 monthly job, T7 read API, T8 `/status` index). Then Wave 5: T9b. T9a (wave 3)
-sigue pendiente en paralelo sin dependencia de Wave 4.
+T8 merged. T6 in Pi RDD. T7 blocked on owner call: `GET /organizations/{org_id}/metrics` cannot
+compute `harvested_cycles_ratio` (no cycle listing in any frozen store) ni
+`median_hours_to_first_reading` (node-month readings carry counts, never a first instant) —
+both need a new lane (migration + frozen-port change). Then Wave 5: T9b (T9a still pending).
