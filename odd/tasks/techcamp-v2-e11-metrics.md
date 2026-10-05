@@ -272,6 +272,12 @@ round; 3+ → fix the most important with `Refs #N`, file the rest.
    `gentle-ai review assess --cwd <lane> --agent <runtime> --base-ref <fork point> --committed-only --json`.
    Never start from the selectorless `review status`: it binds the merge-base with `main`
    (a2bae6b) and freezes the whole epic as the candidate (T1, T3 attempt 1).
+   **The base-ref must be an ANCESTOR of the lane's HEAD** — the lane's fork point, never the
+   epic's current tip. T7b was briefed with the epic tip (`b35fb1bf`, a sibling commit carrying the
+   D-T7.2 record) while the lane had forked at `9bacd05`; `git merge-base --is-ancestor` returned NO,
+   so `odd/tasks/…` entered the frozen scope as an 18-line **deletion artifact** of a file the lane
+   never touched. Harmless at merge (three-way keeps the epic's copy) but the reviewer then read a
+   path that was not the candidate's, and the evidence trail said "documentation changes" for it.
 2. Execute the returned `next_transition.command` verbatim (the preflight STATUS with the same
    selectors), then the START it returns.
 3. A consent envelope is relayed to the parent complete; the parent relays it to the owner
