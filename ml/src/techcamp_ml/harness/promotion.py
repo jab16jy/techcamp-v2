@@ -160,7 +160,7 @@ def decide_promotion(
     baseline: Scored,
     seed: int = BOOTSTRAP_SEED,
     resamples: int = BOOTSTRAP_RESAMPLES,
-    reads: SpentTestBlocks | None = None,
+    reads: SpentTestBlocks,
 ) -> PromotionDecision:
     """Run the gate of ADR-0020 step 8 once over the blocked test block.
 
@@ -169,7 +169,7 @@ def decide_promotion(
     so the paired interval compares like with like.
     """
     blocked = _test_block(table)
-    _read_once(blocked, reads or SpentTestBlocks())
+    _read_once(blocked, reads)
     labels, features = _design(blocked)
     candidate_scores = _positive_class(candidate.predict_proba(features), features)
     baseline_scores = _positive_class(baseline.predict_proba(features), features)
@@ -261,6 +261,23 @@ def _require_complete_year(months: pd.PeriodIndex) -> None:
             f"months of the complete labelled year {TEST_FIRST} to {TEST_LAST}, and is "
             f"missing {named}; the gate promotes off that whole year, not off a fragment of "
             "it, because every metric below would answer on whatever rows it was given"
+        )
+
+    # Presence of every month is a shape, not a population: a block thinned to a fraction of
+    # the year still has all twelve months and can still decide. The bar is the **modal** month
+    # of the whole label window rather than the fullest one, because the last month of a
+    # window is incomplete by construction and comparing against the maximum would refuse
+    # legitimate datasets. The window is the reference because it is what the dataset itself
+    # says a month holds, so nothing about the shape of the data has to be maintained here.
+    counts = months.value_counts()
+    typical = int(counts.mode().iloc[0])
+    thin = sorted(str(month) for month in expected if int(counts.get(month, 0)) < typical)
+    if thin:
+        raise ValueError(
+            f"the complete labelled year {TEST_FIRST} to {TEST_LAST} is thin in {len(thin)} "
+            f"of its {len(expected)} months ({', '.join(thin[:3])}), each holding fewer than "
+            f"the {typical} rows a typical month of the label window holds; a thinned month is "
+            "a truncated block wearing a complete one's shape"
         )
 
 

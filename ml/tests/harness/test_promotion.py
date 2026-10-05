@@ -75,7 +75,9 @@ def test_a_candidate_that_beats_the_baseline_on_both_rules_is_promoted() -> None
     candidate = HeavyRain()
     baseline = Fixed(probability=PRECEDENCE)
 
-    decision = decide_promotion(table, candidate=candidate, baseline=baseline, resamples=400)
+    decision = decide_promotion(
+        table, candidate=candidate, baseline=baseline, resamples=400, reads=SpentTestBlocks()
+    )
 
     assert isinstance(decision, PromotionDecision)
     assert decision.promote
@@ -91,7 +93,11 @@ def test_a_candidate_that_only_ties_the_baseline_is_not_promoted() -> None:
     identical = Fixed(probability=0.5)
 
     decision = decide_promotion(
-        flood_table(), candidate=identical, baseline=identical, resamples=200
+        flood_table(),
+        candidate=identical,
+        baseline=identical,
+        resamples=200,
+        reads=SpentTestBlocks(),
     )
 
     assert not decision.promote
@@ -108,7 +114,9 @@ def test_a_candidate_that_ranks_better_but_calibrates_worse_is_not_promoted() ->
     candidate = HeavyRain(confidence=0.6)
     baseline = Fixed(probability=PRECEDENCE)
 
-    decision = decide_promotion(table, candidate=candidate, baseline=baseline, resamples=400)
+    decision = decide_promotion(
+        table, candidate=candidate, baseline=baseline, resamples=400, reads=SpentTestBlocks()
+    )
 
     assert decision.report.candidate.pr_auc == 1.0
     assert decision.report.improvement.lower > 0
@@ -124,6 +132,7 @@ def test_a_candidate_with_neither_a_lower_bound_nor_a_brier_is_not_promoted() ->
         candidate=Fixed(probability=0.95),
         baseline=Fixed(probability=0.02),
         resamples=200,
+        reads=SpentTestBlocks(),
     )
 
     assert not decision.promote
@@ -136,7 +145,9 @@ def test_the_gate_scores_only_the_blocked_test_and_scores_it_once() -> None:
     table = flood_table()
     candidate = HeavyRain()
 
-    decision = decide_promotion(table, candidate=candidate, baseline=Fixed(0.5), resamples=200)
+    decision = decide_promotion(
+        table, candidate=candidate, baseline=Fixed(0.5), resamples=200, reads=SpentTestBlocks()
+    )
     expected = int((table["year"] == 2025).sum())
 
     assert candidate.calls == [expected]
@@ -151,7 +162,9 @@ def test_the_gate_reads_no_month_the_experiment_already_used() -> None:
     (docs/08 §Reglas de gobierno, "Test intocable")."""
     table = flood_table()
 
-    decision = decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+    decision = decide_promotion(
+        table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=SpentTestBlocks()
+    )
 
     assert decision.report.test_rows == int(
         (table["horizon_start"] >= pd.Timestamp(TEST_FIRST)).sum()
@@ -213,7 +226,13 @@ def test_the_gate_says_which_feature_columns_are_missing() -> None:
     table = flood_table().drop(columns=["slope_deg", "month_cos"])
 
     with pytest.raises(ValueError, match="month_cos.*slope_deg|slope_deg.*month_cos"):
-        decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+        decide_promotion(
+            table,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_a_table_without_the_label_column_is_refused() -> None:
@@ -222,7 +241,13 @@ def test_a_table_without_the_label_column_is_refused() -> None:
     table = flood_table().drop(columns=["label"])
 
     with pytest.raises(ValueError, match="label"):
-        decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+        decide_promotion(
+            table,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_a_scorer_that_answered_hard_labels_is_refused() -> None:
@@ -234,7 +259,13 @@ def test_a_scorer_that_answered_hard_labels_is_refused() -> None:
             return np.zeros((len(features), 1))
 
     with pytest.raises(ValueError, match="two-column"):
-        decide_promotion(flood_table(), candidate=HardLabels(), baseline=Fixed(0.5), resamples=200)
+        decide_promotion(
+            flood_table(),
+            candidate=HardLabels(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_a_scorer_that_skipped_rows_is_refused() -> None:
@@ -245,7 +276,13 @@ def test_a_scorer_that_skipped_rows_is_refused() -> None:
             return np.column_stack([np.ones(1), np.zeros(1)])
 
     with pytest.raises(ValueError, match="one row per block row"):
-        decide_promotion(flood_table(), candidate=Short(), baseline=Fixed(0.5), resamples=200)
+        decide_promotion(
+            flood_table(),
+            candidate=Short(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_a_dataset_with_no_test_block_is_refused() -> None:
@@ -254,7 +291,13 @@ def test_a_dataset_with_no_test_block_is_refused() -> None:
     early = table[table["horizon_start"] < pd.Timestamp(TEST_FIRST)]
 
     with pytest.raises(ValueError, match="nothing to decide on"):
-        decide_promotion(early, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+        decide_promotion(
+            early,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_a_fragment_of_the_labelled_year_is_not_promoted() -> None:
@@ -270,7 +313,13 @@ def test_a_fragment_of_the_labelled_year_is_not_promoted() -> None:
     assert len(fragment[fragment["horizon_start"] >= pd.Timestamp(TEST_FIRST)]) == 8
 
     with pytest.raises(ValueError, match="complete labelled year"):
-        decide_promotion(fragment, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+        decide_promotion(
+            fragment,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_the_test_block_is_read_once_per_final_candidate() -> None:
@@ -350,7 +399,9 @@ def test_an_independent_run_may_score_the_same_block() -> None:
     `SpentTestBlocks`, and making one is a visible act rather than a reset nobody sees."""
     table = flood_table()
 
-    first = decide_promotion(table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200)
+    first = decide_promotion(
+        table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=SpentTestBlocks()
+    )
     second = decide_promotion(
         table,
         candidate=HeavyRain(),
@@ -361,6 +412,45 @@ def test_an_independent_run_may_score_the_same_block() -> None:
 
     assert first.promote == second.promote
     assert first.report.test_rows == second.report.test_rows == 48
+
+
+def test_the_read_ledger_cannot_be_omitted() -> None:
+    """Negative: a guard a caller can leave out is not a guard. `reads` carries no default,
+    so there is no call that silently gets a fresh ledger and reads the block again."""
+    parameter = inspect.signature(decide_promotion).parameters["reads"]
+
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_a_thinned_test_month_is_refused() -> None:
+    """Negative: every month present is not completeness. The declared block is a complete
+    labelled year, so a month thinned to a fraction of the window's typical month is a
+    truncated block wearing a complete one's shape — and it is enough to decide on.
+
+    The bar is the **modal** month of the whole label window, not the fullest: the last month
+    of a window is incomplete by construction, so comparing against the maximum would refuse
+    legitimate datasets.
+    """
+    table = flood_table()
+    early_2025 = (table["horizon_start"] >= pd.Timestamp("2025-01-01")) & (
+        table["horizon_start"] <= pd.Timestamp("2025-03-01")
+    )
+    thinned = table.drop(index=table[early_2025].groupby("horizon_start").tail(3).index)
+    months = pd.PeriodIndex(thinned["horizon_start"], freq="M")
+    blocked = months[(months >= pd.Period(TEST_FIRST, freq="M"))]
+
+    assert len(blocked.unique()) == 12, "every test month is still present"
+    assert int(months.value_counts().min()) == 1, "some month is thinned"
+
+    with pytest.raises(ValueError, match="complete labelled year"):
+        decide_promotion(
+            thinned,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_the_gate_accepts_anything_that_answers_predict_proba() -> None:
@@ -381,7 +471,11 @@ def test_the_gate_accepts_anything_that_answers_predict_proba() -> None:
 
 def test_the_report_carries_the_numbers_the_gate_decided_on() -> None:
     decision = decide_promotion(
-        flood_table(), candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200
+        flood_table(),
+        candidate=HeavyRain(),
+        baseline=Fixed(0.5),
+        resamples=200,
+        reads=SpentTestBlocks(),
     )
 
     report = decision.report
