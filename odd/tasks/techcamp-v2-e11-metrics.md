@@ -100,14 +100,30 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
   passed on the lane (parent rerun) and on the epic branch after merge; `gate-lane 31c6b3e` green
   on all 4 commits. RED first line: `test_an_owner_saves_and_reads_the_survey` 404 == 200 (route
   not mounted). Baseline port lives in `metrics/application/baseline.py` (lane split with T3).
-- [ ] T3 Read-only SQL views (migration) and the metrics source repository: readings expected vs
+- [x] T3 Read-only SQL views (migration) and the metrics source repository: readings expected vs
   received per node-month, logbook aggregates per cycle and per plot-month, recommendations vs
-  irrigation per day, plot alerts with timely actions, stress days. ~400. Route: Herdr OpenCode.
-  Depends T1.
-- [ ] T4 Cycle summary: pure domain math (docs/11 §1) + use case (closed → persist, active →
-  compute) + upsert. ~350. Route: Herdr OpenCode. Depends T3. Parallel with T5.
-- [ ] T5 Adoption index: pure component math (D-T0.3…6) + monthly use case + upsert + latest-index
-  query for `home`. ~400. Route: Herdr OpenCode. Depends T3.
+  irrigation per day, plot alerts with timely actions, stress days. Route: Herdr OpenCode.
+  Depended T1. Commits `7cc3dd7` (port), `51052a1` (builders), `09cef3f` (monitoring),
+  `407ed2b` (record-keeping + decision), `230289c` (alert action), `429b293` (cycle totals),
+  `371c0e7` (bounded correction) + close-out docs/tests (`823974d`, `a1941ba`, D-T3.1 ruling).
+  Evidence: `uv run pytest tests/metrics` 61 passed, `gate-fast` green; RDD
+  `review-82b031d38b733383` (close-out `371c0e7..HEAD`, 9 paths / 466 lines, reliability,
+  4 WARNING, approved, receipt `d2c09ecd…`, burned); follow-up #248; report
+  `../e11-briefs/e11-t3-rdd.md`. Merged `8a8cbc4`.
+- [x] T4 Cycle summary: pure domain math (docs/11 §1) + use case (closed → persist, active →
+  compute) + upsert. Route: Herdr OpenCode. Depended T3. Parallel with T5. Commits `f7d808e`
+  (domain, 396), `d3f6e72` (use case, 440), `c01fd2e` (repo, 339). Evidence: unit 2
+  `review-24ee776a961efc72` (reliability, 1 SUGGESTION, receipt `86019dee…`, burned) + lane
+  combined `review-15dcaac22de5ade7` (`104608c..c01fd2e`, 1175 lines, 0 findings, receipt
+  `cee683fa…`, burned, D-T4.1); follow-up #250; report `../e11-briefs/e11-t4-rdd.md`.
+  Merged `465e1bd`; worktree/rama/DB de `e11-t4` eliminados.
+- [x] T5 Adoption index: pure component math (D-T0.3…6) + monthly use case + upsert + latest-index
+  query for `home`. Route: Herdr OpenCode. Depended T3. Commits `9d9b3b2` (domain, 590),
+  `f05e8db` (use case, 539), `d8de405` (repo, 418) + correction `f45b0bc`→`ce779ac` + fix
+  `e8d975b` (`Refs #251`). Evidence: three burned receipts (`781b21ad…`, `3ea9b1fd…`,
+  `74a1e77a…`); fix `under_budget` without lineage (terminal disposition); follow-up #251
+  (6 WARNING, #1 fixed in `e8d975b`); report `../e11-briefs/e11-t5-rdd.md`. Merged `e04cde3`;
+  worktree/rama/DB de `e11-t5` eliminados.
 - [ ] T6 Monthly job (day 1, 02:00; cycles then index; per-plot containment) +
   `/dev/jobs/metrics:run` + worker registration + periodic-schedule test. ~200. Route: Herdr
   OpenCode. Depends T4, T5.
@@ -329,6 +345,16 @@ autorizaciones auditadas solo por el canal del orquestador. El id de lineage der
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
   `origin/main` a2bae6b), CodeGraph index, DB `techcamp-db-e11-metrics`. Explorers (Herdr
   OpenCode docs map, AGY lessons) → `../techcamp-v2-worktrees/e11-briefs/*.md.out`. T0 written.
+- 2026-10-05: T3 merged (`8a8cbc4`): review `review-82b031d38b733383` approved + burned, issue
+  #248, report `../e11-briefs/e11-t3-rdd.md`.
+- 2026-10-05: T4 merged (`465e1bd`): unit 2 + lane-combined reviews approved + burned
+  (D-T4.1/D-T4.2 recorded), issue #250, report `../e11-briefs/e11-t4-rdd.md`; lane removed.
+- 2026-10-05: T5 merged (`e04cde3` → `442ef91` with ODD record): 3 unit reviews approved +
+  burned + `Refs #251` fix, issue #251, report `../e11-briefs/e11-t5-rdd.md`; lane removed.
+- 2026-10-05: Wave 4 launched (T6 ‖ T7 ‖ T8): worktrees `../e11-t6|t7|t8` from `442ef91`,
+  Herdr panes + OpenCode writers briefed with disjoint surfaces, DBs up, RDD procedure patched
+  with D-T4.1/D-T4.2 + work-unit granularity (`a20dfbd`).
 
 ## Next step
-T2 merged. T3 (`e11-t3`) gate passed; its RDD (`review-9b9197b7eee80109`) is relaunching the re-offered slot after an admission rejection. Then wave 3: T4 ‖ T5 ‖ T9a.
+Wave 4 in progress (T6 monthly job, T7 read API, T8 `/status` index). Then Wave 5: T9b. T9a (wave 3)
+sigue pendiente en paralelo sin dependencia de Wave 4.
