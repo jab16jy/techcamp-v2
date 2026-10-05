@@ -106,8 +106,14 @@ def s3_ml_bucket() -> str:
     another. Under `models/<name>/<version>/` and `datasets/<name>/<hash>/` a
     released artifact is addressed by version, and the `ml/` project on the
     developer's host uploads there through the public URL (ADR-0021).
+
+    `ml-artifacts`, not the `ml` of docs/08-ml.md: an S3 bucket name is 3 to 63
+    characters and the store refuses a shorter one (`InvalidBucketName`, checked
+    against the seminar MinIO), so the two-character name could not hold the
+    objects that doc describes. Both the doc and this default were changed
+    together (D-T9.8).
     """
-    return os.environ.get("TECHCAMP_S3_ML_BUCKET", "ml")
+    return os.environ.get("TECHCAMP_S3_ML_BUCKET", "ml-artifacts")
 
 
 def s3_access_key() -> str | None:

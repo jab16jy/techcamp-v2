@@ -81,7 +81,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-techcamp}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-techcamp123}
       TECHCAMP_S3_BUCKET: ${TECHCAMP_S3_BUCKET:-logbook-photos}
-      TECHCAMP_S3_ML_BUCKET: ${TECHCAMP_S3_ML_BUCKET:-ml}
+      TECHCAMP_S3_ML_BUCKET: ${TECHCAMP_S3_ML_BUCKET:-ml-artifacts}
     depends_on:
       - minio
 
@@ -178,7 +178,7 @@ services:
       # service, one bucket per kind of object. `api` gets neither variable
       # because it never reads a model artifact.
       TECHCAMP_S3_INTERNAL_URL: ${TECHCAMP_S3_INTERNAL_URL:-http://minio:9000}
-      TECHCAMP_S3_ML_BUCKET: ${TECHCAMP_S3_ML_BUCKET:-ml}
+      TECHCAMP_S3_ML_BUCKET: ${TECHCAMP_S3_ML_BUCKET:-ml-artifacts}
     depends_on:
       postgres:
         condition: service_healthy

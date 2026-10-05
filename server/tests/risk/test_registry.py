@@ -40,7 +40,7 @@ from techcamp.risk.domain.features import seasonality
 from techcamp.risk.domain.models import ModelVersion
 
 _VERSION = "2026-10-02"
-_URI = f"s3://ml/models/risk_flood/{_VERSION}/climatology.json"
+_URI = f"s3://ml-artifacts/models/risk_flood/{_VERSION}/climatology.json"
 _CREATED = datetime(2026, 10, 2, tzinfo=UTC)
 
 
@@ -178,7 +178,8 @@ def test_another_flood_version_resolves_because_the_factory_reads_the_row() -> N
     a key the row does not name.
     """
     first, second = _payload(), _payload(version="2026-11-01")
-    store = _Store({_URI: first, "s3://ml/models/risk_flood/2026-11-01/climatology.json": second})
+    second_uri = "s3://ml-artifacts/models/risk_flood/2026-11-01/climatology.json"
+    store = _Store({_URI: first, second_uri: second})
 
     registry = build_registry(store)
     first_predictor = registry.resolve(_version(body=first, sha=_sha256(first)))
@@ -187,7 +188,7 @@ def test_another_flood_version_resolves_because_the_factory_reads_the_row() -> N
             body=second,
             sha=_sha256(second),
             version="2026-11-01",
-            uri="s3://ml/models/risk_flood/2026-11-01/climatology.json",
+            uri=second_uri,
         )
     )
 
@@ -247,15 +248,15 @@ def test_the_bucket_of_an_uri_is_the_one_it_names_or_the_configured_one() -> Non
     """`s3_ml_bucket()` is a deployment fact (ADR-0018 keeps the ML bucket apart
     from the photo bucket), so a bare key is read from that bucket, while the
     registered `s3://<bucket>/...` form is read from the bucket it names."""
-    assert _split_uri(_URI, default_bucket="ml") == (
-        "ml",
+    assert _split_uri(_URI, default_bucket="ml-artifacts") == (
+        "ml-artifacts",
         f"models/risk_flood/{_VERSION}/climatology.json",
     )
-    assert _split_uri("models/risk_flood/x/climatology.json", default_bucket="ml") == (
-        "ml",
+    assert _split_uri("models/risk_flood/x/climatology.json", default_bucket="ml-artifacts") == (
+        "ml-artifacts",
         "models/risk_flood/x/climatology.json",
     )
-    assert _split_uri("s3://other-bucket/models/flood.json", default_bucket="ml") == (
+    assert _split_uri("s3://other-bucket/models/flood.json", default_bucket="ml-artifacts") == (
         "other-bucket",
         "models/flood.json",
     )
@@ -265,7 +266,7 @@ def test_an_uri_that_names_no_object_key_is_refused() -> None:
     """A bucket with no key is not an artifact; reading it would ask the store
     for a listing and take whatever it returned as the model's bytes."""
     with pytest.raises(ValueError, match="names no object key"):
-        _split_uri("s3://ml", default_bucket="ml")
+        _split_uri("s3://ml-artifacts", default_bucket="ml-artifacts")
 
 
 def test_a_factory_that_cannot_answer_caches_nothing() -> None:

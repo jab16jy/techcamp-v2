@@ -35,7 +35,7 @@ from techcamp.risk.domain.features import FEATURE_NAMES, build_features, seasona
 from techcamp.risk.domain.models import ModelVersion
 
 _VERSION = "2026-10-02"
-_URI = f"s3://ml/models/risk_flood/{_VERSION}/climatology.json"
+_URI = f"s3://ml-artifacts/models/risk_flood/{_VERSION}/climatology.json"
 _CREATED = datetime(2026, 10, 2, tzinfo=UTC)
 
 
