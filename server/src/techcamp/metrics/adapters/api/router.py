@@ -20,16 +20,26 @@ database `CHECK`s of T1's migration are the second line of defense.
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
-from techcamp.farms.adapters.api.deps import CropRepoDep, PlotRepoDep
-from techcamp.farms.domain.errors import PlotNotFoundError
+from techcamp.farms.adapters.api.deps import CropCycleRepoDep, CropRepoDep, PlotRepoDep
+from techcamp.farms.domain.errors import CropCycleNotFoundError, PlotNotFoundError
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
-from techcamp.metrics.adapters.api.deps import BaselineRepoDep
+from techcamp.metrics.adapters.api.deps import (
+    BaselineRepoDep,
+    CycleSummaryRepoDep,
+    MetricsSourceRepoDep,
+    MonthlyMetricRepoDep,
+)
 from techcamp.metrics.application.baseline import get_plot_baseline, put_plot_baseline
+from techcamp.metrics.application.metrics_read import CycleSummaryRead, get_plot_month
+from techcamp.metrics.application.metrics_read import get_cycle_summary as read_cycle_summary
+from techcamp.metrics.domain.adoption import PlotMonthlyMetric
 from techcamp.metrics.domain.errors import (
     InsufficientRoleError,
     PlotBaselineNotFoundError,
@@ -177,3 +187,160 @@ class PlotMetricMonthlyView(BaseModel):
     risk_management: float | None
     digital_adoption_index: float | None
     computed_at: datetime
+
+
+class CropCycleSummaryView(BaseModel):
+    """`crop_cycle_summary` on the wire plus the cycle's own status
+    (docs/04-api.md:235, docs/03-modelo-datos.md:439).
+
+    `cycle_status` is not a column of the summary: it lives on `crop_cycle`, and
+    it is what tells a reader whether these figures were stored (a finished
+    cycle) or computed for the moment (D-T0.8).
+    """
+
+    crop_cycle_id: UUID
+    plot_id: UUID
+    org_id: UUID
+    cycle_status: str
+    yield_kg_ha: float | None
+    yield_change_vs_baseline: float | None
+    relative_yield: float | None
+    water_applied_m3_ha: float | None
+    irrigation_wue_kg_m3: float | None
+    water_stress_days: int | None
+    cost_cop_ha: float | None
+    cost_cop_kg: float | None
+    yield_kg_per_labor_day: float | None
+    gross_margin_cop: float | None
+    loss_kg: float | None
+    loss_cop: float | None
+    computed_at: datetime
+
+
+def _as_float(value: Decimal | None) -> float | None:
+    """`Decimal` to `float` for the wire, never rounding on the way.
+
+    The domain and the `Numeric` columns keep `Decimal`; a JSON figure is a
+    double, and the conversion is exact enough for a ratio or a COP amount while
+    leaving the stored value untouched (the adapters read back what the
+    database holds, same as T4's and T5's stores).
+    """
+    return None if value is None else float(value)
+
+
+def _month_view(metric: PlotMonthlyMetric) -> PlotMetricMonthlyView:
+    components = metric.components
+    return PlotMetricMonthlyView(
+        plot_id=metric.plot_id,
+        month=metric.month,
+        monitoring=_as_float(components.monitoring),
+        record_keeping=_as_float(components.record_keeping),
+        decision=_as_float(components.decision),
+        risk_management=_as_float(components.risk_management),
+        digital_adoption_index=_as_float(metric.digital_adoption_index),
+        computed_at=metric.computed_at,
+    )
+
+
+def _summary_view(read: CycleSummaryRead) -> CropCycleSummaryView:
+    summary = read.summary
+    return CropCycleSummaryView(
+        crop_cycle_id=summary.crop_cycle_id,
+        plot_id=summary.plot_id,
+        org_id=summary.org_id,
+        cycle_status=read.cycle_status.value,
+        yield_kg_ha=_as_float(summary.yield_kg_ha),
+        yield_change_vs_baseline=_as_float(summary.yield_change_vs_baseline),
+        relative_yield=_as_float(summary.relative_yield),
+        water_applied_m3_ha=_as_float(summary.water_applied_m3_ha),
+        irrigation_wue_kg_m3=_as_float(summary.irrigation_wue_kg_m3),
+        water_stress_days=summary.water_stress_days,
+        cost_cop_ha=_as_float(summary.cost_cop_ha),
+        cost_cop_kg=_as_float(summary.cost_cop_kg),
+        yield_kg_per_labor_day=_as_float(summary.yield_kg_per_labor_day),
+        gross_margin_cop=_as_float(summary.gross_margin_cop),
+        loss_kg=_as_float(summary.loss_kg),
+        loss_cop=_as_float(summary.loss_cop),
+        computed_at=summary.computed_at,
+    )
+
+
+def _month_start(month: str) -> date:
+    """`YYYY-MM` to the first day of that month, the key the row is stored under.
+
+    The query pattern already rejected anything that is not a real month, so this
+    parse cannot fail; `date(..., 1)` is what makes `(plot_id, month)` the upsert
+    key (D-T0.2) and what `month_bounds` reads back.
+    """
+    return date(int(month[:4]), int(month[5:7]), 1)
+
+
+@router.get("/plots/{plot_id}/metrics", response_model=PlotMetricMonthlyView)
+async def get_plot_metrics(
+    month: Annotated[str, Query(pattern=_MONTH_QUERY, description="Month as YYYY-MM")],
+    plot_id: UUID,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    metrics: MonthlyMetricRepoDep,
+    memberships: MembershipRepoDep,
+) -> PlotMetricMonthlyView:
+    """The plot's adoption index for one month, as the job stored it.
+
+    Any member reads it (D-T0.10), a month with no stored row is `404`, and a
+    plot in another organization is the same `404`
+    (docs/04-api.md:234, 237; docs/09-cuellos-de-botella.md#seguridad).
+    """
+    try:
+        metric = await get_plot_month(
+            user_id=user_id,
+            plot_id=plot_id,
+            month=_month_start(month),
+            plots=plots,
+            metrics=metrics,
+            memberships=memberships,
+        )
+    except PlotNotFoundError as exc:
+        raise ProblemError(status=404, title="Plot not found") from exc
+    if metric is None:
+        raise ProblemError(status=404, title="Plot has no metrics for that month")
+    return _month_view(metric)
+
+
+@router.get("/plots/{plot_id}/cycles/{crop_cycle_id}/summary", response_model=CropCycleSummaryView)
+async def get_cycle_summary(
+    plot_id: UUID,
+    crop_cycle_id: UUID,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    cycles: CropCycleRepoDep,
+    baselines: BaselineRepoDep,
+    sources: MetricsSourceRepoDep,
+    summaries: CycleSummaryRepoDep,
+    memberships: MembershipRepoDep,
+) -> CropCycleSummaryView:
+    """One cycle's impact: the stored row of a finished cycle, the same figures
+    computed on read for an active one (D-T0.8).
+
+    A cycle of another plot or another organization is `404`, and a finished
+    cycle with no stored row yet is `404` too — a read never summarizes
+    (docs/04-api.md:235).
+    """
+    try:
+        read = await read_cycle_summary(
+            user_id=user_id,
+            plot_id=plot_id,
+            crop_cycle_id=crop_cycle_id,
+            cycles=cycles,
+            plots=plots,
+            baselines=baselines,
+            sources=sources,
+            summaries=summaries,
+            memberships=memberships,
+        )
+    except PlotNotFoundError as exc:
+        raise ProblemError(status=404, title="Plot not found") from exc
+    except CropCycleNotFoundError as exc:
+        raise ProblemError(status=404, title="Crop cycle not found") from exc
+    if read is None:
+        raise ProblemError(status=404, title="Cycle has no stored summary yet")
+    return _summary_view(read)
