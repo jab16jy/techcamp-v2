@@ -84,8 +84,8 @@ def _forget_spent_reads() -> None:
     Every test in this module builds the same block from the same fixture, so each of them is
     legitimately a first read and the process-level receipt has to be emptied around them.
     Thirty independent cases over one fixture is not thirty reads of the test set, and refusing
-    all but the first would be the guard working rather than a fault to route around with
-    subprocess isolation.
+    all but the first would be the guard working rather than a fault to route around by running
+    each case in a separate interpreter.
 
     It is here because of that, and not as an affordance. A caller holding a block it has not
     read gains nothing here, and reaching for it is modifying the harness — which ADR-0020
