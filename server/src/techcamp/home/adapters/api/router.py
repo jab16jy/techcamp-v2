@@ -5,15 +5,24 @@ The HTTP shape only: pydantic out, `PlotNotFoundError` mapped to
 rule (D-T0.1). The repositories come from each module's own `deps` — the
 wiring that already `weather`, `irrigation`, `telemetry` and `logbook` do —
 so nothing is built twice.
+
+`metrics` is the one exception, and it is temporary: E11 T5 shipped
+`SqlAlchemyMonthlyMetricRepository` without a dep, and `metrics`
+`adapters/api/deps.py` is T7's file (T8 runs in parallel with it), so this
+module builds the repository over its own `SessionDep` instead of importing a
+dep that does not exist yet. The `home` application layer still reaches
+`metrics` only through its `application` facade, and the moment T7's
+`MonthlyMetricRepoDep` lands, this provider becomes a plain import like every
+other one here.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from techcamp.alerts.adapters.api.deps import AlertRepoDep
@@ -38,6 +47,9 @@ from techcamp.irrigation.adapters.api.deps import (
     WaterBalanceRepoDep,
 )
 from techcamp.logbook.adapters.api.deps import VisitRepoDep
+from techcamp.metrics.adapters.monthly_repository import SqlAlchemyMonthlyMetricRepository
+from techcamp.metrics.application.adoption import MonthlyMetricRepository
+from techcamp.shared.db import SessionDep
 from techcamp.shared.errors import ProblemError
 from techcamp.telemetry.adapters.api.deps import (
     CalibrationRepoDep,
@@ -48,6 +60,24 @@ from techcamp.telemetry.adapters.api.deps import (
 from techcamp.weather.adapters.api.deps import WeatherRepoDep
 
 router = APIRouter(tags=["home"])
+
+
+async def get_monthly_metric_repository(
+    session: SessionDep,
+) -> SqlAlchemyMonthlyMetricRepository:
+    """The monthly metrics store for `/status` (D-T0.13).
+
+    Local wiring, not the pattern: see this module's docstring. T7 owns
+    `metrics/adapters/api/deps.py` and ships the shared
+    `MonthlyMetricRepoDep`; until it lands, this keeps the lane disjoint from
+    that file instead of guessing at a symbol two lanes would define at once.
+    """
+    return SqlAlchemyMonthlyMetricRepository(session)
+
+
+MonthlyMetricRepoDep = Annotated[MonthlyMetricRepository, Depends(get_monthly_metric_repository)]
+"""The port, not the concrete class: `home` depends on the metrics use case,
+never on its SQL."""
 
 
 class PlotSummaryView(BaseModel):
@@ -143,6 +173,20 @@ class PlotNodeHealthView(BaseModel):
     completeness_24h: float | None
 
 
+class DigitalAdoptionIndexView(BaseModel):
+    """The stored index with the month it belongs to (D-T0.13).
+
+    `value` is a float, not the stored `Decimal`: this is the display number
+    docs/07 §Inicio renders as "Adopción digital: 72 · septiembre", and
+    Pydantic would refuse to serialize a `Decimal` into a float field without
+    the cast done at the boundary. `month` is the bucket's first day, an ISO
+    date on the wire, which is what the web formats as the month name.
+    """
+
+    value: float
+    month: date
+
+
 class PlotStatusView(BaseModel):
     plot: PlotSummaryView
     active_cycle: ActiveCycleView | None
@@ -152,8 +196,9 @@ class PlotStatusView(BaseModel):
     open_alerts: list[OpenAlertView]
     weather_next_3d: list[WeatherDayView]
     nodes: list[PlotNodeHealthView]
-    digital_adoption_index: None = None
-    """D-T0.2: null until E11 computes the index (docs/11-metricas.md)."""
+    digital_adoption_index: DigitalAdoptionIndexView | None
+    """`None` until the plot has a stored month, and `None` again when that
+    month's own index is null (D-T0.2, docs/04 §Estado). Never a zero."""
 
 
 def _view(status: PlotStatus) -> PlotStatusView:
@@ -243,7 +288,12 @@ def _view(status: PlotStatus) -> PlotStatusView:
             )
             for node in status.nodes
         ],
-        digital_adoption_index=status.digital_adoption_index,
+        digital_adoption_index=None
+        if status.digital_adoption_index is None
+        else DigitalAdoptionIndexView(
+            value=float(status.digital_adoption_index.value),
+            month=status.digital_adoption_index.month,
+        ),
     )
 
 
@@ -264,6 +314,7 @@ async def get_plot_status(
     recommendations: RecommendationRepoDep,
     weather: WeatherRepoDep,
     alerts: AlertRepoDep,
+    metrics: MonthlyMetricRepoDep,
     now: NowDep,
 ) -> PlotStatusView:
     """docs/04 §Estado: `GET /plots/{plot_id}/status`, the whole home screen in
@@ -289,6 +340,7 @@ async def get_plot_status(
             recommendations=recommendations,
             weather=weather,
             alerts=alerts,
+            metrics=metrics,
         )
     except PlotNotFoundError as exc:
         raise ProblemError(status=404, title="Plot not found") from exc

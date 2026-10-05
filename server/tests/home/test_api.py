@@ -11,6 +11,7 @@ exists. Every test carries its negative assertion.
 from __future__ import annotations
 
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.irrigation.adapters.api.deps import get_now
 from techcamp.main import app
+from techcamp.metrics.adapters.orm import PlotMetricMonthlyRow
 from techcamp.shared.ids import uuid7
 
 from .conftest import (
@@ -122,12 +124,48 @@ async def test_status_returns_the_whole_docs_payload_in_one_request(
         "2026-10-02",
     ]
     assert [node["node_id"] for node in body["nodes"]] == [str(node_id)]
+    # E11 T8 (D-T0.13): this plot has no stored month, so the field is `null`
+    # on the wire — present in the payload, never a zero.
     assert body["digital_adoption_index"] is None
 
     # Negative: the `advice` of an irrigated recommendation stays out, and no
     # fourth forecast day appears.
     assert body["recommendation"]["advice"] == []
     assert len(body["weather_next_3d"]) == 3
+
+
+async def test_status_carries_the_latest_monthly_index_with_its_month(
+    db_session: AsyncSession,
+    client: TestClient,
+) -> None:
+    """docs/04 §Estado: `digital_adoption_index: { value, month } | null`.
+
+    The `month` travels because the web writes "Adopción digital: 72 ·
+    septiembre" (docs/07 §Inicio) and cannot say which month a bare 72 is from.
+    """
+    env = await make_env(db_session)
+    db_session.add(
+        PlotMetricMonthlyRow(
+            plot_id=env.plot_id,
+            org_id=env.org_id,
+            month=TODAY.replace(day=1),
+            monitoring=Decimal("0.5"),
+            record_keeping=Decimal(1),
+            decision=Decimal(1),
+            risk_management=None,
+            digital_adoption_index=Decimal("62.5"),
+            computed_at=NOW,
+        )
+    )
+    await db_session.commit()
+
+    body = _get(client, env)
+
+    assert body["digital_adoption_index"] == {"value": 62.5, "month": "2026-09-01"}
+
+    # Negative: the stored components never ride along. `/status` is the home
+    # screen on 3G, not the metrics read API of T7 (docs/04 §Métricas).
+    assert set(body["digital_adoption_index"]) == {"value", "month"}
 
 
 async def test_rainfed_plot_never_shows_irrigate_depth_or_minutes(
