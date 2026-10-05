@@ -251,16 +251,16 @@ def _month_view(metric: PlotMonthlyMetric) -> PlotMetricMonthlyView:
 
 class OrgMetricsView(BaseModel):
     """The organization's indicators for one month
-    (docs/04-api.md:236, docs/11-metricas.md:69-75; D-T0.12, D-T7.1).
+    (docs/04-api.md:236, docs/11-metricas.md:69-75; D-T0.12, D-T7.2).
 
     Named for the module, like `PlotMetricMonthlyView`: `OrgMetrics` is the
     application value and a response model sharing that name would collide in
     the OpenAPI components (`tests/test_openapi_schema_names.py`).
 
-    `harvested_cycles_ratio` and `median_hours_to_first_reading` are always `null`
-    in this lane (D-T7.1): the org-month listing carries neither cycles nor node
-    instants, and `0` would report "no cycle was harvested" and "every node
-    answered instantly" instead.
+    Every figure is `null` when it has no evidence, and the two sources differ:
+    a month the monthly job never stored leaves the first three `null` while the
+    harvested-cycle ratio and the enrollment median still answer, and a month with
+    no closed cycle or no answering node leaves those two `null` (docs/11:72-75).
     """
 
     org_id: UUID
@@ -354,20 +354,23 @@ async def get_organization_metrics(
     org_id: UUID,
     user_id: CurrentUserId,
     metrics: MonthlyMetricRepoDep,
+    sources: MetricsSourceRepoDep,
     memberships: MembershipRepoDep,
 ) -> OrgMetricsView:
     """The organization's indicators for one month, computed on read
-    (docs/04-api.md:236; D-T0.12, D-T0.10).
+    (docs/04-api.md:236; D-T0.12, D-T0.10, D-T7.2).
 
     Owner or technician (`403` for any other member); a caller who is not a
     member of the organization is `404`, so the endpoint never reveals that it
     exists.
 
-    A month with no stored report is `200` with every figure `null`, not `404`:
+    A month with nothing to report is `200` with every figure `null`, not `404`:
     the organization exists and the month simply has nothing to say yet
-    (docs/03-modelo-datos.md:441). `harvested_cycles_ratio` and
-    `median_hours_to_first_reading` are `null` in every answer of this lane
-    (D-T7.1) and unlock in the follow-up lane that adds their views.
+    (docs/03-modelo-datos.md:441). "Nothing" is per figure and never `0`: the
+    first three come from the month the job stored, and `harvested_cycles_ratio`
+    and `median_hours_to_first_reading` are read from the views over the logbook
+    and the telemetry tables, so either group can answer while the other is still
+    empty (docs/11-metricas.md:72-75).
     """
     try:
         org_metrics = await read_org_metrics(
@@ -375,6 +378,7 @@ async def get_organization_metrics(
             org_id=org_id,
             month=_month_start(month),
             metrics=metrics,
+            sources=sources,
             memberships=memberships,
         )
     except NotAMemberError as exc:
