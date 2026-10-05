@@ -53,10 +53,10 @@ class SpentTestBlocks:
     """The test blocks one harness run has already spent.
 
     This is harness state and it is owned by the caller, not by the process: a module-level
-    collection would outlive the run that made it and would refuse an unrelated later run
-    that happens to score the same block. What makes it a guard rather than a suggestion is
-    `_SPENT_READS`: the same spend is recorded on the table itself, so a second ledger over
-    the same rows does not buy a second answer.
+    collection would outlive the run that made it. It is therefore the run's record and not
+    the guard: what stops a second read is `_SPENT_READS`, which lives in the harness and is
+    keyed by the content of the rows, so neither a second ledger nor a second frame buys an
+    answer the first one already gave.
 
     What is stored is a digest of the block's content, never a row of the block itself.
     """
@@ -64,46 +64,54 @@ class SpentTestBlocks:
     digests: set[str] = field(default_factory=set)
 
 
-_SPENT_READS = "techcamp_ml.spent_test_blocks"
-"""`table.attrs` key under which the gate records the blocks it has read.
+_SPENT_READS: set[str] = set()
+"""The content digests of the blocked test blocks this process has already read.
 
-The spend rides on the frame and not on the ledger object because a ledger the caller owns
-is a ledger the caller can re-mint: `SpentTestBlocks` scopes the run, this scopes the data,
-and only the data is what "one read of the test set" is counted over. `attrs` is pandas'
-own metadata channel and it travels with `copy()`, slicing and `concat`, so a rebuilt copy
-of the same table carries the receipt it earned."""
+The receipt lives here rather than on anything the caller holds, because both of the
+alternatives are things the caller can drop: a ledger object can be re-minted, and a
+`table.attrs` entry can be cleared with `table.attrs.clear()`. A guard the caller disarms by
+discarding what it owns is not a guard.
+
+It is keyed by **content**, so the three ways of presenting the same block again — the same
+frame, a copy, and a frame rebuilt out of the same rows — are one read and not three. That is
+the whole of docs/08 §Reglas de gobierno, "Test intocable": one read of the test block for the
+final candidate, and the gate is only ever called for that candidate."""
 
 
-def _read_once(blocked: pd.DataFrame, table: pd.DataFrame, reads: SpentTestBlocks) -> None:
+def _forget_spent_reads() -> None:
+    """Empty the process-level read receipt.
+
+    The test suite's seam, and nothing else. Every test in this module builds the same block
+    from the same fixture, so each of them is legitimately a first read and none of them can
+    be the second one the guard refuses. It is not reachable from `decide_promotion`, it is
+    not exported, and nothing in the gate calls it; a caller with a block to read has no use
+    for it, because the receipt it clears is the one standing between it and a second answer.
+    """
+    _SPENT_READS.clear()
+
+
+def _read_once(blocked: pd.DataFrame, reads: SpentTestBlocks) -> None:
     """Spend this block's single read, or refuse a second one over the same rows.
 
     The key is the **content** of the blocked rows, never the identity of the frame they
-    arrived in. That distinction is the whole guard: `table.copy()` is a different object
-    with a different `id` holding exactly the same rows, so an identity key lets a second
-    read through by construction — and copying a frame is precisely what an agent reaching
-    for the test twice would do (ADR-0020: "el agente no puede modificar ... el dataset de
-    test ni la compuerta"). Rows are put in a canonical order before they are hashed, so
-    presenting the same block reordered is the same read too.
-
-    The spend is written twice on purpose — into the run's ledger and into the table — so
-    that neither a re-minted ledger nor a re-minted frame is a way through. docs/08
-    §Reglas de gobierno, "Test intocable", allows one read of the test block; a caller who
-    constructs another `SpentTestBlocks` for the same table has built another object, not
-    bought another answer.
+    arrived in, and never the object the receipt is written to. `table.copy()` is a different
+    object with a different `id` holding exactly the same rows, and a frame rebuilt from those
+    rows is not even the same object; both are the read that was already spent. Rows are put
+    in a canonical order before they are hashed, so presenting the same block reordered is
+    the same read too.
 
     Called before `_design` builds anything, so a repeat call is refused while the rows are
     still just rows: no design matrix is built and no scorer is asked anything.
     """
     digest = _block_digest(blocked)
-    spent: frozenset[str] = frozenset(table.attrs.get(_SPENT_READS, ()))
-    if digest in spent or digest in reads.digests:
+    if digest in _SPENT_READS or digest in reads.digests:
         raise ValueError(
             "the blocked test block has already been read, and docs/08 §Reglas de gobierno, "
             '"Test intocable", allows one read per final candidate; a second answer over the '
             "same rows is iterating against the test set"
         )
+    _SPENT_READS.add(digest)
     reads.digests.add(digest)
-    table.attrs[_SPENT_READS] = spent | {digest}
 
 
 def _block_digest(blocked: pd.DataFrame) -> str:
@@ -187,7 +195,7 @@ def decide_promotion(
     so the paired interval compares like with like.
     """
     blocked = _test_block(table)
-    _read_once(blocked, table, reads)
+    _read_once(blocked, reads)
     labels, features = _design(blocked)
     # One frame each, because the paired interval below is only a comparison if both scorers
     # answered the same rows. Sharing one let a candidate that writes in place decide what the
@@ -301,14 +309,17 @@ def _require_complete_year(blocked: pd.DataFrame, months: pd.PeriodIndex) -> Non
             "a truncated block wearing a complete one's shape"
         )
 
-    # A row count is manufactured by copying a row: duplicate the one municipality-month a
-    # thinned month kept and its count is back at the typical one, with the municipalities
-    # still missing. docs/08 §M2 "Unidad" is one row per municipality and month, so a month
-    # that holds one twice is not the same block wearing a bigger hat — it is a different
-    # dataset, and the gate has no authority over what to make of it.
-    repeated = blocked.duplicated(subset=["code", "horizon_start"], keep=False)
+    # A row count is manufactured by copying a row: duplicate one municipality-month and its
+    # count is back at the typical one, with the municipalities still missing. The unit is
+    # the **month**, not the timestamp, so the key is the normalized month — a second row for
+    # the same municipality on another day of the same month is the same unit twice, and
+    # comparing raw timestamps would wave it through (docs/08 §M2 "Unidad" is one row per
+    # municipality and month).
+    block_months = pd.PeriodIndex(blocked["horizon_start"], freq="M")
+    unit = pd.DataFrame({"code": blocked["code"].to_numpy(), "month": block_months.to_numpy()})
+    repeated = unit.duplicated(keep=False)
     if repeated.any():
-        offenders = blocked.loc[repeated, ["code", "horizon_start"]].drop_duplicates()
+        offenders = unit.loc[repeated].drop_duplicates()
         raise ValueError(
             f"the complete labelled year {TEST_FIRST} to {TEST_LAST} holds "
             f"{len(offenders)} municipality-months more than once; a duplicated row restores "

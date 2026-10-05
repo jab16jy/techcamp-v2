@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -17,9 +18,20 @@ from techcamp_ml.harness.promotion import (
     PromotionDecision,
     Scored,
     SpentTestBlocks,
+    _forget_spent_reads,
     decide_promotion,
 )
 from techcamp_ml.harness.split import TEST_FIRST, TRAIN_LAST, VAL_LAST
+
+
+@pytest.fixture(autouse=True)
+def unspent_test_block() -> Iterator[None]:
+    """Every test here builds the same block from the same fixture, so each of them is a
+    first read and the harness's process-level receipt has to be emptied around it. Without
+    this the guard would refuse every test but the first, which is the guard working."""
+    _forget_spent_reads()
+    yield
+    _forget_spent_reads()
 
 
 @dataclass
@@ -190,6 +202,33 @@ def test_the_gate_reads_no_month_the_experiment_already_used() -> None:
     )
     assert int((table["horizon_start"] <= pd.Timestamp(VAL_LAST)).sum()) > decision.report.test_rows
     assert int((table["horizon_start"] <= pd.Timestamp(TRAIN_LAST)).sum()) > 0
+
+
+def test_a_month_padded_with_another_day_of_the_same_month_is_refused() -> None:
+    """Negative: the unit is the **month**, not the timestamp. docs/08 §M2 "Unidad" is one row
+    per municipality and per month M, so a second row for a municipality on a different day
+    of that same month is the same unit twice, not a second observation: it restores the
+    month's row count while the municipality it is missing stays missing, and the block
+    decides on a count no municipality supports."""
+    table = flood_table()
+    padded = table[
+        (table["code"] == "08001") & (table["horizon_start"] == pd.Timestamp("2025-06-01"))
+    ].copy()
+    padded["horizon_start"] = pd.Timestamp("2025-06-18")
+    block = pd.concat([table, padded], ignore_index=True)
+    june = block["horizon_start"].dt.to_period("M") == pd.Period("2025-06", freq="M")
+
+    assert int(june.sum()) == 5, "the month's row count went up"
+    assert int(block.loc[june, "code"].nunique()) == 4, "one municipality is still missing"
+
+    with pytest.raises(ValueError, match="more than once"):
+        decide_promotion(
+            block,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_the_gate_has_no_way_to_be_told_which_rows_to_score() -> None:
@@ -432,9 +471,12 @@ def test_a_fresh_ledger_does_not_buy_a_second_read() -> None:
         )
 
 
-def test_a_copied_table_carries_the_read_it_already_answered() -> None:
-    """Negative: the spend rides on the frame, so `table.copy()` is not a way out either —
-    and copying is what an agent reaching for the test twice reaches for."""
+def test_a_rebuilt_block_is_still_the_same_read() -> None:
+    """Negative: the receipt cannot live on anything the caller owns. A frame rebuilt from
+    the same rows carries no trace of the read that already answered for them, so a receipt
+    written into `table.attrs` is a receipt the caller can erase; the same rows rebuilt into
+    a new object have to be the same read as the ones that were scored (ADR-0020: "el agente
+    no puede modificar ... el dataset de test ni la compuerta")."""
     table = flood_table()
     decide_promotion(
         table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=SpentTestBlocks()
@@ -442,7 +484,27 @@ def test_a_copied_table_carries_the_read_it_already_answered() -> None:
 
     with pytest.raises(ValueError, match="has already been read"):
         decide_promotion(
-            table.copy(),
+            flood_table(),
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
+
+
+def test_a_cleared_receipt_does_not_buy_a_second_read() -> None:
+    """Negative: emptying the frame's own metadata and handing over a fresh ledger has to
+    leave the read spent. Both are things the caller holds, so a guard that lives in either
+    one is a guard the caller disarms by dropping what it owns."""
+    table = flood_table()
+    decide_promotion(
+        table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=SpentTestBlocks()
+    )
+    table.attrs.clear()
+
+    with pytest.raises(ValueError, match="has already been read"):
+        decide_promotion(
+            table,
             candidate=HeavyRain(),
             baseline=Fixed(0.5),
             resamples=200,
@@ -461,6 +523,7 @@ def test_a_candidate_that_mutates_the_design_matrix_cannot_reach_the_baseline() 
         resamples=200,
         reads=SpentTestBlocks(),
     )
+    _forget_spent_reads()  # the control is a separate case over the same block, not a re-read
     control = decide_promotion(
         flood_table(),
         candidate=HeavyRain(),
@@ -494,6 +557,7 @@ def test_a_scorer_that_answered_something_other_than_probabilities_is_refused() 
             return np.full((len(features), 2), np.nan)
 
     for scorer in (OutOfRange(), NotNormalised(), NotFinite()):
+        _forget_spent_reads()  # each scorer is its own case, so its own first read
         with pytest.raises(ValueError, match="probabilit"):
             decide_promotion(
                 flood_table(),
