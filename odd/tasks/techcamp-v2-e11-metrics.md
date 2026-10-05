@@ -229,13 +229,40 @@ preflight por no ser ancestros del base.
   web/src/features/plot-status web/src/app` EXIT=0 (metrics 25, plot-status 86, app 15),
   `gate-lane` 5/5; RDD `review-4b39d1bd807fbd23` (reliability, 0 native findings, approved,
   authority burned); follow-up #255; report `../e11-briefs/e11-t9b-rdd.md`. Merged `228666d`.
-- [ ] T7b OrgMetrics complete (D-T7.1 follow-up lane, added 2026-10-05): the two locked figures
-  get their read views (`ciclos con cosecha registrada / ciclos terminados`, and the median hours to
-  first reading over **nodes claimed in the requested month**, docs/11:69-75), new `source_repository`
-  methods, and the `null` branches in `metrics_read.py` replaced by the real rule. Route: Herdr
-  OpenCode. Unfreezes `ports.py`, `source_repository.py` and a new migration revision by owner
-  authorization. Work units: views+migration, repository, on-read wiring. Parallel hazard: the
-  single Alembic head with E10.
+- [x] T7b OrgMetrics complete (D-T7.1 follow-up lane): the two locked figures got their read views
+  (`d2c8f4a1b3e7`, one Alembic head), `source_repository` methods, and the `null` branches in
+  `metrics_read.py` replaced by the real rule; docs/11 §2 updated in the same work unit as the SQL
+  (D-T7.2). Route: Herdr OpenCode. Commits `5b3db63` (views + migration + docs/11),
+  `b07d56e` (source repository), `4359072` (on-read wiring), `f9cc544` (post-review docstring
+  correction, no RDD — passive documentation). Evidence: scoped gate 254 passed on the lane;
+  RDD `review-d1dff3698a655e8c` (reliability, **0 findings**, approved, authority burned, token
+  `941a5cf1…`); no follow-up issue; report `../e11-briefs/e11-t7b-rdd.md`. Merged `fb1a8d7`; lane
+  removed. **D-T7.1 cerrado: OrgMetrics tiene las cinco figuras.**
+- D-T7.3 (owner, 2026-10-05) El numerador de `harvested_cycles_ratio` queda **literal al doc**:
+  cualquier ciclo con una entrada `harvest` en el mes cuenta como cosechado, sin filtro de status,
+  aunque su status sea `lost`. La asimetría con el denominador (que sí exige
+  `status IN (harvested, lost)`) es **intencional**: ante datos contradictorios, la bitácora del
+  productor es la evidencia más fuerte. Queda escrito en docs/11 §2 para que nadie lo lea como bug.
+
+### T7b — lineage `review-d1dff3698a655e8c`, **aprobado, 0 findings, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | Lane completa `b35fb1bf…HEAD`, 10 paths / +1239 −92, un candidato combinado |
+| Lente | `review-reliability`, 0 findings, admisión `completed` |
+| Recibo | `terminal-consumption/v1` `35a385a2…`, lineage quemada |
+| Verificado por el reviewer | Las fórmulas de docs/11:69-75 y D-T7.2 ancla del mes; los tres casos de evidencia faltante (`lost` sin registro de pérdida, cosecha con ciclo `active`, cierre por PATCH sin bitácora) como `null`/excluidos, nunca 0; `deleted_at IS NOT NULL` excluido; la mediana sobre **nodos** del mes, no mediana de medianas; org filter con isolation tests; un solo head |
+| Corrección post-review | `f9cc544`: el docstring de la migración afirmaba una reutilización de predicado que no existe (`query_valid_raw` filtra solo el bit 2 y nunca testea `value`; una vista SQL no puede llamar un método de repositorio). Readback estructural: un archivo, solo prosa, SQL byte-idéntico |
+| Merge | `fb1a8d7` |
+
+**Procedimiento (error del orquestador, corregido).** El base-ref que le di a Pi fue el tip actual de
+la épica (`b35fb1bf`, commit hermano con el registro de D-T7.2) mientras la lane había bifurcado en
+`9bacd05`: `git merge-base --is-ancestor` devolvió NO, así que `odd/tasks/…` entró al scope
+congelado como un **artefacto de borrado de 18 líneas** de un archivo que la lane nunca tocó. El
+reviewer lo detectó y lo reportó en vez de aprobarlo en silencio. Inofensivo al mergear (el merge de
+tres vías conserva la copia de la épica) pero el revisor leyó un path que no era del candidato. El
+procedimiento §"How a lane runs RDD" paso 1 ahora exige un base-ref **ancestro** del HEAD de la lane.
+Full report: `../e11-briefs/e11-t7b-rdd.md`.
 - [ ] T10 Close: `just gate-release`, follow-up issue (`field_record` / `relative_yield`), delivery
   plan. Route: parent.
 
