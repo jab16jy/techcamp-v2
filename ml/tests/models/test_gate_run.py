@@ -270,3 +270,22 @@ def test_the_fixture_is_the_shape_the_harness_gate_accepts() -> None:
     assert len(test_months.unique()) == 12
     assert table.duplicated(subset=["code", "horizon_start"]).sum() == 0
     assert test_months.value_counts().min() == test_months.value_counts().mode().iloc[0]
+
+
+def test_the_register_ladder_is_the_whole_run_before_the_gate_and_writes_it(
+    tmp_path: Path,
+) -> None:
+    """It reads train and validation only, so the register can be written — or rewritten,
+    after a run that crashed past it — without spending the block's single read."""
+    register = tmp_path / "log.csv"
+    development = split(flood_table(noise=9.0, offset=7))
+
+    ladder, candidate, baseline, rows = gate_run.register_ladder(
+        development, register=register, trials=2, resamples=64, today="2026-10-05"
+    )
+
+    assert len(ladder) == 4
+    assert (candidate.kind, baseline.kind) == ("model", BASELINE)
+    assert len(rows) == 4
+    assert len(register.read_text(encoding="utf-8").splitlines()) == 5
+    assert all(entry.id > 0 for entry in rows)

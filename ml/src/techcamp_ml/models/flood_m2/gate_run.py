@@ -132,6 +132,33 @@ class GateRun:
         return "\n".join(lines)
 
 
+def register_ladder(
+    development: DevelopmentSplit,
+    *,
+    register: Path | None = None,
+    trials: int = experiments.TRIALS,
+    seed: int = experiments.TUNING_SEED,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    today: str | None = None,
+) -> tuple[tuple[Search, ...], Search, Search, tuple[Entry, ...]]:
+    """The ladder, the two rungs the gate compares, and the register rows of all four.
+
+    Everything here reads train and validation. It is the whole of a run before the gate is
+    called, and it is a function of its own so the register can be written — or rewritten,
+    after a run that crashed past it — without spending the block's single read.
+    """
+    ladder = experiments.run_ladder(
+        development.train, development.validation, trials=trials, seed=seed, resamples=resamples
+    )
+    candidate = experiments.select(ladder, experiments.MODEL)
+    baseline = experiments.select(ladder, BASELINE)
+    stamp = today or date.today().isoformat()
+    rows = tuple(
+        _row(rung, candidate, baseline, stamp) for rung in sorted(ladder, key=lambda one: one.name)
+    )
+    return ladder, candidate, baseline, _append(register, rows)
+
+
 def run_gate(
     table: pd.DataFrame,
     development: DevelopmentSplit,
@@ -149,19 +176,12 @@ def run_gate(
     guard is what refuses a second read *within* a process, and the caller's object is what
     the caller can inspect afterwards.
     """
-    ladder = experiments.run_ladder(
-        development.train, development.validation, trials=trials, seed=seed, resamples=resamples
+    ladder, candidate, baseline, written = register_ladder(
+        development, register=register, trials=trials, seed=seed, resamples=resamples, today=today
     )
-    candidate = experiments.select(ladder, experiments.MODEL)
-    baseline = experiments.select(ladder, BASELINE)
     calibrated = CalibratedCandidate.fit(candidate.scorer, development.validation)
     cuts = read_cuts(calibrated, development.validation)
     report = robustness(lambda rows: experiments.refit(candidate, rows), development)
-    stamp = today or date.today().isoformat()
-    rows = tuple(
-        _row(rung, candidate, baseline, stamp) for rung in sorted(ladder, key=lambda one: one.name)
-    )
-    written = _append(register, rows)
     decision = decide_promotion(table, candidate=calibrated, baseline=baseline.scorer, reads=reads)
     return GateRun(
         ladder=ladder,
@@ -272,6 +292,7 @@ def main(argv: Sequence[str] | None = None, *, layout: Layout = DEFAULT_LAYOUT) 
         table,
         development,
         reads=SpentTestBlocks(),
+        register=experiments.LOG_PATH,
         trials=args.trials,
         seed=args.seed,
         today=args.today,
