@@ -153,10 +153,12 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   **byte a byte idénticos**. Cero descargas, cero datos nuevos. Los archivos de procedencia nunca se
   escribieron a mano: `labels_plan.json` afirma que el fetch caminó hasta una página corta, y eso no
   se establece offline desde el caché.
-- [ ] T5 Harness + gate (owner approval gate): split with gap, department hold-out, real frequency,
+- [x] T5 Harness + gate (owner approval gate): split with gap, department hold-out, real frequency,
   bootstrap CI95, locked test, `decide_promotion`; own tests; freeze hashes after approval.
-  ~400. Route: Herdr writer. Depends T1 (schema from T4 for wiring).
-- [~] T6 Server schema + risk serving (T6a done `515f399`; T6b next): migrations (`municipality`, `model_version`,
+  Route: Herdr writer (Pi), luego un Pi fresco para el cierre acotado. Merged `82a7bcb`.
+  **Cerrado SIN recibo por decisión de gobernanza, no aprobado**: límites aceptados en #253,
+  tres WARNING en #254. Ver §Review (RDD).
+- [x] T6 Server schema + risk serving (T6a `515f399` + #239; T6b `5ce6f87`, recibo `review-d72b0c9624200a09`): migrations (`municipality`, `model_version`,
   `risk_prediction`), baseline heuristics (flood: accumulated rainfall; drought: SPI-3), archive
   client, daily job, `/dev/jobs/risk:run`, `GET /plots/{plot_id}/risk`. ~400. Route: Herdr writer.
   Depends T2. Parallel with T3–T5.
@@ -366,20 +368,37 @@ Forecast ≈ 2950 authored lines — **already stale**: T1+T2+T3 alone measure ~
   over 180 municipalities and 2019–2025, `municipalities` 195, `elevation` 195.
   `labels.drops.json` records 8,477 rows dropped as `unknown_code`.
 - 2026-10-05: T7 merged `e6f3060`; lane DB dropped. T5's correction in flight (no receipt yet).
-- 2026-10-05: **T4's real build is unblocked and NOT run.** It writes a tracked
-  `ml/datasets/flood_m2/manifest.json`, so it is implementation with its own commit, not a parent
-  step. It needs the epic-branch worktree carrying `ml/.cache/raw` and `ml/data/flood_m2/sources`.
+- 2026-10-05: **T4's real build is DONE** — `2e1d1c0` on the epic worktree, receipt
+  `review-f6805ba1b12bc39a` (approved, acknowledged, 0 findings, base `bf6994b` = the work unit, not
+  the branch); docs close `98d34f0` with receipt `review-3384d456d179b344`. Dataset real:
+  **16 380 filas** = 195 municipios × 84 meses, **838 positivas / 15 542 negativas**, `manifest.json`
+  trackeado, cero nulos fuera de las tres columnas de anomalía. **Prevalencia real 5,12 %** (838/16380),
+  no 9,2 %: la etiqueta es binaria por municipio-mes, así que los 1 508 reportes colapsan en 838 meses
+  con evento; el 9,2 % del brief dividía reportes por filas y sobrestimaba 1,8×. Los fixtures del
+  harness usan 1-en-84 (1,19 %), 4,3× por debajo: sólo prueban forma, nunca umbrales.
+  Desvío aceptado: `fetch --source labels` corrió fuera de brief (el caché de T3 era anterior a
+  `5fac554`/`3bdca35` y faltaban los plan traces), verificado offline-safe — 0 raw copies, `sha256`
+  de las tres páginas idéntico, parquets byte a byte idénticos.
+- 2026-10-05: **T5 cerrado SIN recibo** (merge `82a7bcb`, 9 files / 1 899 líneas). Cinco lineages sin
+  aprobación: el slot de corrección no tiene salida por Pi (el provider lo emite, la facade lo
+  rechaza sobre binding byte-idéntigo) — dead end #6. El lens evalúa propiedades de runtime y rechaza
+  el argumento de gobernanza del seam `_forget_spent_reads`, así que el dueño eligió (b)+(c): aceptar
+  el límite documentado y agotar la lineage en diseño. #253 (2 CRITICAL aceptados) y #254 (3 WARNING).
+  **Sin recibo significa no revisado, nunca aprobado.** El RDD de T8 corre igual, con su propia base.
+- 2026-10-05: T3 y T7 worktrees eliminados con sus DB; T3 se conserva como fuente del caché ERA5.
+  T8 abierta en `e10-t8` con `ml/data` copiado del épico (los artefactos out-of-git no se heredan).
 
 ## Next step
-- **T5 is the only open lane.** Its one-read guard must stop resting on object identity: key it on
-  something derived from the contract, and refuse BEFORE the test block is read, not after. Then one
-  more bounded review over `fefeb00..HEAD` to earn T5 a receipt. Both prior rounds on that lane are
-  parked (`review-6cd12d59a63983e9` `correction_required`, `review-b34713697b28f808` escalated);
-  neither burns authority and neither blocks delivery.
-- **T4's real build**, now that D-T3.3 is unblocked. Needs the epic-branch worktree carrying
-  `ml/.cache/raw` and `ml/data/flood_m2/sources`, then `uv run --locked --project ml python
-  ml/datasets/flood_m2/build.py`. Its hash lands in the manifest and the real counts replace the
-  fixture counts in the data card.
+- **T8 en vuelo** (lane `e10-t8`, Pi `e10-t8-pi`, `--thinking xhigh`). Split real verificado: train
+  8 190/377 (4,60 %), val 3 510/184 (5,24 %), test 2 340/63 (2,69 %), 1 170 filas por la brecha.
+  Decisiones del dueño ya tomadas: anomalías en tabla derivada **out-of-git** (el `sha256` del manifest
+  no se toca), escalera termina en LightGBM (TabPFN fuera), candidato único = mayor PR-AUC en val,
+  nulos con LightGBM nativo + `SimpleImputer` fitteado sólo en train, y `promote=False` es resultado
+  válido (reporte + `model_version` de la mejor baseline, D-T0.5). Luego T9 y T10.
+- ~~T5's one-read guard~~ Historial, ya resuelto: la llave pasó a ser el digest del contenido del
+  bloque (`66d4b65`), el ledger volvió a ser parámetro obligatorio del caller (`52755fc`), y el
+  recibo de lectura se hizo inmune a `table.attrs.clear()` (`a2d8b22`). El argumento de gobernanza
+  quedó documentado en `37e3157`. Las cuatro lineages previas nunca quemaron autoridad.
 - **Dispositions the owner still owns:** the parked escalated lineages (T5 round 1 over the
   correction, T7 round 2 over `ae735b8`) and `review-c73397a8bb8c3785`'s already-acknowledged state.
   None of them blocks anything; escalation approves nothing.
