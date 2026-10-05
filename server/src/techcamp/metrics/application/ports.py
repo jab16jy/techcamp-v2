@@ -150,6 +150,48 @@ class CycleTotals:
     which is missing evidence rather than a stress-free cycle."""
 
 
+@dataclass(frozen=True, slots=True)
+class OrgMonthCycle:
+    """One cycle closed inside one calendar month, for the organization's
+    `harvested_cycles_ratio` (docs/11-metricas.md:72, D-T7.2).
+
+    `closed_on` is the day of the logbook entry that registered the closure, which
+    is the only thing that places a cycle in a month: `crop_cycle` carries
+    `sown_on`, `expected_harvest_on` and `status` and no end date
+    (docs/03-modelo-datos.md:128-135).
+
+    `has_harvest` is the numerator's whole evidence. It is a bool rather than a
+    `Decimal | None` because this row exists **only** when a closure was
+    registered, so "no harvest registered" is a real fact about a closed cycle —
+    `False` — and the absent row is what says "no evidence" (docs/03:441).
+    """
+
+    crop_cycle_id: UUID
+    plot_id: UUID
+    closed_on: date
+    has_harvest: bool
+
+
+@dataclass(frozen=True, slots=True)
+class NodeFirstReading:
+    """One node claimed in a month and the instant of its first valid reading
+    (docs/11-metricas.md:73, D-T7.2).
+
+    The two instants are what the caller needs and no more: the hours between
+    them are the figure, and dividing here would put a formula in a read-model
+    row. `first_reading_at` is `None` when the node has not produced a valid
+    reading since its claim, which is missing evidence rather than an instant of
+    zero (docs/03-modelo-datos.md:441).
+    """
+
+    node_id: UUID
+    plot_id: UUID
+    claimed_at: datetime
+    """When the node was claimed, the "alta" of docs/11:73 and the anchor of the
+    month's population (docs/11:75)."""
+    first_reading_at: datetime | None
+
+
 class MetricsSourceRepository(Protocol):
     """Read-only access to the metrics SQL views (docs/05 §Reglas, D-T0.1).
 
@@ -197,5 +239,38 @@ class MetricsSourceRepository(Protocol):
 
         `None` when the cycle does not exist or belongs to another organization
         (docs/09 §Seguridad): the caller cannot tell the two apart.
+        """
+        ...
+
+    async def org_month_cycles(self, org_id: UUID, *, month: date) -> Sequence[OrgMonthCycle]:
+        """Every cycle of the organization closed **inside** `month`
+        (docs/11-metricas.md:72, D-T7.2).
+
+        One row per cycle that is `harvested` or `lost` and carries a
+        non-deleted logbook entry registering its closure with an `occurred_on`
+        inside the month — a `harvest` entry, or an `observation` carrying an
+        `alert_id` for a lost season (docs/03-modelo-datos.md:424). `crop_cycle`
+        has no end date, so that entry is what places the cycle in a month.
+
+        A month with no closed cycle returns no rows, never a row with
+        `has_harvest = False`: an `active` cycle, a `lost` cycle whose loss was
+        never observed, and a cycle closed with nothing written in the logbook
+        are missing evidence, and a figure over no evidence is `None`
+        (docs/03-modelo-datos.md:441, D-T0.3).
+        """
+        ...
+
+    async def node_first_readings(self, org_id: UUID, *, month: date) -> Sequence[NodeFirstReading]:
+        """Every node the organization claimed inside `month`, with the instant of
+        its first valid reading (docs/11-metricas.md:73-75, D-T7.2).
+
+        The population is the **nodes claimed in the asked month**, not the
+        readings of that month: docs/11:75 says the median "toma los nodos
+        reclamados en ese mes", so one row per node and the node is the unit.
+
+        `first_reading_at` is `None` for a node that has not answered yet, which
+        contributes no value to the median rather than a zero. The reading is
+        looked for from `claimed_at` onwards and must be valid as
+        docs/04-api.md:83 defines it.
         """
         ...

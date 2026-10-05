@@ -1,29 +1,38 @@
 """The organization-indicators endpoint (docs/04-api.md:226, 236; D-T0.10, D-T0.12,
-D-T7.1).
+D-T7.2).
 
 Against the real database and the real router: the mean ignores the plots without
 an index, the ratios are computed over the stored month, and org isolation is
 adapter behavior — a double at the port would prove none of it.
 
-D-T7.1 ships this **partial**: `harvested_cycles_ratio` and
-`median_hours_to_first_reading` arrive as `null`, because the org-month listing
-carries nothing about cycles and nothing about node instants
-(docs/03-modelo-datos.md:441 — a figure with no evidence is `null`, never `0`).
-Both unlock in the follow-up lane that adds the two `metrics_*` views and their
-`source_repository` methods.
+The last two figures were shipped `null` by D-T7.1, which had no frozen store
+able to produce them. They are computed now from the two views of the follow-up
+lane (D-T7.2), and the tests here say what each one counts: `harvested_cycles_ratio`
+over the cycles whose **closure is registered inside the month**, and
+`median_hours_to_first_reading` over the **nodes claimed in it**. They also come
+from different sources, so one of them missing must not blank the other.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from home.conftest import BOUNDARY, make_env
-from metrics.conftest import MONTH
+from home.conftest import BOUNDARY, HomeEnv, make_env
+from metrics.conftest import (
+    MONTH,
+    add_alert,
+    add_claimed_node,
+    add_cycle,
+    add_logbook_entry,
+    add_reading,
+    add_sensor,
+    bogota_midnight,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,6 +129,38 @@ async def _month_rows(db_session: AsyncSession, *, org_id: UUID, month: Any = MO
     ).scalar_one()
 
 
+async def _closed_harvest(db_session: AsyncSession, env: HomeEnv, *, on: date) -> UUID:
+    """A harvested cycle whose `harvest` entry of `on` registers its closure, which
+    is what places it in that month (D-T7.2)."""
+    cycle_id = await add_cycle(db_session, env, sown_on=date(2026, 8, 1), status="harvested")
+    await add_logbook_entry(
+        db_session,
+        env,
+        kind="harvest",
+        occurred_on=on,
+        yield_kg=500,
+        crop_cycle_id=cycle_id,
+    )
+    return cycle_id
+
+
+async def _answering_node(
+    db_session: AsyncSession,
+    env: HomeEnv,
+    *,
+    code: str,
+    channel: str,
+    hours: int,
+) -> UUID:
+    """A node claimed at local midnight of the month under test that answers `hours`
+    later with one valid reading — the pair docs/11-metricas.md:73 measures."""
+    claimed_at = bogota_midnight(MONTH)
+    node_id = await add_claimed_node(db_session, env, claim_code=code, claimed_at=claimed_at)
+    sensor_id = await add_sensor(db_session, node_id, channel_key=channel)
+    await add_reading(db_session, sensor_id, at=claimed_at + timedelta(hours=hours), value=22.5)
+    return node_id
+
+
 async def test_an_owner_reads_the_three_computed_figures(db_session: AsyncSession) -> None:
     """docs/11-metricas.md:75 — the mean is over the plots **with an index**, so a
     plot with no evidence at all must not drag it down as a zero.
@@ -167,10 +208,60 @@ async def test_an_owner_reads_the_three_computed_figures(db_session: AsyncSessio
     assert body["monitored_plots_ratio"] == 0.5
 
 
-async def test_the_two_locked_figures_arrive_as_null(db_session: AsyncSession) -> None:
-    """D-T7.1: `harvested_cycles_ratio` and `median_hours_to_first_reading` are `null`
-    even when the month has rows — they are not `0`, which would say an
-    organization harvested nothing and every node arrived instantly."""
+async def test_the_harvested_ratio_counts_the_cycles_closed_in_the_month(
+    db_session: AsyncSession,
+) -> None:
+    """docs/11-metricas.md:72 — `ciclos con cosecha registrada / ciclos
+    terminados`, counted over the month asked.
+
+    Two September closures: a harvested cycle whose `harvest` entry of Sep 28
+    registers a close with a harvest, and a lost cycle whose `observation`
+    carrying an `alert_id` of Sep 20 registers one without. So the ratio is 1/2 —
+    not `1`, which would count only the cycles that went well, and not `0`.
+    """
+    env = await make_env(db_session, role="owner")
+    await _stored_month(
+        db_session,
+        plot_id=env.plot_id,
+        org_id=env.org_id,
+        monitoring=0.5,
+        record_keeping=0.5,
+        decision=0.5,
+        risk_management=0.5,
+        index=50,
+    )
+    await _closed_harvest(db_session, env, on=date(2026, 9, 28))
+    lost = await add_cycle(db_session, env, sown_on=date(2026, 8, 1), status="lost")
+    alert_id = await add_alert(db_session, env, rule_code="water_stress")
+    await add_logbook_entry(
+        db_session,
+        env,
+        kind="observation",
+        occurred_on=date(2026, 9, 20),
+        quantity=40,
+        alert_id=alert_id,
+        crop_cycle_id=lost,
+    )
+    client = _client()
+
+    response = client.get(
+        f"/organizations/{env.org_id}/metrics",
+        params={"month": _MONTH_QUERY},
+        headers=_auth(issue_token(str(env.user_id))),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["harvested_cycles_ratio"] == 0.5
+
+
+async def test_a_month_with_no_closed_cycle_has_no_ratio(db_session: AsyncSession) -> None:
+    """docs/03-modelo-datos.md:441: a month with no closed cycle is missing
+    evidence, so the figure is `null` — not `0`, which would say the organization
+    closed cycles and harvested nothing.
+
+    The stored month makes the endpoint answer `200`; only this figure has
+    nothing to say.
+    """
     env = await make_env(db_session, role="owner")
     await _stored_month(
         db_session,
@@ -191,7 +282,116 @@ async def test_the_two_locked_figures_arrive_as_null(db_session: AsyncSession) -
     )
 
     assert response.status_code == 200, response.text
+    assert response.json()["harvested_cycles_ratio"] is None
+
+
+async def test_the_median_is_over_the_nodes_claimed_in_the_month(
+    db_session: AsyncSession,
+) -> None:
+    """docs/11-metricas.md:73-75 — hours between a node's alta and its first
+    valid reading, over the nodes **claimed in that month**.
+
+    Four September nodes answer 2, 4, 6 and 12 h after their claim, so the median
+    of the raw per-node values is `(4 + 6) / 2 = 5`. A tenth node claimed in
+    October is outside the population, and a September node that has not answered
+    contributes no value instead of pulling the median down — neither of them is
+    the figure the docs name.
+    """
+    env = await make_env(db_session, role="owner")
+    await _stored_month(
+        db_session,
+        plot_id=env.plot_id,
+        org_id=env.org_id,
+        monitoring=0.5,
+        record_keeping=0.5,
+        decision=0.5,
+        risk_management=0.5,
+        index=50,
+    )
+    for index, hours in enumerate((2, 4, 6, 12), start=1):
+        await _answering_node(
+            db_session, env, code=f"node-{index}", channel=f"sm-{index}-20", hours=hours
+        )
+    await add_claimed_node(
+        db_session, env, claim_code="node-late", claimed_at=bogota_midnight(date(2026, 10, 1))
+    )
+    await add_claimed_node(
+        db_session, env, claim_code="node-silent", claimed_at=bogota_midnight(MONTH)
+    )
+    client = _client()
+
+    response = client.get(
+        f"/organizations/{env.org_id}/metrics",
+        params={"month": _MONTH_QUERY},
+        headers=_auth(issue_token(str(env.user_id))),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["median_hours_to_first_reading"] == 5.0
+
+
+async def test_the_two_figures_survive_a_month_the_monthly_job_never_stored(
+    db_session: AsyncSession,
+) -> None:
+    """The figures do not all come from the same place, so one missing source must
+    not blank the others.
+
+    There is no `plot_metric_monthly` row here — the monthly job has not run for
+    this month — yet a cycle closed in September and a node claimed in September
+    are both real evidence, and the endpoint must report them. The three plot
+    figures stay `null`: they are exactly the missing evidence.
+    """
+    env = await make_env(db_session, role="owner")
+    await _closed_harvest(db_session, env, on=date(2026, 9, 28))
+    await _answering_node(db_session, env, code="node-a", channel="sm-a-20", hours=7)
+    client = _client()
+
+    response = client.get(
+        f"/organizations/{env.org_id}/metrics",
+        params={"month": _MONTH_QUERY},
+        headers=_auth(issue_token(str(env.user_id))),
+    )
+
+    assert response.status_code == 200, response.text
     body = response.json()
+    assert body["mean_digital_adoption_index"] is None
+    assert body["plots_with_index"] is None
+    assert body["monitored_plots_ratio"] is None
+    assert body["harvested_cycles_ratio"] == 1.0
+    assert body["median_hours_to_first_reading"] == 7.0
+
+
+async def test_the_two_figures_ignore_another_organization(
+    db_session: AsyncSession,
+) -> None:
+    """docs/09-cuellos-de-botella.md#seguridad: both reads filter on `org_id`, so
+    another organization's closures and nodes are absent rather than averaged in.
+    The caller reads its own organization, which has no evidence at all."""
+    env_a = await make_env(db_session, role="owner")
+    env_b = await make_env(db_session, role="owner")
+    await _stored_month(
+        db_session,
+        plot_id=env_b.plot_id,
+        org_id=env_b.org_id,
+        monitoring=0.5,
+        record_keeping=0.5,
+        decision=0.5,
+        risk_management=0.5,
+        index=80,
+    )
+    await _closed_harvest(db_session, env_b, on=date(2026, 9, 28))
+    await _answering_node(db_session, env_b, code="node-b", channel="sm-b-20", hours=3)
+    client = _client()
+
+    response = client.get(
+        f"/organizations/{env_a.org_id}/metrics",
+        params={"month": _MONTH_QUERY},
+        headers=_auth(issue_token(str(env_a.user_id))),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mean_digital_adoption_index"] is None
     assert body["harvested_cycles_ratio"] is None
     assert body["median_hours_to_first_reading"] is None
 
