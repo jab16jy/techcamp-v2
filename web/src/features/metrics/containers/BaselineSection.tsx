@@ -20,14 +20,22 @@ import { BaselineSurvey } from '../components/BaselineSurvey'
 
 const YIELD_FORMAT = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 })
 const COST_FORMAT = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 })
+const DATE_FORMAT = new Intl.DateTimeFormat('es-CO')
 
 /** The practices the closed vocabulary holds, for the narrowing guard below. */
 const KNOWN_PRACTICES = new Set<string>(Object.keys(PRACTICE_LABELS))
 
-/** A `YYYY-MM-DD` from the wire, printed the way a Colombian reads a date. */
+/**
+ * A `YYYY-MM-DD` from the wire, printed the way a Colombian reads a date.
+ *
+ * The parts go through `new Date(y, m - 1, d)` — a *local* date — because
+ * `new Date('2026-01-15')` is UTC midnight, which in Bogotá is still the 14th
+ * and would print a day early. Handing the parts to `Intl` keeps the locale's
+ * own ordering and separators instead of hardcoding `dd/mm/yyyy`.
+ */
 function enrolledOnLabel(value: string): string {
-  const [year, month, day] = value.split('-')
-  return `${day}/${month}/${year}`
+  const [year, month, day] = value.split('-').map(Number)
+  return DATE_FORMAT.format(new Date(year, month - 1, day))
 }
 
 /**
@@ -39,12 +47,22 @@ function canFill(role: Role | null): boolean {
   return role === 'owner' || role === 'technician'
 }
 
-/** The 422 the server sends for a `crop_id` outside the catalog names the field
- * in English; the producer needs the field's own name instead. */
+/**
+ * Spanish copy for what the server refused, naming the problem and the way out.
+ *
+ * The `422` body is the one case that cannot be shown raw: the server names the
+ * Python field (`crop_id is not a valid crop`), and an internal code is not an
+ * error message a producer can act on (docs/07:14 plain Spanish; the rule that
+ * an actionable error names the problem and the recovery). The only `422` this
+ * endpoint can raise is the unknown crop, so the message names that field and
+ * what to do instead of forwarding the wire text.
+ */
 function describeBaselineError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 403) return 'Tu rol no puede cambiar esta encuesta.'
-    if (err.status === 422) return err.detail ?? err.title
+    if (err.status === 422) {
+      return 'Ese cultivo no está en la lista. Elige otro de la lista de cultivos.'
+    }
   }
   return describeApiError(err)
 }

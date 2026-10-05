@@ -104,6 +104,8 @@ export function BaselineSurvey({
         <Input
           id="baseline-enrolled-on"
           type="date"
+          required
+          aria-required="true"
           value={enrolledOn}
           onChange={(event) => setEnrolledOn(event.target.value)}
         />
@@ -112,7 +114,7 @@ export function BaselineSurvey({
       <label className="flex flex-col gap-2 text-base" htmlFor="baseline-crop">
         Cultivo del último ciclo
         <Select value={cropId} onValueChange={setCropId}>
-          <SelectTrigger id="baseline-crop">
+          <SelectTrigger id="baseline-crop" aria-required="true">
             <SelectValue placeholder="Elige el cultivo" />
           </SelectTrigger>
           <SelectContent>
@@ -133,6 +135,8 @@ export function BaselineSurvey({
           step="any"
           min={0}
           inputMode="decimal"
+          required
+          aria-required="true"
           value={yieldKgHa}
           onChange={(event) => setYieldKgHa(event.target.value)}
         />
@@ -155,7 +159,7 @@ export function BaselineSurvey({
       <label className="flex flex-col gap-2 text-base" htmlFor="baseline-practice">
         ¿Cómo se regaba antes?
         <Select value={practice} onValueChange={setPractice}>
-          <SelectTrigger id="baseline-practice">
+          <SelectTrigger id="baseline-practice" aria-required="true">
             <SelectValue placeholder="Elige la forma de riego" />
           </SelectTrigger>
           <SelectContent>
@@ -168,7 +172,14 @@ export function BaselineSurvey({
         </Select>
       </label>
 
-      {error && <p className="text-base text-severity-critical">{error}</p>}
+      {/* A save that fails changes nothing the keyboard is resting on, so
+          without `role="alert"` a screen reader never learns it failed
+          (docs/07 §Accesibilidad; harden: "announce errors accessibly"). */}
+      {error && (
+        <p role="alert" className="text-base text-severity-critical">
+          {error}
+        </p>
+      )}
     </FormSheet>
   )
 }

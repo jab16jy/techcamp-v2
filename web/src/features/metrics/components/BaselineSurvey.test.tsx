@@ -111,9 +111,30 @@ describe('BaselineSurvey', () => {
   })
 
   it('shows the server message when the save is rejected', () => {
-    renderSurvey({ error: 'crop_id is not a valid crop' })
+    renderSurvey({ error: 'Ese cultivo no está en la lista. Elige otro de la lista de cultivos.' })
 
     // Not color alone: the message is text the farmer can read (docs/07:12).
-    expect(screen.getByText('crop_id is not a valid crop')).toBeInTheDocument()
+    expect(
+      screen.getByText('Ese cultivo no está en la lista. Elige otro de la lista de cultivos.'),
+    ).toBeInTheDocument()
+  })
+
+  it('announces a rejected save to a screen reader instead of only showing it', () => {
+    renderSurvey({ error: 'Ese cultivo no está en la lista. Elige otro de la lista de cultivos.' })
+
+    // A save that fails leaves focus where it was, so nothing else announces
+    // it; without `role="alert"` the failure is silent to a screen reader.
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('marks the four required fields as required and leaves the cost optional', () => {
+    renderSurvey()
+
+    expect(screen.getByLabelText('Fecha de inscripción')).toBeRequired()
+    expect(screen.getByLabelText(/Rendimiento del último ciclo/)).toBeRequired()
+    expect(screen.getByLabelText('Cultivo del último ciclo')).toHaveAttribute('aria-required', 'true')
+    expect(screen.getByLabelText('¿Cómo se regaba antes?')).toHaveAttribute('aria-required', 'true')
+    // The one optional field stays unmarked, which is what "opcional" means.
+    expect(screen.getByLabelText(/Costo aproximado/)).not.toBeRequired()
   })
 })

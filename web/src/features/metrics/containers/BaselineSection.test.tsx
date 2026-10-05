@@ -175,7 +175,7 @@ describe('BaselineSection', () => {
     expect(reads).toBe(1)
   })
 
-  it('shows the server detail when the crop is rejected as outside the catalog', async () => {
+  it('names the field and the way out when the crop is rejected, never the wire code', async () => {
     routeFetch({
       '/crops': () => jsonResponse(CROPS),
       '/baseline': () => problemResponse(404, 'Plot has no enrollment survey'),
@@ -204,6 +204,25 @@ describe('BaselineSection', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'Secano' }))
     fireEvent.click(screen.getByRole('button', { name: 'Guardar encuesta' }))
 
-    expect(await screen.findByText('crop_id is not a valid crop')).toBeInTheDocument()
+    // The server's detail names a Python field; the producer gets the field's
+    // own name and the way out instead (docs/07:14).
+    expect(
+      await screen.findByText('Ese cultivo no está en la lista. Elige otro de la lista de cultivos.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/crop_id/)).not.toBeInTheDocument()
+  })
+
+  it('prints the enrollment date the way a Colombian reads it, not a day early', async () => {
+    routeFetch({
+      '/crops': () => jsonResponse(CROPS),
+      '/baseline': () => jsonResponse(SURVEY),
+    })
+    renderSection('owner')
+
+    // `new Date('2026-01-15')` is UTC midnight, which in Bogotá is still the
+    // 14th: the summary must not slip a day. `es-CO` prints the day
+    // unpadded, so the expectation follows the locale rather than a guess.
+    expect(await screen.findByText(/^15\/1\/2026$/)).toBeInTheDocument()
+    expect(screen.queryByText(/^14\/1\/2026$/)).not.toBeInTheDocument()
   })
 })
