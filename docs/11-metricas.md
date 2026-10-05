@@ -36,11 +36,17 @@ Hay cinco grupos:
 
 ## 2. Adopción: índice de adopción digital
 
-Es un índice de 0 a 100 por parcela, calculado cada mes con cuatro componentes de igual peso. Mide el **uso de la plataforma**, no la tecnificación en sí (brecha G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
+Es un índice de 0 a 100 por parcela, calculado cada mes con cuatro componentes que pesan lo mismo entre sí. Mide el **uso de la plataforma**, no la tecnificación en sí (brecha G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
+
+El índice **reparte los 100 puntos entre los componentes que sí tienen evidencia**, con el mismo peso cada uno (100/4 con los cuatro, 100/3 con uno nulo, 100/2 con dos, 100 con uno):
 
 ```
-digital_adoption_index = 25 × monitoring + 25 × record_keeping + 25 × decision + 25 × risk_management
+con_evidencia = los componentes cuyo valor NO es null
+digital_adoption_index = 100 × (Σ con_evidencia) / (cantidad de con_evidencia)
+digital_adoption_index = null    si los cuatro componentes son null
 ```
+
+Con los cuatro componentes presentes, `100 × (monitoring + record_keeping + decision + risk_management) / 4` es el mismo número que el promedio ponderado fijo de 25 puntos, así que los dos enunciados coinciden cuando no falta evidencia; difieren en cuanto un componente vale `null`, que es lo que fija la regla de cálculo más abajo (D-T0.3).
 
 | Componente | Fórmula (0–1) | Qué significa |
 |---|---|---|
