@@ -332,6 +332,7 @@ class Search:
     interval: Interval
     brier: float
     params: Mapping[str, Any] = field(default_factory=dict)
+    rounds: int | None = None
     note: str = ""
 
     def score(self, features: pd.DataFrame) -> npt.NDArray[np.float64]:
@@ -392,6 +393,7 @@ def run_ladder(
                 labels,
                 resamples,
                 params=trial.params,
+                rounds=trial.rounds,
                 note=trial.note,
             )
         )
@@ -460,6 +462,7 @@ def _scored(
     resamples: int,
     *,
     params: Mapping[str, Any] | None = None,
+    rounds: int | None = None,
     note: str = "",
 ) -> Search:
     scores = positive_class(scorer.predict_proba(design(validation)))
@@ -471,6 +474,7 @@ def _scored(
         interval=pr_auc_ci95(labels, scores, resamples=resamples),
         brier=brier(labels, scores),
         params=dict(params or {}),
+        rounds=rounds,
         note=note,
     )
 
@@ -575,3 +579,42 @@ def append_register(path: Path, entry: Entry) -> Entry:
 
 def _figure(value: float) -> str:
     return f"{value:.{DECIMALS}f}"
+
+
+def refit(rung: Search, train: pd.DataFrame) -> Any:
+    """The same configuration as `rung`, fitted again on other rows.
+
+    The robustness report of ADR-0020 step 9 has to measure the candidate the ladder chose,
+    seven times, on a department held out each time — so it needs the candidate's own
+    hyperparameters without its fitted coefficients. `train` here is the fold's train: it is
+    development data, never the blocked test, and it holds rows of both periods by design
+    (`harness.split.department_holdouts`).
+    """
+    labels = train["label"].to_numpy(dtype=np.int64)
+    if rung.name == "logistic_regression":
+        pipeline = Pipeline(
+            [
+                ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
+                (
+                    "model",
+                    LogisticRegression(
+                        C=float(rung.params["C"]),
+                        class_weight="balanced",
+                        max_iter=1000,
+                        random_state=TUNING_SEED,
+                    ),
+                ),
+            ]
+        )
+        pipeline.fit(design(train), labels)
+        return pipeline
+    booster = LGBMClassifier(
+        objective="binary",
+        n_estimators=int(rung.rounds) if rung.rounds is not None else TREE_BUDGET,
+        random_state=TUNING_SEED,
+        verbosity=-1,
+        subsample_freq=SUBSAMPLE_FREQUENCY,
+        **rung.params,
+    )
+    booster.fit(design(train), labels)
+    return booster
