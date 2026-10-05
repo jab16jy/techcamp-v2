@@ -74,11 +74,26 @@ def train_climatology_years() -> tuple[int, ...]:
     return TRAIN_YEARS
 
 
-def split(table: pd.DataFrame, *, val_first: str = VAL_FIRST) -> DevelopmentSplit:
+def split(table: pd.DataFrame) -> DevelopmentSplit:
     """The two blocks an experiment may use, after checking the gaps they leave.
 
-    `val_first` is overridable so a test can prove the gap is enforced rather than
-    asserted: a boundary that only holds while nobody moves a constant was never checked.
+    The validation boundary is `VAL_FIRST` and nothing else. It used to be a keyword an
+    experiment could pass, and that was a way to keep the six-month gap while quietly
+    discarding a year of validation: `val_first="2024-01"` leaves the gap intact and drops
+    every 2023 row, so the split passes every check it has while judging less. The
+    boundaries belong to the harness (ADR-0020: "el agente no puede modificar el harness, el
+    dataset de test ni la compuerta"), so `split` takes the table and nothing else; a test
+    that needs to prove the gap is enforced asks `_split_at` for a different boundary.
+    """
+    return _split_at(table, VAL_FIRST)
+
+
+def _split_at(table: pd.DataFrame, val_first: str) -> DevelopmentSplit:
+    """The split at a boundary this call chose.
+
+    `val_first` is a parameter here and nowhere else: a boundary that only holds while
+    nobody moves a constant was never checked, and the gap has to be provable without
+    opening that back up to callers.
     """
     _assert_gap(TRAIN_LAST, val_first)
     _assert_gap(VAL_LAST, TEST_FIRST)

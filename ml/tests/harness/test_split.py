@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pandas as pd
 import pytest
 from conftest import MONTHS, flood_table
@@ -13,6 +15,7 @@ from techcamp_ml.harness.split import (
     TRAIN_YEARS,
     VAL_FIRST,
     VAL_LAST,
+    _split_at,
     department_holdouts,
     split,
     train_climatology_years,
@@ -65,19 +68,28 @@ def test_no_month_of_the_blocked_test_reaches_a_development_block() -> None:
 def test_a_three_month_gap_is_refused() -> None:
     """Negative: docs/08 §M2 "Partición" wants six months, the longest feature window."""
     with pytest.raises(ValueError, match="gap"):
-        split(flood_table(), val_first="2022-10")
+        _split_at(flood_table(), "2022-10")
 
 
 def test_validation_starting_right_after_train_is_refused() -> None:
     """Negative: with no gap at all, 2022-07's window reads a month train was labelled on."""
     with pytest.raises(ValueError, match="gap"):
-        split(flood_table(), val_first="2022-07")
+        _split_at(flood_table(), "2022-07")
 
 
 def test_a_validation_block_that_starts_before_train_ends_is_refused() -> None:
     """Negative: overlapping blocks are not a temporal split at all."""
     with pytest.raises(ValueError, match="gap"):
-        split(flood_table(), val_first="2022-01")
+        _split_at(flood_table(), "2022-01")
+
+
+def test_the_validation_boundary_is_not_a_parameter() -> None:
+    """Negative: the boundaries belong to the harness and an agent may not move them
+    (ADR-0020: "el agente no puede modificar el harness, el dataset de test ni la
+    compuerta"). A public `val_first` kept the six-month gap while discarding a whole year of
+    validation, so a caller could shrink what it was judged on and still pass every gap
+    check; `split` therefore takes the table and nothing else."""
+    assert set(inspect.signature(split).parameters) == {"table"}
 
 
 def test_the_development_split_never_names_the_blocked_test() -> None:

@@ -63,6 +63,25 @@ class HeavyRain:
         return np.column_stack([1.0 - high, high])
 
 
+@dataclass
+class Mutating:
+    """A scorer that writes into the frame it was handed, the way an in-place feature
+    transform would.
+
+    It overwrites the one column `HeavyRain` reads, so a gate that hands both scorers the
+    same object lets the candidate's write decide what the baseline is compared against,
+    and the paired interval stops pairing like with like.
+    """
+
+    calls: list[int] = field(default_factory=list)
+
+    def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+        self.calls.append(len(features))
+        features["precip_sum_1m"] = 999.0
+        high = np.full(len(features), 0.9)
+        return np.column_stack([1.0 - high, high])
+
+
 PRECEDENCE = 1 / 12
 """The climatology of the test block: one flooded month of the twelve of 2025. It is the
 first step of the ladder of docs/08 §M2 "Escalera" and, answered as a constant probability,
@@ -392,26 +411,98 @@ def test_a_second_candidate_on_the_same_block_is_refused() -> None:
         )
 
 
-def test_an_independent_run_may_score_the_same_block() -> None:
-    """The guard belongs to a run, not to the process. State kept in a module-level
-    collection outlives the run that made it and refuses an unrelated later run that happens
-    to score the same rows, which is why the caller owns it: a new run means a new
-    `SpentTestBlocks`, and making one is a visible act rather than a reset nobody sees."""
+def test_a_fresh_ledger_does_not_buy_a_second_read() -> None:
+    """The ledger scopes the run; the spend belongs to the block. docs/08 §Reglas de
+    gobierno, "Test intocable", allows one read of the test block, and a caller that builds
+    a second `SpentTestBlocks` has not bought a second answer over the same rows — it has
+    only built a second object. The read is recorded on the table itself, so re-minting the
+    ledger changes nothing the gate reads."""
     table = flood_table()
-
-    first = decide_promotion(
+    decide_promotion(
         table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=SpentTestBlocks()
     )
-    second = decide_promotion(
-        table,
+
+    with pytest.raises(ValueError, match="has already been read"):
+        decide_promotion(
+            table,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
+
+
+def test_a_copied_table_carries_the_read_it_already_answered() -> None:
+    """Negative: the spend rides on the frame, so `table.copy()` is not a way out either —
+    and copying is what an agent reaching for the test twice reaches for."""
+    table = flood_table()
+    decide_promotion(
+        table, candidate=HeavyRain(), baseline=Fixed(0.5), resamples=200, reads=SpentTestBlocks()
+    )
+
+    with pytest.raises(ValueError, match="has already been read"):
+        decide_promotion(
+            table.copy(),
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
+
+
+def test_a_candidate_that_mutates_the_design_matrix_cannot_reach_the_baseline() -> None:
+    """Negative: the paired interval compares the two scorers row for row, so each has to be
+    handed its own frame. Sharing one lets a candidate that writes in place decide what the
+    baseline is measured against, and the comparison no longer compares like with like."""
+    mutating = decide_promotion(
+        flood_table(),
+        candidate=Mutating(),
+        baseline=HeavyRain(),
+        resamples=200,
+        reads=SpentTestBlocks(),
+    )
+    control = decide_promotion(
+        flood_table(),
         candidate=HeavyRain(),
-        baseline=Fixed(0.5),
+        baseline=HeavyRain(),
         resamples=200,
         reads=SpentTestBlocks(),
     )
 
-    assert first.promote == second.promote
-    assert first.report.test_rows == second.report.test_rows == 48
+    assert mutating.report.baseline == control.report.baseline
+    # Negative: the mutation did reach the baseline while the two shared one frame, which is
+    # what made its numbers different from the control's.
+    assert mutating.report.candidate.brier != control.report.candidate.brier
+
+
+def test_a_block_padded_with_duplicated_rows_is_refused() -> None:
+    """Negative: the completeness bar counts rows, and rows can be manufactured. Padding a
+    thinned month with copies of the one municipality that survived restores its count while
+    the municipality stays missing, so the block wears a complete year's numbers over a
+    fragment of its rows. docs/08 §M2 "Unidad" is one row per municipality and month."""
+    table = flood_table()
+    early_2025 = (table["horizon_start"] >= pd.Timestamp("2025-01-01")) & (
+        table["horizon_start"] <= pd.Timestamp("2025-03-01")
+    )
+    thinned = table.drop(index=table[early_2025].groupby("horizon_start").tail(3).index)
+    still_early = (thinned["horizon_start"] >= pd.Timestamp("2025-01-01")) & (
+        thinned["horizon_start"] <= pd.Timestamp("2025-03-01")
+    )
+    survivors = thinned[still_early].groupby("horizon_start").head(1)
+    padded = pd.concat([thinned, survivors, survivors, survivors], ignore_index=True)
+    months = pd.PeriodIndex(padded["horizon_start"], freq="M")
+
+    assert len(months[months >= pd.Period(TEST_FIRST, freq="M")].unique()) == 12
+    assert int(months.value_counts()[pd.Period("2025-01", freq="M")]) == 4, "the count is back"
+
+    with pytest.raises(ValueError, match="more than once"):
+        decide_promotion(
+            padded,
+            candidate=HeavyRain(),
+            baseline=Fixed(0.5),
+            resamples=200,
+            reads=SpentTestBlocks(),
+        )
 
 
 def test_the_read_ledger_cannot_be_omitted() -> None:
