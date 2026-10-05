@@ -85,6 +85,17 @@ Owner approved 2026-10-02.
   and `median_hours_to_first_reading` ship as `null` (missing-evidence-is-null convention) until a
   new lane lands the two `metrics_*` views plus `source_repository` methods (migration +
   frozen-port change, outside T7's surfaces). T7 closes against this decision.
+- D-T7.2 (owner, 2026-10-05) The month a cycle belongs to, for `harvested_cycles_ratio`: `crop_cycle`
+  has no close date, so the anchor is the logbook entry that **registers the closure**, dated by its
+  own `occurred_on` (the producer's date, not the sync's). A `harvest` entry registers a harvested
+  cycle's close; an `observation` with `alert_id` registers a lost cycle's close (docs/03:424).
+  Numerator = cycles with a `harvest` entry in the month; denominator = cycles with a
+  closure-registering entry in the month and `status IN (harvested, lost)`. Consequences, written
+  into docs/11 §2 by T7b and not left to inference: a `lost` cycle with no loss record belongs to no
+  month; a cycle with a registered harvest still `active` counts in neither side (the denominator is
+  "ciclos terminados"); a cycle closed by PATCH with no logbook entry is invisible to the figure.
+  All three are missing evidence, never zero. Long-term answer, out of E11's scope: `crop_cycle`
+  should carry a `closed_on` column (docs/03 + `farms`, own lane, coordinate with E10).
 - D-T9.1 (owner, 2026-10-05) T9b ships the plot section and the org section; the **cycle summary
   section is deferred**. Its endpoint needs a `crop_cycle_id` that `ActiveCycleView` does not expose
   (docs/04-api.md:64) and there is no cycle listing, so the web has no way to name a cycle; exposing
