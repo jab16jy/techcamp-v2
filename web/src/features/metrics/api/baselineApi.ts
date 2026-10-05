@@ -9,6 +9,30 @@ export type PlotBaselineInput = components['schemas']['PlotBaselineInput']
 export type IrrigationPractice = components['schemas']['IrrigationPractice']
 
 /**
+ * The four practices in the same words `PlotsList` already uses for
+ * `plot.irrigation_system`: the survey compares like with like, so a producer
+ * reading one vocabulary on the plot list and another on the form would think
+ * they were two different questions.
+ *
+ * They live beside `IrrigationPractice` rather than in the form because
+ * `react-refresh` only allows a component file to export components, and the
+ * repo's own precedent (`features/nodes/components/calibrationLabels.ts`) puts
+ * such a list in its own module — which this lane's surfaces do not include.
+ */
+export const PRACTICE_LABELS: Record<IrrigationPractice, string> = {
+  none: 'Secano',
+  drip: 'Goteo',
+  sprinkler: 'Aspersión',
+  gravity: 'Gravedad',
+}
+
+/** The Spanish word for one practice, falling back to the wire value itself so
+ * an unexpected value from the server is shown, never hidden. */
+export function practiceLabel(value: string): string {
+  return PRACTICE_LABELS[value as IrrigationPractice] ?? value
+}
+
+/**
  * The query key `queryClient.ts` documents for a persisted query: the org id
  * first, so switching organizations can never read another one's survey out of
  * the phone's cache, then the query name, then the plot it belongs to.
