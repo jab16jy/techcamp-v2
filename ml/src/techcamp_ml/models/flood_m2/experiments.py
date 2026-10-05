@@ -1,4 +1,5 @@
-"""The quasi-random search over the M2 ladder's noise hyperparameters (ADR-0020 step 6).
+"""The M2 experiment cycle: the ladder of rungs and the search over their noise
+hyperparameters (ADR-0020 steps 5-6).
 
 docs/08 §M2 "Escalera" ends at LightGBM, and the two rungs above `baselines.py` — a
 logistic regression and a booster — are the only places where hyperparameters are chosen at
@@ -22,13 +23,22 @@ Three choices are worth stating, because each of them could have been made the o
   asks for, and it is why the number of rounds is a search *result* and not a
   hyperparameter.
 
+`run_ladder` judges every rung on the same validation block and `select` picks the one the
+gate sees: the highest validation PR-AUC, with the Brier as the tie (owner, 2026-10-05).
+`pr_auc_ci95` is the interval the register carries for that score. It is not
+`harness.metrics.paired_improvement_ci95`, which is the interval of a *difference* and is
+the gate's number: the harness is locked and holds no bootstrap of an absolute PR-AUC. It
+reuses the harness's `BOOTSTRAP_SEED` and `BOOTSTRAP_RESAMPLES`, so both intervals of the
+same candidate are resamples of one rule, and it left out — rather than read as a zero — any
+resample that holds one class only.
+
 `design` is the shared feature contract and nothing else, because that is exactly what
 `harness.promotion._design` hands to `predict_proba` at the gate.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +51,16 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss
 from sklearn.pipeline import Pipeline
 from techcamp.risk.domain.features import FEATURE_NAMES
+
+from techcamp_ml.harness.metrics import BOOTSTRAP_RESAMPLES, BOOTSTRAP_SEED, Interval
+from techcamp_ml.harness.promotion import Scored
+from techcamp_ml.models.flood_m2.baselines import ClimatologyBaseline, RainfallBaseline
+
+BASELINE = "baseline"
+MODEL = "model"
+"""Which ladder a rung belongs to. The gate's `baseline` argument is the best `BASELINE` and
+its `candidate` argument is the best `MODEL`; a baseline can never be its own baseline, and
+the gate has one slot for each."""
 
 TUNING_SEED = 20261005
 """The seed of the quasi-random draws, fixed so the same register is reproduced on any
@@ -256,3 +276,161 @@ def _draw(generator: np.random.Generator) -> dict[str, Any]:
         )
         drawn[name] = int(round(value)) if name in INTEGER_HYPERPARAMETERS else value
     return drawn
+
+
+@dataclass(frozen=True, slots=True)
+class Search:
+    """One rung of the ladder, fitted and judged: the scorer and the numbers it earned.
+
+    `scorer` is the `harness.promotion.Scored` protocol, so the rung the gate receives is
+    the same object the ladder ranked, not a copy that could answer differently.
+    """
+
+    name: str
+    kind: str
+    scorer: Scored
+    pr_auc: float
+    interval: Interval
+    brier: float
+    params: Mapping[str, Any] = field(default_factory=dict)
+    note: str = ""
+
+    def score(self, features: pd.DataFrame) -> npt.NDArray[np.float64]:
+        """The positive class of the rung's two-column matrix, for a caller that wants the
+        number rather than the matrix."""
+        return positive_class(self.scorer.predict_proba(design(features)))
+
+
+def run_ladder(
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+    *,
+    trials: int = TRIALS,
+    seed: int = TUNING_SEED,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+) -> tuple[Search, ...]:
+    """Every rung of docs/08 §M2 "Escalera", judged on the same validation block.
+
+    The two baselines come first and the two models after, so the ladder is a table and not
+    a claim; the order of the result is the selection rule of `select`, best first. Train is
+    read for fitting and validation for judging, and nothing here can see the test block.
+
+    `resamples` is the register's interval budget and defaults to the harness's own; the
+    tests pass a smaller number for speed, because a fixture's interval is not a number
+    anyone is going to act on.
+    """
+    labels = validation["label"].to_numpy(dtype=np.int64)
+    rungs: list[Search] = []
+    for name, estimator in (
+        ("climatology_month", ClimatologyBaseline.fit(train)),
+        ("rainfall_6m", RainfallBaseline.fit(train)),
+    ):
+        rungs.append(
+            _scored(
+                name,
+                BASELINE,
+                estimator,
+                validation,
+                labels,
+                resamples,
+                note="fitted on train only",
+            )
+        )
+    for name, kind, scorer, trial in (
+        (
+            "logistic_regression",
+            MODEL,
+            *logistic_search(train, validation, trials=trials, seed=seed),
+        ),
+        ("lightgbm", MODEL, *lightgbm_search(train, validation, trials=trials, seed=seed)),
+    ):
+        rungs.append(
+            _scored(
+                name,
+                kind,
+                scorer,
+                validation,
+                labels,
+                resamples,
+                params=trial.params,
+                note=trial.note,
+            )
+        )
+    return tuple(sorted(rungs, key=lambda rung: (-rung.pr_auc, rung.brier)))
+
+
+def select(rungs: Sequence[Search], kind: str) -> Search:
+    """The single rung of `kind` that goes to the gate: the highest validation PR-AUC, with
+    the Brier as the tie (owner, 2026-10-05).
+
+    The tie rule matters. The gate's second rule is `Brier no peor`, so handing it the less
+    calibrated of two equally ranked rungs would let a promotion be decided on a rule that
+    had already run, and refusing it on the Brier afterwards would be the harness working
+    rather than a decision the experiment made.
+    """
+    of_kind = [rung for rung in rungs if rung.kind == kind]
+    if not of_kind:
+        raise ValueError(
+            f"the ladder holds no {kind}, only {sorted({rung.kind for rung in rungs})}; the "
+            "gate needs one baseline and one candidate, and a missing rung is not a score "
+            "of zero"
+        )
+    return min(of_kind, key=lambda rung: (-rung.pr_auc, rung.brier))
+
+
+def pr_auc_ci95(
+    labels: npt.NDArray[np.int64],
+    scores: npt.NDArray[np.float64],
+    *,
+    seed: int = BOOTSTRAP_SEED,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+) -> Interval:
+    """The PR-AUC of one rung with its bootstrap IC95, read on the same block.
+
+    Same seed and resample count as the harness, and the same rule about a resample holding
+    one class only: it is left out rather than read as a zero average precision, which would
+    drag the lower bound under a score that really happened.
+    """
+    generator = np.random.default_rng(seed)
+    values: list[float] = []
+    for _ in range(resamples):
+        rows = generator.integers(0, labels.size, labels.size)
+        sampled = labels[rows]
+        if not sampled.any() or sampled.all():
+            continue
+        values.append(pr_auc(sampled, scores[rows]))
+    if not values:
+        raise ValueError(
+            f"none of the {resamples} resamples held both classes; the block is too small "
+            "to put an interval around its average precision"
+        )
+    tail = 0.025
+    return Interval(
+        point=pr_auc(labels, scores),
+        lower=float(np.quantile(values, tail)),
+        upper=float(np.quantile(values, 1.0 - tail)),
+    )
+
+
+def _scored(
+    name: str,
+    kind: str,
+    scorer: Any,
+    validation: pd.DataFrame,
+    labels: npt.NDArray[np.int64],
+    resamples: int,
+    *,
+    params: Mapping[str, Any] | None = None,
+    note: str = "",
+) -> Search:
+    scores = positive_class(scorer.predict_proba(design(validation)))
+    return Search(
+        name=name,
+        kind=kind,
+        scorer=scorer,
+        pr_auc=pr_auc(labels, scores),
+        interval=pr_auc_ci95(labels, scores, resamples=resamples),
+        brier=brier(labels, scores),
+        params=dict(params or {}),
+        note=note,
+    )

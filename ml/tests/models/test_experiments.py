@@ -14,8 +14,19 @@ import pandas as pd
 import pytest
 from techcamp.risk.domain.features import FEATURE_NAMES
 
+from techcamp_ml.harness.metrics import BOOTSTRAP_RESAMPLES, BOOTSTRAP_SEED
 from techcamp_ml.models.flood_m2 import experiments
-from techcamp_ml.models.flood_m2.experiments import TUNING_SEED, lightgbm_search, logistic_search
+from techcamp_ml.models.flood_m2.experiments import (
+    BASELINE,
+    MODEL,
+    TUNING_SEED,
+    Search,
+    lightgbm_search,
+    logistic_search,
+    pr_auc_ci95,
+    run_ladder,
+    select,
+)
 
 TRAIN_ROWS = 240
 FIXTURE_SEED = 11
@@ -139,3 +150,94 @@ def test_both_searches_answer_the_two_column_matrix_the_gate_reads() -> None:
         assert np.isfinite(matrix).all()
         assert ((matrix >= 0.0) & (matrix <= 1.0)).all()
         assert np.allclose(matrix.sum(axis=1), 1.0)
+
+
+def test_the_ladder_holds_the_four_rungs_of_the_escalera() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=32)
+
+    assert sorted(rung.name for rung in ladder) == [
+        "climatology_month",
+        "lightgbm",
+        "logistic_regression",
+        "rainfall_6m",
+    ]
+    assert sorted(rung.kind for rung in ladder) == [BASELINE, BASELINE, MODEL, MODEL]
+
+
+def test_the_ladder_comes_back_best_first() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=32)
+
+    assert [(-rung.pr_auc, rung.brier) for rung in ladder] == sorted(
+        (-rung.pr_auc, rung.brier) for rung in ladder
+    )
+
+
+def test_a_model_that_reads_the_rain_beats_a_baseline_that_does_not() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=32)
+
+    assert select(ladder, MODEL).pr_auc > select(ladder, BASELINE).pr_auc
+
+
+def test_the_gate_gets_one_baseline_and_one_model_and_never_the_same_rung() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=32)
+    candidate, baseline = select(ladder, MODEL), select(ladder, BASELINE)
+
+    assert candidate.name != baseline.name
+    assert (candidate.kind, baseline.kind) == (MODEL, BASELINE)
+
+
+def test_a_ladder_with_no_rung_of_a_kind_is_refused_not_scored_zero() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=32)
+    models = [rung for rung in ladder if rung.kind == MODEL]
+
+    with pytest.raises(ValueError, match="no ensemble"):
+        select(models, "ensemble")
+
+
+def test_equal_pr_auc_is_broken_by_the_brier_and_not_by_the_order_of_the_ladder() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=32)
+    well = Search("well", MODEL, ladder[0].scorer, 0.5, ladder[0].interval, 0.1)
+    poorly = Search("poorly", MODEL, ladder[0].scorer, 0.5, ladder[0].interval, 0.4)
+
+    assert select([poorly, well], MODEL).name == "well"
+    assert select([well, poorly], MODEL).name == "well"
+
+
+def test_the_validation_interval_brackets_the_score_it_was_read_from() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=64)
+    rung = ladder[0]
+
+    assert rung.interval.lower <= rung.pr_auc <= rung.interval.upper
+    assert rung.interval.point == pytest.approx(rung.pr_auc)
+
+
+def test_the_register_interval_uses_the_harness_seed_and_resample_count() -> None:
+    """The gate's interval and the register's are resamples of one rule: the harness is
+    locked and holds no bootstrap of an absolute PR-AUC."""
+    assert experiments.BOOTSTRAP_SEED is BOOTSTRAP_SEED
+    assert experiments.BOOTSTRAP_RESAMPLES is BOOTSTRAP_RESAMPLES
+    labels = np.array([0, 1] * 20, dtype=np.int64)
+    scores = np.linspace(0.0, 1.0, labels.size)
+
+    assert pr_auc_ci95(labels, scores, resamples=200) == pr_auc_ci95(labels, scores, resamples=200)
+
+
+def test_a_block_with_no_positives_has_no_interval() -> None:
+    labels = np.zeros(40, dtype=np.int64)
+    scores = np.linspace(0.0, 1.0, 40)
+
+    with pytest.raises(ValueError, match="too small"):
+        pr_auc_ci95(labels, scores, resamples=8)
+
+
+def test_every_rung_answers_the_two_column_matrix_the_gate_reads() -> None:
+    ladder = run_ladder(train_frame(), validation_frame(), resamples=16)
+    gate_frame = experiments.design(validation_frame())
+
+    for rung in ladder:
+        matrix = np.asarray(rung.scorer.predict_proba(gate_frame))
+        assert matrix.shape == (80, 2)
+        assert np.isfinite(matrix).all()
+        assert ((matrix >= 0.0) & (matrix <= 1.0)).all()
+        assert np.allclose(matrix.sum(axis=1), 1.0)
+        assert np.array_equal(matrix[:, 1], rung.score(validation_frame()))
