@@ -129,9 +129,13 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
   `74a1e77a…`); fix `under_budget` without lineage (terminal disposition); follow-up #251
   (6 WARNING, #1 fixed in `e8d975b`); report `../e11-briefs/e11-t5-rdd.md`. Merged `e04cde3`;
   worktree/rama/DB de `e11-t5` eliminados.
-- [ ] T6 Monthly job (day 1, 02:00; cycles then index; per-plot containment) +
-  `/dev/jobs/metrics:run` + worker registration + periodic-schedule test. ~200. Route: Herdr
-  OpenCode. Depends T4, T5.
+- [x] T6 Monthly job (day 1, 02:00; cycles then index; per-plot containment) +
+  `/dev/jobs/metrics:run` + worker registration + periodic-schedule test. Route: Herdr
+  OpenCode. Depended T4, T5. Commit `a207c95` (single work unit: jobs 265 + dev trigger 56 +
+  worker/main +2/+2, tests 402). Evidence: `just gate server/tests/metrics` 194 passed (lane
+  and epic branch after merge); RDD `review-a6aca8f6f1f43b9c` (reliability, 1 WARNING
+  `R3-DATE-MIN`, approved, authority burned); follow-up #252; report
+  `../e11-briefs/e11-t6-rdd.md`. Merged `1765cf5`; worktree/rama/DB de `e11-t6` eliminados.
 - [ ] T7 Metrics read API: plot metrics, cycle summary, org metrics (D-T0.10, D-T0.12). ~350.
   Route: Herdr OpenCode. Depends T4, T5. Parallel with T6, T8.
 - [x] T8 `/status` index from `metrics` (D-T0.13). Route: Herdr OpenCode (quick lane).
@@ -364,6 +368,19 @@ Rung by Pi (host-relay), base-ref exclusivo `442ef91`. Surface delta declarada (
 en `home/application/__init__.py`): in-scope por convención del módulo, sin flag del revisor.
 Full report: `../e11-briefs/e11-t8-rdd.md`.
 
+### T6 — lineage `review-a6aca8f6f1f43b9c`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | Work unit único `a207c95`, 6 paths (jobs, dev trigger, worker, main, 2 tests) |
+| Lente | `review-reliability`, 1 WARNING (`R3-DATE-MIN`: dev trigger acepta `0001-01-01`, el worker desborda; solo ese borde absurdo, el cron 02:00 nunca lo recibe) |
+| Recibo | `terminal-consumption/v1`, target `sha256:3315cf1c…`, lineage `review-a6aca8f6f1f43b9c` |
+| Follow-up | Issue #252 (`review-follow-up`, `epic:e11`, `area:server`, `type:bug`) con el WARNING |
+| Merge | `1765cf5` a `feat/e11-metrics`; gate post-merge 194 verde |
+
+Rung by Pi (host-relay), base-ref exclusivo full `442ef91…`. Full report:
+`../e11-briefs/e11-t6-rdd.md` (+ findings JSON pre-burn).
+
 ## Progress
 - 2026-10-02: worktree `../techcamp-v2-worktrees/e11-metrics` (`feat/e11-metrics` from
   `origin/main` a2bae6b), CodeGraph index, DB `techcamp-db-e11-metrics`. Explorers (Herdr
@@ -380,12 +397,13 @@ Full report: `../e11-briefs/e11-t8-rdd.md`.
 
 - 2026-10-05: T8 merged (`997a016`): review `review-727e456fcf63bb7d` approved + burned with
   0 findings, no follow-up issue, report `../e11-briefs/e11-t8-rdd.md`; gate post-merge green.
-- 2026-10-05: T6 lane done (single commit `a207c95`, gates green): Pi RDD delegated. T7 lane
-  partially done (plot metrics + cycle summary in `00869b8`/`21d909e`): org-metrics endpoint
-  stopped on a frozen-store gap, owner decision pending (see Next step).
+- 2026-10-05: T6 merged (`1765cf5`): review `review-a6aca8f6f1f43b9c` approved + burned with
+  1 WARNING, issue #252, report `../e11-briefs/e11-t6-rdd.md`; gate post-merge 194 green; lane
+  removed (worktree+rama+DB).
+- 2026-10-05: T7 lane partially done (plot metrics + cycle summary in `00869b8`/`21d909e`):
+  org-metrics endpoint stopped on a frozen-store gap, owner ruled D-T7.1 (partial + new lane),
+  writer resumed.
 
 ## Next step
-T8 merged. T6 in Pi RDD. T7 blocked on owner call: `GET /organizations/{org_id}/metrics` cannot
-compute `harvested_cycles_ratio` (no cycle listing in any frozen store) ni
-`median_hours_to_first_reading` (node-month readings carry counts, never a first instant) —
-both need a new lane (migration + frozen-port change). Then Wave 5: T9b (T9a still pending).
+T8 merged. T6 merged (#252 filed). T7 resumed under D-T7.1 (partial OrgMetrics + follow-up
+lane for the 2 views); its RDD runs when its lane closes. Then Wave 5: T9b (T9a still pending).
