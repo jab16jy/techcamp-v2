@@ -177,8 +177,38 @@ own worktree + branch + `just db-up` + CodeGraph index, branched from `feat/e11-
   D-T0.1/0.2/0.13. RDD `review-727e456fcf63bb7d` (reliability, 0 findings, approved,
   authority burned); no follow-up issue; report `../e11-briefs/e11-t8-rdd.md`. Merged `997a016`;
   worktree/rama/DB de `e11-t8` eliminados.
-- [ ] T9a Web enrollment survey form in plot detail (`impeccable`). ~300. Route: Herdr OpenCode.
-  Depends T2.
+- [x] T9a Web enrollment survey form in plot detail (`impeccable`). Route: Herdr OpenCode.
+  Depended T2. Commits after two re-slices: `76b0bb2` (hooks + tests), `2cad26c` (labels refactor),
+  `913f4af` (form + tests), `4cce335` (container + tests), `01d3b0f` (plot-detail wiring),
+  `a568170` (impeccable craft-floor fixes), `6591b10` (post-review correction, `Refs #256`).
+  Re-slice: a 433-line unit split into container vs wiring (D-T4.3), no test dropped. Evidence:
+  scoped gate 59 → 80 tests, `gate-lane` green; RDD round 1 `review-4841c8fbfc1e4a9b` (6
+  non-blocking: 3 WARNING, 3 SUGGESTION) and round 2 `review-b1b05bc901e23575` over the corrected
+  lane (approved + burned, 3 WARNING confirmed resolved, 2 new SUGGESTION); follow-up #256; report
+  `../e11-briefs/e11-t9a-rdd.md`. Merged `5fd0479`; worktree/rama/DB eliminados.
+
+### T9a — rounds `review-4841c8fbfc1e4a9b` + `review-b1b05bc901e23575`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | 9 paths de la lane, 7 commits, ~1183 líneas; round 2 = el mismo scope más la corrección `6591b10` |
+| Lente | `review-reliability` en ambas rondas, medium, budget 200 |
+| Round 1 | 6 no bloqueantes: 3 WARNING (`R3-001` sin `role="alert"`, `R3-002` todo 422 como cultivo desconocido, `R3-003` catálogo caído = submit muerto), 3 SUGGESTION |
+| Round 2 | Los 3 WARNING **confirmados resueltos**; 2 SUGGESTION nuevos (ramas de cargando/vacío del blocker sin test; blocker no condicionado al rol) |
+| Follow-up | #256 con los 3 SUGGESTION de r1 + los 2 de r2; los 3 WARNING corregidos en `6591b10` (`Refs #256`) |
+| Merge | `5fd0479` |
+
+**El pase completo de impeccable_no es decorativo.** Corregido por el skill, no por el review: el
+párrafo de error sin `role="alert"` (pasa jsdom y es mudo para un lector de pantalla), el `detail`/
+`code` crudo del servidor filtrado a la copy del productor, y el cambio a `Intl.DateTimeFormat` que
+casi mete un off-by-one (`new Date('2026-01-15')` es medianoche UTC, todavía el 14 en Bogotá).
+
+**Proceso (desviación, menor).** El consent del round 2 locessive el dueño en el pane de Pi en vez de
+pasar por el canal del orquestador (D-T4.2); el owner lo Isk Altijd“王”·atizou después a pedido
+mío, con lo cual la procedencia queda curada como en T4/T5. El reviewer sí verificó el candidato
+ANTES de ejecutar la invocación exacta (base tree `04deb666…` = `edf176be^{tree}`, candidate tree =
+`HEAD^{tree}`, 9 paths, aritmética del diff) y **rechazó dos targets erróneos** que le trajo el
+preflight por no ser ancestros del base.
 - [x] T9b Web indicators screen + index line on Inicio (`impeccable`). Route: Herdr OpenCode.
   Depended T7, T8 (waves collapsed). Commits after re-slice: `f2d378e` (hooks + test),
   `7270d60` (figures as ruled rows), `876de18` (screen), `06ed187` (route under Más),
@@ -486,6 +516,11 @@ Full report: `../e11-briefs/e11-t9b-rdd.md`.
 - 2026-10-05: T9b merged (`228666d`): review `review-4b39d1bd807fbd23` approved + burned, 0 native
   findings; owner kept the `CACHE_BUSTER` bump over the reviewer's revert recommendation; F2 fixed
   in-lane (`8155512`); issue #255; report `../e11-briefs/e11-t9b-rdd.md`.
+
+- 2026-10-05: T9a merged (`5fd0479`): two review rounds approved + burned
+  (`review-4841c8fbfc1e4a9b`, then `review-b1b05bc901e23575` over the corrected lane); the 3 WARNING
+  fixed in-lane with `Refs #256`; the 5 SUGGESTION collected in #256; report
+  `../e11-briefs/e11-t9a-rdd.md`. **T9 closed (T9a + T9b).**
 
 ## Next step
 T9b merged. T9a is finishing its impeccable craft-floor pass (its first run skipped
