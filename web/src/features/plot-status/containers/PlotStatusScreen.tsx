@@ -27,8 +27,9 @@ import {
  * plot with its crop, the day's decision, the open alerts, the soil moisture and
  * three-day forecast, and the sync and node state.
  *
- * `digital_adoption_index` is not rendered: it is `null` until E11 computes it
- * (D-T0.2), and a tile for a value that never arrives is a lie about the data.
+ * `digital_adoption_index` is rendered as the discreet line docs/07:152 asks
+ * for, right under the crop line, and nothing at all when it is `null` — a tile
+ * for a value that never arrives is a lie about the data.
  */
 export function PlotStatusScreen() {
   const orgId = useOrgId()
@@ -130,6 +131,10 @@ export function PlotStatusScreen() {
           <PlotHeader
             plotName={status?.plot.name ?? activePlot.plotName ?? ''}
             cycleLine={status ? cycleLine(status.active_cycle) : null}
+            // `?? null` because a persisted `/status` from a build older than T8
+            // restores without the field at all, and `undefined` is not the
+            // absence the header reads for.
+            adoptionIndex={status?.digital_adoption_index ?? null}
           />
           {statusQuery.isPending && (
             <p className="mt-4 px-4 text-base text-text-muted">Cargando el estado de la parcela…</p>
