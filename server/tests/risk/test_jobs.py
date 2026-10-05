@@ -12,23 +12,28 @@ from __future__ import annotations
 
 import datetime
 import importlib
-from collections.abc import Mapping
+import logging
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import techcamp.risk.adapters.api.dev_jobs as dev_jobs_module
 import techcamp.risk.adapters.jobs as jobs_module
+from techcamp.alerts.adapters.evaluate_risk import build_risk_evaluation
+from techcamp.alerts.adapters.orm import AlertRow, AlertRuleRow
+from techcamp.alerts.application import PredictionEvidence
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import OrganizationRow
 from techcamp.main import app
 from techcamp.risk.adapters.jobs import (
     QUEUE_NAME,
     RUN_ACTIVE_CELLS_TASK_NAME,
+    AlertEvaluationFactory,
     predict_active_cells,
 )
 from techcamp.risk.adapters.open_meteo_archive import seminar_archive_adapter
@@ -68,6 +73,7 @@ def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     R3-wall-clock-dependent-job-tests)."""
     monkeypatch.setattr(jobs_module, "local_today", lambda: _FROZEN_TODAY)
     monkeypatch.setattr(dev_jobs_module, "local_today", lambda: _FROZEN_TODAY)
+    _EVALUATED.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -112,12 +118,79 @@ class _FixedPredictor:
         )
 
 
+_EVALUATED: list[tuple[datetime.datetime, tuple[PredictionEvidence, ...]]] = []
+"""What the run handed the evaluation, one entry per run. Cleared per test by
+`_frozen_clock`, so nothing depends on the order the tests ran in."""
+
+
+class _RecordingEvaluation:
+    """The model-rule evaluation double: it records what the run handed it, so a
+    test can tell "the run wrote predictions" from "the run decided alerts"."""
+
+    async def __call__(
+        self, *, at: datetime.datetime, predictions: Sequence[PredictionEvidence]
+    ) -> None:
+        _EVALUATED.append((at, tuple(predictions)))
+
+
+def _recording_evaluation(session: AsyncSession) -> _RecordingEvaluation:
+    """The factory the composition root injects, answering the double."""
+    return _RecordingEvaluation()
+
+
+class _RaisingPredictor:
+    """A predictor that never answers: one event's artifact fails to load.
+
+    Registered for a single event, so the cell stores the other event's prediction
+    first and then fails on this one (`EventType` walks flood before drought).
+    """
+
+    def predict(
+        self, version: ModelVersion, features: Mapping[str, float | None]
+    ) -> PredictionOutcome:
+        raise RuntimeError("the model artifact is corrupt")
+
+
+class _FlakyOnce:
+    """The alert evaluation that fails its first call and delegates every call
+    after it, the way procrastinate's `max_attempts=2` retry sees it.
+
+    One instance for every run of the job (a test hands the same one to the
+    factory), because a retry is a second call of a process that is still up.
+    """
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self.failed = False
+
+    async def __call__(
+        self, *, at: datetime.datetime, predictions: Sequence[PredictionEvidence]
+    ) -> None:
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("the alert write failed")
+        await self._inner(at=at, predictions=predictions)  # type: ignore[operator]
+
+
+async def _alerts_of_plot(db_session: AsyncSession, plot_id: UUID) -> list[tuple[str, str, str]]:
+    rows = (
+        await db_session.execute(
+            select(AlertRuleRow.code, AlertRow.state, AlertRow.severity)
+            .join(AlertRow, AlertRow.rule_id == AlertRuleRow.id)
+            .where(AlertRow.plot_id == plot_id)
+            .order_by(AlertRuleRow.code)
+        )
+    ).all()
+    return [(code, state, severity) for code, state, severity in rows]
+
+
 def _use_doubles(
     monkeypatch: pytest.MonkeyPatch,
     *,
     with_predictors: bool = True,
     with_cells: bool = True,
     predictors: PredictorRegistry | None = None,
+    alert_evaluation: AlertEvaluationFactory = _recording_evaluation,
 ) -> None:
     if with_cells:
         # The composition root does this in `techcamp/worker.py`
@@ -125,6 +198,10 @@ def _use_doubles(
         # finds the seam configured never depends on the order they ran in (#240
         # R3-global-seam-leak).
         monkeypatch.setattr(jobs_module, "_weather_cells", SqlAlchemyWeatherRepository)
+    # Same seam for the model rules (docs/06 §8 "Alertas"), by default a double:
+    # the alerts themselves are `tests/alerts/test_risk_rules.py`, and the test
+    # below is the one that runs the real composition.
+    monkeypatch.setattr(jobs_module, "_alert_evaluation", alert_evaluation)
     monkeypatch.setattr(jobs_module, "_archive", lambda: seminar_archive_adapter())
     monkeypatch.setattr(
         jobs_module,
@@ -319,6 +396,178 @@ async def test_a_run_without_a_configured_cell_reader_fails_loudly(
         await predict_active_cells(timestamp=0, day=_DAY.isoformat())
 
     assert await _stored(db_session) == []
+
+
+async def test_the_run_hands_the_predictions_it_wrote_to_the_alert_evaluation(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """docs/06-diseno-detallado.md §8: "después de escribir las predicciones" the
+    rules are evaluated, in the SAME run and over the predictions stored for the
+    month that run predicted. The month, not the run's own insert: a rerun of a
+    month already predicted writes nothing (docs/06 §8) and still has to decide
+    the stored rows, or the alert of that month is lost when the first attempt's
+    alert step is what failed."""
+    _use_doubles(monkeypatch)
+    cell_id = await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood", "risk_drought")
+
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert len(_EVALUATED) == 2
+    first_run = _EVALUATED[0][1]
+    assert {prediction.event for prediction in first_run} == {"flood", "drought"}
+    assert {prediction.cell_id for prediction in first_run} == {cell_id}
+    assert {prediction.severity.value for prediction in first_run} == {"high", "low"}
+    # The second run of the same month stored nothing and decided the same rows.
+    assert _EVALUATED[1][1] == first_run
+
+
+async def test_a_cell_that_fails_after_it_stored_a_row_alerts_on_the_row_it_stored(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#242 R3-rollback-leaves-written-count-inflated against the REAL repository:
+    `insert_prediction` commits every row of its own
+    (`risk/adapters/repositories.py:163`), so the cell's rollback does not undo the
+    flood row stored before the drought predict raised. That row is written, it is
+    stored, and it is what the alert is decided on — dropping it from either count
+    lost both the count and the alert."""
+    caplog.set_level(logging.INFO)
+    _use_doubles(
+        monkeypatch,
+        predictors=PredictorRegistry(
+            {
+                ("risk_flood", _VERSION): _FixedPredictor(0.82),
+                ("risk_drought", _VERSION): _RaisingPredictor(),
+            }
+        ),
+        alert_evaluation=build_risk_evaluation,
+    )
+    cell_id = await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood", "risk_drought")
+    plot_id = (
+        await db_session.execute(select(PlotRow.id).where(PlotRow.weather_cell_id == cell_id))
+    ).scalar_one()
+
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert await _stored(db_session) == [(cell_id, "flood", datetime.date(2026, 10, 1), "high")]
+    assert "risk: 1 predictions for 2026-10-01" in caplog.text
+    assert await _alerts_of_plot(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+
+async def test_a_retried_run_opens_the_alert_the_failed_attempt_left_undecided(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The job retries (`RetryStrategy(max_attempts=2)`, ADR-0012) and the retry
+    re-runs everything: the predictions are already stored, so the run writes
+    nothing — and evaluating only what this attempt inserted would leave that
+    month with no alert at all, lost in silence (docs/06 §8 "Alertas"). The stored
+    rows of the month are what both attempts decide, and `open_alert` is
+    idempotent, so the second one opens what the first could not."""
+    flaky = _FlakyOnce(build_risk_evaluation(db_session))
+    _use_doubles(monkeypatch, alert_evaluation=lambda _session: flaky)
+    cell_id = await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood")
+    plot_id = (
+        await db_session.execute(select(PlotRow.id).where(PlotRow.weather_cell_id == cell_id))
+    ).scalar_one()
+
+    with pytest.raises(RuntimeError, match="the alert write failed"):
+        await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+    assert await _alerts_of_plot(db_session, plot_id) == []
+
+    # The retry: the prediction is already stored, so nothing new is written.
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert await _stored(db_session) == [(cell_id, "flood", datetime.date(2026, 10, 1), "high")]
+    assert await _alerts_of_plot(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+
+async def test_a_second_run_of_the_same_month_opens_no_second_alert(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression fix 2 opened: every run of a month hands the same stored
+    prediction over, so a second run that decided it again would put a second
+    `flood_risk` alert on the plot — and after a day of that, a farmer closing one
+    by hand would see the next morning reopen it (docs/06 §3 "cierre manual").
+
+    docs/06 §3: una sola alerta abierta por (`rule_id`, `plot_id`), and a decision
+    taken from a prediction is taken once."""
+    _use_doubles(monkeypatch, alert_evaluation=build_risk_evaluation)
+    cell_id = await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood", "risk_drought")
+    plot_id = (
+        await db_session.execute(select(PlotRow.id).where(PlotRow.weather_cell_id == cell_id))
+    ).scalar_one()
+
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert await _alerts_of_plot(db_session, plot_id) == [("flood_risk", "open", "critical")]
+
+
+async def test_the_run_opens_the_model_alert_of_the_cell_it_predicted(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole path over real repositories: the run writes the predictions and
+    the same run opens `flood_risk` on the plot of the cell, because 0.82 clears
+    `{high: 0.7}` (docs/08-ml.md §M2 "Severidad"), while the drought prediction of
+    0.2 is `low` and opens nothing (docs/06-diseno-detallado.md §8 "Alertas")."""
+    _use_doubles(monkeypatch, alert_evaluation=build_risk_evaluation)
+    cell_id = await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood", "risk_drought")
+    plot_id = (
+        await db_session.execute(select(PlotRow.id).where(PlotRow.weather_cell_id == cell_id))
+    ).scalar_one()
+
+    await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    rows = (
+        await db_session.execute(
+            select(AlertRuleRow.code, AlertRow.state, AlertRow.severity)
+            .join(AlertRow, AlertRow.rule_id == AlertRuleRow.id)
+            .where(AlertRow.plot_id == plot_id)
+            .order_by(AlertRuleRow.code)
+        )
+    ).all()
+    assert [(code, state, severity) for code, state, severity in rows] == [
+        ("flood_risk", "open", "critical")
+    ]
+
+
+async def test_a_run_without_a_configured_alert_evaluation_fails_loudly(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other composition seam, for the same reason as the cell reader: without
+    it the run writes predictions that never become an alert, which is exactly the
+    gap docs/06 §8 "Alertas" closes (docs/05-arquitectura.md §Solo la fachada
+    pública)."""
+    _use_doubles(monkeypatch)
+    monkeypatch.setattr(jobs_module, "_alert_evaluation", None)
+    await _cell_with_plot(db_session, lat="10.9", lon="-74.1")
+    await _register_versions(db_session, "risk_flood")
+
+    with pytest.raises(RuntimeError, match="configure_alert_evaluation"):
+        await predict_active_cells(timestamp=0, day=_DAY.isoformat())
+
+    assert await _stored(db_session) == []
+
+
+async def test_the_worker_composes_the_alert_evaluation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`techcamp/worker.py` is the composition root (docs/05-arquitectura.md §Solo
+    la fachada pública), so the real builder has to be injected from there: a
+    builder injected nowhere is a run that predicts and never alerts."""
+    import techcamp.worker as worker
+
+    monkeypatch.setattr(worker.app, "run_worker", lambda **kwargs: None)
+
+    worker.main()
+
+    assert jobs_module._alert_evaluation is build_risk_evaluation
 
 
 async def test_the_worker_runs_the_risk_queue(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -14,6 +14,8 @@ served another cell's risk.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from datetime import date
 from typing import Any
 
 from sqlalchemy import Row, case, select
@@ -162,6 +164,38 @@ class SqlAlchemyRiskRepository:
         )
         await self._session.commit()
         return result.scalar_one_or_none() is not None
+
+    async def stored_predictions(
+        self,
+        *,
+        horizon_start: date,
+        cell_ids: Sequence[int],
+        model_version_ids: Sequence[uuid.UUID],
+    ) -> list[RiskPrediction]:
+        """The stored predictions of one month, over `cell_ids` and the served
+        versions.
+
+        One read for the whole month, the shape `active_cells` already has on the
+        weather side: a `risk_prediction` belongs to a cell and not to an
+        organization (docs/03-modelo-datos.md §`risk_prediction`), and the fan-out
+        that keeps every alert inside an organization is the one the caller does
+        after this — the plots of each organization, filtered to their own cell.
+
+        Ordered by cell and event so two runs of the same month hand the caller the
+        same rows in the same order.
+        """
+        if not cell_ids or not model_version_ids:
+            return []
+        result = await self._session.execute(
+            select(*_PREDICTION_COLUMNS)
+            .where(
+                RiskPredictionRow.horizon_start == horizon_start,
+                RiskPredictionRow.cell_id.in_(cell_ids),
+                RiskPredictionRow.model_version_id.in_(model_version_ids),
+            )
+            .order_by(RiskPredictionRow.cell_id, RiskPredictionRow.event_type)
+        )
+        return [_prediction_from_row(row) for row in result]
 
     async def latest_prediction(
         self, cell_id: int, event_type: EventType, model_version_id: uuid.UUID

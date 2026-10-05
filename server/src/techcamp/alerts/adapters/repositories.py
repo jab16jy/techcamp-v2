@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, Row, case, func, or_, select, text, update
+from sqlalchemy import CursorResult, Row, and_, case, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -32,7 +32,9 @@ from techcamp.alerts.domain.models import (
     AlertRuleChanges,
     AlertState,
     InvalidAlertTransitionError,
+    PredictionEvidence,
     Severity,
+    prediction_identity,
 )
 from techcamp.farms.adapters.orm import FarmRow, PlotRow
 from techcamp.identity.adapters.orm import MembershipRow
@@ -112,6 +114,65 @@ class SqlAlchemyAlertRepository:
         else:
             stmt = stmt.where(AlertRow.node_id == node_id, AlertRow.plot_id.is_(None))
         result = await self._session.execute(stmt)
+        row = result.one_or_none()
+        return _alert_from_row(row) if row is not None else None
+
+    async def get_decided_for_target(
+        self,
+        *,
+        rule_id: UUID,
+        org_id: UUID,
+        plot_id: UUID,
+        prediction: PredictionEvidence,
+        exclude_alert_id: UUID | None = None,
+    ) -> Alert | None:
+        """The alert that already decided `prediction` for this (rule, plot),
+        resolved ones included, other than the one the caller excludes.
+
+        `evidence.contains(...)` is JSONB containment: the stored object has to
+        hold the keys asked for, and may hold more, so the identity is matched
+        without a column of its own.
+
+        The second branch is the alert that was already OPEN when the prediction
+        was issued — its own `opened_at`..`resolved_at` window contains
+        `issued_at`. That is the decision that left no record (the open alert
+        answered the prediction with NO_ACTION), and it is the branch that keeps a
+        manual close final: after the alert is resolved, the window still says the
+        prediction was judged while it was open.
+
+        `exclude_alert_id` is the alert the caller is deciding about RIGHT NOW.
+        That alert is the one that absorbed this prediction and is also the one a
+        RESOLVE has to reach, and it matches this very predicate — so without the
+        exclusion a legitimate resolve is suppressed by the record of the
+        NO_ACTION it absorbed (#246), and WITH it, a replayed row still finds the
+        OTHER alerts that already decided it (#247).
+
+        `(rule_id, plot_id)` with the organization is the scope of the partial
+        index (docs/09 §Seguridad), so no row of another organization is a
+        candidate and a node alert, which carries no `plot_id`, never matches.
+        """
+        stmt = (
+            select(*_ALERT_COLUMNS, _RULE_CODE)
+            .join(AlertRuleRow, AlertRuleRow.id == AlertRow.rule_id)
+            .where(
+                AlertRow.rule_id == rule_id,
+                AlertRow.org_id == org_id,
+                AlertRow.plot_id == plot_id,
+                or_(
+                    AlertRow.evidence.contains(prediction_identity(prediction)),
+                    and_(
+                        AlertRow.opened_at <= prediction.issued_at,
+                        or_(
+                            AlertRow.resolved_at.is_(None),
+                            AlertRow.resolved_at >= prediction.issued_at,
+                        ),
+                    ),
+                ),
+            )
+        )
+        if exclude_alert_id is not None:
+            stmt = stmt.where(AlertRow.id != exclude_alert_id)
+        result = await self._session.execute(stmt.limit(1))
         row = result.one_or_none()
         return _alert_from_row(row) if row is not None else None
 

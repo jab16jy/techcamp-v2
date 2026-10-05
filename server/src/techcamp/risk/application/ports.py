@@ -74,6 +74,30 @@ class RiskRepository(Protocol):
 
     async def insert_prediction(self, prediction: RiskPrediction) -> bool: ...
 
+    async def stored_predictions(
+        self,
+        *,
+        horizon_start: date,
+        cell_ids: Sequence[int],
+        model_version_ids: Sequence[uuid.UUID],
+    ) -> list[RiskPrediction]:
+        """The predictions stored for one month, over these cells, with any of
+        these served versions.
+
+        Read back instead of remembered, because what the alert rules need is the
+        MONTH and not one run's own insert: la predicción de una celda, evento y
+        mes se escribe una vez (docs/06-diseno-detallado.md §8), so every run
+        after the first writes nothing, and the caller that evaluated only the
+        rows its own attempt inserted would leave that month without an alert
+        whenever the attempt that failed was the alert step (the job retries,
+        ADR-0012).
+
+        `model_version_ids` is the served version of each event, so a month that a
+        promotion later predicted again brings back the row of the version being
+        served, which is the one `GET /plots/{plot_id}/risk` shows too.
+        """
+        ...
+
     async def latest_prediction(
         self, cell_id: int, event_type: EventType, model_version_id: uuid.UUID
     ) -> RiskPrediction | None: ...
@@ -101,7 +125,11 @@ class CellTransactions:
     **Rollback before continuing.** A statement the database rejected leaves its
     transaction aborted, and every later statement of an aborted transaction fails
     too — so after a cell's failure the run undoes it and keeps going with the
-    next one instead of failing every cell after it.
+    next one instead of failing every cell after it. What that rollback does NOT
+    undo is what was already committed: `SqlAlchemyRiskRepository.insert_prediction`
+    commits every row of its own, so the rows a cell stored before it failed are
+    stored, are counted as written, and are what the alerts are decided on (#242
+    `R3-rollback-leaves-written-count-inflated`).
     """
 
     commit: Callable[[], Awaitable[None]]
