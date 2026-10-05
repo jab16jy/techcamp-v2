@@ -301,7 +301,7 @@ def s3_client() -> Any:
         region_name=s3_region(),
         aws_access_key_id=s3_access_key(),
         aws_secret_access_key=s3_secret_key(),
-        config=Config(signature_version="s3v4", s={"addressing_style": "path"}),
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
 
 

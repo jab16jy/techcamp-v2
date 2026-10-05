@@ -27,6 +27,7 @@ import pandas as pd
 import pytest
 from techcamp.risk.domain.features import seasonality
 from techcamp.risk.domain.models import ModelVersion
+from techcamp.shared.config import s3_internal_url, s3_public_url
 
 from techcamp_ml.datasets.flood_m2 import DATASET_NAME, MANIFEST_NAME
 from techcamp_ml.models.flood_m2 import anomalies, gate_run, registration
@@ -427,3 +428,38 @@ def test_a_refused_run_answers_1_and_explains_itself(
 
     assert registration.main([], layout=layout) == 1
     assert "gate" in capsys.readouterr().err
+
+
+def test_the_real_s3_client_is_built_path_style_and_against_the_configured_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The uploader itself, built for real, because every other test doubles it.
+
+    A client that is never constructed cannot fail to construct: `botocore` rejects an
+    unknown `Config` keyword at build time, and this client is only ever built by the CLI
+    against a real bucket. Pinning it here is what turns "the run against MinIO raised
+    `TypeError: Got unexpected keyword argument`" into a unit failure. No request is sent:
+    constructing a client opens no connection.
+    """
+    monkeypatch.setenv("TECHCAMP_S3_PUBLIC_URL", "http://minio.test:9000")
+    monkeypatch.setenv("TECHCAMP_S3_BUCKET", "logbook-photos")
+
+    client = registration.s3_client()
+
+    assert client.meta.endpoint_url == "http://minio.test:9000"
+    # Path style, or a virtual-hosted URL would hand the emulator a host that does not
+    # resolve (`logbook-photos.localhost:9000`); SigV4, which is what the store signs.
+    assert client.meta.config.s3["addressing_style"] == "path"
+    assert client.meta.config.signature_version == "s3v4"
+
+
+def test_the_client_the_registry_will_read_is_never_the_public_one() -> None:
+    """The negative of the endpoint decision, stated where the uploader is built.
+
+    `ml/` runs on the developer's host, outside the compose network, so the PUBLIC url is
+    the one that reaches the store from here. The worker that later reads the same object
+    goes through `s3_internal_url()` instead, because inside a container `localhost` is
+    the container (D-T9.5).
+    """
+    assert s3_public_url().startswith("http://localhost:9000")
+    assert s3_internal_url().startswith("http://minio:9000")
