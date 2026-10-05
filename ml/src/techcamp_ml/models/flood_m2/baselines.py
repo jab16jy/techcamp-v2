@@ -153,16 +153,9 @@ class RainfallBaseline:
         floods = np.bincount(
             bins, weights=train["label"].to_numpy(dtype=np.float64), minlength=reachable
         )
-        empty = [int(index) for index, count in enumerate(counts) if count == 0]
-        if empty:
-            raise ValueError(
-                f"the {reachable} rainfall bins of train left {len(empty)} of them with no "
-                f"row, the first being bin {empty[0]}; an empty bin has no frequency and the "
-                "rule would answer 0.0 — 'this rain never floods' — for rain nobody has seen"
-            )
         return cls(
             edges=edges,
-            frequencies=np.maximum.accumulate(floods / counts),
+            frequencies=_frequencies(counts, floods, reachable),
             imputer=imputer,
         )
 
@@ -174,6 +167,32 @@ class RainfallBaseline:
 
     def predict_proba(self, features: pd.DataFrame) -> npt.NDArray[np.float64]:
         return probabilities(self.score(features))
+
+
+def _frequencies(
+    counts: npt.NDArray[np.int64], floods: npt.NDArray[np.float64], reachable: int
+) -> npt.NDArray[np.float64]:
+    """The rule's frequency per bin, in order, never falling as the rain rises.
+
+    A bin train never held has no frequency of its own, and answering it `0.0` would be
+    "this rain never floods" — a claim about rain nobody has seen. It borrows the wettest
+    bin that does hold evidence, which is the nearest answer at or above it; the
+    `maximum.accumulate` then flattens the whole table into "more rain, never less risk".
+
+    The empty bins are real whenever the quantile edges collapse, which is what happens when
+    train holds fewer distinct accumulations than bins — two distinct totals and five bins
+    is the ordinary case, not the exotic one. That is also why `fit` does not refuse them:
+    a rule that cannot be fitted at all is worse than one that borrows.
+    """
+    occupied = np.flatnonzero(counts)
+    if occupied.size == 0:
+        raise ValueError(
+            f"no rainfall bin of the {reachable} holds a row of train; the rule has no "
+            "evidence to answer with, which is a guess and not a baseline"
+        )
+    position = np.minimum(np.searchsorted(occupied, np.arange(reachable)), occupied.size - 1)
+    borrowed = occupied[position]
+    return np.maximum.accumulate(floods[borrowed] / counts[borrowed])
 
 
 def _require(features: pd.DataFrame, columns: tuple[str, ...]) -> None:

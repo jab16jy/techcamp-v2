@@ -206,3 +206,17 @@ def test_a_train_block_with_no_rainfall_at_all_is_refused() -> None:
 
     with pytest.raises(ValueError, match="no bin to"):
         RainfallBaseline.fit(frame)
+
+
+def test_a_bin_train_never_held_borrows_the_next_bin_that_has_evidence() -> None:
+    """Two distinct accumulations and five bins is the ordinary case, not the exotic one:
+    the quantile edges collapse and the driest bin is left with no row of train. Its answer
+    is the next bin's frequency, never a 0.0 that would read as "this rain never floods"."""
+    frame = _features([5] * 6, [0.0, 0.0, 0.0, 700.0, 700.0, 700.0], [1, 0, 0, 1, 1, 0])
+
+    baseline = RainfallBaseline.fit(frame)
+    scores = baseline.score(frame)
+
+    assert len(baseline.frequencies) == 3
+    assert baseline.frequencies[0] == pytest.approx(1 / 3)
+    assert list(scores) == [pytest.approx(1 / 3)] * 3 + [pytest.approx(2 / 3)] * 3
