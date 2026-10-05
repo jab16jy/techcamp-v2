@@ -215,14 +215,147 @@ async def test_a_cycle_with_balance_but_no_stress_reads_zero_stress_days(
 ) -> None:
     """The difference between "no stress" and "no evidence": a cycle whose
     window holds balance days that are never stressed reads 0, and only a cycle
-    with no balance at all reads `None` (D-T0.3)."""
+    with no balance at all reads `None` (D-T0.3).
+
+    The cycle is finished, so its window is bounded by the entry that registers
+    its closure (D-T7.2): the Sep 20 `harvest` entry is what makes the cycle
+    measurable at all. Without it the figure would be `None`, which is the rule
+    the next test pins — so this one has to carry the anchor to keep 0 and
+    `None` apart."""
     env = await make_env(db_session)
     cycle_id = await add_cycle(db_session, env, **_CYCLE)
+    await add_logbook_entry(
+        db_session,
+        env,
+        kind="harvest",
+        occurred_on=date(2026, 9, 20),
+        yield_kg=400,
+        crop_cycle_id=cycle_id,
+    )
     await add_water_balance(db_session, env, day=date(2026, 9, 2), depletion_mm=10.0)
 
     totals = await SqlAlchemyMetricsSourceRepository(db_session).cycle_totals(env.org_id, cycle_id)
 
     assert totals is not None and totals.water_stress_days == 0
+
+
+async def test_a_finished_cycle_stops_counting_at_the_entry_that_closed_it(
+    db_session: AsyncSession,
+) -> None:
+    """A finished cycle's stress window ends at its closing entry, not at the
+    harvest date it expected and not at today.
+
+    The cycle was sown on Jun 1 and harvested on Aug 10, so the closure entry is
+    Aug 10. `expected_harvest_on` says Aug 31, which is **wrong**: a late
+    expectation must not extend the window, because the crop was already out of
+    the ground on Aug 10. Two stressed days sit inside the closure (Aug 5, Aug
+    8) and two sit outside it: Aug 20, still before the expectation, and Sep 1,
+    which belongs to the next cycle of the same plot. So the figure is 2.
+
+    Every date is in the past, so `now()` cannot move any of them and the count
+    is exactly hand-computable.
+    """
+    env = await make_env(db_session)
+    cycle_id = await add_cycle(
+        db_session,
+        env,
+        sown_on=date(2026, 6, 1),
+        status="harvested",
+        expected_harvest_on=date(2026, 8, 31),
+    )
+    await add_logbook_entry(
+        db_session,
+        env,
+        kind="harvest",
+        occurred_on=date(2026, 8, 10),
+        yield_kg=500,
+        crop_cycle_id=cycle_id,
+    )
+    for day in (date(2026, 8, 5), date(2026, 8, 8), date(2026, 8, 20), date(2026, 9, 1)):
+        await add_water_balance(db_session, env, day=day, depletion_mm=60.0, raw_mm=46.2)
+
+    totals = await SqlAlchemyMetricsSourceRepository(db_session).cycle_totals(env.org_id, cycle_id)
+
+    assert totals is not None and totals.water_stress_days == 2
+
+
+async def test_a_lost_cycle_stops_at_its_loss_observation(
+    db_session: AsyncSession,
+) -> None:
+    """The anchor is the entry that **registers the closure**, and for a lost
+    cycle that is the observation carrying an `alert_id` — that observation *is*
+    the loss record (docs/03-modelo-datos.md:424, D-T7.2). It is the same anchor
+    `metrics_org_month_cycles` dates the cycle with, so the two views cannot
+    disagree about when the cycle ended.
+
+    Sown May 1, lost Jul 5, and `expected_harvest_on` (Nov 30) is a third
+    unrelated date. Only Jul 2 and Jul 4 are inside the closure.
+    """
+    env = await make_env(db_session)
+    cycle_id = await add_cycle(
+        db_session,
+        env,
+        sown_on=date(2026, 5, 1),
+        status="lost",
+        expected_harvest_on=date(2026, 11, 30),
+    )
+    alert_id = await add_alert(db_session, env, rule_code="water_stress")
+    await add_logbook_entry(
+        db_session,
+        env,
+        kind="observation",
+        occurred_on=date(2026, 7, 5),
+        quantity=40,
+        alert_id=alert_id,
+        crop_cycle_id=cycle_id,
+    )
+    for day in (date(2026, 7, 2), date(2026, 7, 4), date(2026, 7, 20)):
+        await add_water_balance(db_session, env, day=day, depletion_mm=60.0, raw_mm=46.2)
+
+    totals = await SqlAlchemyMetricsSourceRepository(db_session).cycle_totals(env.org_id, cycle_id)
+
+    assert totals is not None and totals.water_stress_days == 2
+
+
+async def test_a_finished_cycle_with_no_closing_entry_has_no_stress_days(
+    db_session: AsyncSession,
+) -> None:
+    """The missing-evidence case, and the one the finding is really about: a
+    finished cycle whose closure nothing registered has **no window**, so the
+    figure is `None`.
+
+    `expected_harvest_on` is null — `compute_expected_harvest_on` returns `None`
+    for a crop with no FAO-56 stages (yam), and a PATCH may null it because
+    `_reject_explicit_null` exempts that field. With the old bound the window fell
+    back to `today`, so this cycle kept accruing stressed days indefinitely,
+    including days that belong to the next cycle on the same plot. The four
+    stressed September days below are exactly that: a cycle sown in April and
+    never closed must not claim the September of the cycle that followed it, and
+    none of those days is evidence about a cycle nothing closed.
+
+    Every date is frozen in the past, so the assertion holds whatever the day the
+    suite runs on: `now()` only ever *widened* the old window, and a frozen day
+    inside it is what the old bound counted. There is no live clock here to drift.
+
+    `None`, not 0: "nothing measured it" and "measured it and it was never
+    stressed" are different facts (D-T0.3, docs/03-modelo-datos.md:441).
+    """
+    env = await make_env(db_session)
+    cycle_id = await add_cycle(
+        db_session, env, sown_on=date(2026, 4, 1), status="harvested", expected_harvest_on=None
+    )
+    for day in (2, 5, 20, 28):
+        await add_water_balance(
+            db_session,
+            env,
+            day=date(2026, 9, day),
+            depletion_mm=60.0,
+            raw_mm=46.2,
+        )
+
+    totals = await SqlAlchemyMetricsSourceRepository(db_session).cycle_totals(env.org_id, cycle_id)
+
+    assert totals is not None and totals.water_stress_days is None
 
 
 async def test_cycle_totals_measure_an_active_cycle_up_to_today(

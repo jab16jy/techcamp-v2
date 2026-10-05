@@ -30,6 +30,14 @@ Hay cinco grupos:
 | **Margen bruto** | `Σ (sold_kg × sale_price_cop_per_kg) − Σ costos` | Bitácora (venta registrada en la cosecha) | Por ciclo |
 | **Pérdidas por evento** | `Σ quantity` (kg) y `Σ cost_cop` (COP) de las observaciones con `alert_id` | Bitácora | Por evento |
 
+**Ventana de los días en estrés hídrico.** El balance asimilado es diario **por parcela** y no lleva ciclo ([03](03-modelo-datos.md)), así que se lee sobre una ventana, y la ventana es parte de la cifra:
+
+- Un ciclo `active` se mide desde `sown_on` hasta `min(expected_harvest_on, hoy)` en `America/Bogota`: un ciclo abierto no tiene cierre que lo acote, y su única esperanza de fin es la fecha esperada.
+- Un ciclo terminado (`harvested` o `lost`) se mide hasta el `occurred_on` de la entrada de bitácora que **registra su cierre**, que es la misma entrada y el mismo ancla que le dan su mes a un ciclo cerrado (§2, D-T7.2). Una `expected_harvest_on` equivocada o tardía no puede extender la ventana más allá del día en que el ciclo se cerró, y un ciclo cerrado no sigue contando días que ya pertenecen al siguiente ciclo de la misma parcela.
+- Un ciclo terminado **sin entrada de cierre no tiene ventana**, y la cifra es `null`: evidencia faltante, no un conteo truncado a hoy ([03:441](03-modelo-datos.md)).
+
+El futuro nunca está dentro de un ciclo: una entrada de cierre fechada hacia adelante no respalda días que todavía no ocurren.
+
 **Parcelas de secano** (`irrigation_system = none`, [ADR-0023](adr/0023-parcelas-con-riego-y-secano.md); brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). No tienen agua aplicada ni productividad del agua de riego: su resultado hídrico se reporta con el rendimiento y los días en estrés hídrico.
 
 **Encuesta de inscripción** (`plot_baseline`). Al inscribir una parcela se registra una encuesta corta: cultivo y rendimiento del último ciclo, costos aproximados y práctica de riego ([03](03-modelo-datos.md#plot_baseline-encuesta-de-inscripción)). El impacto se mide contra esa encuesta (antes y después por parcela) y, en un piloto, contra parcelas de control del mismo municipio sin TechCamp (diferencias en diferencias). No se mide contra la media municipal: los productores que adoptan se autoseleccionan y EVA no es una muestra comparable, así que el rendimiento relativo municipal solo da contexto (brechas G04 y G11 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
