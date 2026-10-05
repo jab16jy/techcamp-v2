@@ -88,10 +88,14 @@ Otras métricas de adopción:
 
 Estas tres, junto con el promedio del índice de las parcelas con índice, forman `OrgMetrics` (`GET /organizations/{org_id}/metrics`, D-T0.12). Se calculan al consultar: cuentan sobre el mes pedido y la mediana del tiempo a primera lectura toma los nodos reclamados en ese mes, un valor por nodo y no la mediana de las medianas de parcela.
 
-**En qué mes cuenta un ciclo** (D-T7.2). `crop_cycle` no tiene fecha de cierre ([03:128-135](03-modelo-datos.md)), así que el mes de un ciclo es el de la entrada de bitácora que **registra su cierre**, por su `occurred_on`: la fecha que escribió el productor, nunca la que llegó la sincronización offline.
+**En qué mes cuenta un ciclo** (D-T7.2, y D-T10.1). `crop_cycle` no tiene fecha de cierre ([03:128-135](03-modelo-datos.md)), así que el mes de un ciclo es el de la entrada de bitácora que **registra su cierre**, por su `occurred_on`: la fecha que escribió el productor, nunca la que llegó la sincronización offline.
 
-- **Numerador:** ciclos con una entrada `harvest` en el mes.
-- **Denominador:** ciclos con una entrada que registre el cierre en el mes y `status` en `harvested` o `lost`. Una entrada `harvest` registra el cierre de un ciclo cosechado, y una `observation` con `alert_id` registra el cierre de uno perdido (esa observación *es* el registro de la pérdida, [03:424](03-modelo-datos.md)).
+**Un ciclo cerrado cuenta en un solo mes** (D-T10.1, ruling del dueño, 2026-10-05): el de su entrada de cierre, y ningún otro. Un ciclo no entra en el denominador de dos meses, ni su cosecha aparece en el numerador de un mes que no es el suyo. Las reglas de numerador y denominador se leen sobre ese único mes, no sobre "el mes".
+
+Cuando varias entradas podrían registrar el cierre, la elige el `status` del ciclo, que es la misma regla: una entrada `harvest` registra el cierre de un ciclo cosechado, y una `observation` con `alert_id` el de uno perdido (esa observación *es* el registro de la pérdida, [03:424](03-modelo-datos.md)). Con varias entradas del mismo tipo, la más antigua.
+
+- **Denominador:** ciclos cerrados cuyo mes es el pedido y `status` en `harvested` o `lost`.
+- **Numerador:** de esos ciclos, los que tienen una entrada `harvest` **en su mes**, **sin filtro de `status`**. La asimetría con el denominador es deliberada: ante datos contradictorios —un cosechero que registró la cosecha y después anotó la pérdida— el registro del productor es la evidencia más fuerte disponible, así que el mes reporta la cosecha en vez de discutir el `status`.
 - **Un ciclo `active` no cuenta ni en el numerador ni en el denominador**, aunque tenga una cosecha registrada: el denominador son ciclos **terminados**, así que la fracción es de ciclos cerrados y registrados, no de ciclos con cosecha anotada.
 - **Evidencia faltante, no cero.** Un ciclo `lost` sin observación de pérdida, y un ciclo cerrado por `PATCH` sin ninguna entrada de bitácora, no aparecen en ningún mes. Un mes sin ciclos terminados vale `null`, nunca `0`.
 
