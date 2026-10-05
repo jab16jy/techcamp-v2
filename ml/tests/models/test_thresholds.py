@@ -131,7 +131,7 @@ def test_a_validation_block_with_one_class_is_refused_rather_than_calibrated_to_
 
 def test_the_high_cut_reaches_precision_and_publishes_its_recall() -> None:
     frame = candidate_frame()
-    cuts = read_cuts(_fitted(frame).base, frame)
+    cuts = read_cuts(_fitted(frame), frame)
 
     assert cuts.high is not None
     assert cuts.high.precision >= 0.7
@@ -147,7 +147,7 @@ def test_a_critical_cut_that_validation_cannot_reach_is_none_and_never_a_score()
     flat["precip_sum_6m"] = 2.0
     pipeline = _pipeline(flat)
 
-    cuts = read_cuts(pipeline, flat)
+    cuts = read_cuts(CalibratedCandidate.fit(pipeline, flat), flat)
 
     if cuts.critical is None:
         assert CRITICAL not in list(cuts.severity([0.0, 0.5, 1.0]))
@@ -157,7 +157,7 @@ def test_a_critical_cut_that_validation_cannot_reach_is_none_and_never_a_score()
 
 
 def test_a_score_at_a_cut_gets_that_severity_and_not_the_one_below() -> None:
-    cuts = read_cuts(_fitted(candidate_frame()).base, candidate_frame())
+    cuts = read_cuts(_fitted(candidate_frame()), candidate_frame())
     scores = [cut.value for cut in (cuts.high, cuts.critical) if cut is not None]
     ranks = {"low": 0, "high": 1, "critical": 2}
 
@@ -171,7 +171,7 @@ def test_a_score_at_a_cut_gets_that_severity_and_not_the_one_below() -> None:
 
 
 def test_a_score_below_the_first_cut_is_low_and_never_a_severity() -> None:
-    cuts = read_cuts(_fitted(candidate_frame()).base, candidate_frame())
+    cuts = read_cuts(_fitted(candidate_frame()), candidate_frame())
     first = min(cut.value for cut in (cuts.high, cuts.critical) if cut is not None)
 
     assert list(cuts.severity([0.0, first / 2])) == [LOW, LOW]

@@ -143,14 +143,19 @@ class OperatingCuts:
         )
 
 
-def read_cuts(candidate: Scored, validation: pd.DataFrame) -> OperatingCuts:
-    """The operating cuts of `candidate` on validation, calibrated first (ADR-0020 paso 7).
+def read_cuts(calibrated: CalibratedCandidate, validation: pd.DataFrame) -> OperatingCuts:
+    """The operating cuts of an already calibrated candidate, read on validation
+    (ADR-0020 paso 7).
 
-    Both halves read the same block, and that is what step 7 asks for: the calibration is
-    fitted on validation and the cut is read on validation. It is the one place where
-    validation is used twice, so it is named here rather than left to be discovered.
+    It takes the `CalibratedCandidate` and not the raw one so the calibrator is fitted once
+    per run: the candidate that goes to the gate and the cuts that go to
+    `model_version.thresholds` are then the same object, and a second fit would be a second
+    answer to a question that has one.
+
+    Both halves read validation, and that is what step 7 asks for: the calibration is
+    fitted on validation and the cut is read on validation. It is the one place validation
+    is used twice, so it is named here rather than left to be discovered.
     """
-    calibrated = CalibratedCandidate.fit(candidate, validation)
     labels = validation["label"].to_numpy(dtype=np.int64)
     return OperatingCuts(thresholds=operating_thresholds(labels, calibrated.score(validation)))
 
