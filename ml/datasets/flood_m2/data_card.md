@@ -58,7 +58,7 @@ pedir.
 | Etiquetas 2019–2022 | UNGRD, `https://www.datos.gov.co/resource/wwkg-r6te.json` | CC BY-SA 4.0 | 2026-10-02T17:27:25Z | `171266650fe22614` |
 | Etiquetas 2023–2024 | UNGRD, `https://www.datos.gov.co/resource/rgre-6ak4.json` | CC BY-SA 4.0 | 2026-10-02T17:27:28Z | `7769c6d43fc754f8` |
 | Etiquetas 2025+ | UNGRD, `https://www.datos.gov.co/resource/2343-nuqp.json` | CC BY 4.0 | 2026-10-02T17:27:32Z | `7e54b5371993ebc3` |
-| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, 2026-10-02T18:02Z, **3 de 6 trozos**: `archive_000` `956284edc5cbf9f7`, `archive_001` `255c33527febdf48`, `archive_002` `db28970e8074ec09` | ver `MANIFEST.tsv` |
+| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, 2026-10-02T18:02Z (trozos 000–002) y 2026-10-03T16:23Z (trozos 003–005), **6 de 6 trozos** | `archive_000` `956284edc5cbf9f7`, `archive_001` `255c33527febdf48`, `archive_002` `db28970e8074ec09`, `archive_003` `4dcdb69e8a9f32e4`, `archive_004` `5fb9a72d4ec76fb5`, `archive_005` `db9d8cf60087b059` |
 | Elevación y vecino | Open-Meteo elevation (Copernicus GLO-90), `https://api.open-meteo.com/v1/elevation` | Open-Meteo, uso no comercial | 2026-10-02T17:28Z, 10 trozos (975 coordenadas) | trozo 000 de 10: `d52dc71cce74be05` (los diez en `MANIFEST.tsv`) |
 
 Open-Meteo gratuito es de uso no comercial: cubre el seminario; producción necesita su
@@ -77,23 +77,26 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   La serie empieza en 2018-07-01 para que las ventanas de seis meses de docs/08 §M2
   "Features" estén completas antes del primer mes etiquetado, 2019-01.
 
-  **Estado al cerrar T3 (2026-10-02): descarga a medias, cobertura desigual.** Hay 3 de
-  los 6 trozos en el caché y el parquet arma **430 895 filas**:
+  **Estado al cerrar la descarga (2026-10-05): los 6 de 6 trozos en el caché**, con plan
+  `plan_for=2026-10-05`, que declara las mismas tres ventanas que el 2026-10-02 porque el
+  último mes completo no se movió. Cobertura para los 195 municipios, de punta a punta:
 
-  | Cobertura | Municipio | Rango |
-  |---|---|---|
-  | Completa (195) | los 195 municipios | 2018-06-30 → 2022-06-29 (`archive_000` + `archive_001`, ventana 1) |
-  | Parcial (100) | los 100 primeros por código (`archive_002`) | 2022-06-30 → 2026-06-28 |
+  | Cobertura | Municipio | Rango | Trozos |
+  |---|---|---|---|
+  | Completa (195) | los 195 municipios | 2018-06-30 → 2026-08-31 | `archive_000`…`archive_005` |
 
-  O sea: **no** hay clima hasta 2026-09-30 ni hasta 2026-08-31 para todo el conjunto;
-  95 municipios no pasan de 2022-06-29 y 100 no pasan de 2026-06-28. Faltan tres
-  trozos (resto de la ventana 2 y ventana 3 completa). No es un fallo del código sino
-  de la cuota: el nivel gratuito de Open-Meteo pesa una consulta por variables,
-  ubicaciones y dominios (10 000/día por IP, con cubos por minuto y por hora), y el
-  archivo histórico pesa además por la longitud del rango pedido.
+  El parquet de `ml/data/flood_m2/sources/weather.parquet`, rearmado el 2026-10-03 después
+  del último trozo, tiene **582 075 filas**: 195 municipios × 2 987 días menos los dos
+  días de frontera que `concat_windows` cuenta una sola vez. Ningún municipio queda con
+  una serie truncada.
+
+  La cuota fue el obstáculo de la primera pasada, no del código: el nivel gratuito de
+  Open-Meteo pesa una consulta por variables, ubicaciones y dominios (10 000/día por IP,
+  con cubos por minuto y por hora), y el archivo histórico pesa además por la longitud del
+  rango pedido.
   `python -m techcamp_ml.sources fetch --source weather` reanuda donde se quedó y no
-  vuelve a pedir lo que ya está en el caché; al terminar hay que reparsear y volver a
-  copiar los hashes de esta tarjeta. Un trozo cuyo `.request.json` declara otra ventana
+  vuelve a pedir lo que ya está en el caché: con los 6 trozos y su plan, corre en menos
+  de un segundo y no toca la red. Un trozo cuyo `.request.json` declara otra ventana
   **se vuelve a pedir**: los mismos nombres de archivo respondían la ventana anterior en
   cuanto los meses avanzan, y una serie que termina antes de lo que su nombre promete no
   puede pasar como completa.
@@ -104,11 +107,9 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   El `parse` no recibe ningún día: lee ese plan y se niega a armar el parquet si falta
   algún trozo planeado, o si alguno declara otra ventana u otros códigos, diciendo cuál.
   Mismo caché, mismo parquet, cualquier día en que corra (docs/08 §Reglas de gobierno: "el
-  dataset se arma sólo desde esas copias"). **Este caché, el que T3 cerró, no tiene plan**
-  (los planes no existían todavía), así que `parse --source weather` ahora se niega con
-  `the raw cache holds no archive plan (archive_plan.json)` hasta que el próximo `fetch
-  --source weather` lo escriba; ese fetch no se volvió a correr porque la cuota de
-  Open-Meteo está agotada. **T4 no debe correr sobre este parquet.**
+  dataset se arma sólo desde esas copias"). Este caché **sí tiene plan**: `archive_plan.json`
+  con sus 6 trozos, escrito antes del primer request. `parse --source weather` lo lee y se
+  niega si algún trozo planeado falta o declara otra ventana u otros códigos.
 
 - **Etiquetas:** ventana de consulta por dataset: 2019-01-01→2022-12-31,
   2023-01-01→2024-12-31 y 2025-01-01→(sin tope), en ese orden y sin mezclar años entre
