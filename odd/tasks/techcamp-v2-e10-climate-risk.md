@@ -133,6 +133,26 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
 - [x] T4 Dataset build: municipality × month table through T2 features, all negatives, hash.
   ~200. Route: Herdr writer. Depends T2, T3. Merged `fefeb00`, receipt `review-4b11cb9d8f8faa8c`
   (4 lenses). Built and tested on fixtures; the real build is unblocked but not run (D-T3.3).
+  **Real build done (2026-10-05), `2e1d1c0` in the epic worktree**: `manifest.json` tracked with
+  16 380 rows (195 municipios × 84 meses, 2019-01 → 2025-12), 838 positivos / 15 542 negativos,
+  parquet `sha256 7916e97f…83d0be5`, reproducible (dos builds sobre el mismo caché, mismo digest).
+  **Zero nulos** fuera de `precip_anomaly_{1,3,6}m`: la cobertura 2018-06-30 → 2026-08-31 cierra
+  toda ventana de 1 a 6 meses, así que el dataset no es parcial. **La prevalencia real es 5,12 %**
+  (838 / 16 380), **no el 9,2 %** que el brief de la lane estimaba dividiendo 1 508 reportes por
+  municipio-mes: la etiqueta de docs/08 §M2 "Etiqueta" es binaria por municipio-**mes**, así que
+  esos reportes colapsan en 838 meses con evento y el cálculo anterior sobrestima por 1,8×. Los
+  fixtures del harness usan 1-en-84 (1,19 %), 4,3× menos que la realidad. **T8 lee 5,12 % de la
+  data card, no del conteo de reportes.**
+  **Desvío aceptado, offline-safe:** el build se negó correctamente porque el caché de T3 (2026-10-02)
+  es anterior a `5fac554` (`write_plan_trace`) y `3bdca35` (plan de paginación de etiquetas), ninguno
+  ancestro de `93006e3`; faltaban `weather.plan.json`, `labels.plan.json` y `labels_plan.json`. Se
+  corrieron `fetch --source labels` + `parse`: el fetch **0 raw copies**, verificado por partida
+  doble (`SOCRATA_PAGE=50000` contra páginas de 6 419 / 1 494 / 2 072 registros, y con
+  `ALL_PROXY`/`HTTPS_PROXY` a `127.0.0.1:1`, donde cualquier request habría fallado ruidosamente);
+  `sha256` de las tres páginas idéntico antes y después, y el `parse` reescribió los cuatro parquets
+  **byte a byte idénticos**. Cero descargas, cero datos nuevos. Los archivos de procedencia nunca se
+  escribieron a mano: `labels_plan.json` afirma que el fetch caminó hasta una página corta, y eso no
+  se establece offline desde el caché.
 - [ ] T5 Harness + gate (owner approval gate): split with gap, department hold-out, real frequency,
   bootstrap CI95, locked test, `decide_promotion`; own tests; freeze hashes after approval.
   ~400. Route: Herdr writer. Depends T1 (schema from T4 for wiring).
@@ -188,6 +208,21 @@ Branch point: `a2bae6b` (main). RDD on (global). Per work-unit commit: `gentle-a
   `horizon_start`) plus the duplicate `(code, date)` refusal fixed in `4eae2f3`, with the data card
   updated in the same unit. Merged `fefeb00`. `4eae2f3` (321 authored lines) is unreviewed by
   budget, not by omission: `review_due: false`, `under_budget`.
+- T4 real build (Pi; `2e1d1c0` on the epic branch, base `bf6994b`, 2 files / 140 authored lines):
+  lineage `review-f6805ba1b12bc39a`, target `705e5f27…`, medium, **reliability lens**, APPROVED and
+  acknowledged (`native-approved-acknowledgement-completed`, authority burned, store revision
+  `7f09d406…`), **0 findings**, correction budget 70 unused. `assess` had said `review_due: false`
+  (`under_budget`); the lane ran RDD anyway because the brief ordered it.
+  **The selectorless `inspect` is the trap again**: its offered START froze the **whole epic branch**
+  (100 paths, base `a2bae6b`, including `ml/uv.lock` ~2.8k lines — exactly what burned T1 with
+  `lens_context_budget_exceeded`). Scoping to the work unit needs
+  `{"mode":"ordinary","baseRef":"<parent>","committedOnly":true}` **together with** the `lineageId`
+  from inspect: `baseRef` alone fails with `graph-v1 START requires lineageId`, and omitting `mode`
+  fails with the ordinary/judgment-day message. Both fail pre-authority and create no lineage.
+  A `capture-binding-rejected` was a transcription error, not the runtime: the `artifactSubject`
+  schema is `gentle-ai.review-artifact-subject/v2`. Also note `bf6994b` (cherry-pick of e10-t3
+  `93006e3`, data card) landed on the epic branch **mid-lane**, so the work-unit base was `bf6994b`,
+  not `e9377ee`.
 - T7 (Pi; 9 commits on `cd270ad`, lane `e10-t7`): round 1 lineage `review-c73397a8bb8c3785` over
   `cd270ad..1f247b7`, reliability lens, APPROVED and acknowledged; 2 WARNING + 1 SUGGESTION →
   #246, both WARNINGs fixed in `db967d6`.
