@@ -116,6 +116,20 @@ RDD on (global). OpenCode writers run their own RDD after the parent gate passes
 reviewed by the parent. Findings rule (owner, 2026-09-30): blocking → bounded correction; 1–2
 non-blocking → one issue per round; 3+ → fix the most important with `Refs #N`, file the rest.
 
+### T3 — lineage `review-82b031d38b733383`, **aprobado, autoridad quemada** (2026-10-05)
+
+| Item | Resultado |
+|---|---|
+| Alcance | Work unit de cierre `371c0e7..HEAD`, 9 paths / 466 líneas (`assess --base-ref 371c0e7`) |
+| Lente | `review-reliability`, medium risk |
+| Hallazgos | **4 WARNING**, ningún BLOCKER ni CRITICAL |
+| Recibo | `terminal-consumption/v1`, target `sha256:d2c09ecd60ad97b55d07de7fb2e1db4d5cfac4ab3ee3c62024ce163507dfd07a` (base tree `dff067d3` → candidate `7d2f97d7`) |
+| Follow-up | Issue #248 (`review-follow-up`, `area:server`) con los 4 WARNING |
+| Verificación | `uv run pytest tests/metrics -q` → 61 passed; `gate-fast` verde |
+
+Corrido por un agente Pi fresco (runtime host-relay), lineage nuevo, consentimiento del dueño.
+El WARNING 4 (docstring apuntando a ADR-0024) ya quedó corregido en esta rama antes del merge.
+
 ### T3 — lineage `review-9b9197b7eee80109`, escalated (sin recibo)
 
 | Item | Resultado |
