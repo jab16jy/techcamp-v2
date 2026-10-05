@@ -220,8 +220,20 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   `fungal_risk` sweep). ~200. Route: Herdr writer. Depends T6. Landed `e6f3060` (9 commits on
   `cd270ad`), receipt `review-c73397a8bb8c3785` + the round-3 approval of `cd48e0d`. Two CRITICALs
   found by the parent gate and by the round-2 review on the way; see §Review (RDD).
-- [ ] T8 Experiments (steps 4–9): ladder, tuning, calibration/threshold, one gate run, robustness.
-  ~400. Route: Herdr writer. Depends T4, T5 approved.
+- [x] T8 Experiments (steps 4–9): ladder, tuning, calibration/threshold, one gate run, robustness.
+  Route: Herdr writer (Pi, `e10-t8`, `--thinking xhigh`). Merged `d0155c1` (13 commits), receipt
+  `review-74fac1544f824162` (approved, autoridad quemada, 0 bloqueantes). 2 423 líneas authored.
+  **Resultado: `promote=false`.** Split real: train 8 190/377 (4,60 %), val 3 510/184 (5,24 %),
+  test 2 340/63 (2,69 %), 1 170 filas descartadas por la brecha. Escalera: `climatology_month`
+  PR-AUC 0,0984 / Brier 0,0489 · `lightgbm` 0,1077 / 0,0488 (candidato único por mayor PR-AUC en
+  val) · `logistic_regression` 0,0794 · `rainfall_6m` 0,0521 descartado. Compuerta: mejora pareada
+  **+0,004990**, IC95 **[−0,012013, +0,040028]** → `improvement_ic95_lower_bound_not_above_zero` y
+  `brier_worse_than_the_best_baseline`. Se sirve `climatology_month` como `model_version` con
+  `is_baseline` (docs/08 §M2 "Línea base servida", D-T0.5). No es un fallo: con 63 positivos en
+  2 340 meses el IC95 no puede separarse de cero. `derived/gate.json` es el recibo de la lectura
+  única del test y vive **out-of-git**: sin él la compuerta permitiría una segunda corrida.
+  3 WARNING en #257 (recall de `alto` 0,005435 hace inoperable docs/08 §M2 "Uso operativo" antes de
+  un piloto; `lbfgs` no converge sin escalar features y quedó registrado como límite del ladder).
 - [x] T9 Registration + promotion (step 10): artifact to MinIO, `model_version` row, serving loads
   the promoted model or keeps the baseline. ~250. Route: Herdr writer. Depends T6, T8.
   **Código listo en la lane `e10-t9`** (base `d0155c1`, 8 commits). Con promote=false, "promotion" es
@@ -455,12 +467,16 @@ Forecast ≈ 2950 authored lines — **already stale**: T1+T2+T3 alone measure ~
   T8 abierta en `e10-t8` con `ml/data` copiado del épico (los artefactos out-of-git no se heredan).
 
 ## Next step
-- **T8 en vuelo** (lane `e10-t8`, Pi `e10-t8-pi`, `--thinking xhigh`). Split real verificado: train
-  8 190/377 (4,60 %), val 3 510/184 (5,24 %), test 2 340/63 (2,69 %), 1 170 filas por la brecha.
-  Decisiones del dueño ya tomadas: anomalías en tabla derivada **out-of-git** (el `sha256` del manifest
-  no se toca), escalera termina en LightGBM (TabPFN fuera), candidato único = mayor PR-AUC en val,
-  nulos con LightGBM nativo + `SimpleImputer` fitteado sólo en train, y `promote=False` es resultado
-  válido (reporte + `model_version` de la mejor baseline, D-T0.5). Luego T9 y T10.
+- **T10 es lo único que falta**: `just gate-full` una sola vez, demo del job diario, y plan de
+  entrega. Antes de eso, una pregunta que el merge no resuelve: **mergear a `main` no preserva el
+  modelo servido.** La fila `model_version` vive en la base y el artefacto en MinIO; `ml/data/` es
+  gitignored (`.gitignore:2`). Un entorno nuevo arranca sin dataset, sin fila y sin artefacto, y el
+  job hace *skip*. Por eso T9 importa: es el paso que hace la línea base reproducible y portable, y
+  hay que correr el registro en el entorno destino.
+- Decisiones del dueño tomadas en T8, ya aplicadas: anomalías en tabla derivada **out-of-git** (el
+  `sha256` del manifest no se toca), escalera termina en LightGBM (TabPFN fuera), candidato único =
+  mayor PR-AUC en val, nulos con LightGBM nativo + `SimpleImputer` fitteado sólo en train, y
+  `promote=False` como resultado válido (reporte + `model_version` de la mejor baseline, D-T0.5).
 - ~~T5's one-read guard~~ Historial, ya resuelto: la llave pasó a ser el digest del contenido del
   bloque (`66d4b65`), el ledger volvió a ser parámetro obligatorio del caller (`52755fc`), y el
   recibo de lectura se hizo inmune a `table.attrs.clear()` (`a2d8b22`). El argumento de gobernanza
@@ -468,5 +484,5 @@ Forecast ≈ 2950 authored lines — **already stale**: T1+T2+T3 alone measure ~
 - **Dispositions the owner still owns:** the parked escalated lineages (T5 round 1 over the
   correction, T7 round 2 over `ae735b8`) and `review-c73397a8bb8c3785`'s already-acknowledged state.
   None of them blocks anything; escalation approves nothing.
-- T8 experiments need T4's real build and T5's approved harness. T9 needs T8. T10 is `just
-  gate-full`, the demo, and the delivery plan.
+- ~~T8 needs T4's real build and T5's approved harness; T9 needs T8.~~ Cerrado: T4 real, T5 mergeado
+  (sin recibo) y T8 → T9 encadenados. T10 es `just gate-full`, la demo y el plan de entrega.
