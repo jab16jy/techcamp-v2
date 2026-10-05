@@ -142,6 +142,15 @@ flowchart TB
 
 **Bandeja del técnico.** Con el rol `technician`, el inicio abre su bandeja: las fincas asignadas (`farm.technician_id`) ordenadas por alertas abiertas, las críticas primero, con la fecha de la última visita. El orden lo da `GET /me/tray` ([04](04-api.md#visitas-de-extensión-y-bandeja-del-técnico)). El estado de cualquier parcela de sus fincas queda a un toque: al tocar una parcela, su organización pasa a ser la activa (la bandeja reúne fincas de todas sus organizaciones), la parcela queda como parcela activa y se abre su estado, con vuelta a la bandeja. Desde una finca registra la visita de extensión (temas según la Ley 1876, recomendaciones, compromisos y fotos), también sin conexión (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
 
+**Indicadores de tecnificación** (Más, E11 D-T0.13; RF-13). Una sola pantalla con dos partes:
+
+- **Parcela activa.** Muestra el índice de adopción digital del mes elegido (por defecto, el último calculado) con sus cuatro componentes. Un componente `null` se muestra como "Sin datos este mes", nunca como 0. Debajo va el resumen del ciclo actual o del último: rendimiento, cambio frente a la encuesta, agua aplicada, días en estrés, costos y margen. Las métricas que no aplican, como el agua aplicada en secano, no se muestran.
+- **Organización.** Solo la ven `owner` y `technician`. Muestra los indicadores de `OrgMetrics` del mismo mes.
+
+**Encuesta de inscripción.** Es un formulario corto en el detalle de la parcela (Parcelas → Parcela): cultivo del último ciclo, rendimiento (kg/ha), costo aproximado por hectárea (opcional) y práctica de riego. Lo llenan `owner` o `technician`, y los demás roles lo ven solo para lectura. Mientras la parcela no tiene encuesta, el detalle invita a registrarla, porque sin ella no se puede medir el impacto ([ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
+
+En **Inicio**, el estado de la parcela muestra `digital_adoption_index` como una línea discreta con su mes ("Adopción digital: 72 · septiembre"). Si es `null`, no se muestra nada.
+
 ## Presupuestos y calidad
 
 | Métrica | Presupuesto | Verificación |

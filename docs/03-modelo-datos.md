@@ -427,6 +427,21 @@ erDiagram
 
 Al inscribir una parcela, el técnico registra cómo producía antes de usar TechCamp: cultivo y rendimiento del último ciclo, costos aproximados por hectárea y práctica de riego (con el mismo vocabulario que `plot.irrigation_system`). Hay una por parcela y es la referencia contra la que se mide el impacto ([ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)). No es la "línea base" de ML (`baseline`), que es la heurística que un modelo debe superar.
 
+La encuesta se puede corregir después, aunque la parcela ya tenga ciclos: `PUT` reemplaza la fila completa y `recorded_by` pasa a ser quien la guarda (E11, D-T0.11). Es un dato declarado, así que una corrección vale más que conservar la primera versión.
+
+### `plot_metric_monthly` y `crop_cycle_summary`: métricas precalculadas
+
+Son tablas derivadas del módulo `metrics` (E11, D-T0.2 y D-T0.8). Las dos llevan `org_id` y toda consulta filtra por él ([09](09-cuellos-de-botella.md#seguridad)). Las fórmulas están en [11-metricas](11-metricas.md).
+
+| Tabla | Clave | Columnas |
+|---|---|---|
+| `plot_metric_monthly` | `(plot_id, month)`; `month` es el primer día del mes | `org_id`, `monitoring`, `record_keeping`, `decision`, `risk_management` (0–1, `null` sin evidencia), `digital_adoption_index` (0–100, `null` si los cuatro son `null`), `computed_at` |
+| `crop_cycle_summary` | `crop_cycle_id` | `plot_id`, `org_id`, `yield_kg_ha`, `yield_change_vs_baseline`, `relative_yield`, `water_applied_m3_ha`, `irrigation_wue_kg_m3`, `water_stress_days`, `cost_cop_ha`, `cost_cop_kg`, `yield_kg_per_labor_day`, `gross_margin_cop`, `loss_kg`, `loss_cop`, `computed_at` |
+
+- Toda columna de métrica admite `null`: un dato que falta no se guarda como cero. Por ejemplo, no hay agua aplicada ni productividad del agua en secano, ni cambio frente a la encuesta si no hay encuesta o el cultivo es otro.
+- El job escribe con upsert por la clave, así que correrlo dos veces deja el mismo resultado.
+- `crop_cycle_summary` solo guarda ciclos `harvested` o `lost`. El resumen de un ciclo activo se calcula al consultarlo.
+
 ### `extension_visit`: visitas de extensión
 
 El técnico "registra visitas" ([01](01-requisitos.md#usuarios)); esta entidad lo hace posible (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). La extensión agropecuaria es un servicio público con un enfoque de cinco aspectos (Ley 1876, art. 25), y `topics` usa esos cinco como vocabulario cerrado:
