@@ -94,6 +94,9 @@ def _forget_spent_reads() -> None:
     guard therefore holds against every way of reaching the block through the gate's own API:
     a second ledger, a cleared frame, a rebuilt frame, a reordered frame. The one move left is
     not part of that API, and the repository already refuses it.
+
+    Accepted documented limit (R3-READ-RESET): the clear stays reachable in-process and stays
+    that way; ADR-0020, `CODEOWNERS` and `ml/harness/LOCK.sha256` are what close it.
     """
     _SPENT_READS.clear()
 
@@ -201,6 +204,9 @@ def decide_promotion(
     `baseline` is the **best** baseline of the validation block (docs/08 §Reglas de gobierno
     names that one, not the trivial one), and it is scored on the same rows as the candidate
     so the paired interval compares like with like.
+
+    Accepted documented limit (R3-OPEN-CI-PARAMETERS): `seed` and `resamples` stay
+    caller-chosen; ADR-0020, `CODEOWNERS` and `ml/harness/LOCK.sha256` are what close it.
     """
     blocked = _test_block(table)
     _read_once(blocked, reads)
