@@ -25,11 +25,12 @@ why the factory is a module seam configured once by the composition root instead
 a parameter. Unconfigured is an error, never an empty run: a job that quietly
 predicted nothing would look like a month with no risk.
 
-`_predictors()` is empty until T9 registers the promoted model's and the
-baselines' (ADR-0020 paso 10). That is not a stub: with no predictor registered a
-version gets no prediction, the job logs it and finishes
-(docs/06-diseno-detallado.md §8 "Sin modelo promovido"), and nothing in this
-module ever answers with a probability of its own.
+`_predictors()` is the registry T9 registers the served version with: the
+`risk_flood` baseline the gate left serving, loaded from object storage and verified
+against the `artifact_sha256` its `model_version` row registered (ADR-0020 paso 10).
+An event with no registered version, or a version whose artifact does not verify, is a
+skip the job logs and continues past, never a probability nobody produced
+(docs/06-diseno-detallado.md §8 "Sin modelo promovido").
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from techcamp.risk.adapters.open_meteo_archive import (
     get_risk_archive_adapter,
     seminar_archive_adapter,
 )
+from techcamp.risk.adapters.registry import build_registry, s3_artifact_store
 from techcamp.risk.adapters.repositories import SqlAlchemyRiskRepository
 from techcamp.risk.application.ports import CellTransactions, PredictorRegistry, RiskCell
 from techcamp.risk.application.run_daily_risk import run_daily_risk
@@ -156,12 +158,22 @@ def _predictors() -> PredictorRegistry:
     """The predictors this worker serves, keyed by `(name, version)`
     (docs/06-diseno-detallado.md §8).
 
-    Empty until T9 registers them with the artifacts it promotes (ADR-0020
-    paso 10). An empty registry is the honest state of the epic: the job then
-    predicts nothing and says why in its log, rather than writing a probability
-    no model produced.
+    The registry carries a FACTORY per event, not one predictor per version, and that is
+    the shape T9 needed: `build_registry` reads no database and touches no object storage,
+    so building it at import time would be harmless — but the artifact it will load is
+    named by the `model_version` row that `run_daily_risk` resolves through
+    `served_version(name)`, and that row is read per run, inside the transaction this
+    task closes before the first provider call. The factory therefore receives the row,
+    verifies its `artifact_sha256` against the bytes in the bucket and caches what it
+    built, so each artifact is fetched once per process no matter how many cells the run
+    walks (docs/03-modelo-datos.md §Integridad del artefacto, ADR-0012 for the retries).
+
+    Nothing here contacts MinIO: the first fetch happens on the first `resolve`, inside
+    the run. That is also what keeps this import-safe — the tests monkeypatch
+    `_predictors` with their own registry, and registering an artifact at import time
+    would reach the bucket before any of them ran (#240 R3-global-seam-leak).
     """
-    return PredictorRegistry()
+    return build_registry(s3_artifact_store())
 
 
 async def risk_cells(cells: WeatherRepository) -> list[RiskCell]:
