@@ -77,10 +77,10 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   no accepted decision changed). ~150, actual ~70. Route: parent inline (planning is never
   delegated; the `domain-modeling` skill is not installed, so the existing doc conventions were
   followed).
-- [ ] T1 `ml/` scaffold: uv project depending on the server package (feature parity), layout of
+- [x] T1 `ml/` scaffold: uv project depending on the server package (feature parity), layout of
   ADR-0020 (`models/`, `datasets/`, `harness/`, `experiments/`), M2 model card (step 1),
   CODEOWNERS and the hash-lock test framework (#192). ~250. Route: Herdr writer.
-- [ ] T2 Shared features (`risk` domain, pure): rainfall accumulations 1–6 months, anomalies vs a
+- [x] T2 Shared features (`risk` domain, pure): rainfall accumulations 1–6 months, anomalies vs a
   train-only climatology, seasonality, elevation/slope inputs; hand-computed rainfall and terrain examples as tests.
   ~300. Route: Herdr writer. Parallel with T1/T3 (no shared files).
 - [ ] T3 Dataset sources: municipality reference (DIVIPOLA + centroids, Caribbean), Open-Meteo
@@ -115,6 +115,17 @@ Branch point: `a2bae6b` (main). RDD on (global). Per work-unit commit: `gentle-a
   `review-2c38c84a60f334ec` approved, reliability lens, 4 non-blocking findings (ids/locations
   only in the receipt) → #237. R3-004 and R3-001 fixed in the lane (`Refs #237`); R3-003 fixed
   here; R3-002 open.
+- Epic branch vs main after T2 (lineage `review-6e36d3054a66495d`): approved, reliability lens,
+  3 WARNINGs → #238, all fixed in `0bdf632` (window < 1 month raises, NaN is missing, year
+  boundary test). Later whole-branch candidate (22 files incl. T1): owner declined.
+- T1 (AGY, no RDD of its own; parent ran it): first START `lens_context_budget_exceeded`
+  (`ml/uv.lock` ~2.8k lines). Review slice `e10-t1-review` = lock commit `50209bf` + the rest
+  (tree identical to `e10-t1`); lineage `review-360ab4b7b68b05db`, 4 lenses, one CRITICAL
+  `R4-ml-lockfile-missing` (inferential: the lockfile sat in the slice's base, unseen). Owner
+  chose the bounded fix `--locked` on every ml `uv run` (`3b21ab6`, cherry-picked as `d35f0a4`,
+  gate green). The validator, also blind to the base, rejected it → `escalated`,
+  `native_stop_required`: T1 has no approved receipt. Lesson: never split a generated lockfile
+  into the review base; exclude it from the candidate some other way or review the code first.
 
 ## Delivery
 Strategy: `ask-on-risk` resolved by AGENTS.md → stacked-to-main chained PRs of ~400 lines.
