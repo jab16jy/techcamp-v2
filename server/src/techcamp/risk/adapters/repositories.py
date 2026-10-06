@@ -2,9 +2,10 @@
 y `risk_prediction`; docs/08-ml.md §M2 "Línea base servida"; docs/04 §Riesgo,
 métricas y asistente).
 
-No `org_id` filter anywhere: a prediction is a property of a `weather_cell`, and
-a cell is shared reference data, the same row for every organization
-(docs/09-cuellos-de-botella.md:39). Isolation is enforced where this data
+No `org_id` filter anywhere: a prediction belongs to a `weather_cell`, and a cell
+is shared reference data, the same row for every organization
+(docs/03-modelo-datos.md §`municipality`, `model_version` y `risk_prediction`,
+fila `org_id`). Isolation is enforced where this data
 leaves the server, at the plot endpoint (T6b) — a read here is scoped to the
 cell, the event and the version instead, which is what keeps a plot from being
 served another cell's risk.

@@ -1,10 +1,11 @@
 """SQLAlchemy table mappings for climate risk (docs/03-modelo-datos.md
 §`municipality`, `model_version` y `risk_prediction`: riesgo climático (E10)).
 
-Neither table carries `org_id`: a prediction is a property of a *cell*, and a
+Neither table carries `org_id`: a prediction belongs to a `weather_cell`, and a
 cell is shared reference data — the same row for every organization
-(docs/09-cuellos-de-botella.md:39, docs/03-modelo-datos.md:39). Isolation is
-enforced where this data leaves the server, at the plot endpoint (T6b).
+(docs/03-modelo-datos.md §`municipality`, `model_version` y `risk_prediction`,
+fila `org_id`). Isolation is enforced where this data leaves the server, at the
+plot endpoint (T6b).
 
 The CHECKs and the two unique constraints are the documented decisions, not
 defensive extras: the `flood|drought` and `low|high|critical` vocabularies, the

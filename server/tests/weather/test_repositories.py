@@ -204,3 +204,42 @@ async def test_active_cell_ids_returns_only_cells_a_plot_references(
     await _make_plot(db_session, weather_cell_id=referenced)
 
     assert await repository.active_cell_ids() == [referenced]
+
+
+async def test_active_cells_returns_the_referenced_cells_with_their_centre(
+    db_session: AsyncSession,
+) -> None:
+    """The risk job needs the centre of each active cell, not only its id, because
+    it asks the Open-Meteo archive about that point (docs/06-diseno-detallado.md §8
+    "Datos de entrada"). A cell nobody's plot falls into is still not returned."""
+    repository = SqlAlchemyWeatherRepository(db_session)
+    referenced = await repository.get_or_create_cell(_CELL_LAT, _CELL_LON)
+    await repository.get_or_create_cell(_CELL_LAT, _OTHER_CELL_LON)
+    await _make_plot(db_session, weather_cell_id=referenced)
+
+    cells = await repository.active_cells()
+
+    assert [(cell.id, cell.lat, cell.lon) for cell in cells] == [
+        (referenced, float(_CELL_LAT), float(_CELL_LON))
+    ]
+
+
+async def test_active_cells_returns_an_empty_list_when_no_plot_has_a_cell(
+    db_session: AsyncSession,
+) -> None:
+    await SqlAlchemyWeatherRepository(db_session).get_or_create_cell(_CELL_LAT, _CELL_LON)
+    await _make_plot(db_session, weather_cell_id=None)
+
+    assert await SqlAlchemyWeatherRepository(db_session).active_cells() == []
+
+
+async def test_active_cells_orders_by_cell_id(db_session: AsyncSession) -> None:
+    """A stable order keeps a run's log and its tests readable, and two runs over
+    the same data visit the cells in the same sequence."""
+    repository = SqlAlchemyWeatherRepository(db_session)
+    first = await repository.get_or_create_cell(_CELL_LAT, _CELL_LON)
+    second = await repository.get_or_create_cell(_CELL_LAT, _OTHER_CELL_LON)
+    await _make_plot(db_session, weather_cell_id=first)
+    await _make_plot(db_session, weather_cell_id=second)
+
+    assert [cell.id for cell in await repository.active_cells()] == sorted([first, second])

@@ -138,7 +138,7 @@ def soil_moisture_mean(series: DailySeries, *, issue_month: date) -> float | Non
     total = _window_sum(series, issue_month=issue_month, months=1)
     if total is None:
         return None
-    first, last = _window_bounds(issue_month, months=1)
+    first, last = window_bounds(issue_month, months=1)
     return total / ((last - first).days + 1)
 
 
@@ -182,9 +182,15 @@ def build_features(
     day of M names the same one. `elevation_m`, `neighbours` and `climatology` are
     optional, so their features are `None` when the caller has no answer: the
     elevation pair until Open-Meteo answers for the centroid, and the climatology
-    when no train window covers the cell yet. Serving does compute one, with
-    `monthly_climatology` over the served version's train years (docs/06 §8), and
-    reading anomalies without it would break the parity `ml/` and `server/` owe.
+    when no train window covers the cell yet.
+
+    The anomalies are read against the climatology of **train**
+    (docs/08-ml.md §M2 "Features"), so a caller that has one must compute it with
+    `monthly_climatology` over that split's years and not over its own window.
+    Serving passes none until T9 decides where the served version's train years
+    live (D-T6b.1: no doc says, so the anomaly features are missing evidence
+    rather than a zero anomaly), and reading anomalies without a climatology would
+    break the parity `ml/` and `server/` owe.
     """
     features: dict[str, float | None] = {
         f"precip_sum_{months}m": precip_sum(precipitation, issue_month=issue_month, months=months)
@@ -216,11 +222,16 @@ def _month_start(year: int, month: int, *, offset: int) -> date:
     return date(index // 12, index % 12 + 1, 1)
 
 
-def _window_bounds(issue_month: date, *, months: int) -> tuple[date, date]:
+def window_bounds(issue_month: date, *, months: int) -> tuple[date, date]:
     """First and last day of the window: `months` calendar months ending on the
     last day of M-1. `issue_month` is read as its calendar month, so a caller that
     passes the day the job ran on gets the same window as one that passes the
     first of M, and never reads a day of M.
+
+    Public because serving asks the archive for exactly this range and must not
+    define the window a second time: the risk job (T6b) requests
+    `window_bounds(M, months=6)` and then builds the features of that same window
+    (docs/06-diseno-detallado.md §8 "Datos de entrada": los 6 meses previos).
     """
     if months < 1:
         raise ValueError(f"a window spans at least one month, got {months}")
@@ -234,7 +245,7 @@ def _window_bounds(issue_month: date, *, months: int) -> tuple[date, date]:
 def _window_sum(series: DailySeries, *, issue_month: date, months: int) -> float | None:
     """Total of the window, whatever the series measures, or `None` when any day
     of it is missing."""
-    first, last = _window_bounds(issue_month, months=months)
+    first, last = window_bounds(issue_month, months=months)
     total = 0.0
     day = first
     while day <= last:
@@ -255,5 +266,5 @@ def _is_missing(value: float | None) -> bool:
 def _window_months(issue_month: date, months: int) -> list[int]:
     """The calendar months (1-12) of the window that ends on the last day of M-1,
     in chronological order."""
-    first, _ = _window_bounds(issue_month, months=months)
+    first, _ = window_bounds(issue_month, months=months)
     return [(first.month - 1 + step) % 12 + 1 for step in range(months)]
