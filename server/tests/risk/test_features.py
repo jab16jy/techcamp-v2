@@ -416,3 +416,42 @@ def test_a_mid_month_issue_date_never_reads_days_of_the_issue_month() -> None:
         neighbours=NEIGHBOURS,
         climatology=CLIMATOLOGY_MM,
     )
+
+
+@pytest.mark.parametrize("months", [0, -1])
+def test_a_window_of_less_than_one_month_is_rejected_not_a_zero(months: int) -> None:
+    # R3-001 (#238): an empty or inverted window is a caller bug, never a 0 mm claim.
+    with pytest.raises(ValueError):
+        precip_sum(_precip_series(), issue_month=ISSUE_MONTH, months=months)
+    with pytest.raises(ValueError):
+        precip_anomaly(_precip_series(), issue_month=ISSUE_MONTH, months=months, climatology={})
+
+
+def test_a_nan_day_is_missing_evidence_like_none() -> None:
+    # R3-002 (#238): NaN is pandas' missing marker in `ml/`; it must read as None here,
+    # or training gets NaN where serving gets None (docs/08 "Paridad de features").
+    series: dict[date, float] = _precip_series()
+    series[date(2024, 10, 15)] = float("nan")
+    assert precip_sum(series, issue_month=ISSUE_MONTH, months=1) is None
+    assert precip_sum(series, issue_month=ISSUE_MONTH, months=2) is None
+    # Negative: the same NaN outside the 1-month window of a September issue is unread.
+    assert precip_sum(series, issue_month=date(2024, 10, 1), months=1) == 150.0
+    climatology = monthly_climatology(series, years={2024})
+    assert 10 not in climatology
+    assert climatology[9] == 150.0
+
+
+def test_a_window_crossing_the_year_boundary() -> None:
+    # R3-003 (#238): issue month January 2025 -> the 6-month window is Jul..Dec 2024.
+    # Rain: Jul 31x3=93, Aug 31x4=124, Sep 30x5=150, Oct 31x6=186, Nov 30x7=210,
+    # Dec 31x8=248; total 1011. Climatology 10 mm per month -> anomaly 1011-60 = 951.
+    rain = {7: 3.0, 8: 4.0, 9: 5.0, 10: 6.0, 11: 7.0, 12: 8.0}
+    series = _series(date(2024, 7, 1), date(2024, 12, 31), lambda day: rain[day.month])
+    january = date(2025, 1, 1)
+    assert precip_sum(series, issue_month=january, months=6) == 1011.0
+    assert precip_sum(series, issue_month=january, months=1) == 248.0
+    climatology = {month: 10.0 for month in range(7, 13)}
+    assert precip_anomaly(series, issue_month=january, months=6, climatology=climatology) == 951.0
+    # Negative: without December in the climatology the January anomaly is unknown.
+    del climatology[12]
+    assert precip_anomaly(series, issue_month=january, months=1, climatology=climatology) is None

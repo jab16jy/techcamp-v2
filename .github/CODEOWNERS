@@ -1,0 +1,4 @@
+# CODEOWNERS (ADR-0020, #192)
+# Harness, locked test set, promotion gate and the manifest freeze under human ownership.
+/ml/harness/ @jab16jy
+/ml/src/techcamp_ml/harness/ @jab16jy

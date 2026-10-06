@@ -111,7 +111,7 @@ def monthly_climatology(series: DailySeries, *, years: Container[int]) -> dict[i
     totals: dict[int, list[float]] = {}
     for (year, month), values in days_by_month.items():
         length = monthrange(year, month)[1]
-        if any(values.get(number) is None for number in range(1, length + 1)):
+        if any(_is_missing(values.get(number)) for number in range(1, length + 1)):
             continue
         total = sum(value for value in values.values() if value is not None)
         totals.setdefault(month, []).append(total)
@@ -222,6 +222,8 @@ def _window_bounds(issue_month: date, *, months: int) -> tuple[date, date]:
     passes the day the job ran on gets the same window as one that passes the
     first of M, and never reads a day of M.
     """
+    if months < 1:
+        raise ValueError(f"a window spans at least one month, got {months}")
     first_of_month = _month_start(issue_month.year, issue_month.month, offset=0)
     return (
         _month_start(issue_month.year, issue_month.month, offset=-months),
@@ -237,11 +239,17 @@ def _window_sum(series: DailySeries, *, issue_month: date, months: int) -> float
     day = first
     while day <= last:
         value = series.get(day)
-        if value is None:
+        if value is None or math.isnan(value):
             return None
         total += value
         day += timedelta(days=1)
     return total
+
+
+def _is_missing(value: float | None) -> bool:
+    """`None` or NaN: NaN is how pandas marks a missing day in `ml/`, so both sides
+    must read it as missing evidence, never as a number (parity, docs/08)."""
+    return value is None or math.isnan(value)
 
 
 def _window_months(issue_month: date, months: int) -> list[int]:
