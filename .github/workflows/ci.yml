@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       server: ${{ steps.filter.outputs.server }}
+      ml: ${{ steps.filter.outputs.ml }}
       web: ${{ steps.filter.outputs.web }}
     steps:
       - uses: actions/checkout@v7
@@ -42,11 +43,17 @@ jobs:
           # change that can break a job's own steps must never skip it. Over the three-dot
           # diff, so it is GitHub's own list; no paths-filter action (D-T5b.2, D-T5b.4, D-T5b.5).
           server_paths='^(server|infra|rules|rule-tests)/|^justfile$|^sgconfig\.yml$|^\.github/workflows/'
+          ml_paths='^ml/|^justfile$|^\.github/workflows/'
           web_paths='^web/|^\.github/workflows/'
           if printf '%s\n' "$changed" | grep -Eq "$server_paths"; then
             echo "server=true" >> "$GITHUB_OUTPUT"
           else
             echo "server=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$changed" | grep -Eq "$ml_paths"; then
+            echo "ml=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ml=false" >> "$GITHUB_OUTPUT"
           fi
           if printf '%s\n' "$changed" | grep -Eq "$web_paths"; then
             echo "web=true" >> "$GITHUB_OUTPUT"
@@ -103,6 +110,24 @@ jobs:
         run: uv run ast-grep test --config ../sgconfig.yml
       - name: ast-grep scan
         run: uv run ast-grep scan --config ../sgconfig.yml
+      - run: uv run pytest
+
+  ml:
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ml == 'true') }}
+    needs: changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy
       - run: uv run pytest
 
   web:
