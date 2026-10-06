@@ -2,19 +2,28 @@
 
 docs/04-api.md §Estado de la parcela (pantalla principal) and its field rule
 table; docs/05-arquitectura.md §Módulos (C4 nivel 3) and D-T0.1; docs/06 §5 for
-the representative sensor; ADR-0023 for the rainfed plot.
+the representative sensor; ADR-0023 for the rainfed plot; docs/11-metricas.md
+and D-T0.13 for `digital_adoption_index` (E11 T8).
 
 The module is read-only, owns no tables, and nothing depends on it. It reaches
 the other five modules through their public `application` facades only —
 never their `domain` or their `adapters` (docs/05's dependency rules), which
 is why `Alert`, `Plot`, `Crop` and the errors this module does not own are
 projected into the dataclasses below instead of being re-exported.
+
+`metrics` is reached the same way, only the import names the module instead of
+the package: `metrics/application/__init__.py` is empty because T3, T4 and T5
+each shipped their own slice of that facade (E11). `get_latest_plot_month` and
+its `MonthlyMetricRepository` port come from `metrics.application.adoption`, and
+the domain's `PlotMonthlyMetric` is only inferred, never imported: the stored row
+stays behind the repository, like every other source this module reads.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -39,6 +48,10 @@ from techcamp.irrigation.application import (
 from techcamp.irrigation.application.ports import (
     IrrigationRecommendationRepository,
     WaterBalanceRepository,
+)
+from techcamp.metrics.application.adoption import (
+    MonthlyMetricRepository,
+    get_latest_plot_month,
 )
 from techcamp.shared.dates import local_today
 from techcamp.telemetry.application import (
@@ -164,6 +177,23 @@ class OpenAlert:
 
 
 @dataclass(frozen=True, slots=True)
+class DigitalAdoption:
+    """The docs/04 `digital_adoption_index` field: the stored index with the
+    month it belongs to, so the home screen can write "Adopción digital: 72 ·
+    septiembre" (docs/07 §Inicio) without guessing which month it read.
+
+    `None` in the payload, never a zero: a plot whose job has not run, and a
+    month with no evidence at all, are both missing data (D-T0.2).
+    """
+
+    value: Decimal
+    """`Decimal` from `metrics`, kept exact: the stored 0-100 index crosses the
+    wire unchanged and is rounded only where it is displayed."""
+    month: date
+    """The month's first day, the `plot_metric_monthly` bucket (D-T0.2)."""
+
+
+@dataclass(frozen=True, slots=True)
 class PlotStatus:
     plot: PlotSummary
     active_cycle: ActiveCycleSummary | None
@@ -173,8 +203,8 @@ class PlotStatus:
     open_alerts: list[OpenAlert]
     weather_next_3d: list[PlotWeatherDay]
     nodes: list[PlotNodeHealth]
-    digital_adoption_index: None
-    """D-T0.2: null until E11 computes the index (docs/11-metricas.md)."""
+    digital_adoption_index: DigitalAdoption | None
+    """The plot's latest stored month (D-T0.13); `None` when it has none yet."""
 
 
 async def build_plot_status(
@@ -195,6 +225,7 @@ async def build_plot_status(
     recommendations: IrrigationRecommendationRepository,
     weather: WeatherRepository,
     alerts: AlertRepository,
+    metrics: MonthlyMetricRepository,
 ) -> PlotStatus:
     """Compose the whole home payload for one plot.
 
@@ -291,7 +322,9 @@ async def build_plot_status(
         nodes=await get_plot_nodes_health(
             plot_id=plot.id, org_id=plot.org_id, nodes=nodes, now=now
         ),
-        digital_adoption_index=None,
+        digital_adoption_index=await _digital_adoption(
+            plot_id=plot.id, org_id=plot.org_id, metrics=metrics
+        ),
     )
 
 
@@ -451,6 +484,30 @@ async def _recommendation(
         advice=list(stored.advice),
         rationale=stored.rationale,
     )
+
+
+async def _digital_adoption(
+    *,
+    plot_id: UUID,
+    org_id: UUID,
+    metrics: MonthlyMetricRepository,
+) -> DigitalAdoption | None:
+    """The plot's latest stored adoption index, or `None` (D-T0.13).
+
+    `None` in two cases docs/04 §Estado lists separately: the plot has no
+    stored month, or the latest month's own index is null because none of its
+    four components had evidence (D-T0.2). Neither is an index of zero, which
+    would read as "adopted nothing" (docs/11-metricas.md §2).
+
+    `get_latest_plot_month` orders by `month` descending, so a re-run of an
+    older month never becomes the latest one; this only reads what the monthly
+    job stored and never recomputes, so the number a farmer sees does not move
+    because somebody re-ran a job.
+    """
+    latest = await get_latest_plot_month(org_id=org_id, plot_id=plot_id, metrics=metrics)
+    if latest is None or latest.digital_adoption_index is None:
+        return None
+    return DigitalAdoption(value=latest.digital_adoption_index, month=latest.month)
 
 
 def _water_balance(day: PlotWaterBalanceDay) -> WaterBalanceSummary:

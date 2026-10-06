@@ -1,6 +1,6 @@
 # Registro de decisiones de arquitectura (ADR)
 
-Cada ADR registra una decisión importante: su contexto, las alternativas y las consecuencias aceptadas. Un ADR aceptado no se edita; si la decisión cambia, se escribe uno nuevo que lo **reemplaza** y el anterior se marca `Reemplazada por ADR-XXXX`.
+Cada ADR registra una decisión importante: su contexto, las alternativas y las consecuencias aceptadas. Un ADR aceptado no se edita; si la decisión cambia, se escribe uno nuevo que lo **reemplaza** y el anterior se marca `Reemplazada por ADR-XXXX`. Cuando un ADR posterior **aclara** una decisión sin cambiarla, el anterior se marca `Aceptada; modificada por ADR-XXXX` y el texto original queda intacto (así 0009 con 0022 y 0023, y 0024 con 0025).
 
 | ADR | Decisión | Estado |
 |---|---|---|
@@ -27,7 +27,8 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0021](0021-perfil-seminario-local.md) | Perfil de seminario: ejecución local con emuladores | Aceptada |
 | [0022](0022-estres-hidrico-y-asimilacion.md) | Estrés hídrico por parcela y asimilación ponderada del sensor | Aceptada |
 | [0023](0023-parcelas-con-riego-y-secano.md) | Parcelas con riego y de secano: el mismo balance hídrico, con lámina o con recomendación de secano | Aceptada |
-| [0024](0024-metricas-de-impacto-y-adopcion-digital.md) | Métricas de impacto y adopción digital: impacto contra la encuesta de inscripción e índice que cuenta acciones | Aceptada |
+| [0024](0024-metricas-de-impacto-y-adopcion-digital.md) | Métricas de impacto y adopción digital: impacto contra la encuesta de inscripción e índice que cuenta acciones | Aceptada; modificada por 0025 |
+| [0025](0025-la-accion-de-water-stress-es-de-la-parcela.md) | La acción de `water_stress` que cuenta en el índice de adopción es de la parcela, no del ciclo de cultivo | Aceptada |
 
 Los ADRs 0004, 0007 (en parte), 0014, 0016, 0017 y 0018 describen el perfil `production` (futuro). Cada uno lleva una nota de **Alcance** que remite al [ADR-0021](0021-perfil-seminario-local.md), donde se definen los adaptadores del perfil `seminar`. Esa nota no cambia la decisión.
 

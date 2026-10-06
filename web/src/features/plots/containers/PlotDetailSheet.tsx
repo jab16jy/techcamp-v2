@@ -17,8 +17,10 @@ import {
 } from '../../../design-system/ui/select'
 import { ApiError } from '../../../lib/api/client'
 import { describeApiError } from '../../../lib/api/errorCopy'
+import type { Role } from '../../../lib/api/me'
 import { formatFreshness, minutesSince } from '../../../design-system/components/format'
 import { asReadingEvent, useFarmEvents } from '../../../lib/api/useFarmEvents'
+import { BaselineSection } from '../../metrics/containers/BaselineSection'
 import { PlotNodesSection } from '../../nodes/containers/PlotNodesSection'
 import {
   SOIL_MOISTURE,
@@ -41,6 +43,9 @@ export interface PlotDetailSheetProps {
   /** The farm the plot belongs to: the SSE stream is filtered by farm (docs/04:180). */
   farmId: string
   plotName: string
+  /** Caller role in the active organization: only an owner or a technician fills
+   * the enrollment survey (docs/07:150; docs/04-api.md:233 gives the rest read). */
+  callerRole?: Role | null
 }
 
 // Keys of `techcamp.farms.domain.models.FAO56_TEXTURE_WATER_LIMITS` (server, T4): the only
@@ -491,6 +496,7 @@ export function PlotDetailSheet({
   plotId,
   farmId,
   plotName,
+  callerRole = null,
 }: PlotDetailSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -503,6 +509,7 @@ export function PlotDetailSheet({
           <SoilMoistureSection plotId={plotId} farmId={farmId} />
           <SoilSection plotId={plotId} />
           <CycleSection plotId={plotId} />
+          <BaselineSection plotId={plotId} callerRole={callerRole} />
           <PlotNodesSection plotId={plotId} />
         </div>
       </SheetContent>
