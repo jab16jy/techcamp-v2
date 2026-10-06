@@ -2,9 +2,17 @@
 
 The HTTP shape only: pydantic out, `PlotNotFoundError` mapped to
 `problem+json`, and `home.application.build_plot_status` decides every field's
-rule (D-T0.1). The repositories come from each module's own `deps` — the
-wiring that already `weather`, `irrigation`, `telemetry` and `logbook` do —
-so nothing is built twice.
+rule (D-T0.1). Every repository comes from the module that owns it, through
+that module's own `deps` — the wiring that already `weather`, `irrigation`,
+`telemetry` and `logbook` do, and that `metrics` does too since it ships its
+own `MonthlyMetricRepoDep`. Nothing is built twice here, and no metrics SQL
+adapter crosses a module boundary from this file.
+
+Each dep is annotated with the adapter class its own module returns, as every
+dep in this file is. The boundary `home` actually owns is one layer down:
+`build_plot_status` takes `metrics.application.adoption.MonthlyMetricRepository`,
+the port, so `home` still reaches `metrics` only through its use case and
+never through its SQL.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ from techcamp.irrigation.adapters.api.deps import (
     WaterBalanceRepoDep,
 )
 from techcamp.logbook.adapters.api.deps import VisitRepoDep
+from techcamp.metrics.adapters.api.deps import MonthlyMetricRepoDep
 from techcamp.shared.errors import ProblemError
 from techcamp.telemetry.adapters.api.deps import (
     CalibrationRepoDep,
@@ -143,6 +152,20 @@ class PlotNodeHealthView(BaseModel):
     completeness_24h: float | None
 
 
+class DigitalAdoptionIndexView(BaseModel):
+    """The stored index with the month it belongs to (D-T0.13).
+
+    `value` is a float, not the stored `Decimal`: this is the display number
+    docs/07 §Inicio renders as "Adopción digital: 72 · septiembre", and
+    Pydantic would refuse to serialize a `Decimal` into a float field without
+    the cast done at the boundary. `month` is the bucket's first day, an ISO
+    date on the wire, which is what the web formats as the month name.
+    """
+
+    value: float
+    month: date
+
+
 class PlotStatusView(BaseModel):
     plot: PlotSummaryView
     active_cycle: ActiveCycleView | None
@@ -152,8 +175,9 @@ class PlotStatusView(BaseModel):
     open_alerts: list[OpenAlertView]
     weather_next_3d: list[WeatherDayView]
     nodes: list[PlotNodeHealthView]
-    digital_adoption_index: None = None
-    """D-T0.2: null until E11 computes the index (docs/11-metricas.md)."""
+    digital_adoption_index: DigitalAdoptionIndexView | None
+    """`None` until the plot has a stored month, and `None` again when that
+    month's own index is null (D-T0.2, docs/04 §Estado). Never a zero."""
 
 
 def _view(status: PlotStatus) -> PlotStatusView:
@@ -243,7 +267,12 @@ def _view(status: PlotStatus) -> PlotStatusView:
             )
             for node in status.nodes
         ],
-        digital_adoption_index=status.digital_adoption_index,
+        digital_adoption_index=None
+        if status.digital_adoption_index is None
+        else DigitalAdoptionIndexView(
+            value=float(status.digital_adoption_index.value),
+            month=status.digital_adoption_index.month,
+        ),
     )
 
 
@@ -264,6 +293,7 @@ async def get_plot_status(
     recommendations: RecommendationRepoDep,
     weather: WeatherRepoDep,
     alerts: AlertRepoDep,
+    metrics: MonthlyMetricRepoDep,
     now: NowDep,
 ) -> PlotStatusView:
     """docs/04 §Estado: `GET /plots/{plot_id}/status`, the whole home screen in
@@ -289,6 +319,7 @@ async def get_plot_status(
             recommendations=recommendations,
             weather=weather,
             alerts=alerts,
+            metrics=metrics,
         )
     except PlotNotFoundError as exc:
         raise ProblemError(status=404, title="Plot not found") from exc

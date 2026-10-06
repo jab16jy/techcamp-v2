@@ -30,26 +30,51 @@ Hay cinco grupos:
 | **Margen bruto** | `Σ (sold_kg × sale_price_cop_per_kg) − Σ costos` | Bitácora (venta registrada en la cosecha) | Por ciclo |
 | **Pérdidas por evento** | `Σ quantity` (kg) y `Σ cost_cop` (COP) de las observaciones con `alert_id` | Bitácora | Por evento |
 
+**Ventana de los días en estrés hídrico.** El balance asimilado es diario **por parcela** y no lleva ciclo ([03](03-modelo-datos.md)), así que se lee sobre una ventana, y la ventana es parte de la cifra:
+
+- Un ciclo `active` se mide desde `sown_on` hasta `min(expected_harvest_on, hoy)` en `America/Bogota`: un ciclo abierto no tiene cierre que lo acote, y su única esperanza de fin es la fecha esperada.
+- Un ciclo terminado (`harvested` o `lost`) se mide hasta el `occurred_on` de la entrada de bitácora que **registra su cierre**, que es la misma entrada y el mismo ancla que le dan su mes a un ciclo cerrado (§2, D-T7.2). Una `expected_harvest_on` equivocada o tardía no puede extender la ventana más allá del día en que el ciclo se cerró, y un ciclo cerrado no sigue contando días que ya pertenecen al siguiente ciclo de la misma parcela.
+- Un ciclo terminado **sin entrada de cierre no tiene ventana**, y la cifra es `null`: evidencia faltante, no un conteo truncado a hoy ([03:441](03-modelo-datos.md)).
+
+El futuro nunca está dentro de un ciclo: una entrada de cierre fechada hacia adelante no respalda días que todavía no ocurren.
+
 **Parcelas de secano** (`irrigation_system = none`, [ADR-0023](adr/0023-parcelas-con-riego-y-secano.md); brecha G06 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). No tienen agua aplicada ni productividad del agua de riego: su resultado hídrico se reporta con el rendimiento y los días en estrés hídrico.
 
 **Encuesta de inscripción** (`plot_baseline`). Al inscribir una parcela se registra una encuesta corta: cultivo y rendimiento del último ciclo, costos aproximados y práctica de riego ([03](03-modelo-datos.md#plot_baseline-encuesta-de-inscripción)). El impacto se mide contra esa encuesta (antes y después por parcela) y, en un piloto, contra parcelas de control del mismo municipio sin TechCamp (diferencias en diferencias). No se mide contra la media municipal: los productores que adoptan se autoseleccionan y EVA no es una muestra comparable, así que el rendimiento relativo municipal solo da contexto (brechas G04 y G11 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
 
 ## 2. Adopción: índice de adopción digital
 
-Es un índice de 0 a 100 por parcela, calculado cada mes con cuatro componentes de igual peso. Mide el **uso de la plataforma**, no la tecnificación en sí (brecha G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
+Es un índice de 0 a 100 por parcela, calculado cada mes con cuatro componentes que pesan lo mismo entre sí. Mide el **uso de la plataforma**, no la tecnificación en sí (brecha G05 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas); [ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
+
+El índice **reparte los 100 puntos entre los componentes que sí tienen evidencia**, con el mismo peso cada uno (100/4 con los cuatro, 100/3 con uno nulo, 100/2 con dos, 100 con uno):
 
 ```
-digital_adoption_index = 25 × monitoring + 25 × record_keeping + 25 × decision + 25 × risk_management
+con_evidencia = los componentes cuyo valor NO es null
+digital_adoption_index = 100 × (Σ con_evidencia) / (cantidad de con_evidencia)
+digital_adoption_index = null    si los cuatro componentes son null
 ```
+
+Con los cuatro componentes presentes, `100 × (monitoring + record_keeping + decision + risk_management) / 4` es el mismo número que el promedio ponderado fijo de 25 puntos, así que los dos enunciados coinciden cuando no falta evidencia; difieren en cuanto un componente vale `null`, que es lo que fija la regla de cálculo más abajo (D-T0.3).
 
 | Componente | Fórmula (0–1) | Qué significa |
 |---|---|---|
 | `monitoring` | `lecturas recibidas / lecturas esperadas` en el mes (tope 1) | La parcela se está midiendo |
 | `record_keeping` | `semanas con ≥ 1 entrada de bitácora / semanas del mes` | El productor registra lo que hace |
 | `decision` | `días con recomendación seguida / días con recomendación`. Seguida = lámina aplicada dentro de ±25 % de la recomendada, o no regar cuando la recomendación fue 0 | Las decisiones usan los datos |
-| `risk_management` | `alertas con acción registrada a tiempo / alertas abiertas` de la parcela en el mes (las de nodo no cuentan: van al técnico). Acción = una entrada de bitácora con el `alert_id` de la alerta o, en `water_stress` de una parcela con riego, un riego registrado. A tiempo = antes de 48 h desde la apertura. Reconocer la alerta no cuenta como acción | Las alertas llevan a actuar |
+| `risk_management` | `alertas con acción registrada a tiempo / alertas abiertas` de la parcela en el mes (las de nodo no cuentan: van al técnico). Acción = una entrada de bitácora con el `alert_id` de la alerta o, en `water_stress` de una parcela con riego, un riego registrado **en esa parcela**. A tiempo = antes de 48 h desde la apertura. Reconocer la alerta no cuenta como acción | Las alertas llevan a actuar |
 
 En una parcela de secano `decision` no aplica (no hay lámina que seguir) y los otros tres componentes pesan 100/3 cada uno.
+
+**Reglas de cálculo** (E11, D-T0.3 a D-T0.6):
+
+- **Mes.** Es el mes calendario en `America/Bogota`. Un componente se calcula con los eventos de ese mes.
+- **Componente sin evidencia.** Un componente sin denominador vale `null`, nunca `0` ni `1`. Pasa con `monitoring` si la parcela no tuvo nodo reclamado en el mes, con `decision` si no hubo días con recomendación que cuente o la parcela es de secano, y con `risk_management` si no se abrió ninguna alerta de parcela. El índice reparte los 100 puntos entre los componentes no nulos, con el mismo peso cada uno (la regla de secano es el caso de un solo componente nulo). Si los cuatro son `null`, el índice es `null`.
+- **`monitoring`.** Lecturas esperadas por nodo = segundos en que el nodo estuvo reclamado dentro del mes (desde el mayor entre el inicio del mes y `claimed_at`) ÷ `interval_s`. Cuentan todas las lecturas recibidas, con cualquier `quality`: el componente mide que la parcela se está midiendo, y una lectura fuera de rango ya la cubren las alertas de nodo. Con varios nodos se suman las esperadas y las recibidas antes de dividir.
+- **`decision`.** Cuentan los días con recomendación `irrigate`, `postpone` o `not_needed`; `no_kc` y `rainfed` no entran. Un día `irrigate` se sigue si la suma de `irrigation_mm` registrada ese día queda dentro de ±25 % de `depth_mm`. Un día `postpone` o `not_needed` se sigue si ese día no hay riego registrado.
+- **`risk_management`.** El denominador son las alertas de parcela con `opened_at` dentro del mes. La bitácora registra fechas, no horas, así que "a tiempo" significa que `occurred_on` cae entre el día local de `opened_at` y el día local de `opened_at + 48 h`. Una alerta abierta en las últimas 48 h del mes se evalúa con lo registrado hasta que corre el job.
+- **La acción de `water_stress` es de la parcela, no del ciclo de cultivo** (D-T3.1). El riego que responde una alerta de estrés hídrico cuenta si está registrado **en esa parcela** dentro de la ventana de 48 h, y **no lleva qualifier de ciclo**: una entrada de riego con `crop_cycle_id` nulo también cuenta, y cuenta igual si el teléfono le colgó el ciclo que tenía en caché. La acción tampoco se acota por el tipo de entrada: `alert_id` es la marca de la acción (`alert` no tiene `crop_cycle_id`, así que acotarla exigiría un cruce temporal que ningún doc define, y `crop_cycle_id` admite `null` — [03](03-modelo-datos.md#logbook_entry-la-tabla-que-se-sincroniza-offline)).
+
+El job mensual guarda el índice y sus componentes en `plot_metric_monthly`. El resumen del ciclo se guarda en `crop_cycle_summary` cuando el ciclo termina (`harvested` o `lost`). El de un ciclo activo se calcula al consultarlo y no se guarda (D-T0.8). El cambio frente a la encuesta es `null` si `last_yield_kg_ha = 0`: una temporada perdida es un dato válido de la encuesta, pero no se puede medir un cambio porcentual contra cero (#243). `relative_yield` queda `null` hasta que exista `field_record`: los datos EVA de la v1 no se recuperaron (D-T0.9).
 
 Los pesos son fijos en v2.0 y se revisan con los datos del piloto. Si el índice debe alinearse con la clasificación de usuarios del MADR (cinco aspectos del enfoque de extensión, niveles 1–4, Ley 1876) es una decisión abierta del dueño del producto.
 
@@ -58,8 +83,23 @@ Otras métricas de adopción:
 | Métrica | Fórmula |
 |---|---|
 | Parcelas monitoreadas | `parcelas con nodo activo / parcelas` |
-| Ciclos cerrados con cosecha | `ciclos con cosecha registrada / ciclos terminados` |
+| Ciclos cerrados con cosecha | `ciclos con cosecha registrada / ciclos terminados` (el mes de un ciclo es el de la entrada de bitácora que registra su cierre; ver §2) |
 | Tiempo a primera lectura | Horas entre el alta del nodo y su primera lectura válida |
+
+Estas tres, junto con el promedio del índice de las parcelas con índice, forman `OrgMetrics` (`GET /organizations/{org_id}/metrics`, D-T0.12). Se calculan al consultar: cuentan sobre el mes pedido y la mediana del tiempo a primera lectura toma los nodos reclamados en ese mes, un valor por nodo y no la mediana de las medianas de parcela.
+
+**En qué mes cuenta un ciclo** (D-T7.2, y D-T10.1). `crop_cycle` no tiene fecha de cierre ([03:128-135](03-modelo-datos.md)), así que el mes de un ciclo es el de la entrada de bitácora que **registra su cierre**, por su `occurred_on`: la fecha que escribió el productor, nunca la que llegó la sincronización offline.
+
+**Un ciclo cerrado cuenta en un solo mes** (D-T10.1, ruling del dueño, 2026-10-05): el de su entrada de cierre, y ningún otro. Un ciclo no entra en el denominador de dos meses, ni su cosecha aparece en el numerador de un mes que no es el suyo. Las reglas de numerador y denominador se leen sobre ese único mes, no sobre "el mes".
+
+Cuando varias entradas podrían registrar el cierre, la elige el `status` del ciclo, que es la misma regla: una entrada `harvest` registra el cierre de un ciclo cosechado, y una `observation` con `alert_id` el de uno perdido (esa observación *es* el registro de la pérdida, [03:424](03-modelo-datos.md)). Con varias entradas del mismo tipo, la más antigua.
+
+- **Denominador:** ciclos cerrados cuyo mes es el pedido y `status` en `harvested` o `lost`.
+- **Numerador:** de esos ciclos, los que tienen una entrada `harvest` **en su mes**, **sin filtro de `status`**. La asimetría con el denominador es deliberada: ante datos contradictorios —un cosechero que registró la cosecha y después anotó la pérdida— el registro del productor es la evidencia más fuerte disponible, así que el mes reporta la cosecha en vez de discutir el `status`.
+- **Un ciclo `active` no cuenta ni en el numerador ni en el denominador**, aunque tenga una cosecha registrada: el denominador son ciclos **terminados**, así que la fracción es de ciclos cerrados y registrados, no de ciclos con cosecha anotada.
+- **Evidencia faltante, no cero.** Un ciclo `lost` sin observación de pérdida, y un ciclo cerrado por `PATCH` sin ninguna entrada de bitácora, no aparecen en ningún mes. Un mes sin ciclos terminados vale `null`, nunca `0`.
+
+La mediana del tiempo a primera lectura usa la lectura válida según [04:83](04-api.md): calibrada, con `value` no nulo y sin el bit de fuera de rango en `quality`. Un nodo reclamado en el mes que todavía no tiene lectura válida no aporta valor a la mediana, y no es lo mismo que aportar un cero.
 
 ## 3. Calidad de decisión
 

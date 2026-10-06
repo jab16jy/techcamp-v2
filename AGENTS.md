@@ -118,7 +118,8 @@ the header: `uv run pytest --randomly-seed=<n>`.
   `epic:eN`, `area:*`, `type:*`), linked from the feature doc's "Review (RDD)"; fix the WARNINGs
   that touch the task's own code now, in their own commit with `Refs #N`, and note in the issue
   what was fixed.
-- Delivery: stacked-to-main chained PRs of about 400 authored lines, merged in order.
+- Delivery: stacked-to-main chained PRs, one per work unit (per task when it is a single unit),
+  merged in order. No line budget; never shrink a diff to fit one.
 - Skills: the Agent Teams Lite registry `.atl/skill-registry.md` (local, gitignored; rebuild with
   `gentle-ai skill-registry refresh`) is the skill index. Delegators pick matching skills there
   and pass their exact `SKILL.md` paths to subagents.
