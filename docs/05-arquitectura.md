@@ -121,6 +121,7 @@ flowchart TB
   metrics --> logbook
   metrics --> alerts
   metrics --> irrigation
+  metrics --> farms
   assistant --> farms
   assistant --> telemetry
   assistant --> irrigation
@@ -132,13 +133,14 @@ flowchart TB
   home --> irrigation
   home --> alerts
   home --> logbook
+  home --> metrics
 ```
 
 D14: `alerts` depende de `farms` e `identity` para obtener el suelo de la parcela, el técnico de la finca y los miembros de la organización; `notifications` depende de `identity` para las suscripciones push y el teléfono del usuario.
 
 D25: `alerts` depende de `irrigation` para la regla `water_stress` sobre el balance hídrico: lee `water_balance_daily` (el θ_estrés y el `Dr > RAW` de la parcela, [§3](06-diseno-detallado.md#3-evaluación-de-alertas) y [§5](06-diseno-detallado.md#5-riego-balance-hídrico-fao-56) de [06](06-diseno-detallado.md), [ADR-0022](adr/0022-estres-hidrico-y-asimilacion.md)) y comparte con el job de riego la regla del sensor representativo (`K > 0`). La dependencia es de su paquete `application` (una lectura), nunca de su `domain`, y nunca al revés: `irrigation` no depende de `alerts`, así que el job de riego sigue sin llamar a ninguna regla.
 
-D-T0.1 (E9): `home` es un módulo de solo lectura que arma la pantalla de inicio (`GET /plots/{plot_id}/status`) y la bandeja del técnico (`GET /me/tray`) ([04](04-api.md#estado-de-la-parcela-pantalla-principal)). Llama a consultas de la fachada `application` de `farms`, `telemetry`, `weather`, `irrigation`, `alerts` y `logbook`; no tiene tablas y ningún módulo depende de él. No vive en `alerts` porque eso le daría a `alerts` una dependencia de `logbook` que nada tiene que ver con alertas, ni en un router suelto porque el orden, las reglas de `null` y la etapa del cultivo merecen pruebas de aplicación.
+D-T0.1 (E9): `home` es un módulo de solo lectura que arma la pantalla de inicio (`GET /plots/{plot_id}/status`) y la bandeja del técnico (`GET /me/tray`) ([04](04-api.md#estado-de-la-parcela-pantalla-principal)). Llama a consultas de la fachada `application` de `farms`, `telemetry`, `weather`, `irrigation`, `alerts`, `logbook` y `metrics` (esta última desde E11: lee el índice más reciente por la fachada de `metrics`, no por vistas SQL); no tiene tablas y ningún módulo depende de él. No vive en `alerts` porque eso le daría a `alerts` una dependencia de `logbook` que nada tiene que ver con alertas, ni en un router suelto porque el orden, las reglas de `null` y la etapa del cultivo merecen pruebas de aplicación.
 
 **Reglas de dependencia** (verificadas en CI con `import-linter`):
 
@@ -146,7 +148,7 @@ D-T0.1 (E9): `home` es un módulo de solo lectura que arma la pantalla de inicio
 |---|---|
 | Sin ciclos | Las flechas del grafo anterior son las únicas permitidas. |
 | Solo la fachada pública | Un módulo solo importa el paquete `application` público de otro, nunca su `domain` ni sus `adapters`. |
-| Lecturas cruzadas | Si un módulo necesita datos de otro, llama a una consulta de su fachada; no hace joins entre tablas ajenas. `metrics` es la única excepción: lee vistas SQL de solo lectura porque agrega datos de todos. |
+| Lecturas cruzadas | Si un módulo necesita datos de otro, llama a una consulta de su fachada; no hace joins entre tablas ajenas. `metrics` es la única excepción: lee vistas SQL de solo lectura porque agrega datos de todos. El control de acceso a la parcela y la lectura de sus ciclos pasan por la fachada de `farms`, y `home` lee el índice más reciente por la fachada de `metrics` (E11, D-T0.1). |
 | Eventos | La comunicación asíncrona usa la tabla outbox y el worker, nunca llamadas en segundo plano dentro del proceso. |
 
 ### Estructura hexagonal de cada módulo
