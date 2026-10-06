@@ -248,8 +248,65 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   docs/08 lo rechaza el almacén (D-T9.8) y el cliente boto3 se construía con `Config(s=…)` en vez
   de `s3=…`, que es `TypeError` en cada corrida real porque todos los tests lo duplicaban.
   Pendiente: RDD de la lane, y T10.
-- [ ] T10 Close: `just gate-full`, demo run, follow-up issues (risk screen), delivery plan. Route:
-  parent.
+- [x] T10 Close: `gate-release`, follow-up issues, plan de entrega y merge a `main`. Route: parent.
+  - **`gate-release` sobre `180bb7e`** (HEAD del épico tras el merge de main): `gate-lane` **FAIL**,
+    `gate-full` **PASS**, `pytest --randomly-seed=787316` **PASS**, `--randomly-seed=442816` **PASS**.
+    `gate-full`: 1629 server + 264 ml + 517 web (65 files) + build + size budget.
+    El FAIL de `gate-lane` es `36b709c5` (dentro de `e10-03`): crea `ml/tests/test_lock.py` con el
+    bloque de imports sin ordenar y `ml/pyproject.toml` sin `[tool.ruff.lint.isort] known-first-party`
+    todavía. El commit siguiente `b997bf5` lo corrige. **Decisión del dueño: aceptado y documentado**
+    (A), no rebaseado, porque el rebase reescribiría ~108 shas siguientes incluidos los boundaries de
+    los recibos de T3/T4/T5/T8/T9. Registrado en el cuerpo de `#282` y de `#291`.
+  - **Rechain de Alembic**: `b6e1c4a7f2d9.down_revision` = **`43c9c5cc68c9`**
+    (`anchor_a_closed_cycle_on_one_month`), el head real de `main` después de que los fixes de E11
+    (#278, #279) mergearan. Verificado construyendo el grafo de 25 revisiones de `origin/main`, no
+    de memoria. Commit `180bb7e`. Un solo head confirmado en `main`: `b6e1c4a7f2d9 (head)`.
+  - **Follow-ups abiertos en T10**: **#277** (pantalla de riesgo — `web/` tiene cero archivos de E10;
+    `schema.d.ts` no tiene los tipos de riesgo; y la versión que sirve va con `thresholds={}` (D-T9.2)
+    así que hoy toda predicción sale en `low`) y **#292** (`CalibrationSheet.test.tsx:81` compara
+    `valid_from` contra `Date.now()` con 60 s de tolerancia; falló por 69 ms en CI y pasó local).
+    #292 **no es de E10**: `git diff --name-only origin/main e10-12 -- web/` sale vacío.
+  - **CodeRabbit**: 67 comentarios inline sobre el stack = 33 temas únicos. Triage en **#293**
+    (5 falsos positivos confirmados con evidencia + 3 decisiones de owner); reales en **#294**
+    (Major), **#295**, **#296** (Major), **#297**, **#298**, **#299** (Major). **Ningún CRITICAL ni
+    bloqueante**, que era la precondición de T10.6.
+  - **Plan de entrega: A**, 12 PRs uno por work unit, base `main` desde la creación, merge en orden,
+  con `size:exception` explícita (los cortes pasan las 400 líneas y el repo no tiene presupuesto de
+  líneas). Todos con **merge commit y nunca squash**, para que los shas de los recibos sigan
+  existiendo.
+  - **PRs y orden real de merge** (los ids se endogenous, el orden es el de la cadena):
+
+| # | rama | corte | líneas del corte | estado |
+|---|---|---|---|---|
+| 280 | `e10-01-t0-decisions` | T0 decisiones | +188/−2 | MERGED `71c33d0` |
+| 281 | `e10-02-t2-shared-features` | T2 shared features | +677/−2 | CERRADO sin merge |
+| 282 | `e10-03-t1-ml-scaffold` | T1 `ml/` scaffold | +3.376/−2 | MERGED `7587d7e` |
+| 283 | `e10-04-t6a-schema-repo-archive` | T6a schema+repo+archive | +2.135/−12 | MERGED |
+| 284 | `e10-05-t6b-job-endpoint` | T6b job+endpoint | +2.877/−33 | MERGED |
+| 285 | `e10-06-t3-m2-sources` | T3 M2 sources | +3.132/−7 | MERGED |
+| 286 | `e10-07-t4-m2-dataset-build` | T4 dataset build | +1.546/−35 | MERGED |
+| 287 | `e10-08-t7-alert-evaluators` | T7 alert evaluators | +2.007/−26 | MERGED |
+| 288 | `e10-09-t5-harness-promotion-gate` | T5 harness+gate | +2.187/−57 | MERGED |
+| 289 | `e10-10-t8-experiments` | T8 experiments | +3.265/−16 | MERGED |
+| 290 | `e10-11-t9-serving-registration` | T9 serving+registration | +2.430/−29 | MERGED |
+| 291 | `e10-12-t10-rechain` | T10 rechain | +2/−2 | MERGED |
+
+    `main` al cierre: **`6744502`**. E10 completo en `main`: 80 archivos / +17.092 líneas en
+    `ml/` + `risk/`.
+  - **`#281` quedó sin diff** y se cerró documentando la evidencia: su contenido entró a `main` por el
+    merge de `#282`, que lo lleva como ancestro (stack acumulativo). Verificado en `main`:
+    `risk/domain/features.py`, 20 tests en `test_features.py`, y `71d7988`/`99839c5` ancestros.
+  - **Recibos RDD intactos**: ningún sha quemado se reescribió. `3b21ab6` llegó como `d35f0a4` (el
+    cherry-pick ya documentado); `50209bf` es un tree, no un commit; `93006e3` estaba en la lane
+    descartada de T4 y lo reemplaza `bf6994b`, que sí está.
+  - **`main` sí está protegido** (ruleset `protect-main`, id `24219776`): exige `server`, `web` y
+    `gitleaks`. El brief decía que no. `required_approving_review_count: 0`, así que la plataforma no
+    exige aprobación de nadie — el control del review es humano.
+  - **`web` en `SKIPPED` no bloquea el merge**: a partir de `#283` el diff acumulado ya no toca
+    `web/` (E10 no tiene archivos ahí) y GitHub cuenta el check filtrado como satisfecho. Verificado
+    en `#283`, `#286`, `#289`.
+  - **`#300` es un PR de Dependabot** (`source-map-js` 1.2.1→1.2.2), ajeno a E10: no se abrió ni se
+    mergeó desde T10.
 
 ## Lanes
 Wave 1 (after T0): T1, T2. Wave 2: T3, T6 (after T2). Wave 3: T4, T5, T7. Wave 4: T8. Wave 5: T9.
