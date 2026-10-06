@@ -79,6 +79,43 @@ def s3_bucket() -> str:
     return os.environ.get("TECHCAMP_S3_BUCKET", "logbook-photos")
 
 
+def s3_internal_url() -> str:
+    """The object storage endpoint reached from INSIDE the compose network.
+
+    The browser uploads through `s3_public_url()` because the presigned URL is
+    signed for whoever uses it, and that is the farmer's phone (ADR-0018). A
+    worker that reads a stored artifact is not that caller: inside a container
+    `localhost:9000` is the container itself, not MinIO, so the same public
+    URL would point the daily job at nothing. This is the service name on the
+    seminar network, where MinIO is an emulator nobody reaches from the outside
+    (ADR-0021).
+
+    The public URL is not wrong here, it is unreachable: publishing is for the
+    farmer, resolution is for the job. Credentials are shared
+    (`s3_access_key()`), only the endpoint differs.
+    """
+    return os.environ.get("TECHCAMP_S3_INTERNAL_URL", "http://minio:9000")
+
+
+def s3_ml_bucket() -> str:
+    """The bucket holding ML datasets and model artifacts (docs/08-ml.md).
+
+    Separate from the logbook photo bucket on purpose: ADR-0018 keeps photos,
+    model artifacts and Postgres backups on the same object storage service but
+    in different buckets, so a retention or cleanup rule over one never reaches
+    another. Under `models/<name>/<version>/` and `datasets/<name>/<hash>/` a
+    released artifact is addressed by version, and the `ml/` project on the
+    developer's host uploads there through the public URL (ADR-0021).
+
+    `ml-artifacts`, not the `ml` of docs/08-ml.md: an S3 bucket name is 3 to 63
+    characters and the store refuses a shorter one (`InvalidBucketName`, checked
+    against the seminar MinIO), so the two-character name could not hold the
+    objects that doc describes. Both the doc and this default were changed
+    together (D-T9.8).
+    """
+    return os.environ.get("TECHCAMP_S3_ML_BUCKET", "ml-artifacts")
+
+
 def s3_access_key() -> str | None:
     """The access key that signs photo uploads, or `None` when there is none.
 

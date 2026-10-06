@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
-from sqlalchemy import Row, case, select
+from sqlalchemy import Row, case, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -126,6 +126,90 @@ class SqlAlchemyRiskRepository:
             if row is not None:
                 return _version_from_row(row)
         return None
+
+    async def insert_version(self, version: ModelVersion) -> ModelVersion:
+        """Store one registered model or baseline and return the row as it reads back.
+
+        ADR-0020 paso 10, docs/08-ml.md §Reglas de gobierno "Trazabilidad". The row is
+        written after its artifact is already in object storage, so a version a
+        prediction names exists before anything points at it.
+
+        There is no `ON CONFLICT` clause and there is no unique index on
+        `(name, version)` to hang one on: `served_version` is what decides which row
+        serves an event, and it breaks a tie deterministically (most recent first). Two
+        rows claiming the same version string would therefore be decided by
+        `created_at`, not refused here, so `insert_version` returns what it wrote and
+        leaves that choice to the caller that asked to register twice — registration
+        checks `versions_for` first and refuses on its own.
+        """
+        row_id = version.id
+        result = await self._session.execute(
+            pg_insert(ModelVersionRow)
+            .values(
+                id=row_id,
+                name=version.name,
+                version=version.version,
+                artifact_uri=version.artifact_uri,
+                metrics=version.metrics,
+                baseline_metrics=version.baseline_metrics,
+                is_baseline=version.is_baseline,
+                artifact_sha256=version.artifact_sha256,
+                dataset_hash=version.dataset_hash,
+                git_commit=version.git_commit,
+                thresholds=dict(version.thresholds),
+                promoted=version.promoted,
+                promotion_reason=version.promotion_reason,
+                created_at=version.created_at,
+            )
+            .returning(ModelVersionRow.id)
+        )
+        await self._session.commit()
+        stored = await self._session.execute(
+            select(*_VERSION_COLUMNS).where(ModelVersionRow.id == result.scalar_one())
+        )
+        return _version_from_row(stored.one())
+
+    async def versions_for(self, name: str) -> list[ModelVersion]:
+        """Every registered version of one event, most recent first.
+
+        Registration reads this before writing, so a version string already registered is
+        never taken twice by a second run (ADR-0020 paso 10): docs/08 §Reglas de gobierno
+        "Reversión" keeps the artifacts, so re-registering is a new version string, never
+        an overwrite.
+
+        The order is `created_at` then `id`, the same one `served_version` uses, so
+        "most recent" means one thing in both reads: `uuid7` sorts by creation time, which
+        is why no extra column is needed.
+        """
+        result = await self._session.execute(
+            select(*_VERSION_COLUMNS)
+            .where(ModelVersionRow.name == name)
+            .order_by(ModelVersionRow.created_at.desc(), ModelVersionRow.id.desc())
+        )
+        return [_version_from_row(row) for row in result]
+
+    async def lock_version(self, name: str, version: str) -> None:
+        """Take the registration claim on one version string, held until the session
+        closes.
+
+        `pg_advisory_lock` on the 64-bit hash of `name` and `version` together, so two
+        processes registering the SAME version serialise and two registering different
+        versions never wait for each other. Session-scoped, not transaction-scoped,
+        because the claim has to survive the commits `insert_version` makes in the
+        middle of registration: the whole read-check-upload-write is what must not
+        interleave, and a transaction lock would be released at the first of them.
+
+        The key is derived from the two strings rather than assigned, so no coordinate
+        has to be agreed anywhere: `hashtextextended` is the same function for every
+        writer of this table.
+        """
+        await self._session.execute(
+            select(
+                text("pg_advisory_lock(hashtextextended(:claim, 0))").bindparams(
+                    claim=f"{name}:{version}"
+                )
+            )
+        )
 
     async def insert_prediction(self, prediction: RiskPrediction) -> bool:
         """Store one prediction, reporting whether this call wrote it.
