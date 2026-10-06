@@ -1,0 +1,74 @@
+[
+  {
+    "cod_dpto": "08",
+    "dpto": "ATLÁNTICO",
+    "cod_mpio": "08001",
+    "nom_mpio": "BARRANQUILLA",
+    "tipo_municipio": "Municipio",
+    "longitud": "-74,815546",
+    "latitud": "10,977961"
+  },
+  {
+    "cod_dpto": "13",
+    "dpto": "BOLÍVAR",
+    "cod_mpio": "13268",
+    "nom_mpio": "EL PEÑÓN",
+    "tipo_municipio": "Municipio",
+    "longitud": "-73,949274",
+    "latitud": "8,988271"
+  },
+  {
+    "cod_dpto": "20",
+    "dpto": "CESAR",
+    "cod_mpio": "20045",
+    "nom_mpio": "BECERRIL",
+    "tipo_municipio": "Municipio",
+    "longitud": "-73,278707",
+    "latitud": "9,704404"
+  },
+  {
+    "cod_dpto": "23",
+    "dpto": "CÓRDOBA",
+    "cod_mpio": "23001",
+    "nom_mpio": "MONTERÍA",
+    "tipo_municipio": "Municipio",
+    "longitud": "-75,873096",
+    "latitud": "8,759789"
+  },
+  {
+    "cod_dpto": "44",
+    "dpto": "LA GUAJIRA",
+    "cod_mpio": "44001",
+    "nom_mpio": "RIOHACHA",
+    "tipo_municipio": "Municipio",
+    "longitud": "-72,911795",
+    "latitud": "11,528588"
+  },
+  {
+    "cod_dpto": "47",
+    "dpto": "MAGDALENA",
+    "cod_mpio": "47001",
+    "nom_mpio": "SANTA MARTA",
+    "tipo_municipio": "Municipio",
+    "longitud": "-74,199829",
+    "latitud": "11,204679"
+  },
+  {
+    "cod_dpto": "70",
+    "dpto": "SUCRE",
+    "cod_mpio": "70001",
+    "nom_mpio": "SINCELEJO",
+    "tipo_municipio": "Municipio",
+    "longitud": "-75,395445",
+    "latitud": "9,302322"
+  },
+  {
+    "cod_dpto": "70",
+    "dpto": "SUCRE",
+    "cod_mpio": "70823",
+    "nom_mpio": "SAN JOSÉ DE TOLUVIEJO",
+    "tipo_municipio": "Municipio",
+    "longitud": "-75,44085",
+    "latitud": "9,451819"
+  }
+]
