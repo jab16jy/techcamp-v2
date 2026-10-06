@@ -335,6 +335,11 @@ flowchart LR
 
 - **Paridad entre entrenamiento y producción:** las features se calculan con el mismo módulo y **la misma fuente** en los dos lados (archivo histórico de Open-Meteo para entrenar, pronóstico y observados recientes de Open-Meteo para inferir). El modelo se construye con el protocolo del [ADR-0020](adr/0020-protocolo-de-experimentacion-ml.md); detalle en [08-ml](08-ml.md#m2-riesgo-de-inundación).
 - Cada predicción guarda `model_version_id`: toda alerta se puede rastrear hasta el modelo exacto.
+- **Horizonte mensual** ([08 §M2](08-ml.md#m2-riesgo-de-inundación)): el job predice el mes en curso con datos hasta el último día del mes anterior. La predicción de una celda, evento y mes se escribe **una vez**; las corridas siguientes del mismo mes no la repiten, salvo que se promueva otra versión del modelo.
+- **Datos de entrada:** el módulo `risk` pide al archivo histórico de Open-Meteo (`models=era5`, el mismo de entrenamiento) los 6 meses previos de la celda y la elevación de su centro; no lee `weather_daily`, que viene del pronóstico y no tiene la misma fuente. ERA5 llega con ~5 días de retraso: mientras el mes anterior no esté completo, la celda no tiene predicción del mes nuevo y sigue visible la anterior. En el perfil seminario las respuestas están grabadas, como el resto del clima ([ADR-0021](adr/0021-perfil-seminario-local.md)).
+- **Sin modelo promovido:** se usa la línea base registrada para el evento (inundación: la mejor de la validación; sequía: SPI-3 hasta que M3 exista). Sin ninguna versión registrada para un evento, el job no escribe predicciones de ese evento y lo registra en el log.
+- **Alertas** (`flood_risk` / `drought_risk`): después de escribir las predicciones, cada parcela de la celda abre la alerta si la severidad es `alto` o `crítico`, y la resuelve en la primera predicción nueva por debajo de `alto` (sin ventana de 60 min: igual que las reglas de pronóstico de [§3](#3-evaluación-de-alertas), su cadencia es su evidencia).
+- `POST /dev/jobs/risk:run { day? }` corre el job como si fuera `day` (por defecto, hoy).
 
 ## 9. Asistente agronómico
 
