@@ -29,6 +29,7 @@ from techcamp.farms.adapters import orm as farms_orm  # noqa: E402,F401
 from techcamp.identity.adapters import orm as identity_orm  # noqa: E402,F401
 from techcamp.irrigation.adapters import orm as irrigation_orm  # noqa: E402,F401
 from techcamp.logbook.adapters import orm as logbook_orm  # noqa: E402,F401
+from techcamp.metrics.adapters import orm as metrics_orm  # noqa: E402,F401
 from techcamp.notifications.adapters import orm as notifications_orm  # noqa: E402,F401
 from techcamp.shared.config import database_url  # noqa: E402
 from techcamp.shared.db import Base  # noqa: E402
