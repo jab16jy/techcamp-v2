@@ -3,6 +3,7 @@
 from techcamp.home.application.plot_status import (
     ActiveCycleSummary,
     CropSummary,
+    DigitalAdoption,
     LatestReadings,
     OpenAlert,
     PlotStatus,
@@ -20,6 +21,7 @@ from techcamp.home.application.technician_tray import (
 __all__ = [
     "ActiveCycleSummary",
     "CropSummary",
+    "DigitalAdoption",
     "FarmSummary",
     "LatestReadings",
     "OpenAlert",
