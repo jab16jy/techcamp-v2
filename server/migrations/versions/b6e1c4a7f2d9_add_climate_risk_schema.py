@@ -11,7 +11,7 @@ which is shared reference data — the same row for every organization
 endpoint (T6b).
 
 Revision ID: b6e1c4a7f2d9
-Revises: e8b109b00c01
+Revises: 43c9c5cc68c9
 Create Date: 2026-10-02 00:00:00.000000
 
 """
@@ -24,7 +24,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "b6e1c4a7f2d9"
-down_revision: Union[str, Sequence[str], None] = "e8b109b00c01"
+down_revision: Union[str, Sequence[str], None] = "43c9c5cc68c9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

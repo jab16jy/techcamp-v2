@@ -24,7 +24,7 @@ describe('buildRoutes', () => {
     expect(routes[0].children?.some((route) => route.path === 'dev/ui')).toBe(true)
   })
 
-  it('includes the five tabs and the estado route at the root', () => {
+  it('includes the five tabs, the estado route and the indicators screen at the root', () => {
     const routes = buildRoutes(null)
 
     expect(routes[0].path).toBe('/')
@@ -34,7 +34,9 @@ describe('buildRoutes', () => {
     expect(routes[0].children?.some((route) => route.path === 'bitacora')).toBe(true)
     expect(routes[0].children?.some((route) => route.path === 'parcelas')).toBe(true)
     expect(routes[0].children?.some((route) => route.path === 'mas')).toBe(true)
-    expect(routes[0].children?.length).toBe(6)
+    // docs/07's screen map: `Más --> Indicadores de tecnificación`.
+    expect(routes[0].children?.some((route) => route.path === 'mas/indicadores')).toBe(true)
+    expect(routes[0].children?.length).toBe(7)
   })
 })
 
