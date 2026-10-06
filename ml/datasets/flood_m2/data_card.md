@@ -1,6 +1,6 @@
 # Data card — M2 riesgo de inundación: fuentes y dataset
 
-**Actualizado:** 2026-10-02 · **Tarea:** E10 T3 (fuentes) + E10 T4 (tabla municipio × mes)
+**Actualizado:** 2026-10-05 · **Tarea:** E10 T3 (fuentes) + E10 T4 (tabla municipio × mes)
 (odd/tasks/techcamp-v2-e10-climate-risk.md) ·
 **Docs:** [docs/08](../../docs/08-ml.md) §M2 riesgo de inundación, §Fuentes de datos de M2, §Estructura de `ml/`, §Reglas de gobierno
 
@@ -58,7 +58,7 @@ pedir.
 | Etiquetas 2019–2022 | UNGRD, `https://www.datos.gov.co/resource/wwkg-r6te.json` | CC BY-SA 4.0 | 2026-10-02T17:27:25Z | `171266650fe22614` |
 | Etiquetas 2023–2024 | UNGRD, `https://www.datos.gov.co/resource/rgre-6ak4.json` | CC BY-SA 4.0 | 2026-10-02T17:27:28Z | `7769c6d43fc754f8` |
 | Etiquetas 2025+ | UNGRD, `https://www.datos.gov.co/resource/2343-nuqp.json` | CC BY 4.0 | 2026-10-02T17:27:32Z | `7e54b5371993ebc3` |
-| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, 2026-10-02T18:02Z, **3 de 6 trozos**: `archive_000` `956284edc5cbf9f7`, `archive_001` `255c33527febdf48`, `archive_002` `db28970e8074ec09` | ver `MANIFEST.tsv` |
+| Clima diario | Open-Meteo archive, `https://archive-api.open-meteo.com/v1/archive`, `models=era5` | Open-Meteo, uso no comercial ([ADR-0021](../../docs/adr/0021-perfil-seminario-local.md)) | T3, 2026-10-02T18:02Z (trozos 000–002) y 2026-10-03T16:23Z (trozos 003–005), **6 de 6 trozos** | `archive_000` `956284edc5cbf9f7`, `archive_001` `255c33527febdf48`, `archive_002` `db28970e8074ec09`, `archive_003` `4dcdb69e8a9f32e4`, `archive_004` `5fb9a72d4ec76fb5`, `archive_005` `db9d8cf60087b059` |
 | Elevación y vecino | Open-Meteo elevation (Copernicus GLO-90), `https://api.open-meteo.com/v1/elevation` | Open-Meteo, uso no comercial | 2026-10-02T17:28Z, 10 trozos (975 coordenadas) | trozo 000 de 10: `d52dc71cce74be05` (los diez en `MANIFEST.tsv`) |
 
 Open-Meteo gratuito es de uso no comercial: cubre el seminario; producción necesita su
@@ -77,23 +77,26 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   La serie empieza en 2018-07-01 para que las ventanas de seis meses de docs/08 §M2
   "Features" estén completas antes del primer mes etiquetado, 2019-01.
 
-  **Estado al cerrar T3 (2026-10-02): descarga a medias, cobertura desigual.** Hay 3 de
-  los 6 trozos en el caché y el parquet arma **430 895 filas**:
+  **Estado al cerrar la descarga (2026-10-05): los 6 de 6 trozos en el caché**, con plan
+  `plan_for=2026-10-05`, que declara las mismas tres ventanas que el 2026-10-02 porque el
+  último mes completo no se movió. Cobertura para los 195 municipios, de punta a punta:
 
-  | Cobertura | Municipio | Rango |
-  |---|---|---|
-  | Completa (195) | los 195 municipios | 2018-06-30 → 2022-06-29 (`archive_000` + `archive_001`, ventana 1) |
-  | Parcial (100) | los 100 primeros por código (`archive_002`) | 2022-06-30 → 2026-06-28 |
+  | Cobertura | Municipio | Rango | Trozos |
+  |---|---|---|---|
+  | Completa (195) | los 195 municipios | 2018-06-30 → 2026-08-31 | `archive_000`…`archive_005` |
 
-  O sea: **no** hay clima hasta 2026-09-30 ni hasta 2026-08-31 para todo el conjunto;
-  95 municipios no pasan de 2022-06-29 y 100 no pasan de 2026-06-28. Faltan tres
-  trozos (resto de la ventana 2 y ventana 3 completa). No es un fallo del código sino
-  de la cuota: el nivel gratuito de Open-Meteo pesa una consulta por variables,
-  ubicaciones y dominios (10 000/día por IP, con cubos por minuto y por hora), y el
-  archivo histórico pesa además por la longitud del rango pedido.
+  El parquet de `ml/data/flood_m2/sources/weather.parquet`, rearmado el 2026-10-03 después
+  del último trozo, tiene **582 075 filas**: 195 municipios × 2 987 días menos los dos
+  días de frontera que `concat_windows` cuenta una sola vez. Ningún municipio queda con
+  una serie truncada.
+
+  La cuota fue el obstáculo de la primera pasada, no del código: el nivel gratuito de
+  Open-Meteo pesa una consulta por variables, ubicaciones y dominios (10 000/día por IP,
+  con cubos por minuto y por hora), y el archivo histórico pesa además por la longitud del
+  rango pedido.
   `python -m techcamp_ml.sources fetch --source weather` reanuda donde se quedó y no
-  vuelve a pedir lo que ya está en el caché; al terminar hay que reparsear y volver a
-  copiar los hashes de esta tarjeta. Un trozo cuyo `.request.json` declara otra ventana
+  vuelve a pedir lo que ya está en el caché: con los 6 trozos y su plan, corre en menos
+  de un segundo y no toca la red. Un trozo cuyo `.request.json` declara otra ventana
   **se vuelve a pedir**: los mismos nombres de archivo respondían la ventana anterior en
   cuanto los meses avanzan, y una serie que termina antes de lo que su nombre promete no
   puede pasar como completa.
@@ -104,11 +107,9 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   El `parse` no recibe ningún día: lee ese plan y se niega a armar el parquet si falta
   algún trozo planeado, o si alguno declara otra ventana u otros códigos, diciendo cuál.
   Mismo caché, mismo parquet, cualquier día en que corra (docs/08 §Reglas de gobierno: "el
-  dataset se arma sólo desde esas copias"). **Este caché, el que T3 cerró, no tiene plan**
-  (los planes no existían todavía), así que `parse --source weather` ahora se niega con
-  `the raw cache holds no archive plan (archive_plan.json)` hasta que el próximo `fetch
-  --source weather` lo escriba; ese fetch no se volvió a correr porque la cuota de
-  Open-Meteo está agotada. **T4 no debe correr sobre este parquet.**
+  dataset se arma sólo desde esas copias"). Este caché **sí tiene plan**: `archive_plan.json`
+  con sus 6 trozos, escrito antes del primer request. `parse --source weather` lo lee y se
+  niega si algún trozo planeado falta o declara otra ventana u otros códigos.
 
 - **Etiquetas:** ventana de consulta por dataset: 2019-01-01→2022-12-31,
   2023-01-01→2024-12-31 y 2025-01-01→(sin tope), en ese orden y sin mezclar años entre
@@ -211,25 +212,52 @@ La región se verifica **en el build también**, no sólo en el `parse`: sin la 
 `assert_region` un dataset podría armarse sobre otra región y M2 entrenaría sobre
 municipios que docs/08 §M2 "Región" no nombra.
 
-### Conteos sobre fixtures
+### Conteos del dataset real
 
-El build se prueba sobre la **región completa de 195 municipios** y la ventana completa de
-84 meses, con serie diaria sólo para dos cabeceras y con los reportes de un municipio-mes,
-no sobre el archivo real (la cuota de ERA5 no alcanzó, ver arriba):
+El build corrió sobre el **archivo real**, el 2026-10-05: los seis trozos de ERA5, los tres
+consolidados UNGRD y la elevación de los 195 municipios. El `manifest.json` junto a este
+documento es el recibo, con el `sha256` del parquet y el de cada uno de los cuatro
+parquets de entrada.
 
-| Medida | Fixtures | Esperado con el archivo real |
-|---|---|---|
-| Filas | 16 380 (195 municipios × 84 meses) | 16 380 (la misma región y la misma ventana) |
-| Positivos | 1 | los municipio-mes con evento, ~1 508 reportes colapsados |
-| Negativos | 16 379 | todos los demás, sin submuestreo |
-| Fechas de horizonte | `2019-03-01`, 31 días | día 1 y longitud de cada mes |
+| Medida | Dataset real |
+|---|---|
+| Filas | **16 380** (195 municipios × 84 meses, `2019-01` → `2025-12`) |
+| Municipios | 195, **los 195 con los 84 meses completos** (ninguno truncado) |
+| Positivos | **838** municipio-mes con evento (1 508 reportes colapsados) |
+| Negativos | **15 542**, sin submuestreo en ningún punto |
+| Prevalencia real | **5,12 %** (838 / 16 380) |
+| Nulos | **0** fuera de `precip_anomaly_{1,3,6}m`, que van nulas por diseño |
+| Parquet | 455 260 bytes, `sha256 7916e97fb4ea7bdc50b4d4cb1bb244683c5dcbf1bf32421ea8c32788983d0be5` |
 
-**El dataset real todavía no existe.** Falta que terminen los tres trozos del archivo
-histórico (hoy hay 3 de 6 y la cobertura es desigual: 95 municipios no pasan de
-2022-06-29), y el caché que T3 cerró no tiene plan, así que `parse --source weather` y
-`parse --source labels` se niegan hasta que vuelva a correr el `fetch`. El primer build
-real, y su `manifest.json` con el `sha256` de la región entera, ocurren después de esa
-descarga.
+Que no haya **ningún** nulo fuera de las tres anomalías es la prueba de que no es un dataset
+parcial: la serie diaria cubre 2018-06-30 → 2026-08-31 para los 195 municipios, así que
+toda ventana de uno a seis meses de cualquier mes etiquetado tiene su evidencia completa.
+Un municipio al que el archivo no hubiera respondido habría conserved su fila con
+features nulas, y no hay ninguno.
+
+**La prevalencia es 5,12 %, no 9,2 %.** La etiqueta de docs/08 §M2 "Etiqueta" es binaria por
+municipio y mes, así que los 1 508 reportes colapsan en **838** meses con evento: los 670
+repetidos son varios reportes del mismo municipio en el mismo mes. Cualquier cálculo de
+frecuencia que divida reportes por municipio-mes sobrestima por un factor de 1,8. T8 tiene
+que leer la prevalencia de acá y no del conteo de reportes.
+
+El `build` es función pura de los cuatro parquets, y eso se comprobó corriendo dos veces
+seguidas sobre el mismo caché: los dos `manifest.json` salieron con el mismo `sha256`.
+
+### El caché y sus planes
+
+El caché de T3 se descargó el 2026-10-02, antes de que T4 escribiera los rastros de plan
+(`weather.plan.json`, `labels.plan.json`, commit `5fac554`) y de que el `parse` publicara
+el plan de paginación de etiquetas (`labels_plan.json`, `3bdca35`). Contra ese contrato el
+build se negaba, con razón: un parquet sin rastro no se puede atribuir a este caché.
+
+La reparación es la misma que ya resolvió el clima el 2026-10-05: volver a correr el paso
+que escribe el plan, no el que descarga. `fetch --source labels` reporta **0 raw copies** —
+las tres páginas ya estaban en el caché y cada una es corta frente a `SOCRATA_PAGE = 50 000`
+(6 419, 1 494 y 2 072 registros), así que la caminata termina en `p000` de las tres fuentes
+sin pedir nada. Después `parse` reescribe los cuatro parquets **byte a byte idénticos** a los
+que T3 dejó y escribe los dos rastros. Ninguna descarga, ningún dato nuevo: sólo el
+promiso de procedencia que faltaba.
 
 ## Decisiones de esta tarea
 
@@ -260,12 +288,12 @@ descarga.
    por municipio no es comparable con su exposición real al riesgo.
 2. ** Cabecera, no centroide:** ver D-T3.1 arriba. En municipios extensos la cabecera
    puede no representar el clima de la parte inundable.
-3. **Cobertura de etiquetas vs. clima:** la descarga de clima **termina el 2026-06-28**
-   (y sólo para 100 de los 195 municipios; ver la tabla de cobertura arriba). El fin
-   previsto es el 2026-08-31, el último mes completo que ERA5 había publicado del todo
-   el 2026-10-02. Las etiquetas, en cambio, terminan el **2025-12-02** porque
-   `2343-nuqp` todavía no tiene rows de 2026. Los meses de 2026 quedan sin etiqueta:
-   no son negativos, son desconocidos, y T4 no debe contarlos como tales.
+3. **Cobertura de etiquetas vs. clima:** el clima **termina el 2026-08-31** para los 195
+   municipios y las etiquetas el **2025-12-02**, porque `2343-nuqp` todavía no tiene rows
+   de 2026. El clima sobra por dos meses respecto de la ventana etiquetada, que es lo
+   que hace falta para que la ventana de seis meses de enero de 2019 esté completa. Los
+   meses de 2026 quedan sin etiqueta: no son negativos, son desconocidos, y por eso no
+   son filas de la tabla.
 4. **Duplicados de reporte:** 550 combinaciones (municipio, día, clase) aparecen más
    de una vez, con `source_row_id` distinto. La etiqueta de docs/08 es binaria por
    municipio y mes, así que en T4 se colapsan; T3 las conserva con su id de origen.
@@ -295,8 +323,8 @@ nuevo autorizado), no un ajuste de este dataset.
 
 ## Qué sigue
 
-- **Build real:** cuando termine la descarga de ERA5, `fetch --source weather`, `parse` y
-  `build.py`; el `manifest.json` con el `sha256` de la región entera sale de ahí.
+- **Build real:** hecho el 2026-10-05. `ml/datasets/flood_m2/manifest.json` ya está
+  trackeado, con el `sha256` de la región entera y el de cada parquet de entrada.
 - **T5:** harness con partición temporal de brecha ≥ 6 meses, hold-out por departamento,
   IC95 y compuerta. También es suyo rellenar `precip_anomaly_{1,3,6}m` con la climatología
   de sus años de train: la tabla las deja nulas a propósito.

@@ -1,0 +1,61 @@
+{
+  "all_null_features": [
+    "precip_anomaly_1m",
+    "precip_anomaly_3m",
+    "precip_anomaly_6m"
+  ],
+  "bytes": 455260,
+  "columns": [
+    "code",
+    "department_code",
+    "department_name",
+    "year",
+    "month",
+    "horizon_start",
+    "horizon_days",
+    "precip_sum_1m",
+    "precip_sum_2m",
+    "precip_sum_3m",
+    "precip_sum_4m",
+    "precip_sum_5m",
+    "precip_sum_6m",
+    "precip_anomaly_1m",
+    "precip_anomaly_3m",
+    "precip_anomaly_6m",
+    "soil_moisture_mean_1m",
+    "elevation_m",
+    "slope_deg",
+    "month_sin",
+    "month_cos",
+    "label"
+  ],
+  "dataset": "flood_m2",
+  "file": "flood_m2.parquet",
+  "months": {
+    "from": "2019-01",
+    "to": "2025-12"
+  },
+  "municipalities": 195,
+  "negatives": 15542,
+  "positives": 838,
+  "rows": 16380,
+  "sha256": "7916e97fb4ea7bdc50b4d4cb1bb244683c5dcbf1bf32421ea8c32788983d0be5",
+  "sources": {
+    "elevation": {
+      "rows": 195,
+      "sha256": "ec1a974677c65aaf72dcdd77c6ae4c1b4fa8de2a7b3c7734f7e626f19ec7ebde"
+    },
+    "labels": {
+      "rows": 1508,
+      "sha256": "1ef6f20fbea95c87fe615a35c88341f413f24a939240527e87f3a8d3fdd339b8"
+    },
+    "municipalities": {
+      "rows": 195,
+      "sha256": "5a061d5863b018a4af367f4141ec62928b34b9a110cad4e11d1f7cc09e83c572"
+    },
+    "weather": {
+      "rows": 582075,
+      "sha256": "f2dc2f39b7e8951471fcb22d6ede1db208947b7aef5cd328b8cc56ee10328dd8"
+    }
+  }
+}

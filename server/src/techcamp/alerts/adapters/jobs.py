@@ -93,13 +93,14 @@ async def _orgs_with_nodes(session: AsyncSession) -> list[UUID]:
     return [org_id for org_id in result.scalars() if org_id is not None]
 
 
-async def _orgs_with_plots(session: AsyncSession) -> list[UUID]:
+async def orgs_with_plots(session: AsyncSession) -> list[UUID]:
     """The organizations that have a plot, the ones a weather rule is about.
 
     The same ids-only read as `_orgs_with_nodes`, and for the same reason: the
     fan-out exists so that every other read keeps its `org_id` (D21). A plot
     belongs to exactly one organization, so `org_id` set is what "has a plot"
-    means.
+    means. Public because the model rules fan out the same way from outside this
+    module (`alerts.adapters.evaluate_risk`, driven by the daily risk job).
     """
     result = await session.execute(select(PlotRow.org_id).distinct().order_by(PlotRow.org_id))
     return [org_id for org_id in result.scalars() if org_id is not None]
@@ -188,7 +189,7 @@ async def sweep_escalations(timestamp: int) -> None:
     hold an alert, so it must not cost a job.
     """
     async with async_session_factory() as session:
-        for org_id in await _orgs_with_plots(session):
+        for org_id in await orgs_with_plots(session):
             await _defer_org_job(
                 session, task_name=ESCALATE_ORG_TASK_NAME, org_id=org_id, source="escalation"
             )
@@ -212,7 +213,7 @@ async def sweep_forecast_rules(timestamp: int) -> None:
     (infra/compose.yaml), the zone docs/10 §3 fixes every job hour to.
     """
     async with async_session_factory() as session:
-        for org_id in await _orgs_with_plots(session):
+        for org_id in await orgs_with_plots(session):
             await _defer_org_job(
                 session, task_name=EVALUATE_ORG_FORECAST_TASK_NAME, org_id=org_id, source="forecast"
             )
@@ -233,7 +234,7 @@ async def sweep_fungal_risk(timestamp: int) -> None:
     push, so the day's alert is in the tray the producer opens.
     """
     async with async_session_factory() as session:
-        for org_id in await _orgs_with_plots(session):
+        for org_id in await orgs_with_plots(session):
             await _defer_org_job(
                 session, task_name=EVALUATE_ORG_FUNGAL_TASK_NAME, org_id=org_id, source="fungal"
             )
@@ -260,7 +261,7 @@ async def sweep_balance_rules(timestamp: int) -> None:
     round catches up.
     """
     async with async_session_factory() as session:
-        for org_id in await _orgs_with_plots(session):
+        for org_id in await orgs_with_plots(session):
             await _defer_org_job(
                 session, task_name=EVALUATE_ORG_BALANCE_TASK_NAME, org_id=org_id, source="balance"
             )

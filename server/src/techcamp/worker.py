@@ -7,6 +7,7 @@ Entrypoint: `python -m techcamp.worker`.
 from __future__ import annotations
 
 from techcamp.alerts.adapters import jobs as _alerts_jobs  # noqa: F401  registers tasks
+from techcamp.alerts.adapters.evaluate_risk import build_risk_evaluation
 from techcamp.irrigation.adapters import jobs as _irrigation_jobs  # noqa: F401  registers tasks
 from techcamp.metrics.adapters import jobs as _metrics_jobs  # noqa: F401  registers tasks
 from techcamp.notifications.adapters import (
@@ -25,6 +26,10 @@ def main() -> None:
     # concrete repository is built here and handed to the task, the way
     # `techcamp.ingestor` composes the `alerts` evaluator into `telemetry`.
     _risk_jobs.configure_weather_cells(SqlAlchemyWeatherRepository)
+    # The same seam for the model rules of docs/06 §8 "Alertas": `risk` writes the
+    # predictions and `alerts` decides them, and neither module may import the
+    # other's adapters, so the concrete evaluator is built here.
+    _risk_jobs.configure_alert_evaluation(build_risk_evaluation)
 
     app.run_worker(
         queues=[

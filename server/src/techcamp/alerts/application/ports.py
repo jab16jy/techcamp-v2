@@ -15,7 +15,14 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from techcamp.alerts.domain.models import Alert, AlertRule, AlertRuleChanges, AlertState, Severity
+from techcamp.alerts.domain.models import (
+    Alert,
+    AlertRule,
+    AlertRuleChanges,
+    AlertState,
+    PredictionEvidence,
+    Severity,
+)
 from techcamp.notifications.application import NotificationDraft
 
 type UnitOfWorkRecovery = Callable[[], Awaitable[None]]
@@ -71,6 +78,55 @@ class AlertRepository(Protocol):
         `plot_id` and `node_id` are what the caller evaluated, never guessed
         from the rule code, and exactly one of them is given; the index makes
         the row unique, so the read returns it or nothing.
+        """
+        ...
+
+    async def get_decided_for_target(
+        self,
+        *,
+        rule_id: UUID,
+        org_id: UUID,
+        plot_id: UUID,
+        prediction: PredictionEvidence,
+        exclude_alert_id: UUID | None = None,
+    ) -> Alert | None:
+        """The alert that already decided `prediction` for this (rule, plot), in
+        ANY state — a resolved one counts.
+
+        Two ways a prediction can already have been decided:
+
+        - an alert carries its identity in the stored `evidence`, which is the
+          prediction that OPENED that alert. The identity is matched as a SUBSET
+          of the stored `alert.evidence`, so the caller never has to keep the two
+          formats in step and a key stored beyond them does not matter.
+        - an alert was already OPEN when the prediction was issued (`issued_at`
+          inside that alert's own `opened_at`..`resolved_at` window), so the
+          decision was NO_ACTION: the open alert already answered this evidence
+          and nothing was recorded about it.
+
+        The model rules need both because the daily run hands the same stored
+        prediction over every morning of its month (docs/06-diseno-detallado.md
+        §8): without them, the morning after a farmer closed the alert by hand
+        (docs/06 §3 "cierre manual") would open it again from evidence the run
+        had already judged.
+
+        It is consulted for EVERY action, and `exclude_alert_id` is what keeps two
+        cases the record used to conflate apart.
+
+        The alert that was open when the prediction was issued ABSORBED it
+        (NO_ACTION above), and when that same alert is still open and the
+        prediction now resolves it, it must not match itself: the run STORES a
+        prediction and evaluates it minutes later, so the resolving row of the next
+        month is always issued while the alert it has to resolve is still open
+        (docs/06 §8: "la resuelve en la primera predicción nueva por debajo de
+        `alto`"), and honouring the record there would leave the alert open for the
+        rest of the month. The caller passes that alert as `exclude_alert_id`.
+
+        What is left to match is a DIFFERENT alert that already decided this
+        prediction, and skipping it is what keeps a replayed row harmless: the run
+        hands the same stored row over every morning of its month, so a `bajo`
+        that already resolved one alert would otherwise resolve whatever a later
+        month's `alto` opened in its place (#247).
         """
         ...
 
