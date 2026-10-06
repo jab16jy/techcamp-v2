@@ -1,10 +1,11 @@
-# Data card — M2 riesgo de inundación: fuentes
+# Data card — M2 riesgo de inundación: fuentes y dataset
 
-**Actualizado:** 2026-10-02 · **Tarea:** E10 T3 (odd/tasks/techcamp-v2-e10-climate-risk.md) ·
-**Docs:** [docs/08](../../docs/08-ml.md) §M2 riesgo de inundación, §Fuentes de datos de M2, §Reglas de gobierno
+**Actualizado:** 2026-10-02 · **Tarea:** E10 T3 (fuentes) + E10 T4 (tabla municipio × mes)
+(odd/tasks/techcamp-v2-e10-climate-risk.md) ·
+**Docs:** [docs/08](../../docs/08-ml.md) §M2 riesgo de inundación, §Fuentes de datos de M2, §Estructura de `ml/`, §Reglas de gobierno
 
-Este documento describe lo que T3 descarga y cómo lo normaliza. T4 arma sobre estas
-cuatro tablas la tabla municipio × mes; T5 el harness. Nada aquí decide el modelo.
+Este documento describe lo que T3 descarga y cómo lo normaliza, y lo que T4 arma sobre
+esas cuatro tablas. T5 el harness. Nada aquí decide el modelo.
 
 ## Cómo se reproduce
 
@@ -14,7 +15,30 @@ uv run --locked --project ml python -m techcamp_ml.sources fetch
 # Sin red: los parquets se reconstruyen desde ml/.cache/raw. El rango del clima lo decide
 # el plan que escribió el fetch, no el día en que corre el parse.
 uv run --locked --project ml python -m techcamp_ml.sources parse
+# Sin red: la tabla municipio × mes sale de esos cuatro parquets, con su sha256 en el manifiesto.
+uv run --locked --project ml python ml/datasets/flood_m2/build.py
 ```
+
+El `build` **se niega** si falta cualquiera de los cuatro parquets de
+`ml/data/flood_m2/sources/`, diciendo cuál y que hay que correr el `parse`: los lee todos
+antes de escribir nada, así que un caché incompleto no deja ni dataset ni manifiesto.
+También se niega si un parquet no se puede rastrear hasta el plan del caché actual: el
+`parse` escribe junto a cada parquet gobernado por un plan (`weather.plan.json`,
+`labels.plan.json`) el `sha256` del plan que consumió, y el `build` compara ese digest con
+el del plan que está en `ml/.cache/raw/`. Sin eso, un `fetch` que volvió a correr —o que
+se cortó a medias— dejaba el parquet viejo legible y plausible, y el dataset se armaba
+desde copias que el caché actual ya no respondería (docs/08:68, "el dataset se arma solo
+desde esas copias"). Se niega además si el clima trae **dos filas para el mismo
+municipio y el mismo día**: un diccionario se quedaría con la última, así que la ventana
+dependería del orden de filas del parquet y no de una regla.
+
+Los dos archivos se escriben junto a su destino y se renombran, y **el manifiesto se
+publica antes que el dataset**: en ningún momento existe un parquet sin el manifiesto que
+lo describe, y ninguno de los dos aparece a medio escribir. El `build` sin `--out` ni
+`--manifest` publica en los directorios del `layout` que recibió, nunca en el árbol real
+del repositorio. El manifiesto no lleva fecha: el build es función pura de los cuatro
+parquets —cada uno leído una vez y hasheado de esa misma lectura—, así que el mismo caché
+da el mismo archivo y el mismo `sha256` cualquier día.
 
 Cada respuesta cruda queda en `ml/.cache/raw/<fuente>/` (fuera de git) con su URL, su
 fecha de descarga y su `sha256` en `ml/.cache/raw/MANIFEST.tsv`. Los parquets de
@@ -92,6 +116,16 @@ plan de pago (docs/08 §Fuentes de datos de M2).
   dataset siguiente es del siguiente, no de éste. Rango de los **datos** de la región:
   **2019-02-26 → 2025-12-02**.
 
+  **La paginación se publica antes de paginar** (`labels_plan.json` en
+  `ml/.cache/raw/labels/`, con su fila en el manifiesto), igual que el plan del archivo
+  histórico: el `fetch` lo escribe abierto antes de la primera página y lo reescribe con
+  todas las páginas que caminó cuando llega a una página corta. El `parse` **se niega**
+  si el plan no está, si sigue abierto o si el caché no responde alguna página prometida,
+  diciendo cuál. Socrata no publica un total de filas, así que sólo el `fetch` puede saber
+  que una página fue la última: un `fetch` cortado dejaba páginas que nadie sabía si eran
+  las últimas, y el `parse` armaba un parquet de etiquetas que se leía como completo
+  (#241).
+
 ## Conteos
 
 Etiquetas de inundación en la región: **1 508 reportes**, 180 de los 195 municipios con
@@ -130,6 +164,72 @@ dejar de tapar `2343-nuqp` en 2027: 1 508 reportes antes y después.
 `parse --source elevation` se niega a armar la tabla si le falta **algún** municipio y
 nombra cuántos son: una tabla corta dejaría las features de vecino de T4 sin definir para
 los que faltan, sin decir nada.
+
+## La tabla municipio × mes (T4)
+
+Una fila por municipio y por mes M de la cobertura de etiquetas, ordenada por `code`,
+`year`, `month`. Las features las calcula `techcamp.risk.domain.features`, el mismo módulo
+que usa el serving: no hay una segunda implementación de ninguna ventana, ni de la
+pendiente, ni de la estacionalidad (docs/08 §Reglas de gobierno, "Paridad de features").
+
+### Cobertura de meses
+
+La ventana es **2019-01 → 2025-12**, la que docs/08 §Fuentes de datos de M2 y D-T3.2
+cierran para M2 (los tres consolidados UNGRD, sin DesInventar ni nada anterior a 2019).
+Está **escrita, no medida**: `2343-nuqp` se declara abierta (`year_to=None`) para que la
+consulta nunca esté topada, y el reporte más nuevo del parquet tampoco es una ventana —
+un dataset cuyo horizonte se moviera con sus descargas crecería y menguaría con ellas. Los
+meses de esa ventana son los que la descarga reclama, así que un mes dentro sin reporte es
+un negativo; los de fuera **no son filas**, tengan clima o no.
+
+El retraso de reporte sigue siendo un sesgo (sesgo 3 arriba), no un tope: un municipio que
+reporta tarde aparece con menos eventos de los que tuvo, y los meses de 2026 seguirán sin
+etiqueta hasta que `2343-nuqp` los publique.
+
+### Contrato de columnas
+
+| Columna | Qué es |
+|---|---|
+| `code` | DIVIPOLA de 5 dígitos del municipio |
+| `department_code`, `department_name` | Departamento, de la cabecera DIVIPOLA |
+| `year`, `month` | El mes M que se predice |
+| `horizon_start`, `horizon_days` | Día 1 de M y sus días (docs/08 §M2 "Horizonte") |
+| `precip_sum_1m` … `precip_sum_6m` | Lluvia acumulada de 1 a 6 meses hasta el último día de M−1 |
+| `precip_anomaly_1m`, `_3m`, `_6m` | **Nulo en esta tabla**: la anomalía se mide contra la climatología de **train** y el split es de T5 |
+| `soil_moisture_mean_1m` | Humedad de suelo media de M−1 |
+| `elevation_m`, `slope_deg` | Del parquet de elevación, en la cabecera |
+| `month_sin`, `month_cos` | Estacionalidad, enero en el origen de fase |
+| `label` | 1 si hay evento de inundación reportado en ese municipio y mes, si no 0 |
+
+Un día que falta deja su ventana en **nulo**, nunca en 0: 0 mm es una afirmación sobre el
+clima que el dato no hace. Un municipio al que el archivo no respondió conserva su fila con
+features nulas — el mes se conoce, lo que falta es la evidencia — y quitarlo submuestrearía
+la región según cómo haya ido la descarga. Los reportes repetidos colapsan en la etiqueta
+binaria del mes (sesgo 4 arriba), y `label` es `int`, no `bool`.
+
+La región se verifica **en el build también**, no sólo en el `parse`: sin la guardia de
+`assert_region` un dataset podría armarse sobre otra región y M2 entrenaría sobre
+municipios que docs/08 §M2 "Región" no nombra.
+
+### Conteos sobre fixtures
+
+El build se prueba sobre la **región completa de 195 municipios** y la ventana completa de
+84 meses, con serie diaria sólo para dos cabeceras y con los reportes de un municipio-mes,
+no sobre el archivo real (la cuota de ERA5 no alcanzó, ver arriba):
+
+| Medida | Fixtures | Esperado con el archivo real |
+|---|---|---|
+| Filas | 16 380 (195 municipios × 84 meses) | 16 380 (la misma región y la misma ventana) |
+| Positivos | 1 | los municipio-mes con evento, ~1 508 reportes colapsados |
+| Negativos | 16 379 | todos los demás, sin submuestreo |
+| Fechas de horizonte | `2019-03-01`, 31 días | día 1 y longitud de cada mes |
+
+**El dataset real todavía no existe.** Falta que terminen los tres trozos del archivo
+histórico (hoy hay 3 de 6 y la cobertura es desigual: 95 municipios no pasan de
+2022-06-29), y el caché que T3 cerró no tiene plan, así que `parse --source weather` y
+`parse --source labels` se niegan hasta que vuelva a correr el `fetch`. El primer build
+real, y su `manifest.json` con el `sha256` de la región entera, ocurren después de esa
+descarga.
 
 ## Decisiones de esta tarea
 
@@ -195,11 +295,11 @@ nuevo autorizado), no un ajuste de este dataset.
 
 ## Qué sigue
 
-- **T4:** tabla municipio × mes con **todos** los negativos (ningún submuestreo),
-  unidad y mes según docs/08 §M2 "Unidad"/"Horizonte", features del módulo compartido
-  `techcamp.risk.domain.features` y el hash del dataset.
+- **Build real:** cuando termine la descarga de ERA5, `fetch --source weather`, `parse` y
+  `build.py`; el `manifest.json` con el `sha256` de la región entera sale de ahí.
 - **T5:** harness con partición temporal de brecha ≥ 6 meses, hold-out por departamento,
-  IC95 y compuerta.
+  IC95 y compuerta. También es suyo rellenar `precip_anomaly_{1,3,6}m` con la climatología
+  de sus años de train: la tabla las deja nulas a propósito.
 - **Etiquetas de 2026:** decidir si el dataset arranca en 2019 o si se espera a que
   `2343-nuqp` publique 2026.
 - **T6a:** el cliente de serving debe repetir `ARCHIVE_PARAMS` exactamente.

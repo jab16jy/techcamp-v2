@@ -52,5 +52,14 @@ strict = true
 module = ["pandas.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# The server package ships no `py.typed` marker, and T4 imports its domain features
+# (docs/08 §Estructura de `ml/`: "las features se importan de
+# `techcamp.risk.domain.features`"). Following the import keeps the real annotations of
+# the shared module, so the call that builds every feature of the dataset is checked
+# against the one the serving job calls.
+module = ["techcamp.*"]
+follow_untyped_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,7 +1,7 @@
 """The `parse` step: raw copies in, tidy parquets out, offline."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
 
@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from techcamp_ml.sources import pipeline
-from techcamp_ml.sources.cache import read_manifest, save_raw
+from techcamp_ml.sources.cache import read_manifest, read_raw, save_raw, sha256_of
 from techcamp_ml.sources.layout import Layout
 from techcamp_ml.sources.pipeline import parse_sources
 from techcamp_ml.sources.weather import (
@@ -104,12 +104,24 @@ def _recording_fetch(requested: list[str]) -> Callable[..., bytes]:
 _LABEL_PAGE: list[dict[str, object]] = []
 
 
+def _plan(layout: Layout, pages: Sequence[str], *, complete: bool = True) -> None:
+    """The paging plan a finished (or interrupted) label fetch leaves in the cache."""
+    save_raw(
+        layout,
+        "labels",
+        pipeline.LABELS_PLAN_RAW,
+        "test",
+        json.dumps({"complete": complete, "pages": list(pages)}).encode(),
+    )
+
+
 def _cache(layout: Layout, fixture: Callable[[str], bytes]) -> None:
     """A raw cache holding a full 195-municipality region plus one real label response."""
     divipola, mgn = _region_payloads()
     save_raw(layout, "municipalities", "divipola.json", "test", divipola)
     save_raw(layout, "municipalities", "mgn317.geojson", "test", mgn)
     save_raw(layout, "labels", "wwkg-r6te.p000.json", "test", fixture("ungrd_wwkg-r6te.json"))
+    _plan(layout, ["wwkg-r6te.p000.json"])
 
 
 def test_parse_builds_the_region_and_only_the_requested_sources(
@@ -463,6 +475,94 @@ def test_parsing_labels_with_nothing_in_the_cache_says_run_fetch_first(
     # A KeyError on `code` would tell nobody that the step to run is the fetch one.
     with pytest.raises(ValueError, match="fetch"):
         pipeline.parse_sources(["labels"], layout=layout)
+
+
+def test_parsing_labels_refuses_a_cache_whose_paging_never_finished(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+) -> None:
+    layout = Layout(tmp_path)
+    divipola, mgn = _region_payloads()
+    save_raw(layout, "municipalities", "divipola.json", "test", divipola)
+    save_raw(layout, "municipalities", "mgn317.geojson", "test", mgn)
+    save_raw(layout, "labels", "wwkg-r6te.p000.json", "test", fixture("ungrd_wwkg-r6te.json"))
+
+    # An interrupted walk leaves pages nobody knows to be the last ones (#241): parsing
+    # them would write a labels parquet that reads as complete.
+    with pytest.raises(ValueError, match="fetch"):
+        pipeline.parse_sources(["labels"], layout=layout)
+
+
+def test_parsing_labels_refuses_a_paging_plan_the_cache_does_not_answer(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    _plan(layout, ["wwkg-r6te.p000.json", "wwkg-r6te.p001.json"])
+
+    with pytest.raises(ValueError, match=r"wwkg-r6te\.p001\.json"):
+        pipeline.parse_sources(["labels"], layout=layout)
+
+
+def test_parsing_labels_refuses_a_paging_the_fetch_left_open(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    _plan(layout, ["wwkg-r6te.p000.json"], complete=False)
+
+    # The one page is cached and the plan promises nothing more, but the walk never
+    # reached a short page: only the fetch can know it is the last one.
+    with pytest.raises(ValueError, match="fetch"):
+        pipeline.parse_sources(["labels"], layout=layout)
+
+
+def test_the_label_fetch_publishes_the_paging_it_walked_to_the_end(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+    requested: list[str] = []
+    monkeypatch.setattr(pipeline, "fetch", _recording_fetch(requested))
+    page = json.loads(fixture("ungrd_wwkg-r6te.json"))
+    monkeypatch.setattr(pipeline, "SOCRATA_PAGE", len(page))
+
+    pipeline.fetch_sources(["labels"], layout=layout)
+
+    plan = json.loads(read_raw(layout, "labels", pipeline.LABELS_PLAN_RAW))
+    assert plan["complete"] is True
+    # The plan owes the pages the walk visited, the cached one included: it is what the
+    # dataset is built from, not what this run had to download.
+    assert plan["pages"] == [
+        "wwkg-r6te.p000.json",
+        "wwkg-r6te.p001.json",
+        "rgre-6ak4.p000.json",
+        "2343-nuqp.p000.json",
+    ]
+    # Negative assertion: the plan owes nothing the cache cannot answer.
+    assert [page for page in plan["pages"] if not layout.raw_copy("labels", page).exists()] == []
+
+
+def test_a_parsed_source_records_the_plan_it_was_built_from(
+    tmp_path: Path,
+    fixture: Callable[[str], bytes],
+) -> None:
+    layout = Layout(tmp_path)
+    _cache(layout, fixture)
+
+    parse_sources(["labels"], layout=layout)
+
+    trace = json.loads(pipeline.plan_trace_path(layout, "labels").read_bytes())
+    assert trace == {
+        "plan": pipeline.LABELS_PLAN_RAW,
+        "sha256": sha256_of(read_raw(layout, "labels", pipeline.LABELS_PLAN_RAW)),
+    }
+    # Negative assertion: a source with no plan leaves no trace claiming one.
+    assert not pipeline.plan_trace_path(layout, "municipalities").exists()
 
 
 def test_a_cached_payload_the_manifest_never_documented_is_downloaded_again(

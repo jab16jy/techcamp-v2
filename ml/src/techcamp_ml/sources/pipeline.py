@@ -18,7 +18,7 @@ from typing import Any
 
 import pandas as pd
 
-from techcamp_ml.sources.cache import cached_files, manifest_names, read_raw, save_raw
+from techcamp_ml.sources.cache import cached_files, manifest_names, read_raw, save_raw, sha256_of
 from techcamp_ml.sources.elevation import (
     ELEVATION_URL,
     MAX_COORDINATES_PER_REQUEST,
@@ -68,6 +68,20 @@ PLAN_RAW = "archive_plan.json"
 The parse reads it instead of the wall clock: the dataset is built only from the cached
 copies (docs/08 §Reglas de gobierno), so the same cache gives the same parquet on any
 day, and a cache without a plan says so instead of guessing a range."""
+LABELS_PLAN_RAW = "labels_plan.json"
+"""The label pages the last fetch walked to, cached before its first page.
+
+Socrata paging has no total count, so only the fetch can tell that a short page ended
+the walk: the plan is published as open before the walk and rewritten with every page it
+walked once that happens. The parse refuses an open plan, because a cache whose walk was
+cut short holds pages nobody knows to be the last ones, and parsing it writes a labels
+parquet that reads as complete (#241)."""
+PLAN_TRACE_SUFFIX = ".plan.json"
+"""Beside a plan-governed parquet, the digest of the plan that built it.
+
+The plan lives in the raw cache and the parquet in `ml/data/`, so nothing else connects
+them: without the trace, a parquet left by a parse the current cache would refuse still
+builds a dataset (docs/08:68)."""
 
 
 def _chunk_ready(
@@ -270,9 +284,32 @@ def _downloaded(layout: Layout, source: str, name: str, proven: set[str]) -> boo
     return name in proven and layout.raw_copy(source, name).exists()
 
 
+def plan_trace_path(layout: Layout, source: str) -> Path:
+    """Where the trace of the plan a parquet was built from lives, beside that parquet."""
+    return layout.data / f"{source}{PLAN_TRACE_SUFFIX}"
+
+
+def write_plan_trace(layout: Layout, source: str, plan_name: str) -> None:
+    """Record, beside a plan-governed parquet, the digest of the plan it came from.
+
+    A parquet outlives the cache that produced it: a new fetch rewrites the plan, and a
+    parse that then refuses leaves the previous parquet in place, readable and plausible.
+    Whoever builds the dataset has to tell "built from the plan in this cache" from "left
+    behind by an earlier one" (docs/08:68, "el dataset se arma solo desde esas copias").
+    """
+    digest = sha256_of(read_raw(layout, source, plan_name))
+    path = plan_trace_path(layout, source)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"plan": plan_name, "sha256": digest}, indent=2) + "\n")
+
+
 def _fetch_labels(layout: Layout) -> int:
     written = 0
     proven = manifest_names(layout, "labels")
+    # The plan opens before the first page: any plan an earlier fetch left is void from
+    # this moment, because it promises pages this walk may no longer owe (#241).
+    _save_labels_plan(layout, [], complete=False)
+    owed: list[str] = []
     for source in LABEL_SOURCES:
         url = f"{SOCRATA_RESOURCE}/{source.dataset}.json"
         offset = 0
@@ -287,25 +324,73 @@ def _fetch_labels(layout: Layout) -> int:
                 else fetch(layout, "labels", name, url, params=label_params(source, offset=offset))
             )
             written += 0 if cached else 1
+            owed.append(name)
             if len(json.loads(payload)) < SOCRATA_PAGE:
                 break
             offset += SOCRATA_PAGE
+    # Only now is the last page a last page: a short one ended the walk.
+    _save_labels_plan(layout, owed)
     return written
+
+
+def _save_labels_plan(layout: Layout, pages: Sequence[str], *, complete: bool = True) -> None:
+    """Publish the label paging this cache owes, as the weather plan does."""
+    save_raw(
+        layout,
+        "labels",
+        LABELS_PLAN_RAW,
+        f"{SOCRATA_RESOURCE}?plan_for=label_pages",
+        json.dumps({"complete": complete, "pages": list(pages)}).encode(),
+    )
+
+
+def _read_labels_plan(layout: Layout) -> list[str]:
+    """The pages the last fetch walked to, or a refusal naming the step to run.
+
+    Nothing else can tell a finished walk from a cut one: the dataset has no total count
+    to compare the last page against, and a page is short by accident all the time. So the
+    parse builds only what the fetch promised, and a cache with no promise, an open
+    promise or a promise the cache does not answer says so instead of writing a labels
+    parquet that reads as complete (#241).
+    """
+    if not layout.raw_copy("labels", LABELS_PLAN_RAW).exists():
+        raise ValueError(
+            f"the raw cache holds no label paging plan ({LABELS_PLAN_RAW}): the parse builds "
+            "only the pages a fetch walked to the end, so run the fetch step and parse again"
+        )
+    plan = json.loads(read_raw(layout, "labels", LABELS_PLAN_RAW))
+    pages = [str(page) for page in plan.get("pages", [])]
+    if not bool(plan.get("complete", False)):
+        raise ValueError(
+            f"the label paging in {LABELS_PLAN_RAW} never reached a short page: run the fetch "
+            "step and parse again"
+        )
+    datasets = {source.dataset for source in LABEL_SOURCES}
+    unknown = [page for page in pages if page.split(".")[0] not in datasets]
+    if unknown:
+        raise ValueError(
+            f"the label paging plan names pages outside the label sources: {sorted(unknown)}; "
+            "run the fetch step and parse again"
+        )
+    missing = [page for page in pages if not layout.raw_copy("labels", page).exists()]
+    if missing:
+        raise ValueError(
+            f"the label download does not answer its paging plan: missing pages: {missing}; "
+            "run the fetch step and parse again"
+        )
+    return pages
 
 
 def _parse_labels(layout: Layout, codes: Collection[str]) -> Path:
     frames: list[pd.DataFrame] = []
     dropped = Dropped()
-    for source in LABEL_SOURCES:
-        pages = [
-            name
-            for name in cached_files(layout, "labels")
-            if name.startswith(f"{source.dataset}.p") and name.endswith(".json")
-        ]
-        for page in pages:
-            frame, page_dropped = parse_labels(read_raw(layout, "labels", page), source, codes)
-            frames.append(frame)
-            dropped += page_dropped
+    sources = {source.dataset: source for source in LABEL_SOURCES}
+    for page in _read_labels_plan(layout):
+        frame, page_dropped = parse_labels(
+            read_raw(layout, "labels", page), sources[page.split(".")[0]], codes
+        )
+        frames.append(frame)
+        dropped += page_dropped
     if not frames:
         # An empty frame has no columns, and sorting it by `code` would answer a
         # KeyError instead of naming the step that was never run.
@@ -322,6 +407,7 @@ def _parse_labels(layout: Layout, codes: Collection[str]) -> Path:
         },
     }
     path = write_parquet(layout, "labels", labels)
+    write_plan_trace(layout, "labels", LABELS_PLAN_RAW)
     path.with_suffix(".drops.json").write_text(json.dumps(report, indent=2) + "\n")
     return path
 
@@ -417,7 +503,9 @@ def _parse_weather(
         unknown = sorted(set(weather["code"]) - set(municipalities["code"]))
         if unknown:
             raise ValueError(f"archive chunks hold codes outside the region: {unknown}")
-    return write_parquet(layout, "weather", weather)
+    path = write_parquet(layout, "weather", weather)
+    write_plan_trace(layout, "weather", PLAN_RAW)
+    return path
 
 
 def _assert_plan_cached(layout: Layout, plan: Sequence[PlannedChunk]) -> None:

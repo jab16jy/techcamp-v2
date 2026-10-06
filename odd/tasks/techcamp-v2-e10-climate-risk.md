@@ -75,6 +75,14 @@ feeds E12 (assistant cites risk) and E15 (risk rules), off the critical path (do
 - D-T3.2 Labels stop at 2019 (owner, 2026-10-02): UNGRD 2019-2025 only, no DesInventar and
   no pre-2019 consolidated, no source mixed inside a year. 1,508 events over 180 of the 195
   municipalities. Documented in `ml/datasets/flood_m2/data_card.md`.
+- D-T3.3 The missing ERA5 archive is completed through the **free** Open-Meteo archive, one `fetch`
+  per day as the daily quota resets (owner, 2026-10-03). Rejected: the commercial API key (paid),
+  Copernicus CDS directly (breaks docs/08 §M2 "Features": same source as serving), a self-hosted
+  Open-Meteo (disproportionate), and any quota evasion (terms of use). The free tier is 10,000
+  weighted calls/day per IP; a call weighs by range length, locations, variables and models
+  (open-meteo.com/en/docs, via ctx7). Missing on 2026-10-03: `archive_003` (95 codes,
+  2022-06-30..2026-06-28, ~one day of quota) and `archive_004/005` (195 codes, 2026-06-29..last
+  complete month, small) — about 26% of the municipality-days, an estimated 2 days of fetch.
 
 ### Decisions (T6b)
 - D-T6b.1 Serving builds the M2 features **without** a climatology, so `precip_anomaly_*` is `None`
@@ -103,13 +111,18 @@ Forecasts are authored lines (additions + deletions, generated excluded). Route 
   train-only climatology, seasonality, elevation/slope inputs; hand-computed rainfall and terrain examples as tests.
   ~300 forecast, **677 actual** (251 prod + 418 test, test/prod 1.67). Route: Herdr writer.
   Parallel with T1/T3 (no shared files).
-- [~] T3 Dataset sources: municipality reference (DIVIPOLA + centroids, Caribbean), Open-Meteo
-  archive downloader, flood-event labels (UNGRD / DesInventar), elevation; pinned versions, cache,
-  data card. ~400 forecast, **2488 actual** (1132 prod + 1119 test + 200 docs + 24 other, 13
-  deletions; 6.2x — see [Calibration](#calibration)). All 7 deliverables landed, `gate-fast` green,
-  46/46 ml tests green offline in 0.62s. Partial: the ERA5 archive **data** download is blocked by
-  an Open-Meteo 429 (daily quota), which blocks T4's input but not T3's contract. Route: Herdr
-  writer (network authorized). Depends T1. Pending: split into 2 review slices, then close.
+- [~] T3 Dataset sources: municipality reference (DIVIPOLA seat, Caribbean), Open-Meteo archive
+  downloader, UNGRD flood-event labels (D-T3.2), elevation; cache with provenance manifest, archive
+  plan, data card. ~400 forecast, **2488 actual** for the first round (6.2x — see
+  [Calibration](#calibration)) plus the #241 round (7 commits). **Code done and merged**
+  (`2794932`, 66 ml tests green): reviews `review-07c50aaba6995614` (lane `eeaa5bd..3f60153`,
+  approved, follow-up #241), `review-592d021505ff5e3b` (`3f60153..74bc8c6`, escalated; parent
+  triage in #241: one real finding, fixed in `d640fcf`), `review-43121bc6a8eb042f`
+  (`3f60153..d640fcf`, approved, 4 advisory WARNINGs in #241; the partial-labels one goes to T4).
+  **Data partial** (D-T3.3): ERA5 archive at 3 of 6 chunks; the cache lives in worktree
+  `e10-t3` (`ml/.cache/raw`, gitignored) — do not remove that worktree before the cache is moved.
+  `parse` refuses the current cache (no `archive_plan.json`); the next real `fetch` writes the plan.
+  Route: Herdr writers (Pi, then OpenCode space-bunny high). Depends T1.
 - [ ] T4 Dataset build: municipality × month table through T2 features, all negatives, hash.
   ~200. Route: Herdr writer. Depends T2, T3.
 - [ ] T5 Harness + gate (owner approval gate): split with gap, department hold-out, real frequency,
@@ -223,8 +236,10 @@ Forecast ≈ 2950 authored lines — **already stale**: T1+T2+T3 alone measure ~
   Consequence: T3 closable, **T4 blocked** on the real archive data.
 
 ## Next step
-Split T3 into 2 review slices (owner chose 2 cuts, not 6): (A) cache + fetching + layout + the 4
-sources with their tests and fixtures ≈1700; (B) `pipeline` + CLI + data card ≈750. Requires
-reordering — the history interleaves `feat` and correction commits — and splitting `2adc269`, which
-touches `cache.py` (A) and `pipeline.py` (B). Verify `gate-fast` + 46 ml tests at the slice A
-boundary, review A, then B. Then resume the ERA5 fetch after the quota reset to unblock T4.
+- T3 data (D-T3.3), once per day until complete, from worktree `e10-t3` (`ml/`):
+  `uv run --locked python -m techcamp_ml.sources fetch --source weather`, then
+  `uv run --locked python -m techcamp_ml.sources parse` — it refuses until every planned chunk is
+  cached. When it passes: T4's real build, its hash in the dataset manifest, the real counts into
+  the data card, then the `just ml-lock` of T5 after the owner approves the harness.
+- T4 (lane `e10-t4`) and T7 (lane `e10-t7`, sent back at the gate) in progress; T5 after T4 fixes
+  the column contract.
