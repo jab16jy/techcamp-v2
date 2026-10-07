@@ -161,7 +161,7 @@ shrink a diff to fit one*).
   doc. No `docs/07` change. **No code, no pytest** (C6). Landed 2026-10-07 in
   the `docs/e16-blockers-assessment` worktree. **Route: parent inline** —
   planning is never delegated (E10 T0 / E12 T0 precedent).
-- [ ] **T1 — Scenario library + fixtures.** YAMLs A–E + normal at the T0
+- [x] **T1 — Scenario library + fixtures.** YAMLs A–E + normal at the T0
   home (D-T16.1), full schema per docs/06:421-440; recorded weather fixtures
   (`el-nino-caribe.json` ETc ≈ 5 mm/día, `veranillo-caribe.json` ET0 ≈ 4.2
   mm/día, no rain > 5 mm) in the D-T16.3 format with version + hash.
@@ -365,3 +365,16 @@ commit is a passive doc-only candidate (C6).
 - 2026-10-07: no ctx7 run (no external API verification needed at plan
   time); T5 verifies the Playwright API via `find-docs` when the harness
   starts.
+- 2026-10-06/07: T1 implemented. U1 `80c7910` (2 fixtures + schema-library
+  contract + `test_weather_fixtures.py`), U1b `eb6a1eb` (rainy-season +
+  normal fixtures), U2 `6df9b36` (scenario contract `scenario_schema.py` +
+  `test_scenario_schema.py`), R3-001 correction `d932658`, 6 YAMLs
+  `b082076`, `test_scenario_library.py` `a636089`. Verified: server-side
+  gate steps green; full simulator suite 139 passed, 27 skipped.
+- T1 RDD: `6df9b36` approved (lineage `review-edd3d19eab8c0fb5`),
+  non-blocking findings filed at #303 and R3-001 fixed with `Refs #303`.
+  Capture transport for `b082076` and the U2 review of the same round
+  returned `provider_failed` twice on the frozen binding; per the known E10
+  facade/snake_case trap no foreign lineage was started and no correction
+  opened — the lineage sits in `collect` and needs a maintainer runtime fix,
+  not a source change. Delivery of this lane remains owner-owned.
