@@ -475,13 +475,14 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
     validación dirigida apuntaba al target del candidato de corrección y el controller lo rechazó
     (`review repair --preflight` lo declara `unsupported`), así que se resolvió con un START fresco
     sobre el árbol ya corregido.
-  - **Hallazgos no bloqueantes** (WARNING, `informational`; ninguno reabre la revisión; van a un
-    issue `review-follow-up` por ronda): `R3-BLANK-MODEL-EVIDENCE`, `R3-CITATION-KIND-STRING-BYPASS`,
+  - **Hallazgos no bloqueantes** (WARNING, `informational`; ninguno reabre la revisión; van al
+    issue `review-follow-up` #302 de la ronda): `R3-BLANK-MODEL-EVIDENCE`, `R3-CITATION-KIND-STRING-BYPASS`,
     `R3-MESSAGE-CONVERSATION-MISMATCH`, `R3-QUOTA-RACE-DOUBLE`, `R3-QUOTA-REASON-PRECEDENCE`,
     `R3-RESERVATION-DOUBLE-COUNT`, `R3-UNSTABLE-FRAGMENT-IDS`, `R3-USER-MESSAGE-LLM-EVIDENCE`. Los
     que tocan el código de T1 (`BLANK-MODEL-EVIDENCE`, `CITATION-KIND-STRING-BYPASS`,
     `USER-MESSAGE-LLM-EVIDENCE`, `QUOTA-REASON-PRECEDENCE`) se corrigen en su propio commit con
-    `Refs #N`; los que son solo del doble de prueba se resuelven al escribir el adaptador.
+    `Refs #302`, diferidos hasta que T2/T4 aterricen (decisión del dueño 2026-10-07); los que son
+    solo del doble de prueba se resuelven al escribir el adaptador.
 
 Per work-unit commit: `gentle-ai review assess` against the previous reviewed
 boundary, one lineage per unit, blocking findings in a bounded correction, non-blocking ones to one
