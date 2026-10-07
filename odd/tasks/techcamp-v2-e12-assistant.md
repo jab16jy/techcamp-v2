@@ -227,7 +227,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   trigger: writer). Pass `find-docs`, `fastapi`, `pydantic` by path from `.atl/skill-registry.md`.
   **Depends T0.**
 
-- [ ] **T2 — Schema**: one revision on top of the current single head `b6e1c4a7f2d9`
+- [x] **T2 — Schema**: one revision on top of the current single head `b6e1c4a7f2d9`
   (`server/migrations/versions/b6e1c4a7f2d9_add_climate_risk_schema.py`, confirmed the only head of the
   26-revision graph): `CREATE EXTENSION IF NOT EXISTS vector` (following the `postgis`/`timescaledb`
   precedent at `9098dc0927a3:26` and `8c3983dc2dfd:79`; the seminar image already installs `vector` at
@@ -485,6 +485,16 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
     `USER-MESSAGE-LLM-EVIDENCE`, `QUOTA-REASON-PRECEDENCE`) se corrigen en su propio commit con
     `Refs #302`, diferidos hasta que T2/T4 aterricen (decisión del dueño 2026-10-07); los que son
     solo del doble de prueba se resuelven al escribir el adaptador.
+- **T2 — `review-f1315ed728b0e08a` — aprobado y reconocido.** Target `sha256:b604fb82…`, lente
+  `review-reliability` (medium, 3 archivos/486 líneas, sin ronda de corrección). Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `delivery: ordinary-repository-policy`. Sin envelope de consent
+  (el STATUS ligado devolvió collect sin envelope: sin decisión humana que respetar). Punto ciego:
+  `server/pyproject.toml` + `server/uv.lock` (pin `pgvector>=0.4.0`) no entraron al candidato por ya
+  versionados → commit aparte `c0d0b50`; `assess` dice medium/`under_budget`, pendiente en el slice.
+  Verificación en lane `e12-t2`: `just gate server/tests/assistant` → 136 passed (seed 1314030592);
+  unidades `4681cf2` (schema) + `c0d0b50` (deps). Fricción de worktree fresco (fuera de superficie,
+  mecánica y anotada): `ml/uv.lock` se rancia por el path-dep a `server` (regen) y `web/node_modules`
+  ausente (`npm ci`).
 
 Per work-unit commit: `gentle-ai review assess` against the previous reviewed
 boundary, one lineage per unit, blocking findings in a bounded correction, non-blocking ones to one
