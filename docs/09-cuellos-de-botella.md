@@ -25,10 +25,15 @@
 | Consultas de series largas | API p95 > 300 ms en `/readings` | Obligar el uso de agregados (ya se rechaza `raw` en rangos largos), índices y chunks más pequeños | Consultas lentas en `pg_stat_statements` |
 | Tablero de organización | Consultas pesadas al cargar | Tablas precalculadas (`plot_metric_monthly`, `crop_cycle_summary`) | Ya en el diseño |
 | Ráfaga de reconexión | Pico de mensajes al volver un gateway | Lotes + `ON CONFLICT`; el nodo publica el buffer con pausas | Siempre activo |
-| Conexiones SSE | Memoria o descriptores del proceso `api` | Una conexión `LISTEN` por proceso compartida entre clientes; límite de 1 stream por usuario | > 2.000 streams concurrentes |
+| Conexiones SSE | Memoria o descriptores del proceso `api` | Una conexión `LISTEN` por proceso compartida entre clientes; límite de 1 stream por usuario sobre `GET /api/v1/stream` | > 2.000 streams concurrentes |
 | Jobs diarios (riego, riesgo) | No terminan antes de las 05:00 | Procesar por celda y en paralelo en el worker | Duración del job > 30 min |
 | Pool de conexiones de Postgres | Esperas por conexión | Tamaño de pool por proceso; PgBouncer en modo transacción | > 100 conexiones activas |
-| Costo del LLM | Tope mensual alcanzado | Caché del prompt fijo, modelo más barato, límites por usuario | Gasto > 80 % del tope a mitad de mes |
+| Costo del LLM | Tope mensual alcanzado | Caché del prompt fijo, modelo más barato, límites por usuario, y degradar a respuesta sin LLM antes de agotarlo | Gasto > 80 % del tope a mitad de mes. El gasto es `SUM(message.cost_cop)` del mes contra el tope de [docs/11:132](11-metricas.md), no una métrica propia ([ADR-0026](adr/0026-proveedor-provisional-e12.md)) |
+
+El límite de 1 stream por usuario de la fila de conexiones SSE acota **`GET /api/v1/stream`**, el
+fan-out de tiempo real que se apoya en una conexión `LISTEN` por proceso ([ADR-0015](adr/0015-tiempo-real-sse.md)).
+No aplica al stream de `POST /assistant/messages`, que es el cuerpo de su propia respuesta: abre y cierra
+con la petición, sin `LISTEN` ni suscripción ([ADR-0027](adr/0027-stream-asistente-e12.md), E12 D-T12.4).
 
 **Preguntas del método de Karan Pratap Singh:**
 

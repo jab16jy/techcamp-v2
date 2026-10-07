@@ -358,7 +358,7 @@ erDiagram
     uuid id PK
     uuid document_id FK
     text content
-    vector embedding
+    vector embedding "dimensión fijada en ADR-0026"
   }
   conversation {
     uuid id PK
@@ -373,6 +373,9 @@ erDiagram
     int input_tokens
     int output_tokens
     bool helpful
+    timestamptz created_at
+    text model "null = no se llamó al LLM"
+    numeric cost_cop "null = sin costo; origen de docs/11:132"
   }
   municipality {
     text code PK "DIVIPOLA"
@@ -418,6 +421,25 @@ erDiagram
 | Trazabilidad | `dataset_hash` y `git_commit` por versión | Regla de gobierno de [08](08-ml.md#reglas-de-gobierno) |
 | Unicidad de la predicción | `UNIQUE (cell_id, event_type, horizon_start, model_version_id)` | Una predicción por celda, evento, mes y versión: el job es idempotente y promover otra versión agrega su predicción sin borrar la anterior |
 | Versión promovida | Índice único parcial `(name) WHERE promoted` | Como máximo una versión promovida por evento; revertir es promover la anterior |
+
+### `kb_document`, `kb_chunk`, `conversation` y `message`: el asistente (E12)
+
+El corpus y la conversación son datos de naturaleza distinta, y por eso se aíslan distinto (D-T12.5).
+
+| Aspecto | Decisión | Por qué |
+|---|---|---|
+| `org_id` en `kb_document` y `kb_chunk` | **Ninguna de las dos la lleva.** El corpus es referencia institucional compartida: el Boletín Agroclimático Nacional y los boletines de las mesas técnicas del Caribe ([06 §9](06-diseno-detallado.md#9-asistente-agronómico)), más las guías revisadas por licencia ([ADR-0008:32](adr/0008-rag-pgvector.md)) | Es el mismo caso ya escrito para `model_version` y `risk_prediction` más arriba ([09](09-cuellos-de-botella.md#seguridad)): son la misma fila para todas las organizaciones. El aislamiento se aplica donde el dato sale del servidor, al citar la fuente en la respuesta, no en la tabla |
+| `org_id` en `conversation` | **Tampoco.** Se aísla por `user_id` más el acceso a la parcela | Una conversación es de un usuario, y la parcela de la que habla ya pasa por `resolve_plot_access`, el mismo control que cualquier lectura por parcela ([05](05-arquitectura.md)). Duplicar `org_id` sería una segunda fuente de verdad que puede discrepar de la parcela |
+| Filtro de los repositorios | `kb_*` **no filtra** por nada: son tablas de referencia. `conversation` y `message` filtran por `user_id`, y el acceso a la parcela se resuelve antes | [AGENTS.md](../AGENTS.md) pide filtro por `org_id` en cada repositorio; aquí el filtro equivalente es el usuario dueño, y las tablas sin `org_id` son las de referencia ya documentadas |
+| Costo y tiempo en `message` | `created_at` `NOT NULL`, `model` y `cost_cop` admiten `null`, y `CHECK (helpful IS NULL OR role = 'assistant')` | El límite diario ([docs/04:22](04-api.md)), el tope de presupuesto ([docs/11:132](11-metricas.md)) y [06 §9](06-diseno-detallado.md#9-asistente-agronómico) (*"guardar mensaje, tokens y costo"*) necesitan las tres. Solo una respuesta del asistente se puede marcar como útil |
+| Ausencia de evidencia | La respuesta sin LLM guarda `model IS NULL`, tokens `null` y `cost_cop` `null` — **nunca `0`** | Falta de evidencia no es cero. `model IS NULL` es lo que distingue "no se llamó al LLM" de "se llamó y no costó nada", y `SUM` en SQL ignora `null`, que es justo el comportamiento del presupuesto (D-T12.1) |
+| Presupuesto y tope | El gasto del mes es un `SUM(cost_cop)` sobre `created_at`, no una tabla libro ni un agregado mensual | A 1.800 preguntas/día ([ADR-0007:9](adr/0007-llm-por-api.md)) un mes son ~54.000 filas y un `SUM` indexado por `created_at` no es un problema. Una tabla libro duplicaría la fila y dejaría que el libro y el mensaje no coincidan |
+| Índices de `message` | `(conversation_id, created_at)` para el conteo diario y `(created_at)` para la suma mensual | Son las dos consultas de límite y de presupuesto; el límite diario cuenta por usuario a través de `conversation.user_id` |
+| Unicidad de la ingesta | `kb_document` es único por `(source_url, sha256)` | La ingesta es un job repetible ([ADR-0012](adr/0012-jobs-en-postgres.md)); recargar el mismo documento no duplica fragmentos ni los deja huérfanos |
+
+`vector(<dim>)` y el índice HNSW coseno están en la tabla de [índices](#índices-principales); la dimensión
+la fija [ADR-0026](adr/0026-proveedor-provisional-e12.md) porque es propiedad del modelo de embeddings, y
+cambiarla es una migración de reescritura.
 
 ### `logbook_entry`: la tabla que se sincroniza offline
 
@@ -555,7 +577,9 @@ La calibración tiene versiones y nunca se edita en sitio. Al insertar una lectu
 | `alert` | (`rule_id`, `node_id`) parcial `WHERE state <> 'resolved'` | Máximo una alerta abierta por regla y nodo |
 | `logbook_entry` | (`org_id`, `server_version`) | Pull de sincronización |
 | `notification` | (`status`, `next_attempt_at`) parcial `WHERE status = 'pending'` | Cola de envío |
-| `kb_chunk` | HNSW(`embedding vector_cosine_ops`) | Búsqueda semántica |
+| `kb_chunk` | HNSW(`embedding vector_cosine_ops`) | Búsqueda semántica; `embedding` es `vector(<dim>)` con la dimensión fijada en [ADR-0026](adr/0026-proveedor-provisional-e12.md) |
+| `message` | (`conversation_id`, `created_at`) | Conteo de preguntas del día de un usuario |
+| `message` | (`created_at`) | `SUM(cost_cop)` del mes contra el tope ([docs/11:132](11-metricas.md)) |
 | `weather_daily` | PK (`cell_id`, `day`, `is_forecast`) | Balance hídrico diario |
 
 ## Datos que se migran de la v1
