@@ -1,0 +1,18 @@
+# Scenario B of docs/06-diseno-detallado.md:473-480: sustained high humidity opens
+# `fungal_risk` and the advice is not to water because rain is coming.
+# D-T16.4 fixes `expected` as alerts[] + irrigation kind + advice[].
+name: rainy-season
+description: Temporada de lluvias con humedad alta sostenida en maíz (escenario B)
+plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, irrigation_system: drip }
+soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
+nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
+interval_s: 900
+weather_fixture: rainy-season-caribe.json   # ET0 más bajo y lluvia efectiva: el suelo no se seca
+weather_fixture_sha256: 66e98a694e86a683a68e57ef60c9e9472b240540d1a8e6573fee4182a9e292d2
+trajectories:
+  soil_moisture_30cm: { start: 21.5, end: 19.5, noise: 0.7 }   # se mantiene sobre θ_estrés: nadie tiene sed
+  air_temp: { daily_min: 25, daily_max: 32, noise: 0.5 }
+  air_rh: { daily_min: 72, daily_max: 93, noise: 1.2 }     # sobre 85 % de forma sostenida
+expected:
+  alerts: [fungal_risk]
+  irrigation: not_needed      # Dr bajo RAW: el cultivo tiene reserva, no hace falta agua

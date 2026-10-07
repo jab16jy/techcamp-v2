@@ -41,7 +41,7 @@ from typing import Any
 
 import yaml
 
-from .scenario_library import SCENARIOS_DIR, file_sha256
+from .scenario_library import SCENARIO_NAMES, SCENARIOS_DIR, file_sha256
 
 SCENARIO_KEYS: frozenset[str] = frozenset(
     {
@@ -488,3 +488,8 @@ def load_scenario(name: str) -> Scenario:
     """
     path = SCENARIOS_DIR / f"{name}.yaml"
     return parse_scenario(name, yaml.safe_load(path.read_text(encoding="utf-8")))
+
+
+def load_all_scenarios() -> tuple[Scenario, ...]:
+    """Every scenario, in the order `docs/06-diseno-detallado.md:473-480` lists them."""
+    return tuple(load_scenario(name) for name in SCENARIO_NAMES)
