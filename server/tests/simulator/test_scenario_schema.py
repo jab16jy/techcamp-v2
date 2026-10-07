@@ -25,6 +25,27 @@ from .scenario_schema import MAX_NODES, ScenarioSchemaError, parse_scenario
 FIXTURE = "el-nino-caribe.json"
 """The recording scenario A pins; present since U1, so its digest is real here."""
 
+RAINFED_FIXTURE = "veranillo-caribe.json"
+"""The recording scenario E pins (docs/06-diseno-detallado.md:458)."""
+
+
+def recording_digest(name: str) -> str:
+    """The bytes digest of a recorded fixture, or a clearly-named failure.
+
+    Both accept-path cases below pin a real recording (R3-001). Calling
+    `file_sha256` directly meant a missing file raised `FileNotFoundError` from a
+    module-level helper, which errored the whole file — including the 21 tests
+    that assert nothing about this fixture. Failing the one test that needs the
+    recording keeps the contract's own coverage intact when a fixture is absent.
+    """
+    path = WEATHER_DIR / name
+    if not path.exists():
+        pytest.fail(
+            f"{name} is missing from the recorded library; the scenario contract pins "
+            "real recordings (D-T16.3), so this case cannot run until U1/U1b lands it"
+        )
+    return file_sha256(path)
+
 
 def a_valid_scenario() -> dict[str, Any]:
     """The smallest scenario the contract must accept, shaped like scenario A."""
@@ -42,7 +63,7 @@ def a_valid_scenario() -> dict[str, Any]:
         "nodes": {"count": 2, "soil_moisture_depth_cm": 30, "calibration": "field"},
         "interval_s": 900,
         "weather_fixture": FIXTURE,
-        "weather_fixture_sha256": file_sha256(WEATHER_DIR / FIXTURE),
+        "weather_fixture_sha256": recording_digest(FIXTURE),
         "trajectories": {
             "soil_moisture_30cm": {"start": 22, "end": 13, "noise": 0.8},
             "air_temp": {"daily_min": 26, "daily_max": 37, "noise": 0.5},
@@ -93,7 +114,7 @@ def test_the_contract_accepts_the_node_less_rainfed_shape() -> None:
             "nodes": {"count": 0},
             "interval_s": 900,
             "weather_fixture": "veranillo-caribe.json",
-            "weather_fixture_sha256": file_sha256(WEATHER_DIR / "veranillo-caribe.json"),
+            "weather_fixture_sha256": recording_digest(RAINFED_FIXTURE),
             "expected": {
                 "alerts": ["water_stress"],
                 "irrigation": "rainfed",
