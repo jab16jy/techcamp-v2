@@ -21,6 +21,7 @@ subtly wrong and both fail the producer silently:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -280,6 +281,20 @@ def test_the_facts_are_frozen_so_no_reader_can_rewrite_what_the_call_sends() -> 
         facts.plot_name = "otro lote"  # type: ignore[misc]
 
 
+class _UnreadableMapping:
+    """A mapping whose every read raises — the `jsonb` shape the sanitizer's
+    "never raises" promise is written for."""
+
+    def keys(self) -> Any:
+        raise RuntimeError("boom")
+
+    def __getitem__(self, key: str) -> Any:
+        raise RuntimeError("boom")
+
+    def __iter__(self) -> Any:
+        raise RuntimeError("boom")
+
+
 def test_a_fact_cannot_be_rewritten_through_the_mapping_it_was_built_from() -> None:
     """R3-MUTABLE-FACT-MAPS, the half `frozen=True` does not cover. Rebinding a
     field is refused by the dataclass, but a `dict` the fact points at is still the
@@ -302,3 +317,30 @@ def test_a_fact_cannot_be_rewritten_through_the_mapping_it_was_built_from() -> N
     assert dict(alert.evidence) == {"at": "2026-10-06T14:00:00+00:00"}
     with pytest.raises(TypeError):
         alert.evidence["contact"] = "camila@cooperative.co"  # type: ignore[index]
+
+
+def test_a_fact_built_from_a_mapping_that_cannot_be_copied_carries_no_evidence() -> None:
+    """The snapshot `__post_init__` takes must not turn into a way to fail the
+    question.
+
+    `domain.fact_safety.sanitize_fact_values` states the contract this borrows:
+    **never raises**, because `values` is `jsonb` written by six other modules and
+    anything unexpected is dropped rather than propagated. The copy that
+    `__post_init__` takes is a second read of the same untrusted mapping, so a
+    mapping whose iteration raises would answer every question with an error —
+    and `frozen=True`/`slots=True` give the constructor no way to report a
+    degraded fact instead of raising.
+
+    An unreadable mapping is **empty**, not `None` and not an exception: `None` is
+    `RiskFact.metrics`' own documented "this version measured nothing" (docs/04
+    §Riesgo) and must not become the shape that means "this mapping broke".
+    """
+    alert = AlertFact(
+        rule_code="water_stress",
+        severity="warning",
+        opened_at=datetime(2026, 10, 6, 6, 0, tzinfo=UTC),
+        acknowledged=False,
+        evidence=_UnreadableMapping(),  # type: ignore[arg-type]
+    )
+
+    assert dict(alert.evidence) == {}

@@ -318,5 +318,16 @@ def _read_only(values: Mapping[str, FactValue]) -> Mapping[str, FactValue]:
     the `dict` it passed in could still mutate the fact through it. Copying first
     is what makes the fact a snapshot, which is the property the sanitization and
     the deterministic rendering both rely on.
+
+    **Never raises**, for the reason `sanitize_fact_values` gives: the values are
+    `jsonb` written by other modules and this copy is a second read of them, so a
+    mapping whose iteration fails must cost the question its evidence rather than
+    answer it with an exception — `frozen=True`/`slots=True` leave a constructor
+    no way to report a degraded fact instead of raising. A mapping that cannot be
+    copied is **empty**, not `None`: `None` is `RiskFact.metrics`' own documented
+    "this version measured nothing" (docs/04 §Riesgo), a different fact.
     """
-    return MappingProxyType(dict(values))
+    try:
+        return MappingProxyType(dict(values))
+    except Exception:
+        return MappingProxyType({})
