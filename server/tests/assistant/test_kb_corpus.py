@@ -140,8 +140,7 @@ def test_every_shipped_fixture_is_marked_as_a_fixture() -> None:
 
     assert all(source.document.license == FIXTURE_LICENSE for source in sources)
     assert all(
-        source.document.source_url.startswith("https://example.invalid/")
-        for source in sources
+        source.document.source_url.startswith("https://example.invalid/") for source in sources
     )
 
 

@@ -58,9 +58,7 @@ def _prose(*, sentences: int, words_per_sentence: int = 64) -> str:
     a *sentence* boundary impossible to cut at. Real prose has many short sentences, and
     the fragment boundary lands on one of them, so the overlap test needs this shape.
     """
-    return " ".join(
-        " ".join(["ma"] * words_per_sentence) + "." for _ in range(sentences)
-    )
+    return " ".join(" ".join(["ma"] * words_per_sentence) + "." for _ in range(sentences))
 
 
 def _document(*paragraphs: str) -> str:
@@ -219,9 +217,7 @@ def test_the_chunking_is_deterministic() -> None:
     or the corpus would be re-embedded on every run for no reason."""
     text = _document(*[_paragraph(150, 90) for _ in range(5)])
 
-    assert [chunk.text for chunk in chunk_text(text)] == [
-        chunk.text for chunk in chunk_text(text)
-    ]
+    assert [chunk.text for chunk in chunk_text(text)] == [chunk.text for chunk in chunk_text(text)]
 
 
 @pytest.mark.parametrize("tokens", [1, CHUNK_TARGET_TOKENS, CHUNK_TARGET_TOKENS + 1, 5000])
