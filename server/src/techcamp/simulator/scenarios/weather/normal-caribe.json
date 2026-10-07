@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "name": "normal-caribe",
+  "scenario": "normal",
+  "cell": {
+    "lat": 11.0,
+    "lon": -74.8
+  },
+  "timezone": "America/Bogota",
+  "source_url": "https://archive-api.open-meteo.com/v1/archive?latitude=10.98&longitude=-74.80&start_date=2015-01-19&end_date=2015-02-08&daily=et0_fao_evapotranspiration,temperature_2m_max,temperature_2m_min,precipitation_sum,relative_humidity_2m_mean&timezone=America%2FBogota",
+  "recorded_at": "2026-10-07T02:27:43Z",
+  "synthetic": false,
+  "data_sha256": "197bf34715aa1c1e9f02a626bda10a6f2e3191f7ccc4ffb87dc7bf9056d2d459",
+  "days": [
+    {"day": "2015-01-19", "day_offset": 0, "et0_mm": 3.7, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 81.0, "tmax_c": 27.1, "tmin_c": 25.2},
+    {"day": "2015-01-20", "day_offset": 1, "et0_mm": 4.27, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 79.0, "tmax_c": 27.3, "tmin_c": 25.2},
+    {"day": "2015-01-21", "day_offset": 2, "et0_mm": 4.07, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 81.0, "tmax_c": 27.4, "tmin_c": 25.3},
+    {"day": "2015-01-22", "day_offset": 3, "et0_mm": 3.8, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 82.0, "tmax_c": 27.1, "tmin_c": 25.1},
+    {"day": "2015-01-23", "day_offset": 4, "et0_mm": 4.12, "is_forecast": false, "rain_mm": 0.1, "rh_mean_pct": 81.0, "tmax_c": 27.4, "tmin_c": 25.2},
+    {"day": "2015-01-24", "day_offset": 5, "et0_mm": 4.16, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 81.0, "tmax_c": 28.0, "tmin_c": 25.3},
+    {"day": "2015-01-25", "day_offset": 6, "et0_mm": 4.27, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 80.0, "tmax_c": 27.5, "tmin_c": 25.4},
+    {"day": "2015-01-26", "day_offset": 7, "et0_mm": 4.62, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 80.0, "tmax_c": 28.2, "tmin_c": 25.4},
+    {"day": "2015-01-27", "day_offset": 8, "et0_mm": 4.49, "is_forecast": false, "rain_mm": 0.1, "rh_mean_pct": 80.0, "tmax_c": 27.6, "tmin_c": 25.1},
+    {"day": "2015-01-28", "day_offset": 9, "et0_mm": 3.79, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 81.0, "tmax_c": 27.2, "tmin_c": 25.1},
+    {"day": "2015-01-29", "day_offset": 10, "et0_mm": 4.84, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 78.0, "tmax_c": 27.2, "tmin_c": 25.1},
+    {"day": "2015-01-30", "day_offset": 11, "et0_mm": 4.96, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 78.0, "tmax_c": 28.2, "tmin_c": 25.6},
+    {"day": "2015-01-31", "day_offset": 12, "et0_mm": 4.58, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 81.0, "tmax_c": 27.7, "tmin_c": 25.3},
+    {"day": "2015-02-01", "day_offset": 13, "et0_mm": 4.69, "is_forecast": false, "rain_mm": 0.0, "rh_mean_pct": 81.0, "tmax_c": 27.9, "tmin_c": 25.4},
+    {"day": "2015-02-02", "day_offset": 14, "et0_mm": 5.07, "is_forecast": true, "rain_mm": 0.0, "rh_mean_pct": 76.0, "tmax_c": 28.8, "tmin_c": 25.8},
+    {"day": "2015-02-03", "day_offset": 15, "et0_mm": 4.63, "is_forecast": true, "rain_mm": 0.0, "rh_mean_pct": 78.0, "tmax_c": 28.0, "tmin_c": 26.0},
+    {"day": "2015-02-04", "day_offset": 16, "et0_mm": 5.08, "is_forecast": true, "rain_mm": 0.0, "rh_mean_pct": 76.0, "tmax_c": 28.4, "tmin_c": 25.8},
+    {"day": "2015-02-05", "day_offset": 17, "et0_mm": 4.79, "is_forecast": true, "rain_mm": 0.0, "rh_mean_pct": 78.0, "tmax_c": 29.1, "tmin_c": 26.0},
+    {"day": "2015-02-06", "day_offset": 18, "et0_mm": 4.33, "is_forecast": true, "rain_mm": 0.9, "rh_mean_pct": 82.0, "tmax_c": 28.0, "tmin_c": 25.3},
+    {"day": "2015-02-07", "day_offset": 19, "et0_mm": 4.48, "is_forecast": true, "rain_mm": 0.0, "rh_mean_pct": 80.0, "tmax_c": 27.3, "tmin_c": 25.0},
+    {"day": "2015-02-08", "day_offset": 20, "et0_mm": 4.3, "is_forecast": true, "rain_mm": 0.0, "rh_mean_pct": 79.0, "tmax_c": 27.9, "tmin_c": 25.0}
+  ]
+}

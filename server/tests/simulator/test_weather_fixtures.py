@@ -30,9 +30,28 @@ from .scenario_library import (
     parse_fixture,
 )
 
-FIXTURE_NAMES = ("el-nino-caribe", "veranillo-caribe")
-"""The two fixtures `docs/06-diseno-detallado.md:430,458` names, and the two the
-scenarios with documented arithmetic consume."""
+FIXTURE_NAMES = (
+    "el-nino-caribe",
+    "rainy-season-caribe",
+    "normal-caribe",
+    "veranillo-caribe",
+)
+"""Every fixture in the library: the two docs/06-diseno-detallado.md:430,458
+names for the scenarios with documented arithmetic, plus the rainy-season and the
+benign window the other scenarios read."""
+
+MIN_FUNGAL_OBSERVED_DAYS = {
+    "el-nino-caribe": 0,
+    "rainy-season-caribe": 8,
+    "normal-caribe": 0,
+    "veranillo-caribe": 0,
+}
+"""How many observed rows each fixture needs to satisfy both halves of
+`fungal_risk` (docs/06:129), which is what its scenario's `expected` block
+depends on. Scenarios A, E and `normal` assert their alert list exhaustively, so
+a humid recorded day would add an alert they do not list; scenario B is the
+humidity scenario itself, where sustained humidity is the whole point
+(docs/06:474)."""
 
 
 @pytest.fixture(params=FIXTURE_NAMES)
@@ -101,10 +120,27 @@ def test_veranillo_keeps_effective_rain_at_zero(fixture: WeatherFixture) -> None
     assert all(day.effective_rain_mm == 0.0 for day in fixture.days)
 
 
-def test_scenario_a_and_e_fixtures_cannot_open_fungal_risk(fixture: WeatherFixture) -> None:
-    """Both documented scenarios assert their alert list exhaustively, so a
-    recorded humid day would add `fungal_risk` to it (docs/06:129,437-440,459)."""
-    assert [day for day in fixture.observed if day.meets_fungal_risk_conditions] == []
+def test_each_fixture_meets_its_own_fungal_risk_expectation(fixture: WeatherFixture) -> None:
+    """Every fixture carries exactly the humidity its scenario's `expected` needs."""
+    qualifying = [day for day in fixture.observed if day.meets_fungal_risk_conditions]
+    minimum = MIN_FUNGAL_OBSERVED_DAYS[fixture.name]
+
+    assert len(qualifying) >= minimum, (
+        f"{fixture.name}: {len(qualifying)} observed rows satisfy fungal_risk, "
+        f"scenario needs at least {minimum}"
+    )
+    # `heavy_rain_forecast` needs more than 50 mm in a forecast 24 h
+    # (docs/06:131); no scenario here expects that alert.
+    assert all(day.rain_mm <= 50.0 for day in fixture.forecast)
+
+
+def test_normal_fixture_keeps_effective_rain_at_zero(fixture: WeatherFixture) -> None:
+    """The benign window: no effective rain, so the `normal`, `node-failure` and
+    `offline-farmer` plots dry down only along their own trajectory."""
+    if fixture.name != "normal-caribe":
+        pytest.skip("the contrast fixture's arithmetic")
+
+    assert all(day.effective_rain_mm == 0.0 for day in fixture.days)
 
 
 def test_parse_fixture_rejects_an_edited_row() -> None:
