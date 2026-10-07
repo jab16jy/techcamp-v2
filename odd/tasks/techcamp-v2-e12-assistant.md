@@ -250,8 +250,9 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   registration in `worker.py`). **Depends T2.**
 
 - [ ] **T4 — Fact builders, retrieval use case and the no-LLM fallback**: sensors from the `telemetry`
-  facade (`query_latest_plot_readings`; last calibrated reading per variable with `received_at`, quality
-  ≠ 0 marked, the sensor's calibration version, staleness), alerts from `alerts`
+  facade (`query_latest_plot_readings`; metric/value/time plus derived staleness — `ReadingPoint` carries
+  only time and value, so `received_at`, the quality mark and the calibration version are a follow-up, not
+  invented here; the facade already excludes quality-bit-2 and uncalibrated readings upstream), alerts from `alerts`
   (`list_open_alerts_for_plots` with `severity`, `opened_at`, `evidence`), irrigation from `irrigation`
   (`query_plot_recommendation` with `kind`, `rationale`, `depth_mm`/`duration_min` or the rainfed
   `advice`), seasonal climate from `kb_document` (latest bulletin for the farm's department, else the
@@ -260,8 +261,9 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   settles the assistant's first `risk` facade dependency. With the retrieved fragments (top 5,
   similarity ≥ 0.75, ADR-0008:12) this task also assembles the degraded no-LLM answer: the same facts
   plus the relevant documents, no provider call (docs/06:377). Org gate through `resolve_plot_access`.
-  ~450 floor. **Route: delegated** (trigger: writer; five facades, the D-T12.6 send-list). **Depends T1,
-  T2.** Parallel with T2.
+  ~450 floor. **Route: delegated** (trigger: writer; five facades, the D-T12.6 send-list). **Depends T1.**
+  Parallel with T2: T4 builds against the T1 ports with doubles and needs no T2 migration; the T2
+  dependency holds only for live-kb integration tests, which move to T3.
 
 - [ ] **T5 — The streaming endpoint and feedback**: `POST /assistant/messages` returning
   `text/event-stream` — SSE frames carrying tokens and cited sources — and
