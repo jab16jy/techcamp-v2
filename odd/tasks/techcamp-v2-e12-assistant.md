@@ -871,14 +871,24 @@ lineage; no approved receipt means *not reviewed*, never approved.
 
 ## Next step
 
-**T1, T2 y T4 están cerrados.** **T5 puede arrancar ya**: la ruta que consume ya existe y está
-revisada —`gather_plot_facts` (hechos) → `retrieve_fragments` (fragmentos y citas) →
-`answer_without_llm` (la rama degradada)—, con los puertos de T1 cerrados y el `LLMClient` todavía
-sin tocar, que es exactamente el borde de T5. T6 empieza después de T5 (comparten el router); T7 es
-`web/` y no se solapa con nada del servidor. T3 espera la revisión de licencia del corpus y T8 el
-umbral de la evaluación.
+**T1, T2, T4 y T5 están cerrados.** T5 entró por rebanadas (decisión del dueño, con ~4 k líneas) y
+dejó los dos endpoints de `docs/04:227-228` vivos sobre `ea42de1`, con los repositorios en `b31ac34`
+y su corrección `53cb281`, el prompt/SSE/precio en `8fcb3ed` y el cierre en `959f8b8`. **T6 puede
+arrancar ya** y comparte el router de T5: el `POST /assistant/messages` que T6limita es el de
+`ea42de1`, y la rama degradada (`answer_without_llm`, de T4) está lista para cablearse detrás de la
+puerta de cuota. T7 es `web/` y no se solapa con nada del servidor. T3 espera la revisión de licencia
+del corpus y T8 el umbral de la evaluación.
 
-Lo que queda es decisión del dueño, y ninguna bloquea a T5:
+**Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
+
+1. **El recibo de la rebanada de repositorios está en una parada terminal de mantenedor**
+   (`captured_artifacts_unverifiable`, `repair: unsupported`). El código está corregido y verde; lo
+   que falta es el recibo quemado. No se reintenta ni se recupera por cuenta propia.
+2. **La fuente del precio de `cost_cop` es decisión del dueño y sigue abierta.** El código solo pone
+   la costura (`price_for` sobre una tabla inyectada, `UnknownModelPriceError` en vez de un `0`), que
+   es válida con cualquier valor; lo que cambia con la decisión son los números y la tabla del wiring.
+
+Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
 
 1. **D-T12.3: confirmar el límite de 10/día en ambos perfiles.** Sigue anotado como owner-confirmable en
    `docs/04:22`; si se revierte a solo-`production`, esa fila y [ADR-0007:5](../docs/adr/0007-llm-por-api.md)
@@ -892,7 +902,7 @@ Lo que queda es decisión del dueño, y ninguna bloquea a T5:
    sin recibo. Cerrarlo con recibo exige una decisión explícita del dueño (revisión independiente de
    ese rango); no se reinicia por cuenta propia ni se fabrica un recibo.
 
-En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5** siguiente; **T6 ‖ T7 ‖ T8** después.
+En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5** hecho; **T6 ‖ T7 ‖ T8** después.
 Nada en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista
 blanca de `import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene
 `vector`, y ningún otro módulo se tiene que mover para que E12 arranque.
