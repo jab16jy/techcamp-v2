@@ -857,6 +857,23 @@ lineage; no approved receipt means *not reviewed*, never approved.
       base del `created_at` rechazado del llamador.
     - `R3-001` … `R3-003` (S2, WARNING) — en `pricing.py:94-103`, `stream.py:121-132`, `prompt.py:156-168`.
     - `R3-001` (S3, WARNING) — en `tests/assistant/test_assistant_api.py:320-330`.
+  - **Cierre de T5 (2026-10-08).** El dueño autorizó el cierre entero: (a) la decisión de precio queda
+    como la costura ya implementada —inyectada, 0 en seminario, números reales en T6/T8—; (b) el lineage
+    del RDD único `review-9f2fddf94d243592` quedó **abandonado** con `reason: operator_disposition`,
+    `actor: owner`, sin resultados de lente ni hallazgos que descartar, y su estado en cuarentena bajo
+    `review-transactions/quarantine/`; (c) los hallazgos no bloqueantes se agruparon en el issue
+    [#306](https://github.com/jab16jy/techcamp-v2/issues/306) (`review-follow-up`, `type:chore`,
+    `area:server`); (d) la parada de S1 se investigó de solo lectura y su causa está registrada abajo.
+  - **Causa de la parada de S1, con evidencia (no con conjetura).** `review inspect-authority` dice que
+    el store está **sano**: `valid: true`, `complete: true`, 38 entradas, 1 arista válida, 0
+    diagnósticos, 0 aristas inválidas — no hay corrupción ni registro perdido. Lo que muestra el estado
+    de la autoridad es que el candidato congelado sigue siendo `81a277b7…` (el árbol **anterior** a la
+    corrección) y que el `fix_delta_hash` registrado es `sha256:e3b0c442…`, que es el SHA-256 de la
+    cadena vacía: **cero bytes de corrección registrados**. Al validar el artefacto capturado, native
+    resuelve el candidato corregido como *árbol congelado + delta registrado*, y con delta vacío ese
+    candidato ya no corresponde al contenido commiteado (HEAD iba cuatro commits por delante,
+    incluyendo `53cb281`). De ahí el `captured_artifacts_unverifiable`. El arreglo supported es de
+    mantenedor (`review/complete-fix`, `review/validate-fix`), no de código.
   - **Desviación de tooling registrada tal cual:** la captura de la corrección hubo que emitirse con el
     CLI nativo (`gentle-ai review status --intended-untracked-selection=…` y
     `gentle-ai review capture-correction-plan --correction-lines=19`), con autorización explícita del
@@ -884,9 +901,16 @@ del corpus y T8 el umbral de la evaluación.
 1. **El recibo de la rebanada de repositorios está en una parada terminal de mantenedor**
    (`captured_artifacts_unverifiable`, `repair: unsupported`). El código está corregido y verde; lo
    que falta es el recibo quemado. No se reintenta ni se recupera por cuenta propia.
-2. **La fuente del precio de `cost_cop` es decisión del dueño y sigue abierta.** El código solo pone
-   la costura (`price_for` sobre una tabla inyectada, `UnknownModelPriceError` en vez de un `0`), que
-   es válida con cualquier valor; lo que cambia con la decisión son los números y la tabla del wiring.
+2. **Fuente del precio de `cost_cop` — decidada por el dueño (2026-10-08): precio inyectado, 0 en el
+   perfil seminario.** La costura ya lo respeta: `price_for` resuelve sobre una tabla que inyecta el
+   wiring, `cost_cop` es la aritmética de docs/02:78 sobre esa tarjeta y un modelo sin tarjeta es
+   `UnknownModelPriceError`, **nunca** un costo `0`. Por qué no se fijaron números aquí: ADR-0026:57
+   declara obsoletos los precios de [docs/02:78](../docs/02-estimaciones.md) (Claude Haiku 4.5) y deja
+   los reales de `deepseek-chat` a T8, y el costo del embedding depende del modelo que T8 pueda elegir.
+   El 0 del seminario no es un placeholder: ADR-0021 corre todo localmente, así que un modelo dentro
+   del proceso no tiene factura, y D-T12.1 acepta `cost_cop = 0` para una llamada que sí ocurrió y no
+   costó nada. Lo que falta es el cliente DeepSeek y sus claves (`shared/config.py`, T6) y la tarjeta
+   real (T8), no una decisión.
 
 Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
 
