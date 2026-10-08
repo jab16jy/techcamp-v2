@@ -239,7 +239,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   had to rechain for exactly this). ~300 floor. **Route: delegated** (trigger: writer; migration +
   dependency + ORM). **Depends T0, T1.** Parallel with T4: disjoint files.
 
-- [ ] **T3 — Corpus ingestion**: chunker at ~500 tokens with overlap (ADR-0008:12), one `kb_document`
+- [x] **T3 — Corpus ingestion**: chunker at ~500 tokens with overlap (ADR-0008:12), one `kb_document`
   per source with `source_url` + `license` + `kind` + `published_on` + `department`, ENSO state parsed
   onto `kb_document.enso_state` (docs/06:374), idempotent by `(source_url, sha256)` per ADR-0012's
   *(tipo, entidad, fecha)* rule, a procrastinate job plus `POST /dev/jobs/kb:ingest:run` (ADR-0021).
@@ -485,6 +485,14 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
     `USER-MESSAGE-LLM-EVIDENCE`, `QUOTA-REASON-PRECEDENCE`) se corrigen en su propio commit con
     `Refs #302`, diferidos hasta que T2/T4 aterricen (decisión del dueño 2026-10-07); los que son
     solo del doble de prueba se resuelven al escribir el adaptador.
+- **T3 — `review-0d72f97fb50a0ff3` — aprobado y reconocido.** Lente `review-reliability`
+  (medium, 5 archivos/240 líneas, sin corrección). Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `delivery: ordinary-repository-policy`. Rebanadas `d90853c`
+  (loader + fixtures) + `f44279d` (job + registro + router /dev); `just gate
+  server/tests/assistant` → 197 passed. D-T12.2 decidido: **index-before-load** (la migración T2 ya
+  crea el HNSW en tabla vacía; el corpus ~10k fragmentos está un orden de magnitud bajo el umbral de
+  rebuild; el job nunca corre DDL — ver docstring de `kb_ingest.py:47-60`). Hallazgos a #305 (2 WARNING
+  + 1 SUGGESTION, `Refs #305`).
 - **T4 — dos slices aprobados y reconocidos (recibos quemados).**
   - **Slice 1 — `review-4dbdecc82fb95e75`** (`f0ef15f`, padre `a127acb`): lente `review-reliability`
     (medium, 6 archivos/2138 líneas, presupuesto de corrección 200). Un intento previo sobre el rango
