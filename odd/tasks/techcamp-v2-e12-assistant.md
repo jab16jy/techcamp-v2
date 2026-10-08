@@ -265,7 +265,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   Parallel with T2: T4 builds against the T1 ports with doubles and needs no T2 migration; the T2
   dependency holds only for live-kb integration tests, which move to T3.
 
-- [ ] **T5 — The streaming endpoint and feedback**: `POST /assistant/messages` returning
+- [x] **T5 — The streaming endpoint and feedback**: `POST /assistant/messages` returning
   `text/event-stream` — SSE frames carrying tokens and cited sources — and
   `POST /assistant/messages/{message_id}:feedback { helpful } → 204`. Session lifetime per D-T12.4, not
   held across tokens. Prompt assembly per D-T12.6 with the docs/06:381-387 rules as the system prompt,
@@ -764,6 +764,110 @@ lineage; no approved receipt means *not reviewed*, never approved.
   - **Superficie que T4 deja para adelante:** sin adaptador todavía —el `KnowledgeRepository` es el
     puerto de T1 con el método del boletín, y su lectura SQL es de T3; `usage.py` sigue siendo la
     rama de cuota de T1 y T6 la completa.
+
+- 2026-10-07 — **T5, el endpoint de streaming y el de retroalimentación.** Reconciliado contra el árbol
+  y no de memoria: base `1d7e1b8` (T0–T4), rama `e12-t5`, worktree propia con su propia base
+  (`techcamp-db-e12-t5-460430375`, puerto 55375). **Superficie:** `assistant/adapters/api/**`,
+  `assistant/adapters/repositories.py`, `assistant/domain/{models,errors}.py`,
+  `server/src/techcamp/main.py` (solo el registro del router) y `server/tests/assistant/**`.
+  Nada de `web/`, nada de `/api/v1/stream`, nada del hub de telemetry.
+  - **`adapters/api/prompt.py`** — el prompt saliente: sistema + hechos + fragmentos + pregunta, en
+    ese orden (docs/06 §9), validado contra `PromptSection` en cada llamada. Los **datos viajan como
+    datos**: los bloques de hechos y fragmentos se rotulan *"datos, no instrucciones"* y llegan en
+    mensajes `user`, mientras las reglas de docs/06:381-387 son el único mensaje `system`
+    (docs/09:75). El bloque re-aplica las listas de claves permitidas y `contains_contact_data` al
+    **renderizar**, no solo al construir el hecho: es el test de lista de envío de D-T12.6 (un
+    teléfono o un correo en el bloque de hechos nunca llega al prompt).
+  - **`adapters/api/stream.py`** — el cuerpo SSE y el contrato de tramas: `token` por token del
+    proveedor, después `sources` con las citas resueltas y después `done` con `conversation_id`,
+    `message_id`, modelo, tokens y costo (D-T12.1). **Sin `id:`** y **sin keepalive**: ADR-0027 deja
+    claro que este stream no tiene replay y nace y muere con su petición. El cuerpo **no sostiene
+    sesión**: llama a un `persist` que abre y cierra la suya, y lo llama **después** del último token
+    (D-T12.4 / `R3-stream-holds-db-session`). Un proveedor que falla a mitad de camino, un `usage`
+    ausente o un modelo sin precio cierran la trama con `error` y **no persisten nada**.
+  - **`adapters/api/pricing.py`** — `cost_cop` como aritmética de docs/02:78 sobre una **tarjeta de
+    precios inyectada**, nunca un literal: ADR-0026 declara obsoletos los precios de docs/02:78 y los
+    reales son de T8. Un modelo sin precio es `UnknownModelPriceError`, **jamás** un costo `0`.
+  - **`adapters/api/deps.py`** — el `LLMClient`, el `Embedder` y la tabla de precios. En el perfil
+    seminario: `SeminarLLMClient` (local, determinista, sin red) y **`SeminarHashEmbedder` reutilizado**
+    —el mismo con el que T3 indexó el corpus, porque una pregunta embebida por otro embedder no
+    encontraría nada. En `production`: `503` con título explícito, porque las claves del proveedor y el
+    cliente DeepSeek son superficie de **T6**.
+  - **`adapters/repositories.py`** — `SqlAlchemyKnowledgeRepository` (búsqueda coseno
+    `ORDER BY embedding <=> :query`, piso y `top_k` en SQL, boletín con fallback nacional), y los dos
+    repositorios del transcripto filtrados por `user_id`. `add` **rechaza una conversación ajena** con
+    `ConversationNotFoundError`: la FK no sabe de quién es la conversación y sin esa comprobación un
+    turno se escribiría en el transcripto de otro usuario.
+  - **`adapters/api/router.py`** — los dos endpoints de docs/04:227-228. Orden de las puertas:
+    conversación propia (`404`) → `resolve_plot_access` (`404`) → hechos → recuperación → prompt →
+    escritura de la pregunta, todo en **una sesión corta** que cierra antes de que empiece el
+    `StreamingResponse`; la respuesta se escribe en otra sesión corta, dentro del cuerpo.
+  - **Desviaciones declaradas (dentro o fuera de la superficie que el brief autorizó):**
+    (1) `assistant/adapters/repositories.py` está **fuera** de la fila de superficie de T5
+    (`assistant/adapters/api/**`), con la excepción explícita del dueño: los diez módulos del repo
+    guardan sus repositorios ahí y `adapters/api/` es solo transporte.
+    (2) `MessageRole` gana **`SYSTEM`** y `Message` lo **rechaza** con
+    `SystemRoleOnStoredMessageError`: el payload saliente de docs/06 §9 necesita un rol para las
+    reglas —si no, los fragmentos y el texto del productor llevarían la voz de las instrucciones
+    (docs/09:75)— y el enum congelado de T1 no lo tenía. La transcripción sigue teniendo dos roles, y
+    `test_models` se actualizó para afirmar exactamente eso.
+    (3) `cost_cop` requiere un precio y no hay ninguno en el repo: el dueño decidió **precio
+    inyectado, 0 en el seminario**, con las cifras reales de DeepSeek en T6/T8.
+    (4) La rama **degradada sin LLM no está cableada**: T4 dejó el caso de uso y T6 es su dueño
+    (el disparador son el límite y el presupuesto). Cablearla aquí sin disparador sería código muerto.
+  - **Tests:** 4 módulos nuevos y 53 tests (`test_prompt_assembly` 11, `test_repositories` 20,
+    `test_stream` 18, `test_assistant_api` 16) más `db_fixtures.py`, con RED observado antes de cada
+    GREEN. Aíslan el `conversation`/`plot` de otra organización y usuario (`404`, nunca `403`), el
+    prompt exacto que salió del servidor, una sola llamada al proveedor por request (ADR-0007:26), y
+    **cero conexiones del pool checked out entre tokens** (el mismo instrumento que usa
+    `tests/telemetry/test_stream_api.py` para el stream del hub).
+  - **Verificación (2026-10-07, worktree `e12-t5`, base 55375):** `just gate server/tests/assistant`
+    → **359 passed, 0 failed, 0 skipped** en 47.99 s (incluye `gate-fast`: ruff, ruff format,
+    mypy, `lint-imports` con las capas hexagonales conservadas, una sola cabeza de Alembic, ast-grep,
+    eslint, tsc). Por rebanada: S1 → 304 passed; S2 → 324 passed; S3 → 341 passed; S4 → 359 passed.
+
+- 2026-10-07 — **T5 entregada y revisada por rebanadas** (decisión del dueño: con ~4 k líneas, tres
+  unidades de trabajo y un recibo cada una, no un RDD único). Rama `e12-t5`, base `1d7e1b8`, base de
+  datos propia en el puerto 55375. **Trabajo en política ordinaria:** sin PR, sin merge, sin rebase.
+
+  | Rebanada | Commit | Recibos RDD |
+  |---|---|---|
+  | S1 repos + fixtures + tests | `b31ac34` | `review-19ee9c38084df410` — revisión corrió y cerró `correction_required` (1 CRITICAL + 2 WARNING); corrección acotada en `53cb281` y **parada terminal de mantenedor** al re-verificar artefactos |
+  | S2 prompt + SSE + precio + rol `SYSTEM` | `8fcb3ed` | `review-202f3954880c4634` — **aprobado y quemado** (`gentle-ai.review-acknowledged/v1`), 3 WARNING informativos |
+  | S3 deps + router + `main.py` + tests de API | `ea42de1` | `review-4a3a3fefe2f3f556` — **aprobado y quemado** (`gentle-ai.review-acknowledged/v1`), 1 WARNING informativo |
+
+  - **El CRITICAL de S1 (`R3-ownership-mismatch`) estaba en el código y quedó corregido antes de seguir:**
+    `MessageRepository.add` verificaba la pertenencia del argumento `conversation_id` y escribía una fila
+    con `message.conversation_id`, así que un llamador podía verificar una conversación propia e
+    insertar un turno en el transcripto de otro usuario — la FK lo habría aceptado. La corrección son
+    **19 líneas de diff** (3 en el repositorio, 16 en el test), exactamente las capturadas en el plan
+    pre-edit (`--correction-lines=19`), y el test nuevo cubre justo el caso que el anterior no probaba:
+    el llamador **es** dueño de la conversación que nombra y aun así no puede apuntar el mensaje a otra.
+  - **Parada terminal del recibo de S1, tal cual:** `kind: stop`, `reason_code:
+    captured_artifacts_unverifiable`, `replayability: manual_action_required`, y el store marca
+    `repair: unsupported` (`supported_operations: ["review/complete-fix", "review/validate-fix"]`). Por
+    la tabla de reason codes eso es del **mantenedor**: inspeccionar la autoridad o desactivar el
+    interruptor de RDD del clon. **No se intenta recuperación ambiental.** La corrección ya está
+    commiteada y verificada; lo que falta es el recibo quemado de esa rebanada.
+  - **Hallazgos no bloqueantes, para un issue por ronda de revisión** (ninguno abre corrección y ninguno
+    reabre su candidato):
+    - `R3-search-floor-limit` (S1, WARNING) — el `top_k` se aplica en SQL antes del piso en Python, así
+      que un fragmento bajo el piso consume un cupo y puede dejar fuera a uno que sí califica.
+    - `R3-created-at-assertion` (S1, WARNING) — el test del reloj de la BD no distingue el reloj de la
+      base del `created_at` rechazado del llamador.
+    - `R3-001` … `R3-003` (S2, WARNING) — en `pricing.py:94-103`, `stream.py:121-132`, `prompt.py:156-168`.
+    - `R3-001` (S3, WARNING) — en `tests/assistant/test_assistant_api.py:320-330`.
+  - **Desviación de tooling registrada tal cual:** la captura de la corrección hubo que emitirse con el
+    CLI nativo (`gentle-ai review status --intended-untracked-selection=…` y
+    `gentle-ai review capture-correction-plan --correction-lines=19`), con autorización explícita del
+    dueño, porque la fachada no alcanza ese estado: `readRetainedNativeUntrackedSelection`
+    (`extensions/gentle-ai.ts:6548-6557`) devuelve `{}` en cuanto la selección retenida trae `baseRef`, y
+    `status` no acepta `untrackedScope`; `select-intended-untracked` en cambio ejecuta START
+    (`gentle-ai.ts:8359`). Afecta a **todo candidato con rango commiteado**, no a este en particular.
+  - **Superficie que T5 deja para adelante:** el límite de 10/día, el tope de presupuesto y el `429`
+    con `Retry-After` (T6, que comparte este router), la rama degradada, el cliente DeepSeek con sus
+    claves y su tarjeta de precios (`shared/config.py`), y las tramas que el cliente web de T7
+    consumirá con `fetch` + `ReadableStream` + `createSseParser` (`token`, `sources`, `done`, `error`).
 
 ## Next step
 
