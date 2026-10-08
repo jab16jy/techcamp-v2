@@ -227,6 +227,9 @@ class SqlAlchemyMessageRepository:
         caller's: the foreign key would accept the row, and a turn written into
         another user's transcript is a leak the schema cannot prevent on its own.
         """
+        # The row below writes `message.conversation_id`, so it must be this one.
+        if message.conversation_id != conversation_id:
+            raise ConversationNotFoundError(conversation_id)
         owned = await self._session.execute(
             select(ConversationRow.id).where(
                 ConversationRow.id == conversation_id, ConversationRow.user_id == user_id

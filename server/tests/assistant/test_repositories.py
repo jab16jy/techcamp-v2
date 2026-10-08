@@ -556,6 +556,22 @@ async def test_a_turn_cannot_be_written_into_another_users_conversation(
             ),
         )
 
+    # R3-ownership-mismatch: ownership is verified on the argument while the row
+    # writes `message.conversation_id`, so the two must be the same conversation.
+    another = await _seed_conversation(db_session, user_id=OWNER)
+    with pytest.raises(ConversationNotFoundError):
+        await repository.add(
+            user_id=OWNER,
+            conversation_id=conversation.id,
+            message=Message(
+                id=uuid4(),
+                conversation_id=another.id,
+                role=MessageRole.USER,
+                content="Mensaje dirigido a otro transcripto",
+                created_at=_AT,
+            ),
+        )
+
 
 async def test_feedback_on_a_message_of_another_user_answers_false(
     db_session: AsyncSession,
