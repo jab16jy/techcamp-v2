@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../../../lib/api/session'
 import {
   ASSISTANT_ENDPOINT,
+  ASSISTANT_STALL_TIMEOUT_MS,
   askAssistant,
   parseCitation,
   type AskAssistantDeps,
@@ -102,6 +103,20 @@ function track(promise: Promise<unknown>): () => boolean {
 
 function deps(fetchImpl: typeof fetch, extra: AskAssistantDeps = {}): AskAssistantDeps {
   return { fetchImpl, ...extra }
+}
+
+/**
+ * A `fetch` that never answers, rejecting with an `AbortError` when the request's
+ * own signal fires — which is what a real `fetch` does, and the only way a stall
+ * timeout applied to the request becomes observable from here.
+ */
+function fetchThatHangs(): typeof fetch {
+  return (_input, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('The operation was aborted.', 'AbortError'))
+      })
+    })
 }
 
 describe('askAssistant', () => {
@@ -421,6 +436,99 @@ describe('askAssistant', () => {
       content: QUESTION,
       plot_id: 'plot-9',
     })
+  })
+
+  it('releases the reader on a finished answer, so the body is never left locked', async () => {
+    const stream = controllableStream()
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+    const body = stream.response.body as ReadableStream<Uint8Array>
+
+    const promise = askAssistant({ content: QUESTION }, () => {}, deps(fetchImpl))
+    stream.push(tokenFrame('respuesta'))
+    stream.push(doneFrame())
+    stream.close()
+
+    await expect(promise).resolves.toMatchObject({ status: 'answered' })
+    // A reader still locked here would make a second getReader() throw.
+    expect(() => body.getReader()).not.toThrow()
+  })
+
+  it('releases the reader when the stream is cancelled mid-answer', async () => {
+    const stream = controllableStream()
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+    const body = stream.response.body as ReadableStream<Uint8Array>
+    const controller = new AbortController()
+
+    const promise = askAssistant(
+      { content: QUESTION },
+      () => {},
+      deps(fetchImpl, { signal: controller.signal }),
+    )
+    await tick()
+    stream.push(tokenFrame('a medio'))
+    await tick()
+    controller.abort()
+
+    await expect(promise).resolves.toEqual({ status: 'interrupted' })
+    expect(() => body.getReader()).not.toThrow()
+  })
+
+  it('cancels the body an error frame left unread', async () => {
+    const stream = controllableStream()
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+    const promise = askAssistant({ content: QUESTION }, () => {}, deps(fetchImpl))
+
+    // The `error` frame is terminal and the connection stays open behind it, so
+    // the client has to let go of the body it will never finish reading.
+    stream.push(tokenFrame('a medio '))
+    stream.push(errorFrame())
+    stream.push(tokenFrame('nunca entregado'))
+
+    await expect(promise).resolves.toEqual({ status: 'interrupted' })
+    expect(() => stream.push(tokenFrame('demasiado tarde'))).toThrow(/Invalid state/)
+  })
+
+  it('answers interrupted when the response never sends a byte', async () => {
+    vi.useFakeTimers()
+    try {
+      const promise = askAssistant({ content: QUESTION }, () => {}, deps(fetchThatHangs()))
+
+      // Nothing has arrived, and yet the call must not hang forever: the stall
+      // timeout fires on silence rather than on a total duration.
+      await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS + 1)
+
+      await expect(promise).resolves.toEqual({ status: 'interrupted' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('answers interrupted when the body stalls mid-stream after tokens', async () => {
+    vi.useFakeTimers()
+    try {
+      const stream = controllableStream()
+      const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+      const tokens: string[] = []
+      const promise = askAssistant(
+        { content: QUESTION },
+        (text) => tokens.push(text),
+        deps(fetchImpl),
+      )
+
+      stream.push(tokenFrame('a medio '))
+      // The chunks that did arrive keep the answer alive: the countdown restarts
+      // from the last byte, so the answer may legitimately take longer than a
+      // plain request.
+      await vi.advanceTimersByTimeAsync(1)
+      expect(tokens).toEqual(['a medio '])
+
+      await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS + 1)
+
+      await expect(promise).resolves.toEqual({ status: 'interrupted' })
+      expect(tokens).toEqual(['a medio '])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

@@ -1,4 +1,11 @@
 /**
+ * Review note (`R3-assistant-copy-lives-in-the-api-layer`): these strings live in
+ * `api/` only because this work unit builds the api layer, and nothing here
+ * renders them. Moving the copy to `components/`, beside the screen that speaks
+ * it, belongs to the UI work unit that creates those components — so the move is
+ * recorded here rather than split across two units now.
+ */
+/**
  * The words the assistant screen speaks, in one place.
  *
  * Labels and notices come from docs/07-frontend-design-system.md §Asistente: the

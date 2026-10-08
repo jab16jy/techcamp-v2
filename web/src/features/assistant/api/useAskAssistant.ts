@@ -37,6 +37,15 @@ export interface UseAskAssistantResult {
 /** The two statuses a finished turn settles into: a `done` with a model, or without. */
 type SettledStatus = 'complete' | 'degraded'
 
+/**
+ * The server's own bound on a question (`router.py:73-86`, `MAX_QUESTION_CHARS`).
+ *
+ * The server is the authority and stays it: this is the one place the client
+ * carries the number, so refusing a question that would only come back as a `422`
+ * never widens or narrows what the adapter accepts.
+ */
+const MAX_QUESTION_CHARS = 2000
+
 function browserIsOnline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine
 }
@@ -128,9 +137,29 @@ export function useAskAssistant(plotId: string | null): UseAskAssistantResult {
     }
   }, [])
 
+  /**
+   * A conversation is about the plot it was created with: `_prepare` keeps the
+   * conversation's own plot and answers the new `plot_id` inside the old
+   * transcript (`router.py:201-225`), so continuing it after a plot switch would
+   * mix two subjects in one transcript. The switch therefore stops the question
+   * still on the wire and starts a new conversation.
+   *
+   * Its outcome still lands — an aborted stream answers `interrupted` — which
+   * settles the abandoned turn and frees the composer rather than leaving it busy.
+   */
+  useEffect(() => {
+    controllerRef.current?.abort()
+    controllerRef.current = null
+    conversationIdRef.current = null
+  }, [plotId])
+
   const send = useCallback(
     (content: string) => {
       if (plotId === null) return
+      // Trimmed first: a whitespace-only question is no question, and the text
+      // that reaches the wire is the text the producer meant to send.
+      const question = content.trim()
+      if (question === '' || question.length > MAX_QUESTION_CHARS) return
       if (busyRef.current) return
 
       const controller = new AbortController()
@@ -141,14 +170,18 @@ export function useAskAssistant(plotId: string | null): UseAskAssistantResult {
 
       setTurns((previous) => [
         ...previous,
-        { role: 'user', text: content, citations: [], status: 'complete' },
+        { role: 'user', text: question, citations: [], status: 'complete' },
         { role: 'assistant', text: '', citations: [], status: 'streaming' },
       ])
 
+      // How many tokens this question actually streamed, which is what tells a
+      // settled turn that carries words from an empty bubble.
+      let streamedTokens = 0
       void askAssistant(
-        { content, conversationId: conversationIdRef.current, plotId },
+        { content: question, conversationId: conversationIdRef.current, plotId },
         (text) => {
           if (!aliveRef.current) return
+          streamedTokens += 1
           setTurns((previous) => appendToken(previous, text))
         },
         { signal: controller.signal },
@@ -175,6 +208,16 @@ export function useAskAssistant(plotId: string | null): UseAskAssistantResult {
             case 'offline':
               setNotice('offline')
               setTurns(dropTrailingAssistantTurn)
+              return
+            case 'unavailable':
+            case 'unauthorized':
+              setNotice('failed')
+              // These two are decided before the stream starts, so `interrupted`
+              // and no-token-arrived are the same case today: the turn is an
+              // empty bubble marked "Respondiendo" (docs/07 §Asistente), which
+              // claims an answer is on its way when none is. The question stays
+              // with the notice. A partial answer stays, like `interrupted`.
+              if (streamedTokens === 0) setTurns(dropTrailingAssistantTurn)
               return
             default:
               // `interrupted` keeps the turn as `streaming`, with whatever text

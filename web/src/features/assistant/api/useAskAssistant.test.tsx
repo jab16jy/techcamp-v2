@@ -282,6 +282,124 @@ describe('useAskAssistant', () => {
     expect(result.current.busy).toBe(false)
   })
 
+  it('drops the empty assistant turn on unavailable, keeping the question and the notice', async () => {
+    vi.mocked(fetch).mockReturnValue(Promise.resolve(statusResponse(503)))
+
+    const { result } = renderAssistant()
+    act(() => {
+      result.current.send(QUESTION)
+    })
+
+    await waitFor(() => expect(result.current.notice).toBe('failed'))
+    // No token ever arrived, so the turn is an empty bubble still marked
+    // "Respondiendo": the question stays with the notice, and nothing claims an
+    // answer is on its way.
+    expect(result.current.turns).toEqual([
+      { role: 'user', text: QUESTION, citations: [], status: 'complete' },
+    ])
+    expect(result.current.busy).toBe(false)
+  })
+
+  it('does not send an empty question', async () => {
+    vi.mocked(fetch).mockReturnValue(Promise.resolve(controllableStream().response))
+
+    const { result } = renderAssistant()
+    act(() => {
+      result.current.send('   ')
+    })
+
+    expect(result.current.turns).toEqual([])
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('sends the question trimmed', async () => {
+    const stream = controllableStream()
+    vi.mocked(fetch).mockReturnValue(Promise.resolve(stream.response))
+
+    const { result } = renderAssistant()
+    act(() => {
+      result.current.send('  ¿Qué alertas tengo?  ')
+    })
+
+    expect(result.current.turns[0]?.text).toBe('¿Qué alertas tengo?')
+    const [, init] = vi.mocked(fetch).mock.calls[0]
+    expect(JSON.parse(String(init?.body)).content).toBe('¿Qué alertas tengo?')
+
+    stream.push(doneFrame())
+    stream.close()
+    await waitFor(() => expect(result.current.busy).toBe(false))
+  })
+
+  it('does not send a question over the server bound', async () => {
+    vi.mocked(fetch).mockReturnValue(Promise.resolve(controllableStream().response))
+
+    const { result } = renderAssistant()
+    act(() => {
+      // `router.py:73-86` bounds `content` at 2000 characters, so a longer
+      // question is a `422` round trip this only pays to avoid.
+      result.current.send(`x${'y'.repeat(2000)}`)
+    })
+
+    expect(result.current.turns).toEqual([])
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('starts a new conversation when the active plot changes', async () => {
+    const first = controllableStream()
+    const second = controllableStream()
+    const third = controllableStream()
+    vi.mocked(fetch)
+      .mockReturnValueOnce(Promise.resolve(first.response))
+      .mockReturnValueOnce(Promise.resolve(second.response))
+      .mockReturnValueOnce(Promise.resolve(third.response))
+
+    const { result, rerender } = renderHook(
+      ({ plotId }: { plotId: string | null }) => useAskAssistant(plotId),
+      { initialProps: { plotId: 'plot-1' } },
+    )
+
+    act(() => {
+      result.current.send('¿Qué alertas tiene la parcela?')
+    })
+    first.push(doneFrame({ ...DONE_PAYLOAD, conversation_id: 'conv-1' }))
+    first.close()
+    await waitFor(() => expect(result.current.busy).toBe(false))
+
+    act(() => {
+      result.current.send('¿Y el riesgo?')
+    })
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[1]?.[1]?.body))).toEqual({
+      content: '¿Y el riesgo?',
+      plot_id: 'plot-1',
+      conversation_id: 'conv-1',
+    })
+
+    // The plot switches while the second question is still on the wire.
+    rerender({ plotId: 'plot-2' })
+    const inFlight = vi.mocked(fetch).mock.calls[1]?.[1]?.signal as AbortSignal | undefined
+    expect(inFlight?.aborted).toBe(true)
+    // The abandoned stream still answers: its outcome settles the turn, so the
+    // hook is free for the next question.
+    await waitFor(() => expect(result.current.busy).toBe(false))
+
+    act(() => {
+      result.current.send('¿Y en esta otra parcela?')
+    })
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3))
+
+    // A conversation is about the plot it was created with (`router.py:_prepare`),
+    // so continuing the previous one would answer about the new plot inside the
+    // old transcript: it is dropped and the field is simply absent.
+    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[2]?.[1]?.body))).toEqual({
+      content: '¿Y en esta otra parcela?',
+      plot_id: 'plot-2',
+    })
+    third.push(doneFrame())
+    third.close()
+    await waitFor(() => expect(result.current.busy).toBe(false))
+  })
+
   it('aborts on unmount and writes no state afterwards', async () => {
     const stream = controllableStream()
     vi.mocked(fetch).mockReturnValue(Promise.resolve(stream.response))
@@ -301,17 +419,16 @@ describe('useAskAssistant', () => {
     // to the server, and it is the assertion that fails if the cleanup is dropped.
     expect(signal?.aborted).toBe(true)
 
-    // Everything the stream still delivers after the unmount is dropped on the
-    // floor. React 19 itself refuses a post-unmount render, so what is observable
-    // from outside is the quiet log and the untouched last render; the guard inside
-    // the hook is what keeps the work (and the closure) from reaching it at all.
     await act(async () => {
-      stream.push(tokenFrame('tarde'))
-      stream.push(doneFrame())
-      stream.close()
       await tick()
     })
 
+    // The unmount also cancelled the body and released its reader, so a frame the
+    // stream could still deliver has nowhere to go: the strongest form of "does not
+    // update state afterwards", and it throws because the stream is already closed
+    // rather than reaching the hook at all.
+    expect(() => stream.push(tokenFrame('tarde'))).toThrow(/Invalid state/)
+    expect(stream.response.body?.locked).toBe(false)
     expect(view.result.current).toBe(beforeUnmount)
     expect(consoleError).not.toHaveBeenCalled()
     consoleError.mockRestore()
