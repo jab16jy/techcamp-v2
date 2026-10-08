@@ -35,6 +35,38 @@ def open_meteo_api_key() -> str | None:
     return os.environ.get("OPEN_METEO_API_KEY")
 
 
+LLM_API_KEY_ENV = "TECHCAMP_LLM_API_KEY"
+LLM_BASE_URL_ENV = "TECHCAMP_LLM_BASE_URL"
+LLM_MODEL_ENV = "TECHCAMP_LLM_MODEL"
+
+LLM_BASE_URL_DEFAULT = "https://api.deepseek.com"
+"""ADR-0026's provisional provider: DeepSeek's OpenAI-compatible endpoint, pinned
+for the cost formula and the streaming shape. The real prices of `deepseek-chat`
+are T8's, which is why the model name is the only other thing configured here."""
+
+LLM_MODEL_DEFAULT = "deepseek-chat"
+
+
+def llm_api_key() -> str | None:
+    """The provider key, or `None` when there is none.
+
+    No default in either profile, on purpose. A committed default for a provider
+    credential would be a live key in the repository (docs/09 §Seguridad,
+    "Secretos"), and the seminar profile does not need one: it answers with the
+    local stand-in of `assistant.adapters.api.deps`. An unset key in production is
+    what the assistant dependency reports as `503`.
+    """
+    return os.environ.get(LLM_API_KEY_ENV) or None
+
+
+def llm_base_url() -> str:
+    return os.environ.get(LLM_BASE_URL_ENV, LLM_BASE_URL_DEFAULT)
+
+
+def llm_model() -> str:
+    return os.environ.get(LLM_MODEL_ENV, LLM_MODEL_DEFAULT)
+
+
 def vapid_private_key() -> str | None:
     """The server's half of the VAPID key pair, or `None` when there is none.
 

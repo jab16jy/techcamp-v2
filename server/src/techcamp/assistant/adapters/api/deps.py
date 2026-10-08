@@ -29,14 +29,79 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from typing import Annotated
 
+import httpx
 from fastapi import Depends
 
+from techcamp.assistant.adapters.api.deepseek import DeepSeekLLMClient
 from techcamp.assistant.adapters.api.pricing import ModelPrice, PriceTable
 from techcamp.assistant.adapters.jobs import SeminarHashEmbedder
 from techcamp.assistant.application.ports import Embedder, LLMClient, StreamToken, TokenUsage
 from techcamp.assistant.domain.models import ChatMessage
-from techcamp.shared.config import is_seminar_profile
+from techcamp.shared.config import is_seminar_profile, llm_api_key
 from techcamp.shared.errors import ProblemError
+
+_TIMEOUT = 60.0
+"""Seconds for the whole stream. A provider that has not answered the first token
+in a minute is not a slow answer, it is a hanging one, and the endpoint has a
+producer waiting on the other end of the socket."""
+
+
+class HttpChatCompletionTransport:
+    """`ChatCompletionTransport` over `httpx`, the client the repo already uses.
+
+    `httpx.AsyncClient.stream` with an injectable transport is what the Open-Meteo
+    clients do (`weather/adapters/open_meteo.py`), so reading DeepSeek's SSE is the
+    same shape as an HTTP dependency this repository already runs — and the same
+    seam is what lets a test drive it without a provider.
+
+    The `data:` lines are the transport's whole output: the `[DONE]` sentinel is
+    dropped **here**, so the adapter parses chunks and never sentinels, and the
+    bearer key is read from `shared.config` at the call rather than bound into the
+    object.
+    """
+
+    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._transport = transport
+
+    def chat_completion_lines(
+        self, *, url: str, api_key: str, model: str, messages: Sequence[ChatMessage]
+    ) -> AsyncIterator[str]:
+        return self._stream(url=url, api_key=api_key, model=model, messages=messages)
+
+    async def _stream(
+        self, *, url: str, api_key: str, model: str, messages: Sequence[ChatMessage]
+    ) -> AsyncIterator[str]:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": message.role.value, "content": message.content} for message in messages
+            ],
+            "stream": True,
+            # DeepSeek bills prompt and completion separately (docs/02:78's
+            # formula) and puts both counts on the last chunk; this option is what
+            # makes it send that chunk at all.
+            "stream_options": {"include_usage": True},
+        }
+        async with httpx.AsyncClient(timeout=_TIMEOUT, transport=self._transport) as client:
+            async with client.stream(
+                "POST",
+                f"{url.rstrip('/')}/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    yield data
+
+
+def _httpx_transport() -> HttpChatCompletionTransport:
+    return HttpChatCompletionTransport()
+
 
 SEMINAR_MODEL = "seminar-local"
 """The stand-in's model name, deliberately **not** a provider's: an answer in the
@@ -96,16 +161,24 @@ class SeminarLLMClient:
 def get_llm_client() -> LLMClient:
     """The `LLMClient` behind the port.
 
-    The seminar stand-in in the seminar profile; `503` in production until T6
-    wires the DeepSeek adapter with the keys of `shared/config.py`.
+    The seminar stand-in in the seminar profile — local, deterministic, no network
+    (ADR-0021). In production, DeepSeek behind the port (ADR-0026) as soon as the
+    key exists, and `503` until it does: an assistant that answered without a
+    provider key would either fail on every question or, worse, answer from a
+    stand-in while the deployment believed it was talking to the provider.
     """
     if is_seminar_profile():
         return SeminarLLMClient()
-    raise ProblemError(
-        status=503,
-        title="Assistant provider not configured",
-        detail="The production LLM client is wired in E12 T6; the seminar profile answers locally.",
-    )
+    if llm_api_key() is None:
+        raise ProblemError(
+            status=503,
+            title="Assistant provider not configured",
+            detail=(
+                "No provider key is configured: set TECHCAMP_LLM_API_KEY "
+                "(shared.config), or run the seminar profile to answer locally."
+            ),
+        )
+    return DeepSeekLLMClient(_httpx_transport())
 
 
 def get_embedder() -> Embedder:
