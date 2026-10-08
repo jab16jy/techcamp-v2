@@ -193,6 +193,32 @@ class KnowledgeRepository(Protocol):
         """
         ...
 
+    async def latest_climate_bulletin(self, *, department: str | None) -> KnowledgeDocument | None:
+        """The latest `agroclimatic_bulletin` of a department, else the national
+        one, by `published_on`; `None` when the corpus holds none.
+
+        docs/06-diseno-detallado.md §9: "el último boletín agroclimático del
+        departamento de la finca, **o del nacional si no hay uno regional**, con
+        su fecha de publicación", with the ENSO state ingestion writes onto
+        `kb_document.enso_state`.
+
+        **Why `department` is a nullable argument with a national fallback — the
+        decision this task makes, and a deviation from T1's port shape.** The
+        seasonal fact belongs to a plot's farm, and a farm's department would be
+        the obvious argument, but **nothing in this repository maps a farm or a
+        plot to a department**: `Farm.municipality_code` is free-text DIVIPOLA
+        (`farms/domain/models.py`, whose own docstring says "no `municipality`
+        table exists yet") and there is no lookup from a DIVIPOLA code to a
+        department name anywhere in `farms`. Inventing one here would be a second
+        place that decides Colombia's administrative divisions, which is
+        `municipality`'s table when it exists. So the caller passes what it knows
+        — `None` for a general question — and the national bulletin answers, which
+        docs/06 §9 already allows as the regional one is absent. T3's ingestion
+        stores `department` as free text on the document, so no join is needed for
+        the fallback to be correct.
+        """
+        ...
+
 
 @runtime_checkable
 class ConversationRepository(Protocol):
