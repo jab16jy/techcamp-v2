@@ -105,24 +105,53 @@ interface StallWatch {
   stop: () => void
 }
 
+/** One signal plus the cleanup that detaches what built it. */
+interface CombinedSignals {
+  readonly signal: AbortSignal
+  /** Detaches the forwarding listeners, so a finished call leaves nothing behind. */
+  dispose: () => void
+}
+
 /**
- * Combines the caller's signal with the stall watch, the same idiom
- * `client.ts:combineWithTimeout` uses. `AbortSignal.any` (Chrome 116+, Safari
- * 17.4+) has no polyfill on older field WebViews, where it is simply `undefined`
- * and calling it would throw (#21 round 12). The fallback keeps the caller's
- * signal and drops the stall watch, which is the trade worth making: a request
- * that can no longer be cancelled on unmount is a leak, while a stream nobody
- * abandons is only a question that takes longer than it should.
+ * ORs the caller's signal with the stall watch into one signal, by hand.
+ *
+ * `AbortSignal.any` (Chrome 116+, Safari 17.4+) would do it in one call, but it has
+ * no polyfill on the older field WebViews this repo targets, where it is simply
+ * `undefined`. The feature-detected fallback in `client.ts:combineWithTimeout`
+ * drops one of the two signals there, which is a trade a JSON call can absorb and
+ * a stream cannot: dropping the stall watch means a silent provider leaves the
+ * composer busy forever, and dropping the caller's signal means an unmount cannot
+ * cancel the request. So both are always kept — one controller that forwards
+ * whichever fires, with nothing to feature-detect and no runtime left behind.
  */
 function combineAssistantSignals(
   callerSignal: AbortSignal | undefined,
   stall: StallWatch,
-): AbortSignal {
-  if (callerSignal === undefined) return stall.signal
-  if (typeof AbortSignal.any === 'function') {
-    return AbortSignal.any([callerSignal, stall.signal])
+): CombinedSignals {
+  const controller = new AbortController()
+  const detachers: (() => void)[] = []
+
+  const forward = (source: AbortSignal | undefined): void => {
+    if (source === undefined) return
+    const onAbort = (): void => controller.abort()
+    // An already-fired signal never fires again, so forward it right away.
+    if (source.aborted) {
+      onAbort()
+      return
+    }
+    source.addEventListener('abort', onAbort, { once: true })
+    detachers.push(() => source.removeEventListener('abort', onAbort))
   }
-  return callerSignal
+
+  forward(callerSignal)
+  forward(stall.signal)
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const detach of detachers) detach()
+    },
+  }
 }
 
 /** The stall watch of one call: a plain `setTimeout`, restarted by the reader. */
@@ -193,7 +222,7 @@ export async function askAssistant(
   }
 
   const stall = createStallWatch(ASSISTANT_STALL_TIMEOUT_MS)
-  const signal = combineAssistantSignals(deps.signal, stall)
+  const combined = combineAssistantSignals(deps.signal, stall)
   try {
     let response: Response
     try {
@@ -201,7 +230,7 @@ export async function askAssistant(
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal,
+        signal: combined.signal,
       })
     } catch (error) {
       // The request itself never reached an answer, so there is nothing to show.
@@ -222,10 +251,14 @@ export async function askAssistant(
     if (response.status === 429) return { status: 'limited' }
     if (!response.ok || response.body === null) return { status: 'unavailable' }
 
-    return await readAssistantStream(response.body, onToken, { signal, onChunk: stall.reset })
+    return await readAssistantStream(response.body, onToken, {
+      signal: combined.signal,
+      onChunk: stall.reset,
+    })
   } finally {
     // Every exit path: a stalled answer, an abandoned question, a finished one.
     stall.stop()
+    combined.dispose()
   }
 }
 
@@ -305,6 +338,13 @@ async function readAssistantStream(
   }
 
   try {
+    // A signal that was already aborted when this function started never fires
+    // `abort` again, and a pending `read()` cannot notice it either: the guard
+    // after the loop is unreachable while the read hangs, so this is the only
+    // cover for the window between the response arriving and the reader existing.
+    // Inside the `try`, so the `finally` still releases the reader that was taken.
+    if (io.signal.aborted) return { status: 'interrupted' }
+
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
@@ -325,7 +365,9 @@ async function readAssistantStream(
 
   // A body that ends without a `done` frame is an answer nobody finished: it is
   // not shown as complete, because nothing says it is. An aborted signal is the
-  // caller's own cancellation, which is a stop rather than a failure.
+  // caller's own cancellation or the stall's silence, and both are a stop rather
+  // than a failure — which is what tells "no answer is coming" from "the request
+  // never got anywhere" now that not one token has arrived.
   if (io.signal.aborted) return { status: 'interrupted' }
   return tokens.length > 0 ? { status: 'interrupted' } : { status: 'unavailable' }
 }

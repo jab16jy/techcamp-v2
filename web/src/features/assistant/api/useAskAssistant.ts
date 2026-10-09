@@ -44,7 +44,7 @@ type SettledStatus = 'complete' | 'degraded'
  * carries the number, so refusing a question that would only come back as a `422`
  * never widens or narrows what the adapter accepts.
  */
-const MAX_QUESTION_CHARS = 2000
+export const MAX_QUESTION_CHARS = 2000
 
 function browserIsOnline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine
@@ -118,6 +118,15 @@ export function useAskAssistant(plotId: string | null): UseAskAssistantResult {
   const busyRef = useRef(false)
   /** The conversation the first `done` opened, so the next turn continues it. */
   const conversationIdRef = useRef<string | null>(null)
+  /**
+   * The plot on screen right now, readable from a settled answer.
+   *
+   * The `send` closure only ever sees the plot it was created with, so comparing
+   * against it cannot detect a switch that happened while the request was on the
+   * wire (docs/07 §Asistente). It is written in the same effect that aborts the
+   * in-flight question, never during render.
+   */
+  const currentPlotIdRef = useRef(plotId)
 
   useEffect(() => {
     aliveRef.current = true
@@ -145,9 +154,14 @@ export function useAskAssistant(plotId: string | null): UseAskAssistantResult {
    * still on the wire and starts a new conversation.
    *
    * Its outcome still lands — an aborted stream answers `interrupted` — which
-   * settles the abandoned turn and frees the composer rather than leaving it busy.
+   * frees the composer rather than leaving it busy. The turn it was writing is
+   * dropped without a notice, because the producer asked about a parcel they have
+   * already left (docs/07 §Asistente).
    */
   useEffect(() => {
+    // Written before the abort, so the answer that is about to settle already sees
+    // the plot it was abandoned on.
+    currentPlotIdRef.current = plotId
     controllerRef.current?.abort()
     controllerRef.current = null
     conversationIdRef.current = null
@@ -161,6 +175,11 @@ export function useAskAssistant(plotId: string | null): UseAskAssistantResult {
       const question = content.trim()
       if (question === '' || question.length > MAX_QUESTION_CHARS) return
       if (busyRef.current) return
+
+      // The plot this question was asked about. An answer that settles after the
+      // producer has moved to another plot was written about the one they left,
+      // so it is dropped rather than shown (docs/07 §Asistente).
+      const askedPlotId = plotId
 
       const controller = new AbortController()
       controllerRef.current = controller
@@ -220,8 +239,16 @@ export function useAskAssistant(plotId: string | null): UseAskAssistantResult {
               if (streamedTokens === 0) setTurns(dropTrailingAssistantTurn)
               return
             default:
-              // `interrupted` keeps the turn as `streaming`, with whatever text
-              // arrived, so the producer sees the half answer beside the notice.
+              // The producer left the plot this answer was written about, so it is
+              // discarded with no notice at all: half an answer about the previous
+              // parcel beside a failure message would be worse than nothing, and
+              // the composer is already free (docs/07 §Asistente).
+              if (currentPlotIdRef.current !== askedPlotId) {
+                setTurns(dropTrailingAssistantTurn)
+                return
+              }
+              // Otherwise `interrupted` keeps the turn as `streaming`, with whatever
+              // text arrived, so the producer sees the half answer beside the notice.
               setNotice(FAILED_NOTICES[outcome.status])
               return
           }

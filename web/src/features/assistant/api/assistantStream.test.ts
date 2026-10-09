@@ -119,6 +119,22 @@ function fetchThatHangs(): typeof fetch {
     })
 }
 
+/**
+ * Hides `AbortSignal.any` for the duration of one test, which is what the older
+ * field WebViews this repo targets see: the property is simply not there, so any
+ * code that calls it would throw.
+ */
+async function withoutAbortSignalAny(run: () => Promise<void>): Promise<void> {
+  const own = Object.getOwnPropertyDescriptor(AbortSignal, 'any')
+  Object.defineProperty(AbortSignal, 'any', { value: undefined, configurable: true })
+  try {
+    await run()
+  } finally {
+    if (own === undefined) delete (AbortSignal as { any?: unknown }).any
+    else Object.defineProperty(AbortSignal, 'any', own)
+  }
+}
+
 describe('askAssistant', () => {
   beforeEach(() => {
     setSession('token-123', 'org-1')
@@ -503,7 +519,37 @@ describe('askAssistant', () => {
     }
   })
 
-  it('answers interrupted when the body stalls mid-stream after tokens', async () => {
+  it('keeps the answer alive while chunks keep arriving inside the stall window', async () => {
+    vi.useFakeTimers()
+    try {
+      const stream = controllableStream()
+      const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+      const tokens: string[] = []
+      const promise = askAssistant(
+        { content: QUESTION },
+        (text) => tokens.push(text),
+        deps(fetchImpl),
+      )
+      const settled = track(promise)
+
+      // Two minutes of wall clock, which is twice the stall window. Every chunk
+      // restarts the countdown from the byte that just arrived, so an answer that
+      // legitimately takes longer than one quiet gap stays alive.
+      stream.push(tokenFrame('uno '))
+      await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS - 1)
+      expect(tokens).toEqual(['uno '])
+
+      stream.push(tokenFrame('dos'))
+      await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS - 1)
+
+      expect(tokens).toEqual(['uno ', 'dos'])
+      expect(settled()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('settles as interrupted once a silence outlasts the stall window after chunks', async () => {
     vi.useFakeTimers()
     try {
       const stream = controllableStream()
@@ -515,17 +561,90 @@ describe('askAssistant', () => {
         deps(fetchImpl),
       )
 
-      stream.push(tokenFrame('a medio '))
-      // The chunks that did arrive keep the answer alive: the countdown restarts
-      // from the last byte, so the answer may legitimately take longer than a
-      // plain request.
-      await vi.advanceTimersByTimeAsync(1)
-      expect(tokens).toEqual(['a medio '])
+      stream.push(tokenFrame('uno '))
+      await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS - 1)
+      stream.push(tokenFrame('dos'))
+      await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS - 1)
 
+      // No chunk for longer than the window: the answer stops, and the tokens
+      // that did arrive stay delivered.
       await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS + 1)
 
       await expect(promise).resolves.toEqual({ status: 'interrupted' })
-      expect(tokens).toEqual(['a medio '])
+      expect(tokens).toEqual(['uno ', 'dos'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('answers interrupted when the stall fires after headers but before any token', async () => {
+    vi.useFakeTimers()
+    try {
+      // The response arrived, so the read loop is waiting on a body that never
+      // enqueues: the stall is the only thing that can end this.
+      const stream = controllableStream()
+      const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+
+      const promise = askAssistant({ content: QUESTION }, () => {}, deps(fetchImpl))
+      await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS + 1)
+
+      await expect(promise).resolves.toEqual({ status: 'interrupted' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('answers interrupted when the signal is already aborted before the first read', async () => {
+    // `start` enqueues nothing and `pull` never runs until a read asks for it, so
+    // the only way out of a signal aborted before the reader exists is the guard
+    // ahead of the loop — the `abort` event already fired and will not fire again.
+    const stream = controllableStream()
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(
+      askAssistant(
+        { content: QUESTION },
+        () => {},
+        deps(fetchImpl, { signal: controller.signal }),
+      ),
+    ).resolves.toEqual({ status: 'interrupted' })
+  })
+
+  it('honours both the stall and the caller abort on runtimes without AbortSignal.any', async () => {
+    vi.useFakeTimers()
+    try {
+      await withoutAbortSignalAny(async () => {
+        // Both halves hold a caller signal that is never aborted on its own: on the
+        // old fallback that caller signal *replaced* the stall watch, so nothing
+        // ended the request and the composer stayed busy forever.
+        const controller = new AbortController()
+        const stalled = askAssistant(
+          { content: QUESTION },
+          () => {},
+          deps(fetchThatHangs(), { signal: controller.signal }),
+        )
+        await vi.advanceTimersByTimeAsync(ASSISTANT_STALL_TIMEOUT_MS + 1)
+        await expect(stalled).resolves.toEqual({ status: 'interrupted' })
+
+        // The caller half: with the feature gone on every runtime, the manual OR is
+        // the only combination left, and the caller's abort must still reach the
+        // read loop and release the body it was reading.
+        const stream = controllableStream()
+        const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
+        const aborting = new AbortController()
+        const aborted = askAssistant(
+          { content: QUESTION },
+          () => {},
+          deps(fetchImpl, { signal: aborting.signal }),
+        )
+        await vi.advanceTimersByTimeAsync(0)
+        aborting.abort()
+
+        await expect(aborted).resolves.toEqual({ status: 'interrupted' })
+        expect(stream.response.body?.locked).toBe(false)
+      })
     } finally {
       vi.useRealTimers()
     }

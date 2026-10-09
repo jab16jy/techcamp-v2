@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../../../lib/api/session'
 import { ASSISTANT_COPY } from './assistantCopy'
-import { useAskAssistant } from './useAskAssistant'
+import { MAX_QUESTION_CHARS, useAskAssistant } from './useAskAssistant'
 
 const QUESTION = '¿Por qué no regué ayer?'
 
@@ -335,9 +335,9 @@ describe('useAskAssistant', () => {
 
     const { result } = renderAssistant()
     act(() => {
-      // `router.py:73-86` bounds `content` at 2000 characters, so a longer
-      // question is a `422` round trip this only pays to avoid.
-      result.current.send(`x${'y'.repeat(2000)}`)
+      // `router.py:73-86` bounds `content`, so a longer question is a `422` round
+      // trip this only pays to avoid.
+      result.current.send(`x${'y'.repeat(MAX_QUESTION_CHARS)}`)
     })
 
     expect(result.current.turns).toEqual([])
@@ -378,10 +378,33 @@ describe('useAskAssistant', () => {
     // The plot switches while the second question is still on the wire.
     rerender({ plotId: 'plot-2' })
     const inFlight = vi.mocked(fetch).mock.calls[1]?.[1]?.signal as AbortSignal | undefined
+    // The in-flight request is cancelled, which the browser gives back to the
+    // server. It is the assertion that fails if the cleanup is dropped.
     expect(inFlight?.aborted).toBe(true)
-    // The abandoned stream still answers: its outcome settles the turn, so the
-    // hook is free for the next question.
-    await waitFor(() => expect(result.current.busy).toBe(false))
+
+    // The answer was being written correctly about the plot the producer left,
+    // so it is abandoned rather than reported: no truncated turn and no notice,
+    // and the composer is free for the new plot straight away.
+    //
+    // The abort settles through a promise chain — `onAbort` → `reader.cancel()` →
+    // the pending read resolving → `interrupted` — so the abandoned turn is still
+    // there at the instant `rerender` returns. Waiting on the settled shape is what
+    // makes these assertions about the outcome rather than about the timing. The
+    // first question's own answer stays: it is complete, and it is about plot-1.
+    await waitFor(() =>
+      expect(
+        result.current.turns.some((turn) => turn.role === 'assistant' && turn.status === 'streaming'),
+      ).toBe(false),
+    )
+    expect(result.current.notice).toBeNull()
+    expect(result.current.turns).toHaveLength(3)
+    expect(result.current.turns[2]).toEqual({
+      role: 'user',
+      text: '¿Y el riesgo?',
+      citations: [],
+      status: 'complete',
+    })
+    expect(result.current.busy).toBe(false)
 
     act(() => {
       result.current.send('¿Y en esta otra parcela?')
