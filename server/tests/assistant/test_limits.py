@@ -19,6 +19,8 @@ from techcamp.assistant.domain.limits import (
     SIMILARITY_FLOOR,
     budget_exhausted,
     daily_limit_exhausted,
+    local_day_bounds,
+    local_month_bounds,
     month_spend_cop,
     questions_remaining,
     seconds_until_local_midnight,
@@ -100,10 +102,46 @@ def test_retry_after_from_local_midnight_waits_a_whole_day() -> None:
     assert seconds_until_local_midnight(midnight_bogota) == 24 * 3600
 
 
-def test_month_spend_adds_the_costs_and_ignores_the_missing_ones() -> None:
-    """D-T12.1: the no-LLM answer stores `cost_cop IS NULL`, and SQL `SUM`
-    ignores NULL — which is the budget behavior the design wants."""
-    assert month_spend_cop([Decimal("12.5"), None, Decimal("0.5"), None]) == Decimal("13.0")
+def test_the_local_day_bounds_are_the_bogota_day_in_utc() -> None:
+    """2026-10-06 in Bogotá is 05:00Z to 05:00Z: a `created_at` stored in UTC has
+    to be compared against those instants, or an evening question is charged to
+    the wrong day (docs/06 §9)."""
+    start, end = local_day_bounds(date(2026, 10, 6))
+
+    assert start == datetime(2026, 10, 6, 5, 0, tzinfo=UTC)
+    assert end == datetime(2026, 10, 7, 5, 0, tzinfo=UTC)
+
+
+def test_the_local_day_bounds_span_a_hour_that_belongs_to_the_previous_utc_day() -> None:
+    """The five hours between 00:00Z and 05:00Z are already the new Bogotá day."""
+    start, end = local_day_bounds(date(2026, 10, 7))
+
+    assert start == datetime(2026, 10, 7, 5, 0, tzinfo=UTC)
+    assert end == datetime(2026, 10, 8, 5, 0, tzinfo=UTC)
+
+
+def test_the_local_month_bounds_run_from_the_first_to_the_next_first() -> None:
+    start, end = local_month_bounds(date(2026, 10, 1))
+
+    assert start == datetime(2026, 10, 1, 5, 0, tzinfo=UTC)
+    assert end == datetime(2026, 11, 1, 5, 0, tzinfo=UTC)
+
+
+def test_the_local_month_bounds_wrap_december_into_the_next_year() -> None:
+    """`start.replace(month=13)` is a `ValueError`, so the end of December is the
+    one month the arithmetic has to name explicitly."""
+    start, end = local_month_bounds(date(2026, 12, 1))
+
+    assert start == datetime(2026, 12, 1, 5, 0, tzinfo=UTC)
+    assert end == datetime(2027, 1, 1, 5, 0, tzinfo=UTC)
+
+
+def test_a_question_from_the_last_evening_of_the_month_is_not_next_months_spend() -> None:
+    """2026-11-01T02:00Z is 2026-10-31 21:00 in Bogotá: it falls inside October's
+    bounds, so a month read as UTC dates would charge it to November."""
+    start, end = local_month_bounds(date(2026, 10, 1))
+
+    assert start <= datetime(2026, 11, 1, 2, 0, tzinfo=UTC) < end
 
 
 def test_month_spend_of_a_month_with_no_billed_answer_is_zero() -> None:

@@ -29,9 +29,10 @@ from uuid import UUID
 from techcamp.assistant.application.ports import UsageQuotaPort
 from techcamp.assistant.domain.limits import (
     budget_exhausted,
-    month_spend_cop,
+    daily_limit_exhausted,
     questions_remaining,
 )
+from techcamp.assistant.domain.models import Message
 from techcamp.shared.dates import local_today
 
 
@@ -73,6 +74,7 @@ async def evaluate_quota(
     user_id: UUID,
     budget_cap_cop: Decimal,
     quota: UsageQuotaPort,
+    question: Message,
     now: datetime | None = None,
 ) -> QuotaDecision:
     """Whether this user may ask the provider one more question today.
@@ -84,24 +86,32 @@ async def evaluate_quota(
     decided by the value under test; a naive one is read as UTC, the convention
     of every other read in the application.
 
-    The daily limit is checked before the budget in the *report* because it is the
-    cheaper answer to explain and the one the producer can act on tonight: the
-    count resets at local midnight, and `seconds_until_local_midnight` is what T6
-    puts in `Retry-After`.
+    The daily limit is reported before the budget because it is the one the
+    producer can act on tonight: the count resets at local midnight, and
+    `seconds_until_local_midnight` is what the endpoint puts in `Retry-After`. A
+    budget that ran out is a fact about the month, not about this evening.
 
-    Admission itself is the port's and is atomic: this function asks
-    `quota.admit_question` whether the question may be asked at all, and a refusal
-    is what degrades it. Deciding here from a count that was read earlier would let
-    two concurrent callers that both saw nine questions both take a slot
-    (R3-QUOTA-RACE), which is the opposite of a hard limit.
+    Admission itself is the port's and is atomic: this function hands the question
+    to `quota.admit_question`, which stores it and says whether it may be asked at
+    all. A refusal is what degrades it. Deciding here from a count that was read
+    earlier would let two concurrent callers that both saw nine questions both take
+    a slot (R3-QUOTA-RACE), which is the opposite of a hard limit.
+
+    The question is written on both outcomes, by the port that owns the
+    reservation: it was asked either way.
     """
     instant = now if now is not None else datetime.now(UTC)
     day = local_today(instant)
     month = day.replace(day=1)
 
-    spend = month_spend_cop(await quota.month_costs_cop(user_id=user_id, month=month))
+    spend = await quota.month_spend_cop(user_id=user_id, month=month)
     admitted = await quota.admit_question(
-        user_id=user_id, day=day, month=month, budget_cap_cop=budget_cap_cop
+        user_id=user_id,
+        conversation_id=question.conversation_id,
+        question=question,
+        day=day,
+        month=month,
+        budget_cap_cop=budget_cap_cop,
     )
     # Read after the reservation, so the reported figures include this very
     # question: `questions_remaining` is what the producer can still ask, not what
@@ -110,17 +120,19 @@ async def evaluate_quota(
 
     reason: DegradationReason | None = None
     if not admitted:
-        # A refusal is the budget only when the month's spend really reached the
-        # cap; otherwise the day's limit is what stopped it, and the daily branch
-        # is reported first because that is the one he can act on tonight.
-        reason = (
-            DegradationReason.BUDGET_EXHAUSTED
-            if budget_exhausted(spend, budget_cap_cop)
-            else DegradationReason.DAILY_LIMIT
-        )
+        # The day's limit is the reported one when the day is exhausted, because
+        # that is the branch the producer can act on tonight. The budget is only
+        # reported when the day still has room and the month is what stopped him.
+        # A refusal neither figure explains keeps `reason is None` beside
+        # `allowed is False`, so the producer reads a degraded answer rather than a
+        # reason the system did not give (R3-QUOTA-REASON-PRECEDENCE).
+        if daily_limit_exhausted(asked_today):
+            reason = DegradationReason.DAILY_LIMIT
+        elif budget_exhausted(spend, budget_cap_cop):
+            reason = DegradationReason.BUDGET_EXHAUSTED
 
     return QuotaDecision(
-        allowed=reason is None,
+        allowed=admitted,
         reason=reason,
         questions_asked=asked_today,
         questions_remaining=questions_remaining(asked_today),

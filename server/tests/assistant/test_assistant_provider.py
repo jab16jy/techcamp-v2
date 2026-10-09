@@ -24,8 +24,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.anyio
-
 from techcamp.assistant.adapters.api.deps import (
     SEMINAR_MODEL,
     SeminarLLMClient,
@@ -39,6 +37,8 @@ from techcamp.shared.config import (
     llm_model,
 )
 from techcamp.shared.errors import ProblemError
+
+pytestmark = pytest.mark.anyio
 
 _KEY_ENV = "TECHCAMP_LLM_API_KEY"
 

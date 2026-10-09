@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 from techcamp.shared.dates import BOGOTA_TZ
@@ -78,6 +78,40 @@ def seconds_until_local_midnight(now: datetime | None = None) -> int:
         local_now.date() + timedelta(days=1), time.min, tzinfo=BOGOTA_TZ
     )
     return max(1, math.ceil((next_midnight - local_now).total_seconds()))
+
+
+def local_day_bounds(day: date) -> tuple[datetime, datetime]:
+    """The UTC instants that bound `day` in America/Bogota, `[start, end)`.
+
+    `created_at` is `timestamptz` and is written by the database's clock, so a row
+    is stored as an instant. Counting "the questions of the day"
+    (docs/04-api.md:22) is therefore a comparison of instants against the local
+    day's boundaries, and the boundaries are the local midnight translated to
+    UTC: 2026-10-06 in Bogotá is `05:00Z` to `05:00Z`, not `00:00Z` to `00:00Z`.
+
+    Pure, because the answer is a property of the calendar and not of the row: the
+    same rule has to hold in the query that counts and in the test that proves it.
+    """
+    start = datetime.combine(day, time.min, tzinfo=BOGOTA_TZ)
+    return start.astimezone(UTC), (start + timedelta(days=1)).astimezone(UTC)
+
+
+def local_month_bounds(month: date) -> tuple[datetime, datetime]:
+    """The UTC instants that bound the local month whose first day is `month`.
+
+    Same rule as `local_day_bounds`, for the monthly budget (docs/11:132,
+    `SUM(message.cost_cop)` over `created_at`). Only the day of the argument is
+    read, so a date from the middle of the month is the month it belongs to.
+
+    December is named explicitly because `start.replace(month=13)` is a
+    `ValueError`: the month after December is January of the next year.
+    """
+    start = datetime.combine(month, time.min, tzinfo=BOGOTA_TZ)
+    if month.month == 12:
+        following = start.replace(year=month.year + 1, month=1)
+    else:
+        following = start.replace(month=month.month + 1)
+    return start.astimezone(UTC), following.astimezone(UTC)
 
 
 def month_spend_cop(costs: Iterable[Decimal | None]) -> Decimal:

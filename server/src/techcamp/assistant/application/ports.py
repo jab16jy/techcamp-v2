@@ -288,18 +288,18 @@ class UsageQuotaPort(Protocol):
     §Límites de uso; D-T12.1, D-T12.3).
 
     Per user. The port returns evidence and does **no arithmetic of its own**: the
-    cap comparison, the remaining count and the month sum are the pure rules of
-    `assistant.domain.limits`, so the same figures are decided the same way in the
-    endpoint and in a test. What the port owns is the one thing a pure rule cannot:
-    `admit_question` decides whether this question may be asked at all, in a single
-    atomic step.
+    cap comparison, the remaining count and the local month sum rule are the pure
+    rules of `assistant.domain.limits`, so the same figures are decided the same way
+    in the endpoint and in a test. What the port owns is the one thing a pure rule
+    cannot: `admit_question` decides whether this question may be asked at all, in
+    a single atomic step, and **the stored question is that decision**.
 
-    The monthly read deliberately returns the raw `cost_cop` values with their
-    nulls instead of a `SUM`, because `month_spend_cop` is the rule that ignores a
-    missing cost (D-T12.1) and a `SUM` computed in SQL would hide that. At ADR-0007:9's
-    volume — 1.800 questions a day, ~54.000 rows a month — that is the one place a
-    review should weigh an aggregate query against the rule; T6 owns the budget and
-    can replace this read with a SQL `SUM` without touching the rules.
+    The month read is a `SUM` and not the rows, because at ADR-0007:9's volume —
+    1.800 questions a day, ~54.000 rows a month — returning every `cost_cop` of the
+    month to add them up in Python is the one read in the assistant that a real
+    deployment would regret. `SUM` ignores `NULL`, which is exactly D-T12.1's rule,
+    and the adapter is tested against `domain.limits.month_spend_cop` so the
+    database's arithmetic and the domain's stay the same rule.
     """
 
     async def questions_asked_on(self, *, user_id: UUID, day: date) -> int:
@@ -312,36 +312,49 @@ class UsageQuotaPort(Protocol):
         """
         ...
 
-    async def month_costs_cop(self, *, user_id: UUID, month: date) -> Sequence[Decimal | None]:
-        """Every `message.cost_cop` of that month, `None` included, oldest first.
+    async def month_spend_cop(self, *, user_id: UUID, month: date) -> Decimal:
+        """The month's spend so far, in COP, ignoring the answers that cost nothing
+        they can account for (D-T12.1).
 
-        `month` is the first day of the calendar month in America/Bogota. The
-        nulls are the degraded answers' (D-T12.1) and are returned, not dropped:
-        the rule that ignores them belongs to the domain.
+        `month` is the first day of the calendar month in America/Bogota. A month
+        with no billed answer sums to `0`, not to "unknown": no evidence of
+        spending is evidence of no spending.
         """
         ...
 
     async def admit_question(
-        self, *, user_id: UUID, day: date, month: date, budget_cap_cop: Decimal
+        self,
+        *,
+        user_id: UUID,
+        conversation_id: UUID,
+        question: Message,
+        day: date,
+        month: date,
+        budget_cap_cop: Decimal,
     ) -> bool:
-        """Reserve this user's question for `day`, or refuse it. One atomic step.
+        """Store this user's question and say whether it may reach the provider.
+        One atomic step, and the stored row **is** the reservation.
 
         The ten-questions-per-day rule and the monthly cap are **hard** limits
         (docs/04-api.md §Límites de uso; D-T12.3), so the count, the month's spend
-        and the reservation are decided together or not at all. Reading the count
-        and deciding afterwards lets two concurrent callers that both saw nine
-        questions walk away with the tenth and the eleventh slot (R3-QUOTA-RACE).
+        and the write are decided together or not at all. A decision that writes
+        nothing is R3-QUOTA-RACE: two callers that both arrived at nine questions
+        would both be told there is room and the eleventh would reach the provider.
 
-        An adapter implements this as one conditional write — a reservation whose
-        `WHERE` carries the day's count and the month's spend — so the reservation
-        and both limits are decided against the same snapshot; the reservation is
-        what makes the check and the write the same transaction. `False` means the
-        caller answers the degraded answer and no provider is called.
+        So the question is written **whether it is admitted or refused** — it was
+        asked either way, which is what makes the count true — and the return value
+        is what the caller acts on. `False` means the caller answers the degraded
+        answer and no provider is called.
 
         `day` and `month` are already resolved in America/Bogota, and
         `budget_cap_cop` is passed in because it is the one figure that differs per
         profile (D-T12.3). Whether the refusal was the day or the budget is not
         this method's answer to give: `evaluate_quota` decides it from the figures
         it reads.
+
+        `conversation_id` is passed beside `question.conversation_id` on purpose,
+        the same shape as `MessageRepository.add`: the row written below belongs to
+        that conversation, and an adapter that took only the question could write a
+        turn into another user's transcript that the foreign key would accept.
         """
         ...
