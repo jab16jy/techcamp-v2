@@ -307,6 +307,17 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   exact-term questions fail (ADR-0008:19). ~150 of doc, plus human grading time. **Route: owner for the
   grading, parent for the docs**; the harness that replays the 30 questions against a fixed corpus is
   delegated and lands with T8's first commit. **Depends T5.** Parallel with T6 and T7.
+  - **T8 plan (lane `e12-t8`, 2026-10-08).** Two work units. **U1 — the harness and its fixtures,
+    own commit, before any verdict:** a deterministic replay of the closed 30-question set over the
+    pinned fixture corpus, through the *real* `retrieve_fragments` and the *real* `build_prompt`, with
+    `SeminarHashEmbedder` and a `FakeKnowledgeRepository` seeded from `load_corpus`/`chunk_text`.
+    The harness **produces the graded input and nothing else**: no score, no threshold, no verdict —
+    those are owner work (Open question 1) and a structural guard asserts their absence from the
+    report shape. **U2 — the docs**, which needs the verdict and therefore waits for the owner.
+  - **Surface deviation, flagged and not resolved here:** the brief's own *Done means* requires
+    "ODD updated (checkbox + Review entry)", but `odd/tasks/**` is absent from its *Allowed edit
+    surfaces*. Read as: the done-criterion authorizes this one file. Nothing outside the five listed
+    surfaces plus this feature doc is touched.
 
 - [ ] **T9 — Close**: `just gate-full` **once** on a clean database, follow-up issues for every
   non-blocking RDD finding, the delivery plan (chained-to-main PRs, one per work unit, `size:exception`
