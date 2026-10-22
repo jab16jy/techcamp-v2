@@ -394,8 +394,10 @@ class SqlAlchemyUsageQuota:
         way, and that is what keeps the count true — and the return value is what
         the caller acts on.
 
-        A refusal rolls the transaction back, so nothing is written and the lock is
-        released: a limit that is reached is not a limit that leaves rows behind.
+        A refusal is stored, not rolled back: the question is committed beside the
+        decision, because the degraded answer that follows belongs to a transcript
+        that holds the question it answers. `False` only means "do not call the
+        provider", never "nothing was written".
         """
         if question.conversation_id != conversation_id:
             # The row written below belongs to `conversation_id`, so it must be

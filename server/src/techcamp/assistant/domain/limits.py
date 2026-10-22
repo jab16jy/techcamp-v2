@@ -97,16 +97,17 @@ def local_day_bounds(day: date) -> tuple[datetime, datetime]:
 
 
 def local_month_bounds(month: date) -> tuple[datetime, datetime]:
-    """The UTC instants that bound the local month whose first day is `month`.
+    """The UTC instants that bound the local month `month` belongs to.
 
     Same rule as `local_day_bounds`, for the monthly budget (docs/11:132,
-    `SUM(message.cost_cop)` over `created_at`). Only the day of the argument is
-    read, so a date from the middle of the month is the month it belongs to.
+    `SUM(message.cost_cop)` over `created_at`). Only the month of the argument is
+    read, so a date from the middle of the month is the month it belongs to, and a
+    29th to 31st that does not exist in the next month still bounds its own.
 
     December is named explicitly because `start.replace(month=13)` is a
     `ValueError`: the month after December is January of the next year.
     """
-    start = datetime.combine(month, time.min, tzinfo=BOGOTA_TZ)
+    start = datetime.combine(month.replace(day=1), time.min, tzinfo=BOGOTA_TZ)
     if month.month == 12:
         following = start.replace(year=month.year + 1, month=1)
     else:

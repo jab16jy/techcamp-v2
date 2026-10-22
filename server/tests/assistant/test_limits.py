@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
+
 from techcamp.assistant.domain.limits import (
     DAILY_QUESTION_LIMIT,
     RETRIEVAL_TOP_K,
@@ -134,6 +136,37 @@ def test_the_local_month_bounds_wrap_december_into_the_next_year() -> None:
 
     assert start == datetime(2026, 12, 1, 5, 0, tzinfo=UTC)
     assert end == datetime(2027, 1, 1, 5, 0, tzinfo=UTC)
+
+
+def test_a_date_from_the_middle_of_the_month_bounds_that_whole_month() -> None:
+    """Only the month of the argument is read: a date from the middle of the month
+    is the month it belongs to, not a window shifted by its day."""
+    start, end = local_month_bounds(date(2026, 10, 15))
+
+    assert start == datetime(2026, 10, 1, 5, 0, tzinfo=UTC)
+    assert end == datetime(2026, 11, 1, 5, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("day", "end"),
+    [
+        # January's 29th to 31st do not exist in February 2026, which is not a
+        # leap year: `start.replace(month=2)` would raise instead of bounding.
+        (date(2026, 1, 29), datetime(2026, 2, 1, 5, 0, tzinfo=UTC)),
+        (date(2026, 1, 30), datetime(2026, 2, 1, 5, 0, tzinfo=UTC)),
+        (date(2026, 1, 31), datetime(2026, 2, 1, 5, 0, tzinfo=UTC)),
+        # March and May have 31 days; April and June have 30.
+        (date(2026, 3, 31), datetime(2026, 4, 1, 5, 0, tzinfo=UTC)),
+        (date(2026, 5, 31), datetime(2026, 6, 1, 5, 0, tzinfo=UTC)),
+    ],
+)
+def test_a_day_past_the_short_months_length_still_bounds_its_own_month(
+    day: date, end: datetime
+) -> None:
+    start, following = local_month_bounds(day)
+
+    assert start == datetime(day.year, day.month, 1, 5, 0, tzinfo=UTC)
+    assert following == end
 
 
 def test_a_question_from_the_last_evening_of_the_month_is_not_next_months_spend() -> None:
