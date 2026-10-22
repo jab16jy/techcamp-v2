@@ -134,8 +134,10 @@ def budget_exhausted(spend_cop: Decimal, cap_cop: Decimal) -> bool:
     """True once the month's spend has reached the profile's cap.
 
     Reaching the cap is enough (`>=`), so the cap is a budget that is spent, not
-    one that can be exceeded. A cap of `0` is a profile without a budget and is
-    therefore exhausted: it stops answering instead of answering for free.
+    one that can be exceeded. A cap of `0` is a profile that measures money and has
+    no cap configured, and is therefore exhausted: it stops answering instead of
+    answering for free. The caller passes a cap only when the profile measures
+    money (`None` never reaches this function, D-T6.1).
     """
     return spend_cop >= cap_cop
 

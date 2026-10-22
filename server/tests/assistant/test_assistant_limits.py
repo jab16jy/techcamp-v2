@@ -66,9 +66,9 @@ async def _wipe_corpus(db_session: AsyncSession) -> Iterator[None]:
 async def domain(db_session: AsyncSession) -> SeededDomain:
     """The seeded rows, and the two non-database ports doubled.
 
-    The budget cap is not overridden here: unset means the deployment has not set
-    a COP amount yet, so the daily limit is the only gate these tests meet unless
-    one overrides `get_budget_cap` itself.
+    The budget cap is not overridden here: the default seminar profile does not
+    measure money, so its cap is `None` and the daily limit is the only gate these
+    tests meet unless one overrides `get_budget_cap` itself.
     """
     seeded = await seed_domain(db_session)
     _override(get_llm_client, _fake_llm())

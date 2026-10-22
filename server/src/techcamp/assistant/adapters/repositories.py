@@ -398,6 +398,10 @@ class SqlAlchemyUsageQuota:
         decision, because the degraded answer that follows belongs to a transcript
         that holds the question it answers. `False` only means "do not call the
         provider", never "nothing was written".
+
+        `budget_cap_cop` is `None` when the profile does not measure money
+        (D-T6.1): the sum is not compared against a cap that does not exist, and
+        only the daily limit can refuse.
         """
         if question.conversation_id != conversation_id:
             # The row written below belongs to `conversation_id`, so it must be

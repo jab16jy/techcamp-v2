@@ -348,10 +348,11 @@ class UsageQuotaPort(Protocol):
 
         `day` and `month` are already resolved in America/Bogota, and
         `budget_cap_cop` is passed in because it is the one figure that differs per
-        profile (D-T12.3); `None` means the deployment configured no cap, so only
-        the daily limit decides. Whether the refusal was the day or the budget is
-        not this method's answer to give: `evaluate_quota` decides it from the
-        figures it reads.
+        profile (D-T12.3); `None` means the profile does not measure money
+        (`seminar`), so only the daily limit decides, while a profile that measures
+        money always passes a number, `0` included (D-T6.1). Whether the refusal
+        was the day or the budget is not this method's answer to give:
+        `evaluate_quota` decides it from the figures it reads.
 
         `conversation_id` is passed beside `question.conversation_id` on purpose,
         the same shape as `MessageRepository.add`: the row written below belongs to

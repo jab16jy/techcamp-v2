@@ -38,7 +38,7 @@ from techcamp.assistant.adapters.api.pricing import ModelPrice, PriceTable
 from techcamp.assistant.adapters.jobs import SeminarHashEmbedder
 from techcamp.assistant.application.ports import Embedder, LLMClient, StreamToken, TokenUsage
 from techcamp.assistant.domain.models import ChatMessage
-from techcamp.shared.config import is_seminar_profile, llm_api_key
+from techcamp.shared.config import is_seminar_profile, llm_api_key, llm_budget_cap_cop
 from techcamp.shared.errors import ProblemError
 
 _TIMEOUT = 60.0
@@ -215,15 +215,23 @@ def get_prices() -> PriceTable:
 
 
 def get_budget_cap() -> Decimal | None:
-    """The monthly budget cap in COP, or `None` when no cap applies.
+    """The profile's monthly cap in COP, or `None` when the profile does not measure money.
 
-    The per-profile amount is configuration (D-T12.3): `seminar` does not measure
-    money and `production`'s figure is the owner's. Until that config lands no
-    profile has a cap, so the daily limit is the only gate; the dependency exists
-    now because it is the seam a test overrides to exercise the budget branch
-    without inventing a figure.
+    The rule lives in `shared.config.llm_budget_cap_cop()`, where every environment
+    variable of the repository lives: `seminar` answers `None` because its rate
+    card is zero and it never reaches a provider (ADR-0021); `production` answers
+    the configured figure, or `0` when unset, which stops the model instead of
+    answering for free (D-T6.1, D-T12.3). A malformed figure is a configuration
+    error, which this dependency reports as `503` before any model call.
     """
-    return None
+    try:
+        return llm_budget_cap_cop()
+    except ValueError as error:
+        raise ProblemError(
+            status=503,
+            title="Assistant budget cap misconfigured",
+            detail=str(error),
+        ) from error
 
 
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]

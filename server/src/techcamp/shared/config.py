@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal, InvalidOperation
 
 
 def database_url() -> str:
@@ -65,6 +66,47 @@ def llm_base_url() -> str:
 
 def llm_model() -> str:
     return os.environ.get(LLM_MODEL_ENV, LLM_MODEL_DEFAULT)
+
+
+LLM_BUDGET_CAP_COP_ENV = "TECHCAMP_LLM_BUDGET_CAP_COP"
+"""The month's budget in COP for the profile that measures money (D-T6.1).
+
+The figure is compared against `SUM(message.cost_cop)` over the local month
+(docs/11:132), so it is in COP and whoever configures it owns the USD→COP
+conversion, exactly like whoever fills the price card of
+`assistant.adapters.api.pricing`."""
+
+
+def llm_budget_cap_cop() -> Decimal | None:
+    """The month's cap in COP, or `None` when the profile does not measure money.
+
+    The profile decides, never the variable alone. `seminar` is the profile that
+    does not measure money: its answer is `ModelPrice.local` — zero COP — and it
+    never reaches a provider (ADR-0021), so the monthly sum is structurally zero
+    and there is no money to cap. `None` says exactly that, and never a converted
+    USD 5: the USD 5 total of docs/04:22 and ADR-0021:30 is the provider account's
+    ceiling, where money exists, and no documented rate converts it.
+
+    `production` measures money, and the figure is the owner's future amount
+    (ADR-0007:17). Unset is `Decimal("0")`, the sense `limits.budget_exhausted`
+    already gives a zero cap: a profile that measures money and has no cap stops
+    answering with the model instead of answering for free. A value that is not a
+    non-negative finite decimal is a configuration error, never a silent zero.
+    """
+    if is_seminar_profile():
+        return None
+    raw = os.environ.get(LLM_BUDGET_CAP_COP_ENV)
+    if raw is None or not raw.strip():
+        return Decimal(0)
+    try:
+        cap = Decimal(raw.strip())
+    except InvalidOperation as error:
+        raise ValueError(f"{LLM_BUDGET_CAP_COP_ENV} is not a number of COP: {raw!r}") from error
+    if not cap.is_finite() or cap < 0:
+        raise ValueError(
+            f"{LLM_BUDGET_CAP_COP_ENV} must be a non-negative finite number of COP: {raw!r}"
+        )
+    return cap
 
 
 def vapid_private_key() -> str | None:
