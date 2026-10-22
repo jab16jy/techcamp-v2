@@ -307,6 +307,27 @@ async def test_room_in_the_day_and_an_exhausted_budget_read_as_the_budget() -> N
     assert decision.reason is DegradationReason.BUDGET_EXHAUSTED
 
 
+async def test_a_budget_refusal_with_one_slot_left_in_the_day_reads_as_the_budget() -> None:
+    """Nine questions asked, the cap already spent, and the day's tenth slot free:
+    the budget is what stopped this call.
+
+    The refused question is stored — the port writes it either way — so afterwards
+    the day holds ten, and a count read *after* the write is already at the limit.
+    That post-write figure is what made the refusal name the day (and the endpoint
+    answer `429`, telling the producer to wait for a midnight that frees no budget);
+    the reason names what stopped the call, so it is decided on the nine questions
+    that were there **before** this one.
+    """
+    quota = await _quota_with(questions=9, costs=[Decimal("5")])
+
+    decision = await _decide(quota)
+
+    assert decision.allowed is False
+    assert decision.reason is DegradationReason.BUDGET_EXHAUSTED
+    # The reported figure still includes this turn: it was asked and stored.
+    assert decision.questions_asked == 10
+
+
 async def test_a_refusal_neither_figure_explains_has_no_reason() -> None:
     """A port that refuses without either limit being reached is not one of the
     two documented degradations, and naming one would be inventing a reason.

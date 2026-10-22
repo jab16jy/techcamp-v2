@@ -100,7 +100,9 @@ async def evaluate_quota(
     The daily limit is reported before the budget because it is the one the
     producer can act on tonight: the count resets at local midnight, and
     `seconds_until_local_midnight` is what the endpoint puts in `Retry-After`. A
-    budget that ran out is a fact about the month, not about this evening.
+    budget that ran out is a fact about the month, not about this evening — and it
+    is the reported reason when the day still had a slot, because the `429` promises
+    a midnight that would not free a single question.
 
     Admission itself is the port's and is atomic: this function hands the question
     to `quota.admit_question`, which stores it and says whether it may be asked at
@@ -128,16 +130,24 @@ async def evaluate_quota(
     # question: `questions_remaining` is what the producer can still ask, not what
     # he could have asked before this turn was admitted.
     asked_today = await quota.questions_asked_on(user_id=user_id, day=day)
+    # The port wrote this question whether it was admitted or refused — the stored
+    # row **is** the reservation (`UsageQuotaPort.admit_question`) — so the count
+    # above is exactly this turn plus the questions that were already there. The
+    # rule that decides *why* a call was refused is evaluated on the ones that were
+    # there before it: the question being refused did not take a slot, and a day
+    # with nine questions still had room even though the write made it ten.
+    asked_before_this_question = asked_today - 1
 
     reason: DegradationReason | None = None
     if not admitted:
-        # The day's limit is the reported one when the day is exhausted, because
-        # that is the branch the producer can act on tonight. The budget is only
-        # reported when the day still has room and the month is what stopped him.
-        # A refusal neither figure explains keeps `reason is None` beside
-        # `allowed is False`, so the producer reads a degraded answer rather than a
-        # reason the system did not give (R3-QUOTA-REASON-PRECEDENCE).
-        if daily_limit_exhausted(asked_today):
+        # The day's limit is the reported one when the day was already exhausted
+        # when this question arrived, because that is the branch the producer can
+        # act on tonight. The budget is reported when the day still had room and the
+        # month is what stopped him. A refusal neither figure explains keeps
+        # `reason is None` beside `allowed is False`, so the producer reads a
+        # degraded answer rather than a reason the system did not give
+        # (R3-QUOTA-REASON-PRECEDENCE).
+        if daily_limit_exhausted(asked_before_this_question):
             reason = DegradationReason.DAILY_LIMIT
         elif budget_cap_cop is not None and budget_exhausted(spend, budget_cap_cop):
             reason = DegradationReason.BUDGET_EXHAUSTED
