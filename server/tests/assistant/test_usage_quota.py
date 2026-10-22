@@ -250,16 +250,18 @@ async def test_the_month_is_the_local_one_and_not_the_utc_one(db_session) -> Non
     this one: it belongs to the month that ended, and reading it as this month's
     would spend the cap before the month started."""
     domain = await seed_domain(db_session)
+    instant = _BOGOTA_MIDNIGHT.replace(day=1) - timedelta(hours=3)
 
     await _answer_with_cost(
         db_session,
         user_id=domain.user_id,
         cost_cop=Decimal("4.90"),
-        at=_BOGOTA_MIDNIGHT.replace(day=1) - timedelta(hours=3),
+        at=instant,
     )
 
     quota = SqlAlchemyUsageQuota(db_session)
-    previous_month = (_BOGOTA_MIDNIGHT.replace(day=1) - timedelta(hours=3)).date()
+    previous_month = instant.astimezone(BOGOTA_TZ).date()
+    assert instant.astimezone(UTC).date() == _THIS_MONTH
     assert await quota.month_spend_cop(user_id=domain.user_id, month=_THIS_MONTH) == Decimal("0")
     assert await quota.month_spend_cop(user_id=domain.user_id, month=previous_month) == Decimal(
         "4.90"
