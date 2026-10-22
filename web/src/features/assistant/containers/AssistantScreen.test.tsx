@@ -5,7 +5,7 @@
  * person.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { forgetActivePlotId, setActivePlotId } from '../../../lib/api/activePlot'
 import { clearSession, setSession } from '../../../lib/api/session'
@@ -151,6 +151,25 @@ describe('AssistantScreen', () => {
     await waitFor(() => expect(screen.getByText(ASSISTANT_COPY.limitedTitle)).toBeInTheDocument())
     expect(screen.getByText(ASSISTANT_COPY.limitedBody)).toBeInTheDocument()
     expect(screen.queryByText('429')).not.toBeInTheDocument()
+  })
+
+  it('says a question failed and keeps it, without an answer bubble', async () => {
+    // A rejected fetch is the ordinary "the request never got an answer" case:
+    // `askAssistant` maps it to `unavailable`, which is the `failed` notice.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')))
+    renderScreen()
+
+    ask('¿Y el riesgo?')
+
+    await waitFor(() => expect(screen.getByText(ASSISTANT_COPY.failedTitle)).toBeInTheDocument())
+    expect(screen.getByText(ASSISTANT_COPY.failedBody)).toBeInTheDocument()
+    // The question stays in the transcript, and the empty assistant turn is
+    // dropped: a bubble reading "Respondiendo" with no answer coming is a lie.
+    const turns = within(
+      screen.getByRole('list', { name: 'Conversación con el asistente' }),
+    ).getAllByRole('listitem')
+    expect(turns).toHaveLength(1)
+    expect(screen.getByText('¿Y el riesgo?')).toBeInTheDocument()
   })
 
   it('keeps the connection promise instead of faking an answer', () => {
