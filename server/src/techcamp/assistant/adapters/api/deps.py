@@ -238,7 +238,7 @@ def get_embedder() -> Embedder:
     raise ProblemError(
         status=503,
         title="Assistant embedder not configured",
-        detail="The production embedding model is wired in E12 T6; the seminar profile is local.",
+        detail="The production embedding model is wired in E12 T8; the seminar profile is local.",
     )
 
 
@@ -246,15 +246,16 @@ def get_prices() -> PriceTable:
     """The rate card of the profile (D-T12.3; `adapters.api.pricing`).
 
     The seminar stand-in bills nothing, and a local model genuinely costs zero
-    pesos — which D-T12.1 accepts for a call that came free. The production card
-    is T6's to fill with ADR-0026's real prices, and T8's to confirm in docs/02.
+    pesos — which D-T12.1 accepts for a call that came free. The production card is
+    T8's to fill with ADR-0026's real prices and to confirm in docs/02, which is why
+    T6 wires the seam and not the figures.
     """
     if is_seminar_profile():
         return {SEMINAR_MODEL: ModelPrice.local(SEMINAR_MODEL)}
     raise ProblemError(
         status=503,
         title="Assistant prices not configured",
-        detail="The production rate card is wired in E12 T6 with the provider keys.",
+        detail="The production rate card is wired in E12 T8 with the provider's real prices.",
     )
 
 

@@ -143,13 +143,22 @@ def llm_budget_cap_cop() -> Decimal | None:
     (ADR-0007:17). Unset is `Decimal("0")`, the sense `limits.budget_exhausted`
     already gives a zero cap: a profile that measures money and has no cap stops
     answering with the model instead of answering for free. A value that is not a
-    non-negative finite decimal is a configuration error, never a silent zero.
+    non-negative finite decimal is a configuration error, never a silent zero — and
+    so is a variable that is *set* and reads blank: unset is a deployment that
+    never configured a cap, while an empty one is an operator mid-edit or a compose
+    file that interpolated nothing, and answering that with `0` stops the assistant
+    for a month with nothing saying why.
     """
     if is_seminar_profile():
         return None
     raw = os.environ.get(LLM_BUDGET_CAP_COP_ENV)
-    if raw is None or not raw.strip():
+    if raw is None:
         return Decimal(0)
+    if not raw.strip():
+        raise ValueError(
+            f"{LLM_BUDGET_CAP_COP_ENV} is set but has no figure: "
+            f"{raw!r}; unset it for no cap, or set a number of COP"
+        )
     try:
         cap = Decimal(raw.strip())
     except InvalidOperation as error:

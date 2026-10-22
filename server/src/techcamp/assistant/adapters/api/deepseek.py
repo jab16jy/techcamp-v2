@@ -94,6 +94,11 @@ class DeepSeekLLMClient:
 
         answer: list[str] = []
         usage: TokenUsage | None = None
+        # The model recorded is the last one the provider **named**, falling back to
+        # the configured alias: DeepSeek may send `model` only on the opening chunk,
+        # which are the chunks `_delta_text` reads as text and no further, and a
+        # `None` here would leave the transcript row silent about its own source.
+        recordable_model = self._model
         try:
             lines = self._transport.chat_completion_lines(
                 url=llm_base_url(),
@@ -103,6 +108,9 @@ class DeepSeekLLMClient:
             )
             async for payload in lines:
                 chunk = json.loads(payload)
+                named_model = chunk.get("model") if isinstance(chunk, dict) else None
+                if isinstance(named_model, str) and named_model:
+                    recordable_model = named_model
                 delta = _delta_text(chunk)
                 if delta:
                     answer.append(delta)
@@ -127,7 +135,7 @@ class DeepSeekLLMClient:
         yield StreamToken(
             text="",
             usage=usage or TokenUsage(prompt_tokens=0, completion_tokens=0),
-            model=chunk.get("model") if isinstance(chunk, dict) else self._model,
+            model=recordable_model,
         )
 
 

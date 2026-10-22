@@ -244,6 +244,42 @@ async def test_one_call_per_stream_and_the_request_the_profile_configured(
     assert call["messages"] == [{"role": "user", "content": "¿Por qué no regué ayer?"}]
 
 
+async def test_a_last_chunk_without_a_model_still_stamps_the_configured_one() -> None:
+    """D-T12.1: the answer records the model that produced it, and the port puts
+    that name on the last token. Reading `model` off the final chunk alone records
+    `None` for a provider that names the model only on the first one — a transcript
+    row that says nothing about where the answer came from."""
+    final_chunk = json.dumps(
+        {
+            "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 17, "completion_tokens": 9},
+        }
+    )
+    client = _client([_chunk("La parcela "), final_chunk])
+
+    collected = [token async for token in client.stream(_MESSAGES)]
+
+    assert collected[-1].model == llm_model()
+
+
+async def test_the_model_the_provider_names_wins_over_the_configured_one() -> None:
+    """The reverse case, so the fallback does not flatten it: when the provider
+    stamps its own name — a dated model behind the alias the profile asked for —
+    that is the model that produced the answer, and it is the one recorded."""
+    named = json.dumps(
+        {
+            "model": "deepseek-chat-0614",
+            "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 17, "completion_tokens": 9},
+        }
+    )
+    client = _client([_chunk("La parcela "), named])
+
+    collected = [token async for token in client.stream(_MESSAGES)]
+
+    assert collected[-1].model == "deepseek-chat-0614"
+
+
 async def test_a_missing_key_is_reported_at_the_call_and_not_at_the_import(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

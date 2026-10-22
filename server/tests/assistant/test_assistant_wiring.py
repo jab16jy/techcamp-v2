@@ -93,11 +93,22 @@ def test_production_without_a_figure_measures_money_with_no_cap(
     assert llm_budget_cap_cop() == Decimal("0")
 
 
-def test_a_blank_figure_is_the_same_as_without_one(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("value", ["", "   "])
+def test_a_figure_that_is_set_but_empty_is_a_configuration_error(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Unset is `0` — the profile measures money and has no cap — but a variable
+    that *is* set and reads blank is an operator mid-edit or a compose file that
+    interpolated nothing, and silently turning that into `0` stops the assistant
+    for a month with no message saying why. The same rule the malformed figure
+    gets: a configuration error, never a silent zero."""
     _production(monkeypatch)
-    monkeypatch.setenv(LLM_BUDGET_CAP_COP_ENV, "   ")
+    monkeypatch.setenv(LLM_BUDGET_CAP_COP_ENV, value)
 
-    assert llm_budget_cap_cop() == Decimal("0")
+    with pytest.raises(ValueError) as raised:
+        llm_budget_cap_cop()
+
+    assert LLM_BUDGET_CAP_COP_ENV in str(raised.value)
 
 
 def test_production_reads_the_configured_figure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,6 +148,22 @@ def test_a_malformed_figure_reaches_the_endpoint_as_a_503(
 ) -> None:
     _production(monkeypatch)
     monkeypatch.setenv(LLM_BUDGET_CAP_COP_ENV, "no-es-un-numero")
+
+    with pytest.raises(ProblemError) as raised:
+        get_budget_cap()
+
+    assert raised.value.status == 503
+    assert LLM_BUDGET_CAP_COP_ENV in (raised.value.detail or "")
+
+
+def test_a_blank_figure_reaches_the_endpoint_as_a_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The empty figure is the same 503 as the malformed one: the dependency is
+    where an operator's mistake becomes a response, and the detail is what they
+    read to fix it."""
+    _production(monkeypatch)
+    monkeypatch.setenv(LLM_BUDGET_CAP_COP_ENV, "  ")
 
     with pytest.raises(ProblemError) as raised:
         get_budget_cap()
