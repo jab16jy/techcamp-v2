@@ -1090,6 +1090,12 @@ lineage; no approved receipt means *not reviewed*, never approved.
     producción por el `503` previo de `get_prices` (FastAPI resuelve ese antes), y el operador no se
     entera del tope malformado hasta que T8 cablee la tarjeta. Tocar el orden de resolución de
     dependencias es otro cambio, no este.
+  - **Fusionado a la rama del épico** (2026-10-22): `merge(e12): the T6 lane into the epic branch`
+    (`e40f634`), con los doce commits del lane intactos —cada unidad de trabajo sigue siendo un
+    commit identificable— y **sin PR**: los PRs en rebanadas a `main` se hacen al cerrar el ODD de
+    E12, no ahora. El código fusionado es **byte a byte idéntico** al del lane verificado
+    (`git diff e12-t6 HEAD -- server/ web/` vacío), así que los 461 passed de la verificación se
+    transfieren sin re-correr.
 
 ## Next step
 
