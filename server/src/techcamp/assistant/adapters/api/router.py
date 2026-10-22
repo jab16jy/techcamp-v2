@@ -16,20 +16,23 @@ session alive across tokens keeps a pooled connection checked out for as long as
 the producer reads — and starves every REST endpoint of the pool. So:
 
 1. one short session resolves the conversation, checks the plot, gathers the
-   facts, retrieves the fragments, builds the prompt and **stores the question**;
+   facts, retrieves the fragments, builds the prompt and **admits the question**
+   through the quota port (which stores it, admitted or refused);
 2. the `StreamingResponse` is returned with a body that holds no session at all —
    it calls a `persist` callable which opens and closes its own.
 
 **Order of the gates**, each one before the next, so a question about a plot the
 caller may not see never reaches a repository:
 conversation ownership (`404`), plot access through `resolve_plot_access`
-(`404`, the same gate `home` and `risk` use), facts, retrieval, prompt, write.
+(`404`, the same gate `home` and `risk` use), facts, retrieval, prompt, quota
+admission.
 
-**What is not here.** The 10-questions/day limit, the budget and the `429`
-are T6's (D-T12.3, docs/04:22) and share this router; the degraded no-LLM
-answer (`application.degraded_answer`, T4) is written when T6 wires the branch
-that produces it. This task is the LLM path and its two endpoints, and it leaves
-the degradation out rather than half-wiring it.
+**The two answers of the quota gate** (T6; D-T12.3, docs/04:22, docs/06 §9).
+Admitted: the provider stream of T5. Refused: the degraded answer of T4, with no
+provider call at all. The refusal is `429` with a numeric `Retry-After` only when
+the **day's** limit is what stopped it; a budget refusal is `200`. Both carry the
+same `answer` → `sources` → `done` body, because docs/04 fixes the status and
+docs/06 fixes the body and neither may drop the other.
 """
 
 from __future__ import annotations
@@ -43,17 +46,36 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.alerts.adapters.repositories import SqlAlchemyAlertRepository
-from techcamp.assistant.adapters.api.deps import EmbedderDep, LLMClientDep, PricesDep
+from techcamp.assistant.adapters.api.deps import (
+    BudgetCapDep,
+    EmbedderDep,
+    LLMClientDep,
+    PricesDep,
+)
 from techcamp.assistant.adapters.api.prompt import build_prompt
-from techcamp.assistant.adapters.api.stream import PersistAnswer, stream_assistant_answer
+from techcamp.assistant.adapters.api.stream import (
+    PersistAnswer,
+    stream_assistant_answer,
+    stream_degraded_answer,
+)
 from techcamp.assistant.adapters.repositories import (
     SqlAlchemyConversationRepository,
     SqlAlchemyKnowledgeRepository,
     SqlAlchemyMessageRepository,
+    SqlAlchemyUsageQuota,
+)
+from techcamp.assistant.application.degraded_answer import (
+    answer_without_a_plot,
+    answer_without_llm,
 )
 from techcamp.assistant.application.plot_facts import gather_plot_facts
 from techcamp.assistant.application.retrieval import RetrievedEvidence, retrieve_fragments
+from techcamp.assistant.application.usage import DegradationReason, evaluate_quota
 from techcamp.assistant.domain.facts import PlotFacts
+from techcamp.assistant.domain.limits import (
+    DAILY_QUESTION_LIMIT,
+    seconds_until_local_midnight,
+)
 from techcamp.assistant.domain.models import Conversation, Message, MessageEvidence, MessageRole
 from techcamp.farms.adapters.repositories import SqlAlchemyPlotRepository
 from techcamp.farms.domain.errors import PlotNotFoundError
@@ -112,18 +134,20 @@ async def ask(
     llm: LLMClientDep,
     embedder: EmbedderDep,
     prices: PricesDep,
+    budget_cap_cop: BudgetCapDep,
 ) -> StreamingResponse:
     """One question, answered as a stream of tokens with its cited sources.
 
     The status code is decided before the first token: everything that can answer
-    `404` (a conversation of another user, a plot of another organization)
-    happens inside the short session below, and everything that can fail a
-    provider call is resolved before the response exists.
+    `404` (a conversation of another user, a plot of another organization) and
+    everything the quota decides happens inside the short session below, and
+    everything that can fail a provider call is resolved before the response
+    exists.
     """
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     async with async_session_factory() as session:
         knowledge = SqlAlchemyKnowledgeRepository(session)
         conversations = SqlAlchemyConversationRepository(session)
-        messages = SqlAlchemyMessageRepository(session)
 
         conversation, facts = await _prepare(
             session,
@@ -136,10 +160,11 @@ async def ask(
             question=body.content, embedder=embedder, knowledge=knowledge
         )
         prompt = build_prompt(facts=facts, evidence=evidence, question=body.content)
-        await messages.add(
+        decision = await evaluate_quota(
             user_id=user_id,
-            conversation_id=conversation.id,
-            message=Message(
+            budget_cap_cop=budget_cap_cop,
+            quota=SqlAlchemyUsageQuota(session),
+            question=Message(
                 id=uuid7(),
                 conversation_id=conversation.id,
                 role=MessageRole.USER,
@@ -147,6 +172,32 @@ async def ask(
                 created_at=datetime.now(UTC),
             ),
         )
+
+        if not decision.allowed:
+            degraded = (
+                await answer_without_a_plot(evidence=evidence)
+                if facts is None
+                else await answer_without_llm(facts=facts, evidence=evidence)
+            )
+            refused_headers = dict(headers)
+            status_code = 200
+            if decision.reason is DegradationReason.DAILY_LIMIT:
+                # docs/04:22: the eleventh question of the day is `429` with
+                # `Retry-After` in seconds, never an HTTP-date.
+                status_code = 429
+                refused_headers["Retry-After"] = str(seconds_until_local_midnight())
+            return StreamingResponse(
+                stream_degraded_answer(
+                    answer=degraded.text,
+                    citations=degraded.citations,
+                    reason=None if decision.reason is None else decision.reason.value,
+                    reason_text=_reason_text(decision.reason),
+                    persist=_persist_answer(user_id=user_id, conversation_id=conversation.id),
+                ),
+                status_code=status_code,
+                media_type="text/event-stream",
+                headers=refused_headers,
+            )
 
     return StreamingResponse(
         stream_assistant_answer(
@@ -160,8 +211,22 @@ async def ask(
         # Same two headers as the hub stream (`telemetry/adapters/api/router.py`):
         # no caching of a per-user answer, and no proxy buffering that would turn
         # a token stream into one response.
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=headers,
     )
+
+
+def _reason_text(reason: DegradationReason | None) -> str:
+    """The sentence beside a degraded answer: what stopped the model, in the
+    words the producer reads. `None` is a refusal neither limit explains
+    (R3-QUOTA-REASON-PRECEDENCE), and it says only that the model was not used."""
+    if reason is DegradationReason.DAILY_LIMIT:
+        return (
+            f"Se alcanzó el límite de {DAILY_QUESTION_LIMIT} preguntas por día. "
+            "El contador se reinicia a medianoche."
+        )
+    if reason is DegradationReason.BUDGET_EXHAUSTED:
+        return "Se agotó el presupuesto mensual del asistente."
+    return "El asistente responde hoy sin el modelo."
 
 
 @router.post("/assistant/messages/{message_id}:feedback", status_code=204)

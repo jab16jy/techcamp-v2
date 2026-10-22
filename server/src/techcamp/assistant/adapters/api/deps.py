@@ -27,6 +27,7 @@ it cannot compute (D-T12.1).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from decimal import Decimal
 from typing import Annotated
 
 import httpx
@@ -213,6 +214,19 @@ def get_prices() -> PriceTable:
     )
 
 
+def get_budget_cap() -> Decimal | None:
+    """The monthly budget cap in COP, or `None` when no cap applies.
+
+    The per-profile amount is configuration (D-T12.3): `seminar` does not measure
+    money and `production`'s figure is the owner's. Until that config lands no
+    profile has a cap, so the daily limit is the only gate; the dependency exists
+    now because it is the seam a test overrides to exercise the budget branch
+    without inventing a figure.
+    """
+    return None
+
+
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 EmbedderDep = Annotated[Embedder, Depends(get_embedder)]
 PricesDep = Annotated[PriceTable, Depends(get_prices)]
+BudgetCapDep = Annotated[Decimal | None, Depends(get_budget_cap)]

@@ -384,7 +384,7 @@ class FakeUsageQuota:
         question: Message,
         day: date,
         month: date,
-        budget_cap_cop: Decimal,
+        budget_cap_cop: Decimal | None,
     ) -> bool:
         """Store the question, then answer from the store that now holds it.
 
@@ -401,7 +401,8 @@ class FakeUsageQuota:
         asked_today = await self.questions_asked_on(user_id=user_id, day=day)
         spend = await self.month_spend_cop(user_id=user_id, month=month)
         admitted = not (
-            daily_limit_exhausted(asked_today) or budget_exhausted(spend, budget_cap_cop)
+            daily_limit_exhausted(asked_today)
+            or (budget_cap_cop is not None and budget_exhausted(spend, budget_cap_cop))
         )
         await self.messages.add(user_id=user_id, conversation_id=conversation_id, message=question)
         return admitted

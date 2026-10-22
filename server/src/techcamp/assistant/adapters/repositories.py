@@ -383,7 +383,7 @@ class SqlAlchemyUsageQuota:
         question: Message,
         day: date,
         month: date,
-        budget_cap_cop: Decimal,
+        budget_cap_cop: Decimal | None,
     ) -> bool:
         """Store the question and say whether it may reach the provider.
 
@@ -416,7 +416,8 @@ class SqlAlchemyUsageQuota:
         asked_today = await self.questions_asked_on(user_id=user_id, day=day)
         spend = await self.month_spend_cop(user_id=user_id, month=month)
         admitted = not (
-            daily_limit_exhausted(asked_today) or budget_exhausted(spend, budget_cap_cop)
+            daily_limit_exhausted(asked_today)
+            or (budget_cap_cop is not None and budget_exhausted(spend, budget_cap_cop))
         )
         # The question is stored either way, inside the same transaction that
         # decided it: a refused turn was still asked, which is what keeps the

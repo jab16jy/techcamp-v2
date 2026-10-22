@@ -12,6 +12,13 @@ with the citations retrieval resolved, then `done` with the identifiers and the
 evidence of the turn. `done` is last because it is emitted **after** the write:
 a client that stores `done.message_id` stores the id of a row that exists.
 
+**The degraded body is the same stream without a provider** (T6; docs/06 §9).
+When the day's limit or the month's budget is exhausted, `answer` replaces the
+`token` frames — one frame with the whole text, `degraded: true`, the `reason`
+and the sentence the producer reads — and `sources` and `done` follow in the same
+order. The `done` evidence is all `null`: `model IS NULL` is what distinguishes
+"the LLM was never called" from "it was called and cost nothing" (D-T12.1).
+
 **No database session is held here** (D-T12.4). That is the whole of
 `R3-stream-holds-db-session`, the bug recorded in
 `telemetry/adapters/api/router.py:446-485`: a `yield`-scoped session is torn
@@ -58,6 +65,11 @@ LOGGER = logging.getLogger(__name__)
 TOKEN_EVENT = "token"
 """One piece of the answer, as the provider streamed it. The client concatenates
 them in order; a token boundary in the middle of a word is not a word boundary."""
+
+ANSWER_EVENT = "answer"
+"""The whole answer without a model, in one frame: `text`, `degraded: true`, the
+`reason` and the sentence a producer reads. It replaces the `token` frames of an
+answered turn; `sources` and `done` follow in the same order either way."""
 
 SOURCES_EVENT = "sources"
 """The cited sources, as data, after the last token (docs/04:227). Empty when the
@@ -138,6 +150,58 @@ async def stream_assistant_answer(
         LOGGER.warning("assistant answer could not be stored", exc_info=exc)
         yield _frame(ERROR_EVENT, {"detail": "no se pudo guardar la respuesta del asistente"})
         return
+    yield _frame(SOURCES_EVENT, {"citations": [_citation_view(c) for c in citations]})
+    yield _frame(
+        DONE_EVENT,
+        {
+            "conversation_id": str(stored.conversation_id),
+            "message_id": str(stored.id),
+            "model": evidence.model,
+            "prompt_tokens": evidence.prompt_tokens,
+            "completion_tokens": evidence.completion_tokens,
+            "cost_cop": _decimal_text(evidence.cost_cop),
+        },
+    )
+
+
+async def stream_degraded_answer(
+    *,
+    answer: str,
+    citations: Sequence[Citation],
+    reason: str | None,
+    reason_text: str,
+    persist: PersistAnswer,
+) -> AsyncIterator[bytes]:
+    """The whole body of one degraded answer (T6; docs/06 §9).
+
+    The decision and the text are already made when this runs: the quota gate
+    refused the call, `application.degraded_answer` wrote the same facts the model
+    would have been given, and retrieval resolved the sources. There is no
+    provider to wait for, so the body is **one** `answer` frame instead of a
+    token stream, then the same `sources` and `done` frames as an answered turn.
+
+    The answer is stored **before** the first frame with `MessageEvidence.no_llm()`:
+    `model IS NULL` is what distinguishes "the LLM was never called" from "it was
+    called and cost nothing" (D-T12.1), and a body that starts with a complete
+    answer has no truncation for the client to reason about. A write that fails
+    ends the stream with `error` and no `done`, exactly like the answered path.
+    """
+    evidence = MessageEvidence.no_llm()
+    try:
+        stored = await persist(evidence, answer)
+    except Exception as exc:  # noqa: BLE001 - the frame is the report
+        LOGGER.warning("assistant degraded answer could not be stored", exc_info=exc)
+        yield _frame(ERROR_EVENT, {"detail": "no se pudo guardar la respuesta del asistente"})
+        return
+    yield _frame(
+        ANSWER_EVENT,
+        {
+            "text": answer,
+            "degraded": True,
+            "reason": reason,
+            "reason_text": reason_text,
+        },
+    )
     yield _frame(SOURCES_EVENT, {"citations": [_citation_view(c) for c in citations]})
     yield _frame(
         DONE_EVENT,

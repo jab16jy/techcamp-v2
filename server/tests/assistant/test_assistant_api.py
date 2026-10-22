@@ -177,6 +177,7 @@ async def test_the_stream_holds_no_database_session_while_the_tokens_flow(
         llm=_fake_llm(),
         embedder=FakeEmbedder(),
         prices={SEMINAR_MODEL: ModelPrice.local(SEMINAR_MODEL)},
+        budget_cap_cop=None,
     )
 
     checked_out = 0

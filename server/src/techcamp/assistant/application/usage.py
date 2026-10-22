@@ -16,6 +16,13 @@ this function has no way to reach a provider.
 The cap arrives as an argument because it is the one thing that differs per
 profile (D-T12.3): USD 5 in total for `seminar` (ADR-0021:30), a monthly cap in
 `production` (ADR-0007:17). The 10-questions-per-day rule is the same in both.
+`None` is the only honest value for "this deployment has not configured the amount
+yet": no cap is compared, the daily limit still applies, and this module never
+invents a figure the owner has not fixed (D-T12.3).
+
+The month's spend is `SUM(message.cost_cop)` over `created_at` (docs/11:132), and
+that sum is also the source of `llm_cost_cop_total` (docs/09:86): the metric E14
+exports is derived from the same `message` rows, not computed a second time here.
 """
 
 from __future__ import annotations
@@ -58,7 +65,7 @@ class QuotaDecision:
     `gasto del mes / tope` (docs/11-metricas.md §métricas del asistente). They
     travel together whether the answer is allowed or not, because the endpoint
     reports the budget in both cases and a degraded answer must still say why it
-    is degraded.
+    is degraded. `budget_cap_cop` is `None` when the deployment configured no cap.
     """
 
     allowed: bool
@@ -66,13 +73,13 @@ class QuotaDecision:
     questions_asked: int
     questions_remaining: int
     month_spend_cop: Decimal
-    budget_cap_cop: Decimal
+    budget_cap_cop: Decimal | None
 
 
 async def evaluate_quota(
     *,
     user_id: UUID,
-    budget_cap_cop: Decimal,
+    budget_cap_cop: Decimal | None,
     quota: UsageQuotaPort,
     question: Message,
     now: datetime | None = None,
@@ -128,7 +135,7 @@ async def evaluate_quota(
         # reason the system did not give (R3-QUOTA-REASON-PRECEDENCE).
         if daily_limit_exhausted(asked_today):
             reason = DegradationReason.DAILY_LIMIT
-        elif budget_exhausted(spend, budget_cap_cop):
+        elif budget_cap_cop is not None and budget_exhausted(spend, budget_cap_cop):
             reason = DegradationReason.BUDGET_EXHAUSTED
 
     return QuotaDecision(

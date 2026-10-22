@@ -330,7 +330,7 @@ class UsageQuotaPort(Protocol):
         question: Message,
         day: date,
         month: date,
-        budget_cap_cop: Decimal,
+        budget_cap_cop: Decimal | None,
     ) -> bool:
         """Store this user's question and say whether it may reach the provider.
         One atomic step, and the stored row **is** the reservation.
@@ -348,9 +348,10 @@ class UsageQuotaPort(Protocol):
 
         `day` and `month` are already resolved in America/Bogota, and
         `budget_cap_cop` is passed in because it is the one figure that differs per
-        profile (D-T12.3). Whether the refusal was the day or the budget is not
-        this method's answer to give: `evaluate_quota` decides it from the figures
-        it reads.
+        profile (D-T12.3); `None` means the deployment configured no cap, so only
+        the daily limit decides. Whether the refusal was the day or the budget is
+        not this method's answer to give: `evaluate_quota` decides it from the
+        figures it reads.
 
         `conversation_id` is passed beside `question.conversation_id` on purpose,
         the same shape as `MessageRepository.add`: the row written below belongs to
