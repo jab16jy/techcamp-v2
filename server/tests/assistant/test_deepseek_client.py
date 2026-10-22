@@ -228,7 +228,7 @@ async def test_one_call_per_stream_and_the_request_the_profile_configured(
     """H2: one call per request. The double counts the calls, so a stream that had
     been retried or fanned out would show here."""
     monkeypatch.setenv("TECHCAMP_LLM_API_KEY", "sk-deepseek")
-    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.setenv("TECHCAMP_LLM_MODEL", "deepseek-chat")
     transport = _FakeTransport([_chunk("La parcela "), _chunk("", finish_reason="stop")])
     client = DeepSeekLLMClient(transport, model=llm_model())
@@ -238,7 +238,7 @@ async def test_one_call_per_stream_and_the_request_the_profile_configured(
 
     assert len(transport.calls) == 1
     call = transport.calls[0]
-    assert call["url"] == "https://example.invalid/v1"
+    assert call["url"] == "https://api.deepseek.com/v1"
     assert call["api_key"] == "sk-deepseek"
     assert call["model"] == "deepseek-chat"
     assert call["messages"] == [{"role": "user", "content": "¿Por qué no regué ayer?"}]
@@ -255,3 +255,19 @@ async def test_a_missing_key_is_reported_at_the_call_and_not_at_the_import(
 
     with pytest.raises(LLMUnavailableError):
         [token async for token in client.stream(_MESSAGES)]
+
+
+async def test_a_refused_endpoint_is_never_handed_to_the_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The endpoint is read at the call, inside the adapter's one failure shape, and
+    the transport is what sends the key — so a refused host must fail before the
+    transport runs. A call recorded here would mean the credential left anyway."""
+    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://api.deepseek.com.evil.example/v1")
+    transport = _FakeTransport([_chunk("La parcela "), _chunk("", finish_reason="stop")])
+    client = DeepSeekLLMClient(transport, model=llm_model())
+
+    with pytest.raises(LLMUnavailableError):
+        [token async for token in client.stream(_MESSAGES)]
+
+    assert transport.calls == []

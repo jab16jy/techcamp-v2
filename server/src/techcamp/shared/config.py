@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlsplit
 
 
 def database_url() -> str:
@@ -60,8 +61,59 @@ def llm_api_key() -> str | None:
     return os.environ.get(LLM_API_KEY_ENV) or None
 
 
+_default_base_url_host = urlsplit(LLM_BASE_URL_DEFAULT).hostname
+if _default_base_url_host is None:  # pragma: no cover - the default is a literal URL
+    raise ValueError(f"{LLM_BASE_URL_ENV}'s default must name a host: {LLM_BASE_URL_DEFAULT!r}")
+
+LLM_ALLOWED_BASE_URL_HOSTS: frozenset[str] = frozenset({_default_base_url_host})
+"""The hosts `TECHCAMP_LLM_BASE_URL` may name, because the provider **credential**
+is sent to whatever host that variable points at (R1-llm-base-url-credential-egress-
+unvalidated, docs/09 §Seguridad "Secretos").
+
+Derived from `LLM_BASE_URL_DEFAULT` so the default and the allowlist cannot drift
+apart. An allowlist in code and not in the environment: a host that receives the key
+is a code change somebody reviews, never a second variable that silently redirects
+the credential to a host of its own. The default is the only entry because ADR-0026
+pins exactly one provider; a gateway in front of it is a new entry here, with its own
+review."""
+
+
 def llm_base_url() -> str:
-    return os.environ.get(LLM_BASE_URL_ENV, LLM_BASE_URL_DEFAULT)
+    """The provider's endpoint, or a `ValueError` when the key may not be sent there.
+
+    The check is here, at the single reader of the variable, so every caller inherits
+    it — including `DeepSeekLLMClient`, which reads this per call. An `http://` URL
+    would put the bearer key in clear text on the wire and a host outside
+    `LLM_ALLOWED_BASE_URL_HOSTS` would hand the provider's credential to somebody
+    else, so both are configuration errors and never a best-effort request.
+    """
+    raw = os.environ.get(LLM_BASE_URL_ENV, LLM_BASE_URL_DEFAULT)
+    _validate_llm_base_url(raw)
+    return raw
+
+
+def _validate_llm_base_url(raw: str) -> None:
+    """Raise `ValueError` unless `raw` is an `https` URL to an allowed host.
+
+    Fail-closed on anything unparsable, on a non-`https` scheme, on credentials
+    embedded in the URL, and on any host outside the allowlist. The host is compared
+    exactly (case-insensitively): a suffix check would accept
+    `api.deepseek.com.example`, which is the shape an exfiltration attempt takes.
+    """
+    try:
+        parts = urlsplit(raw)
+        host = parts.hostname
+    except ValueError as error:  # a malformed port, brackets, a broken netloc
+        raise ValueError(f"{LLM_BASE_URL_ENV} is not a URL: {raw!r}") from error
+    if parts.scheme != "https":
+        raise ValueError(f"{LLM_BASE_URL_ENV} must be an https URL: {raw!r}")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(f"{LLM_BASE_URL_ENV} must not carry credentials: {raw!r}")
+    if host is None or host.lower() not in LLM_ALLOWED_BASE_URL_HOSTS:
+        raise ValueError(
+            f"{LLM_BASE_URL_ENV} must point at a provider the key may be sent to "
+            f"({', '.join(sorted(LLM_ALLOWED_BASE_URL_HOSTS))}): {raw!r}"
+        )
 
 
 def llm_model() -> str:

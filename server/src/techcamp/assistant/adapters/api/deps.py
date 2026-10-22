@@ -26,6 +26,7 @@ it cannot compute (D-T12.1).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from decimal import Decimal
 from typing import Annotated
@@ -33,18 +34,32 @@ from typing import Annotated
 import httpx
 from fastapi import Depends
 
-from techcamp.assistant.adapters.api.deepseek import DeepSeekLLMClient
+from techcamp.assistant.adapters.api.deepseek import DeepSeekLLMClient, LLMUnavailableError
 from techcamp.assistant.adapters.api.pricing import ModelPrice, PriceTable
 from techcamp.assistant.adapters.jobs import SeminarHashEmbedder
 from techcamp.assistant.application.ports import Embedder, LLMClient, StreamToken, TokenUsage
 from techcamp.assistant.domain.models import ChatMessage
-from techcamp.shared.config import is_seminar_profile, llm_api_key, llm_budget_cap_cop
+from techcamp.shared.config import (
+    is_seminar_profile,
+    llm_api_key,
+    llm_base_url,
+    llm_budget_cap_cop,
+)
 from techcamp.shared.errors import ProblemError
 
 _TIMEOUT = 60.0
-"""Seconds for the whole stream. A provider that has not answered the first token
-in a minute is not a slow answer, it is a hanging one, and the endpoint has a
-producer waiting on the other end of the socket."""
+"""Seconds for one socket operation of the stream. It bounds a stalled read, not the
+answer: `httpx` applies it per operation, so a provider that keeps sending a byte
+before each timeout never trips it."""
+
+_STREAM_DEADLINE = 60.0
+"""Seconds for the **whole** stream, on the monotonic clock.
+
+`_TIMEOUT` alone does not bound a request (R1-llm-stream-has-no-whole-stream-deadline):
+a provider that drips bytes satisfies every socket timeout while holding the
+connection, the worker and the producer's open stream well past a minute. The
+endpoint has somebody waiting on the other end, so the body is cancelled at this
+wall-clock deadline and the turn ends in an `error` frame instead of a slow drip."""
 
 
 class HttpChatCompletionTransport:
@@ -61,8 +76,14 @@ class HttpChatCompletionTransport:
     object.
     """
 
-    def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        transport: httpx.AsyncBaseTransport | None = None,
+        *,
+        stream_deadline: float = _STREAM_DEADLINE,
+    ) -> None:
         self._transport = transport
+        self._stream_deadline = stream_deadline
 
     def chat_completion_lines(
         self, *, url: str, api_key: str, model: str, messages: Sequence[ChatMessage]
@@ -83,21 +104,30 @@ class HttpChatCompletionTransport:
             # makes it send that chunk at all.
             "stream_options": {"include_usage": True},
         }
-        async with httpx.AsyncClient(timeout=_TIMEOUT, transport=self._transport) as client:
-            async with client.stream(
-                "POST",
-                f"{url.rstrip('/')}/chat/completions",
-                json=payload,
-                headers={"Authorization": f"Bearer {api_key}"},
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[len("data:") :].strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    yield data
+        try:
+            async with asyncio.timeout(self._stream_deadline):
+                async with httpx.AsyncClient(timeout=_TIMEOUT, transport=self._transport) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{url.rstrip('/')}/chat/completions",
+                        json=payload,
+                        headers={"Authorization": f"Bearer {api_key}"},
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[len("data:") :].strip()
+                            if not data or data == "[DONE]":
+                                continue
+                            yield data
+        except TimeoutError as error:
+            # The deadline is on the whole stream, so a body that delivered a chunk
+            # and then dripped is cancelled here — and reported as the provider
+            # failure it is, never as an answer that simply ended.
+            raise LLMUnavailableError(
+                f"the provider's stream did not finish within {self._stream_deadline:.0f}s"
+            ) from error
 
 
 def _httpx_transport() -> HttpChatCompletionTransport:
@@ -167,6 +197,12 @@ def get_llm_client() -> LLMClient:
     key exists, and `503` until it does: an assistant that answered without a
     provider key would either fail on every question or, worse, answer from a
     stand-in while the deployment believed it was talking to the provider.
+
+    The endpoint is validated too (`shared.config.llm_base_url`), and a refused one
+    is the same `503` shape: the client sends `Authorization: Bearer <key>` to
+    whatever host that variable names, so a typo or a redirected variable is
+    refused here, before a client exists, rather than discovered by the host
+    receiving the credential.
     """
     if is_seminar_profile():
         return SeminarLLMClient()
@@ -179,6 +215,14 @@ def get_llm_client() -> LLMClient:
                 "(shared.config), or run the seminar profile to answer locally."
             ),
         )
+    try:
+        llm_base_url()
+    except ValueError as error:
+        raise ProblemError(
+            status=503,
+            title="Assistant provider endpoint refused",
+            detail=str(error),
+        ) from error
     return DeepSeekLLMClient(_httpx_transport())
 
 

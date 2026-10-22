@@ -61,11 +61,11 @@ def test_the_provider_key_and_endpoint_come_from_the_environment(
 ) -> None:
     _clear_assistant_environment(monkeypatch)
     monkeypatch.setenv(_KEY_ENV, "sk-deepseek")
-    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.setenv("TECHCAMP_LLM_MODEL", "deepseek-chat")
 
     assert llm_api_key() == "sk-deepseek"
-    assert llm_base_url() == "https://example.invalid/v1"
+    assert llm_base_url() == "https://api.deepseek.com/v1"
     assert llm_model() == "deepseek-chat"
 
 
@@ -165,3 +165,98 @@ async def test_the_http_transport_drops_the_done_sentinel() -> None:
     ]
 
     assert payloads == [lines[0].removeprefix("data: "), lines[1].removeprefix("data: ")]
+
+
+def test_a_non_https_endpoint_never_carries_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """docs/09 §Seguridad: the request carries `Authorization: Bearer <key>`, so an
+    `http://` endpoint would put the provider credential in clear text on the wire.
+    A configuration error, never a best-effort request."""
+    _clear_assistant_environment(monkeypatch)
+    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "http://api.deepseek.com/v1")
+
+    with pytest.raises(ValueError, match="https"):
+        llm_base_url()
+
+
+def test_a_host_that_only_looks_like_the_provider_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exact host match, not a suffix one: `api.deepseek.com.evil.example` is a
+    different host that a suffix check would accept, and it is the shape the
+    credential would be handed to."""
+    _clear_assistant_environment(monkeypatch)
+    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://api.deepseek.com.evil.example/v1")
+
+    with pytest.raises(ValueError, match="provider the key may be sent to"):
+        llm_base_url()
+
+
+def test_an_endpoint_carrying_its_own_credentials_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`user:pass@` in the URL would put a second secret in the one variable a
+    deployment is told to set, and `httpx` would send it as basic auth beside the
+    bearer key."""
+    _clear_assistant_environment(monkeypatch)
+    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://user:pass@api.deepseek.com/v1")
+
+    with pytest.raises(ValueError, match="must not carry credentials"):
+        llm_base_url()
+
+
+def test_a_refused_endpoint_is_a_503_naming_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dependency turns the configuration error into a `503` before a client is
+    ever built, so the key has no path to the refused host: an operator reads the
+    title and the variable to fix, not a provider's DNS failure."""
+    _clear_assistant_environment(monkeypatch)
+    monkeypatch.setenv("TECHCAMP_PROFILE", "production")
+    monkeypatch.setenv(_KEY_ENV, "sk-test")
+    monkeypatch.setenv("TECHCAMP_LLM_BASE_URL", "https://api.deepseek.com.evil.example/v1")
+
+    with pytest.raises(ProblemError) as refusal:
+        get_llm_client()
+
+    assert refusal.value.status == 503
+    assert refusal.value.title == "Assistant provider endpoint refused"
+    assert "TECHCAMP_LLM_BASE_URL" in (refusal.value.detail or "")
+
+
+async def test_the_whole_stream_is_bounded_and_not_each_read() -> None:
+    """R1-llm-stream-has-no-whole-stream-deadline: `httpx`'s timeout is per socket
+    operation, so a provider that drips one byte before each timeout satisfies it
+    forever while the producer's stream stays open. The deadline is on the whole
+    stream: a body that delivers a chunk and then goes silent is abandoned, and the
+    turn ends as a provider failure instead of an answer nobody will finish."""
+    import asyncio
+    import time
+
+    import httpx
+
+    from techcamp.assistant.adapters.api.deepseek import LLMUnavailableError
+    from techcamp.assistant.adapters.api.deps import HttpChatCompletionTransport
+
+    class _Drip(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices": [{"delta": {"content": "La parcela "}}]}\n\n'
+            await asyncio.sleep(30)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_Drip())
+
+    transport = HttpChatCompletionTransport(httpx.MockTransport(respond), stream_deadline=0.05)
+
+    started = time.monotonic()
+    with pytest.raises(LLMUnavailableError):
+        [
+            payload
+            async for payload in transport.chat_completion_lines(
+                url="https://api.deepseek.com/v1/",
+                api_key="sk-http",
+                model="deepseek-chat",
+                messages=(),
+            )
+        ]
+
+    assert time.monotonic() - started < 5
