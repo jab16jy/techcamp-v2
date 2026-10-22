@@ -67,8 +67,8 @@ if _default_base_url_host is None:  # pragma: no cover - the default is a litera
 
 LLM_ALLOWED_BASE_URL_HOSTS: frozenset[str] = frozenset({_default_base_url_host})
 """The hosts `TECHCAMP_LLM_BASE_URL` may name, because the provider **credential**
-is sent to whatever host that variable points at (R1-llm-base-url-credential-egress-
-unvalidated, docs/09 §Seguridad "Secretos").
+is sent to whatever host that variable points at (the credential-egress-through-an-
+unvalidated-base-URL WARNING of #312; docs/09 §Seguridad "Secretos").
 
 Derived from `LLM_BASE_URL_DEFAULT` so the default and the allowlist cannot drift
 apart. An allowlist in code and not in the environment: a host that receives the key

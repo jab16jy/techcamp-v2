@@ -55,7 +55,7 @@ before each timeout never trips it."""
 _STREAM_DEADLINE = 60.0
 """Seconds for the **whole** stream, on the monotonic clock.
 
-`_TIMEOUT` alone does not bound a request (R1-llm-stream-has-no-whole-stream-deadline):
+`_TIMEOUT` alone does not bound a request (the whole-stream-deadline WARNING of #312):
 a provider that drips bytes satisfies every socket timeout while holding the
 connection, the worker and the producer's open stream well past a minute. The
 endpoint has somebody waiting on the other end, so the body is cancelled at this

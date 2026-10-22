@@ -224,7 +224,7 @@ def test_a_refused_endpoint_is_a_503_naming_the_variable(
 
 
 async def test_the_whole_stream_is_bounded_and_not_each_read() -> None:
-    """R1-llm-stream-has-no-whole-stream-deadline: `httpx`'s timeout is per socket
+    """The whole-stream-deadline WARNING of #312: `httpx`'s timeout is per socket
     operation, so a provider that drips one byte before each timeout satisfies it
     forever while the producer's stream stays open. The deadline is on the whole
     stream: a body that delivers a chunk and then goes silent is abandoned, and the
