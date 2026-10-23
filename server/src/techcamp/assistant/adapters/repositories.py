@@ -39,12 +39,14 @@ index is built on.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Sequence
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.assistant.adapters.orm import (
@@ -55,6 +57,12 @@ from techcamp.assistant.adapters.orm import (
 )
 from techcamp.assistant.application.ports import KnowledgeDocument, RetrievedFragment
 from techcamp.assistant.domain.errors import ConversationNotFoundError
+from techcamp.assistant.domain.limits import (
+    budget_exhausted,
+    daily_limit_exhausted,
+    local_day_bounds,
+    local_month_bounds,
+)
 from techcamp.assistant.domain.models import Conversation, Message, MessageEvidence, MessageRole
 from techcamp.shared.ids import uuid7
 
@@ -298,6 +306,149 @@ class SqlAlchemyMessageRepository:
         updated = (await self._session.execute(statement)).one_or_none()
         await self._session.commit()
         return updated is not None
+
+
+class SqlAlchemyUsageQuota:
+    """`UsageQuotaPort` over `message` and `conversation` (E12 T6; D-T12.1,
+    D-T12.3; docs/06-diseno-detallado.md §9).
+
+    Both counts are per user, and `message` carries no `user_id` of its own
+    (docs/03:363-376): the owner is reached through the conversation, so every
+    query below joins it. That is also what keeps the daily count a count of *this*
+    user's questions rather than a count of ids a caller happens to hold.
+
+    **Why the day and the month are compared as instants.** `created_at` is
+    `timestamptz` written by the database's clock, and the limit is the user's local
+    day in America/Bogota (docs/06 §9), so the boundaries come from
+    `domain.limits.local_day_bounds` / `local_month_bounds` translated to UTC. A
+    `date(created_at)` would count the evening's questions as tomorrow's for five
+    hours a day, which is exactly when a producer asks why he did not irrigate.
+
+    **Why the month is a `SUM`.** D-T12.1 says a missing cost is `null`, never `0`,
+    and SQL `SUM` skips nulls — so the aggregate is the same rule as
+    `domain.limits.month_spend_cop`, executed by the database instead of by a list
+    of ~54.000 Decimals per request (ADR-0007:9).
+
+    **Why the admission takes a lock.** Two requests that read the same count can
+    both be told there is room (R3-QUOTA-RACE), so the count, the sum and the write
+    happen in one transaction that holds a per-user advisory lock:
+    `pg_advisory_xact_lock` serializes the admissions of one user against each
+    other and is released by the `COMMIT` or the `ROLLBACK` that ends the
+    transaction, with no row to lock and no table to add.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def questions_asked_on(self, *, user_id: uuid.UUID, day: date) -> int:
+        day_start, day_end = local_day_bounds(day)
+        statement = (
+            select(func.count())
+            .select_from(MessageRow)
+            .join(ConversationRow, ConversationRow.id == MessageRow.conversation_id)
+            .where(
+                ConversationRow.user_id == user_id,
+                MessageRow.role == MessageRole.USER.value,
+                MessageRow.created_at >= day_start,
+                MessageRow.created_at < day_end,
+            )
+        )
+        return int((await self._session.execute(statement)).scalar_one())
+
+    async def month_spend_cop(self, *, user_id: uuid.UUID, month: date) -> Decimal:
+        month_start, month_end = local_month_bounds(month)
+        statement = (
+            select(func.coalesce(func.sum(MessageRow.cost_cop), 0))
+            .select_from(MessageRow)
+            .join(ConversationRow, ConversationRow.id == MessageRow.conversation_id)
+            .where(
+                ConversationRow.user_id == user_id,
+                MessageRow.created_at >= month_start,
+                MessageRow.created_at < month_end,
+            )
+        )
+        total = (await self._session.execute(statement)).scalar_one()
+        # `coalesce` makes it non-null and asyncpg hands a `numeric` back as a
+        # `Decimal`; the guard is for the type checker, which only knows the column
+        # is nullable, and an empty month must read as `0` rather than as a crash.
+        if total is None:
+            return Decimal(0)
+        return Decimal(total)
+
+    async def admit_question(
+        self,
+        *,
+        user_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        question: Message,
+        day: date,
+        month: date,
+        budget_cap_cop: Decimal | None,
+    ) -> bool:
+        """Store the question and say whether it may reach the provider.
+
+        The whole decision is one transaction: the advisory lock is taken first, the
+        count and the sum are read inside it, and the row is written inside it too,
+        so a concurrent request for the same user sees this one's question before
+        it decides. The question is written **either way** — it was asked either
+        way, and that is what keeps the count true — and the return value is what
+        the caller acts on.
+
+        A refusal is stored, not rolled back: the question is committed beside the
+        decision, because the degraded answer that follows belongs to a transcript
+        that holds the question it answers. `False` only means "do not call the
+        provider", never "nothing was written".
+
+        `budget_cap_cop` is `None` when the profile does not measure money
+        (D-T6.1): the sum is not compared against a cap that does not exist, and
+        only the daily limit can refuse.
+        """
+        if question.conversation_id != conversation_id:
+            # The row written below belongs to `conversation_id`, so it must be
+            # this one: the foreign key would accept the other case.
+            raise ConversationNotFoundError(conversation_id)
+        owned = await self._session.execute(
+            select(ConversationRow.id).where(
+                ConversationRow.id == conversation_id, ConversationRow.user_id == user_id
+            )
+        )
+        if owned.scalar_one_or_none() is None:
+            raise ConversationNotFoundError(conversation_id)
+
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": _advisory_key(user_id)},
+        )
+        asked_today = await self.questions_asked_on(user_id=user_id, day=day)
+        spend = await self.month_spend_cop(user_id=user_id, month=month)
+        admitted = not (
+            daily_limit_exhausted(asked_today)
+            or (budget_cap_cop is not None and budget_exhausted(spend, budget_cap_cop))
+        )
+        # The question is stored either way, inside the same transaction that
+        # decided it: a refused turn was still asked, which is what keeps the
+        # count true, and the degraded answer the caller writes next belongs to a
+        # transcript that holds the question it answers.
+        self._session.add(
+            MessageRow(
+                id=question.id,
+                conversation_id=conversation_id,
+                role=question.role.value,
+                content=question.content,
+            )
+        )
+        await self._session.commit()
+        return admitted
+
+
+def _advisory_key(user_id: uuid.UUID) -> int:
+    """A stable 64-bit key for `pg_advisory_xact_lock`, derived from the user id.
+
+    The id is hashed rather than cast because the lock is global to the database:
+    two users must never share one, and a hash of their own ids keeps them apart.
+    """
+    digest = hashlib.sha256(user_id.bytes).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
 
 
 def _document_from_row(row: Any) -> KnowledgeDocument:

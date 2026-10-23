@@ -199,6 +199,36 @@ into their owner doc by T0, in the same work unit as the doc change.
   version bump naming the provider is a coordination item for `identity`/docs, not an assistant file.
   T0 opens it as a follow-up issue rather than editing `identity` from this epic.
 
+## Decisions (T6) — `D-T6.1`
+
+- **D-T6.1 — The monthly cap is per-profile configuration, and `None` means a profile that does not
+  meter money.** The cap is the one figure that differs per profile (D-T12.3), so it is
+  configuration and not a domain constant: `shared/config.py` reads `TECHCAMP_LLM_BUDGET_CAP_COP`,
+  in **COP**, because the sum it is compared against is `SUM(message.cost_cop)` (D-T12.1,
+  docs/11:132). Two profile defaults, both taken from the documents, neither invented here:
+  - **`seminar` (the default): the cap is `None`.** The seminar card is `ModelPrice.local` — zero
+    COP (D-T12.1) — and the profile reaches no provider (`22e3738`), so the profile does not meter
+    money and has no budget to exhaust. The documented ceiling of **USD 5 total** (docs/04:22,
+    ADR-0021:30) is the **provider account's** ceiling, where the money exists; the code's monthly
+    sum is structurally 0. No document states a USD→COP rate and none is invented here.
+  - **`production`: the cap is `Decimal("0")` when the variable is unset.** ADR-0007:17 leaves the
+    monthly figure to a future owner decision, and the already-reviewed rule of
+    `limits.budget_exhausted` says what a zero budget means: *"a profile without a budget ... stops
+    answering instead of answering for free"*. An unconfigured production deployment therefore
+    degrades and never spends. Whoever sets the variable owns the USD→COP conversion, exactly as
+    whoever fills the price card owns it (pricing.py: *"Whoever fills this in owns the USD→COP
+    conversion"*).
+  `None` is **not** "unconfigured": it is "this profile does not meter money". `Decimal("0")` keeps
+  its reviewed meaning — a profile that meters money and has no budget stops answering. The
+  `cap is not None` guard lives at the call sites, so the pure rule keeps its signature and the
+  reviewed `budget_exhausted(spend, cap)` contract is untouched.
+
+- **D-T12.3 — The assistant's 10-questions-per-day limit applies in both profiles.** Confirmed by
+  the owner on 2026-10-21, after `docs/04-api.md:22` carried the rule as *owner-confirmable*: the
+  daily limit is the same in `seminar` and in `production`, and what differs per profile is the
+  budget cap (D-T6.1). The confirmation is written into `docs/04-api.md:22` itself (`ab2f458`), so
+  the doc no longer says the rule is pending.
+
 ## Tasks
 
 Checklist with stable ids. Forecasts are authored lines (additions + deletions, generated excluded) and
@@ -275,7 +305,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   integration point). **Depends T4.** Parallel with T6's non-router half only if T6 is split; otherwise
   sequential.
 
-- [ ] **T6 — Limits, budget and the cost metric**: the 10/day limit per user in `America/Bogota` with
+- [x] **T6 — Limits, budget and the cost metric**: the 10/day limit per user in `America/Bogota` with
   `429` + `Retry-After` (seconds; a `Retry-After` HTTP-date would need a clock the client cannot
   assume), the degradation branch when the limit or the budget is exhausted (docs/06:356-359), the USD 5
   seminar cap (ADR-0021:30) and the monthly cap (ADR-0007:17), and the metric. **Where the metric lives
@@ -283,10 +313,58 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   `/metrics` does not exist yet (`server/src/techcamp/main.py` has only `/health`; `prometheus-client` is
   not a dependency). So T6 makes `gasto del mes / tope` **derivable from `message.cost_cop`** and records
   the metric name for whoever builds `/metrics`; adding a Prometheus client and an endpoint here would
-  pull E14's work into this epic. The 120 req/min limiter is filed as a follow-up (Scope, Out).
+  pull E14's work into this epic. The 120 req/min limiter is filed as a follow-up (Scope, Out):
+  [#311](https://github.com/jab16jy/techcamp-v2/issues/311).
   ~350 floor. **Route: delegated** (trigger: writer; limit + budget logic with a port). **Depends T5.**
 
-- [ ] **T7 — Web screen** (`impeccable`): `web/src/features/assistant/` in the docs/07 layout
+  > **Split (2026-10-21, owner).** The `~350` forecast was wrong by 7×: T6 is **six independent
+  > behaviors**, not one unit, and the lane reached ~2 600 authored lines. The task keeps its scope text
+  > above; what changes is the unit of work and the receipt. **Nothing already landed is rewritten** —
+  > T6a and T6b are reviewed exactly as they are. Each unit below is its own commit and its own
+  > receipt, and **T6 closes when all six are done**, not before.
+  >
+  > **RDD selection (2026-10-21, owner): the receipt goes where it is necessary, not everywhere.**
+  > T6a is the **only** unit that touches a high-risk item (2 — the provider credential), so it is
+  > the only one that carries a receipt; the native `assess` for the rest of the slice says `medium` /
+  > `under_budget`, i.e. no review is due, and those units are covered by the independent
+  > `gentle-ai-verify` worker plus the gate. **One receipt for the slice instead of six** — and the
+  > candidate of that receipt is the unit alone, not the whole lane.
+
+  - [x] **T6a — DeepSeek behind the `LLMClient` port, with its keys**: `22e3738` (5 files, 703 lines).
+    > **Receipt burned**: `review-8a2df982b3ba8754`, approved with 2 WARNING + 2 SUGGESTION and no
+    > blocker, `gentle-ai.review-acknowledged/v1`. The candidate was scoped to **this unit alone**,
+    > in its own detached worktree at `22e3738`: it is the only unit of T6 that touches a high-risk
+    > item (2 — the provider credential). The four findings live in
+    > [#312](https://github.com/jab16jy/techcamp-v2/issues/312); the two WARNING ones (credential
+    > egress through an unvalidated base URL, and a stream deadline that does not bound the whole
+    > stream) touch this task's own code and are fixed now, in their own commit with `Refs #312`.
+  - [x] **T6b — The atomic admission against the day and the month, and the local date rules**:
+    > `2acc276` (10 files, 988 lines) plus the bounded correction `8b97fed`. **Receipt burned**:
+    > `review-38f31fc11d58ee21`, approved after the correction, `gentle-ai.review-acknowledged/v1`.
+  - [x] **T6c — The `429` with `Retry-After` and the degraded branch with zero provider calls**:
+    > `b8e4987`. `Retry-After` is seconds to local midnight (`limits.seconds_until_local_midnight`),
+    > never an HTTP-date. The refusal carries the degraded body (`answer` → `sources` → `done`).
+  - [x] **T6d — The two advisory findings of
+    > [#310](https://github.com/jab16jy/techcamp-v2/issues/310) that touch T6's own code**: `d37a132`,
+    > `Refs #310` — `R3-RELIABILITY-006` (`local_month_bounds` kept the argument's day and its
+    > `month+1` raised `ValueError` in a shorter month) and `R3-RELIABILITY-002` (the `admit_question`
+    > docstring promised a rollback the body never does).
+  - [x] **T6e — The monthly cap as per-profile configuration** (`D-T6.1`):
+    > `a9d7a48`. `TECHCAMP_LLM_BUDGET_CAP_COP` in `shared/config.py`, in COP; `seminar` → `None` (the
+    > profile does not meter money), `production` → `Decimal("0")` (it meters and has no budget, so it
+    > degrades and never spends). `deps.get_budget_cap()` delegates to it; a malformed, negative or
+    > non-finite value is a `503`, not a silent zero.
+  - [x] **T6f — The metric name recorded**: `llm_cost_cop_total` and `gasto del mes / tope` derivable
+    > from `message.cost_cop`, with no `prometheus-client` and no `/metrics` (that is E14). Recorded in
+    > `docs/04-api.md:233` and named in `application/usage.py`.
+
+  > **T6 closed on 2026-10-21**, with one caveat written down instead of hidden: the RDD of the
+  > units that never reached the review budget (T6a, and the slice that carries T6c–T6f) is **still
+  > pending**, `medium` / `under_budget` at 1 200 lines over 15 paths. Only T6b has a burned receipt.
+  > That is the same open item T5 left with its cut 3: closing that range with a receipt takes an
+  > explicit owner decision (an independent review of the range), and it does not restart by itself.
+
+- [x] **T7 — Web screen** (`impeccable`): `web/src/features/assistant/` in the docs/07 layout
   (`api/` `containers/` `components/`), the streamed `POST` read with `fetch` + `ReadableStream` +
   `createSseParser` (D-T12.4), the message list, the composer, the cited-sources list, and the three
   states a producer must be able to distinguish: streaming answer, degraded no-LLM answer, and
@@ -297,6 +375,12 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   (E11's precedent: regenerating it on the epic branch is what made two lanes parallelizable). Spanish UI
   copy from docs/07 and the glossary. ~800 floor. **Route: delegated + `impeccable`** (trigger: writer,
   UI). **Depends T5.** Parallel with T6 (disjoint files: `web/`).
+  **Hecho (2026-10-22):** `eb89063` (lectura del stream), `cfc7e3e` (los tres WARNING de la rebanada
+  `api/`), `0f315d1` (descarte al cambiar de parcela), `e87df11` (la pantalla: lista, compositor,
+  fuentes, los cuatro estados), `f41e320` (la ruta `mas/asistente` bajo Más —sin ella la pantalla
+  existía y no se podía abrir—), `b9189c6` y `e69d405` (seguimiento de la revisión). Recibo
+  `review-45c3ada4ce1f77c4` quemado; `just gate web/src/app web/src/features/assistant` → 16 + 70
+  tests verdes sobre el árbol ya fusionado con la rama del épico.
 
 - [ ] **T8 — Eval and the provider decision**: 30 real Caribbean agronomic questions graded by an
   agronomist on accuracy, citations and clarity (ADR-0007:15) — **the pass threshold is not written in
@@ -587,6 +671,29 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
   unidades `4681cf2` (schema) + `c0d0b50` (deps). Fricción de worktree fresco (fuera de superficie,
   mecánica y anotada): `ml/uv.lock` se rancia por el path-dep a `server` (regen) y `web/node_modules`
   ausente (`npm ci`).
+- **T7 — `review-45c3ada4ce1f77c4` — aprobado y reconocido.** Target `sha256:6b8ded57…`: los 7
+  archivos de `e87df11` (la pantalla: `Composer`, `MessageList`, `NoticeBanner`, `AssistantScreen` y
+  sus tests), 675 líneas, tier `medium`, lente `review-reliability`. Sin hallazgos bloqueantes:
+  ningún CRITICAL/BLOCKER y sin ronda de corrección. Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `consumed_revision sha256:fae238c8…`, `authority: burned`,
+  `delivery: ordinary-repository-policy`. El lineage llevaba abierto desde la unidad de la pantalla
+  con el slot del revisor reofrecido y **cero** resultados admitidos: se continuó (no se abandonó) y
+  su target congelado se revisó tal cual estaba.
+  - **Hallazgos no bloqueantes** (2 WARNING + 2 SUGGESTION, `informational`; ninguno reabre la
+    revisión) → issue **#314** (`review-follow-up`, `area:web`, `type:chore`): `R3-1` (el aviso de
+    fallo no tenía test: ningún test rechazaba el `fetch` ni rompía el stream) cerrado en `b9189c6`,
+    con corrida de mutación que prueba que la aserción no es vacía; `R3-2` (el compositor limpia el
+    borrador antes de saber si el envío falló) **diferido**: docs/07 no fija qué pasa con el borrador
+    tras un `429` y restaurarlo es una decisión de producto, no una corrección mecánica; `R3-3`
+    (la guía de longitud dice "menos de" un máximo que sí se acepta) y `R3-4` (`.length` cuenta
+    unidades UTF-16 y el servidor cuenta caracteres) diferidos al issue.
+  - **Nota arrastrada de la rebanada `api/`:** `assistantCopy.ts` vivía en `api/` con una nota que
+    asignaba el movimiento a la unidad de UI. Movido a `components/` en `e69d405` (mismos textos,
+    solo imports; 70 tests de la feature y 16 de `app` verdes).
+  - **Cola de la lane, sin revisión debida:** `e87df11..HEAD` (`f41e320` la ruta, `b9189c6` el test,
+    `e69d405` la copia; 11 archivos/202 líneas) → `assess` responde `risk: medium`,
+    `review_due: false`, `review_due_reason: under_budget`: queda **pendiente en el corte**, sin
+    recibo que quemar y sin fabricar uno.
 
 - **T8 — `review-3c128bea98f8df25` — aprobado y reconocido (solo el corte de hermeticidad).**
   Target `sha256:43b7c307…` (2 archivos/26 líneas, medium), lente `review-reliability`, **0 hallazgos**.
@@ -927,7 +1034,216 @@ lineage; no approved receipt means *not reviewed*, never approved.
     claves y su tarjeta de precios (`shared/config.py`), y las tramas que el cliente web de T7
     consumirá con `fetch` + `ReadableStream` + `createSseParser` (`token`, `sources`, `done`, `error`).
 
-- 2026-10-23 — **T8 U1 (el arnés) cerrado, corregido y verificado; U2 sigue bloqueada en el dueño.**
+- 2026-10-08 — **T6, unidad 1: DeepSeek detrás del puerto `LLMClient`.** `22e3738` (5 archivos,
+  695 + 8 líneas) en la rama `e12-t6`. Quedó commiteada al final de esa sesión y **no se anotó aquí**;
+  este entry la recupera. El HTTP vive detrás de `ChatCompletionTransport`, el adaptador parsea
+  trozos y nunca un centinela, la clave se lee por llamada y no se enlaza al cliente — un despliegue
+  sin la variable falla en la primera pregunta, no en el import —, y el `usage` del último trozo es
+  de donde sale `message.cost_cop` (D-T12.1); un stream cuyo último trozo no trae `usage` termina en
+  conteos cero, nunca en una cifra que nadie midió, y `_evidence_from` se niega a persistirla.
+
+- 2026-10-08 — **T6, unidad 2: la admisión atómica contra el día y el mes.** `2acc276` (10 archivos,
+  988 líneas) en `e12-t6`: `SqlAlchemyUsageQuota` admite tras `pg_advisory_xact_lock`,
+  `month_spend_cop` pasa a ser un `SUM` de SQL, y `local_day_bounds`/`local_month_bounds` viven en
+  `domain/limits.py`. Verificación observada: `just gate-fast` PASS;
+  `just gate server/tests/assistant` → **404 passed, 0 failed** (seed 4214842071); enfoque 89 passed.
+  El cierre con recibo queda abajo, porque todavía no lo tiene.
+
+- 2026-10-21 — **T6, el RDD de `2acc276` llegó a `correction_required`.** El `assess` contra la
+  frontera del lane devolvió `medium` / `slice_budget_reached`; la START del dueño (consentimiento
+  otorgado) abrió `review-38f31fc11d58ee21` sobre el target `sha256:a18b5042…`, lente única
+  `review-reliability`, presupuesto de corrección 200 sobre 988 líneas. La captura de la lente **sí
+  quedó admitida** (`admission.decision: completed`, artefacto `sha256:a493ba63…`) después de los
+  tres rechazos de transporte del 8 de octubre, y el estado pasó a `correction_required` con **un
+  único hallazgo corregible, `R3-RELIABILITY-001` (CRITICAL)**, sobre
+  `test_the_month_is_the_local_one_and_not_the_utc_one` (`server/tests/assistant/test_usage_quota.py:248-266`)
+  más tres `WARNING` informativos. **Sin recibo quemado: sin recibo no hay revisión.** El 21 se
+  retoma el ciclo: el STATUS ligado devolvió `stop / managed_assets_outdated`, `gentle-ai sync`
+  corrige los assets gerenciados y el mismo STATUS vuelve a ofrecer `correction_plan_required` con
+  `--correction-lines` acotado a 1…200.
+
+- 2026-10-21 — **T6, `2acc276` aprobado y con el recibo quemado.** La corrección acotada es `8b97fed`
+  (6 líneas: 4 + 2 −, solo `test_usage_quota.py`), verde en
+  `just gate server/tests/assistant/test_usage_quota.py` → **18 passed**. Plan capturado con
+  `--correction-lines=6`; el validador dirigido (`review-validator`, relay por el host) corrió sobre
+  el árbol corregido y devolvió `original_criteria: passed` y `correction_regression: passed`, con un
+  único follow-up admisivo sobre imports que ya estaban. Recibo quemado:
+  `gentle-ai.review-acknowledged/v1`, lineage `review-38f31fc11d58ee21`,
+  target `sha256:a818c5e3…`, `consumed_revision sha256:07b852af…`, `authority: burned`.
+  - **El CRITICAL era falso y queda demostrado, no declarado:** `R3-RELIABILITY-001` sostenía que
+    `.date()` devuelve la fecha UTC y que el test falla en 11 de 12 meses. Reproducido **antes** de
+    tocar nada: `…::test_the_month_is_the_local_one_and_not_the_utc_one` → **1 passed** en octubre.
+    La corrección no maquilló el hallazgo: nombró el instante una sola vez y añadió la fecha UTC de
+    ese mismo instante, que era exactamente lo que el lector había leído al revés.
+  - **7 hallazgos informativos**, sin corrección y sin reabrir el candidato: 002 el docstring de
+    `admit_question` promete rollback y el cuerpo commitea igual; 003 el rol del mensaje no se
+    valida antes de contarlo; 004 el módulo se ancla al reloj de import; 005 la carrera no tiene
+    barrera; 006 `local_month_bounds` conserva el día del argumento y su `month+1` revienta en un
+    mes corto; 007 ninguna fila cae exactamente en la frontera; 008 el doble usa el `created_at`
+    del llamador y el adaptador ignora el suyo.
+
+- 2026-10-21 — **Decisión del dueño sobre el tope mensual (`D-T6.1`): es configuración por perfil.**
+  El tope deja de ser la pregunta abierta y pasa a ser `TECHCAMP_LLM_BUDGET_CAP_COP` en
+  `shared/config.py`, en COP, con dos defaults tomados de los documentos y ninguno inventado:
+  **`seminar` → `None`** (la tarjeta es `ModelPrice.local`, 0 COP, y el perfil no alcanza a ningún
+  proveedor, así que no mide dinero y no hay presupuesto que agotar; el techo de **USD 5 total** de
+  docs/04:22 y ADR-0021:30 es el de la cuenta del proveedor, donde el dinero existe) y
+  **`production` → `Decimal("0")`** mientras no se configure (ADR-0007:17 deja la cifra mensual para
+  el dueño, y el sentido ya revisado de `limits.py:136` es que un perfil que mide dinero y no tiene
+  tope deja de responder con el modelo en vez de responder gratis). `None` significa "este perfil no
+  mide dinero", **no** "falta configurarlo". Quien configure la cifra hace la conversión USD→COP,
+  igual que quien llena la tarjeta de precios.
+  **Lo que sigue abierto y que esto NO cierra:** D-T12.3, la confirmación del límite de 10/día en
+  los dos perfiles, que `docs/04:22` sigue marcando *owner-confirmable*.
+
+- 2026-10-21 — **Los siete hallazgos de la ronda de T6 viven en el issue #310**
+  ([#310](https://github.com/jab16jy/techcamp-v2/issues/310), `review-follow-up`, `type:chore`,
+  `area:server`). Los dos que tocan el código propio de T6 se corrigen **en el propio task, en su
+  commit, con `Refs #310`**: `R3-RELIABILITY-002` (el docstring de `admit_question` promete rollback
+  y el cuerpo commitea) y `R3-RELIABILITY-006` (`local_month_bounds` conserva el día del argumento
+  y su `month+1` revienta en un mes corto). Los otros cinco quedan para su issue y no reabren el
+  candidato. Este ancla existe en el doc y no solo en el contexto de quien ejecuta: una compactación
+  de sesión lo necesita igual que la siguiente sesión.
+
+- 2026-10-21 — **T6 cerrada en seis unidades, con la caveat escrita y no escondida.** El worker
+  terminó con tres commits más —`b8e4987` (el `429` con `Retry-After` y la rama degradada con cero
+  llamadas al proveedor), `d37a132` (los dos avisos de #310, `Refs #310`) y `a9d7a48` (el tope por
+  perfil de `D-T6.1`)— más `ab2f458`, que escribe la confirmación de `D-T12.3` en `docs/04-api.md:22`.
+  Verificación observada por el worker: `just gate server/tests/assistant` → **439 passed**, 2
+  warnings de deprecación de Starlette/anyio, 113.29 s; el foco `tests/assistant/test_limits.py` +
+  `test_usage_quota.py` → 46 passed, 12.23 s. Árbol limpio, sin push, sin PR y sin merge.
+  **Spot check del padre:** `just gate server/tests/assistant` → **439 passed**, 2 warnings,
+  101.28 s — el mismo comando re-corriendo, el mismo resultado.
+  - **La caveat:** el RDD de las unidades que nunca alcanzaron el presupuesto de revisión (T6a y el
+    corte que lleva T6c–T6f) sigue **pendiente**: `assess` sobre `8b97fed..HEAD` dice `medium` /
+    `under_budget` con 1 200 líneas sobre 15 rutas. Solo T6b tiene recibo quemado
+    (`review-38f31fc11d58ee21`). Es el mismo ítem abierto que T5 dejó con su corte 3: cerrarlo con
+    recibo exige una decisión explícita del dueño —una revisión independiente de ese rango— y no se
+    reinicia por cuenta propia.
+  - **El lane completo:** `88268d6..ab2f458`, 7 commits, 21 archivos, **2 863 líneas** contra un
+    forecast de ~350. La partición en T6a…T6f es lo que evita que eso vuelva a ser una unidad
+    sola; el forecast estaba mal desde que se escribió, no porque el trabajo creciera.
+  - **La entrega sigue siendo del dueño:** la política del repo pide PRs encadenados a `main`, uno
+    por unidad, y no se abre ninguno sin que lo pidas.
+
+- 2026-10-22 — **La verificación independiente encontró un bloqueante que la revisión RDD no vio, y
+  ya está corregido.** El verificador (`gentle-ai-verify`) pasó la rebanada completa de T6
+  (`88268d6..ab2f458`) contra los nueve criterios de aceptación: **A–I pasan**, la rebanada está limpia
+  y acotada, y el camino normal es **byte a byte idéntico al baseline** (`88268d6`: mismo status, mismos
+  frames, mismo payload de `done`, mismas filas, una llamada al proveedor). Pero encontró un bloqueante
+  de la causa del cambio: **una negativa de presupuesto con hueco en el día se reportaba como el límite
+  del día** —`429` con `Retry-After` en vez de `200` con el cuerpo degradado—, porque
+  `application/usage.py` leía el conteo **después** de la reserva (la pregunta rechazada se cuenta a sí
+  misma) y lo usaba para la precedencia del motivo. El productor recibía *"mañana podés seguir
+  preguntando"* cuando mañana también iba a estar degradado, porque el presupuesto seguía gastado.
+  Registrado en [#313](https://github.com/jab16jy/techcamp-v2/issues/313).
+  - **Corregido en cuatro commits** en `e12-t6`: `bc9f3fb` (el bloqueante: el motivo se evalúa sobre el
+    conteo previo a esta pregunta y los contadores reportados siguen incluyendo este turno),
+    `7e8eee4` (los dos WARNING de la revisión de T6a: la base URL del proveedor se valida en su único
+    lector con una lista exacta de hosts y falla cerrado con `503` **antes** de que exista un cliente,
+    y el stream entero queda bajo un deadline monótono), `899e1e3` (los tres avisos: respaldo del
+    modelo configurado, la cadena vacía del tope es error de configuración y no cero silencioso, y los
+    textos *"wired in E12 T6"* que ya no son ciertos) y `9083863` (la atribución a #312 en el código, en
+    vez de un slug que nadie puede abrir). `Refs #312` en los tres últimos; el del bloqueante no lo
+    lleva porque su ronda es la del verificador, no la de la revisión.
+  - **El contrato del endpoint, que el repo no tenía**: `server/tests/assistant/test_assistant_quota_contract.py`
+    (11 tests) es el RED del bloqueante y la aceptación en el cable — la 11ª pregunta es `429` con
+    `Retry-After` numérico, las dos negativas devuelven `answer → sources → done` con **cero** llamadas
+    al proveedor, la respuesta degradada persiste la evidencia en `null` y el `SUM` la ignora, el tope
+    es configuración por perfil con `503` ante un valor malformado, y sin tope el presupuesto no rechaza.
+  - Verificación observada por el implementador: `just gate server/tests/assistant` → **461 passed**,
+    2 warnings (115.60 s); el contrato → 11 passed; `test_usage.py` + `test_usage_quota.py` +
+    `test_limits.py` → 67 passed. Árbol limpio, sin push, sin PR y sin merge.
+    **Spot check del padre:** `just gate server/tests/assistant` → **461 passed**, 2 warnings,
+    105.08 s — el mismo comando re-corriendo, el mismo resultado.
+  - **Lo que sigue abierto y NO se corrige aquí:** el `503` de tope malformado sigue tapado en
+    producción por el `503` previo de `get_prices` (FastAPI resuelve ese antes), y el operador no se
+    entera del tope malformado hasta que T8 cablee la tarjeta. Tocar el orden de resolución de
+    dependencias es otro cambio, no este.
+  - **Fusionado a la rama del épico** (2026-10-22): `merge(e12): the T6 lane into the epic branch`
+    (`e40f634`), con los doce commits del lane intactos —cada unidad de trabajo sigue siendo un
+    commit identificable— y **sin PR**: los PRs en rebanadas a `main` se hacen al cerrar el ODD de
+    E12, no ahora. El código fusionado es **byte a byte idéntico** al del lane verificado
+    (`git diff e12-t6 HEAD -- server/ web/` vacío), así que los 461 passed de la verificación se
+    transfieren sin re-correr.
+
+- 2026-10-22 — **T7 cerrada: el recibo de la pantalla y la ruta que le faltaba.** La lane tenía la
+  pantalla completa (lista, compositor, fuentes citadas y los cuatro estados de docs/07) y **no la
+  había montado**: `web/src/app/routes.tsx` no registraba `mas/asistente`, así que la pantalla existía
+  y nadie podía abrirla —y docs/07:129 la cuelga de `Más`, que es alcance explícito de T7—. `f41e320`
+  la monta con el precedente de `mas/indicadores` (chunk perezoso, `Suspense`, la misma fila de lista),
+  con RED observado primero: el test de rutas no encontraba un enlace llamado `Asistente` ni la ruta,
+  y el conteo de hijos pasó de 7 a 8; el test nuevo entra por `/mas`, pulsa el enlace y aterriza en el
+  estado sin parcela de la pantalla.
+  - **El lineage vivo se continuó, no se abandonó.** `review status --lineage … --next-transition`
+    reofrecía el slot del revisor sobre el target congelado de 675 líneas (los 7 archivos de
+    `e87df11`); una corrida `review-reliability` capturó en el acto, el resultado se admitió
+    **aprobado** el target, la captura terminal emitió su operación de reconocimiento y el recibo se
+    quemó (`gentle-ai.review-acknowledged/v1`, `consumed_revision sha256:fae238c8…`,
+    `authority: burned`). El detalle y los hallazgos están en [Review (RDD)](#review-rdd).
+  - **Seguimiento de los cuatro hallazgos no bloqueantes:** issue
+    [#314](https://github.com/jab16jy/techcamp-v2/issues/314). `R3-1` cerrado en `b9189c6` (test del
+    envío fallido, con corrida de mutación que lo rompe si se quita el descarte de la burbuja vacía);
+    `R3-2` diferido porque docs/07 no fija qué pasa con el borrador tras un `429` y restaurarlo es
+    decisión de producto; `R3-3` y `R3-4` quedan en el issue. La nota de la rebanada `api/` sobre
+    `assistantCopy.ts` se cerró moviendo el archivo a `components/` (`e69d405`).
+  - **Antes de registrar nada se fusionó la rama del épico en la lane** (`c72dea9`): `git merge-tree`
+    daba árbol limpio y así el documento no se resuelve dos veces; los gates corrieron sobre el árbol
+    fusionado, no sobre el viejo: `just gate web/src/app web/src/features/assistant` → **16 + 70
+    passed**, con eslint, `tsc`, ruff, mypy, `lint-imports`, una sola cabeza de Alembic y ast-grep
+    verdes.
+  - **La cola de T7 queda sin revisión debida:** `e87df11..HEAD` (11 archivos/202 líneas) → `assess`
+    dice `medium`, `review_due: false`, `under_budget`. No hay recibo que quemar y no se fabrica uno.
+  - **Lo que NO se tocó:** `web/src/design-system/**` (fuera de superficie sin cambio de tokens o
+    primitivas gobernado por `impeccable`) y la pantalla de otra feature.
+
+- 2026-10-23 — **Corrección de T7 encontrada por la verificación independiente: la respuesta degradada
+  llegaba como burbuja vacía.** La rama sin LLM del servidor manda la respuesta completa en **un**
+  frame `answer` (`stream.py:stream_degraded_answer`), no en tokens, y el cliente
+  (`assistantStream.ts`) solo conocía `token`/`sources`/`done`/`error`: el frame caía en el `default`,
+  `done` cerraba con `model: null` y `tokens.join('')` era `''`, así que el productor veía la nota
+  "sin LLM" al lado de una burbuja sin texto — justo el estado que docs/07 pide distinguir y que el
+  test `b9189c6` no cubría porque alimentaba la respuesta con frames `token` que el servidor degradado
+  nunca manda.
+  - **RED observado antes de tocar nada:** los dos tests nuevos
+    (`assistantStream.test.ts::reads the whole answer the degraded branch sends in one frame`,
+    `AssistantScreen.test.tsx::shows the degraded answer the server sent, not an empty bubble`)
+    fallaron 2/38 contra el árbol sin corregir.
+  - **GREEN:** `case 'answer'` en `readAssistantStream`, que toma el mismo camino de un `token` — el
+    texto entra por `onToken` en cuanto llega y se acumula para el `done`. La condición de degradada
+    sigue siendo `model === null` en `done` (D-T12.1); el `reason_text` del frame no se renderiza
+    todavía: docs/07 no pide mostrarlo y el copy del aviso ya es `ASSISTANT_COPY.degradedNote`.
+  - **Verificación:** `just gate web/src/features/assistant web/src/app` → verde (70 + 16 passed, con
+    gate-fast completo). Sin push, sin PR.
+  - **RDD de la corrección:** `gentle-ai review assess --base-ref b604e1a --committed-only` →
+    `medium`, 4 rutas / 90 líneas, `review_due: no` (`under_budget`). Sin recibo que quemar y no se
+    fabrica uno; la cola revisable de T7 crece y sigue pendiente de la decisión del dueño.
+  - **Verificación independiente de la rebanada (2026-10-23): los seis criterios pasan, 0
+    bloqueantes.** Un worker de solo lectura verificó los commits de T7 (`eb89063..7b8143b`) contra
+    los cuatro estados de docs/07, el wire campo por campo contra `stream.py`, la ruta `mas/asistente`,
+    el layout `api/ containers/ components/` con tokens y copy en español, la corrección `7e8506d` y
+    la disciplina de superficie. Evidencia observada por el verificador: `npm test -- --run
+    src/features/assistant src/app` → **86 passed**; `just gate web/src/features/assistant
+    web/src/app` → exit 0. Las cuatro observaciones no bloqueantes van al issue
+    [#318](https://github.com/jab16jy/techcamp-v2/issues/318); la única con acción posible es la
+    primera (las 2 líneas de `docs/07` que `0f315d1` escribió fuera de la fila de superficie de T7,
+    doc-first y declarado, pero no sancionado por la tabla).
+
+- 2026-10-23 — **T7 fusionada a la rama del épico** (`merge(e12): the T7 lane into the epic branch`,
+  `7e97ed2`), con los ocho commits de la lane intactos —cada unidad de trabajo sigue siendo un commit
+  identificable— y **sin PR**: los PRs en rebanadas a `main` se hacen al cerrar el ODD de E12, no
+  ahora (el mismo orden que el merge de T6). El merge fue limpio por construcción: el merge-base era
+  la punta del épico (`dd88e06`, que la lane ya había absorbido en `c72dea9`), así que la lane estaba
+  estrictamente adelante.
+  - **El código fusionado es byte a byte idéntico al de la lane verificada**: `git diff e12-t7 HEAD`
+  vacío y los dos árboles con el mismo hash (`20dbf0be…`), así que los 86 passed de la verificación
+  se transfieren sin re-correr. Spot check del padre sobre el árbol fusionado: `npm test -- --run
+  src/features/assistant src/app` → **86 passed** — el mismo comando re-corriendo, el mismo
+  resultado.
+  - Tras el merge se eliminan la base de datos del worktree `e12-t7` (`just db-down`) y el propio
+  worktree; los shas de la lane quedan alcanzables desde la rama del épico.
+
+- 2026-10-23 — **T8 U1 (el arnés) cerrado, corregido y verificado.**
   La lane lleva seis unidades: `6915f99` (set cerrado de 30 preguntas), `d5316ce` (pin del corpus por
   digest), `cefb763` (replay por el `retrieve_fragments` y el `build_prompt` reales), `6d429bc`
   (reporte de evidencia para calificar, sin score/threshold/verdict), y dos de esta sesión:
@@ -985,22 +1301,21 @@ lineage; no approved receipt means *not reviewed*, never approved.
     graduada contra el umbral + firma de la lista del corpus"; el índice de ADRs registra la 0028.
   - **Cableado que el propio código dejó a T8** (`deps.py:245`: "The production rate card is wired
     in E12 T8"): la tarjeta de producción, el default de `TECHCAMP_LLM_MODEL` y el parámetro
-    `thinking` de la llamada entran como unidad de trabajo propia después de refrescar la lane con
-    la rama del épico (esta lane no trae T6/T7, y el cliente y el config viven allí).
+    `thinking` de la llamada entran como unidad de trabajo propia sobre la lane ya refrescada con la
+    rama del épico — el merge de este mismo día trae el cliente y el config de T6.
 
 ## Next step
 
-**T1, T2, T4 y T5 están cerrados.** T5 entró por rebanadas (decisión del dueño, con ~4 k líneas) y
-dejó los dos endpoints de `docs/04:227-228` vivos sobre `ea42de1`, con los repositorios en `b31ac34`
-y su corrección `53cb281`, el prompt/SSE/precio en `8fcb3ed` y el cierre en `959f8b8`. **T6 puede
-arrancar ya** y comparte el router de T5: el `POST /assistant/messages` que T6limita es el de
-`ea42de1`, y la rama degradada (`answer_without_llm`, de T4) está lista para cablearse detrás de la
-puerta de cuota. T7 es `web/` y no se solapa con nada del servidor. **T8 está aterrizada: U1 (el
-arnés) verificado el 2026-10-23 y U2 (los docs, ADR-0028) con las decisiones delegadas; lo que queda
-de T8 es del dueño — correr y calificar las 30 preguntas contra el umbral de ADR-0028 con el
-embedding y el corpus reales, y firmar la lista de documentos.** T3 carga el corpus real en cuanto la
-lista firmada exista. Después, **T9**: `just gate-full` una vez, issues de seguimiento y PRs en
-rebanadas a `main`.
+**T1, T2, T4, T5, T6 y T7 están cerrados.** T6 entró completo en la rama del épico (`e40f634`) con su
+verificación independiente y sus cuatro commits de corrección. T7 se cierra aquí: recibo propio
+(`review-45c3ada4ce1f77c4`), la ruta `mas/asistente` que le faltaba (`f41e320`) y la copia del
+asistente en `components/` (`e69d405`). **T8 está aterrizada en la lane** (2026-10-23): U1, el arnés,
+verificado sin bloqueadores, y U2, los docs, con las decisiones delegadas del dueño en
+[ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md). Lo que
+queda de T8 es del dueño: correr y calificar las 30 preguntas contra el umbral de ADR-0028 con el
+embedding y el corpus reales, y firmar la lista de documentos del corpus — T3 carga el corpus real en
+cuanto la lista exista. Después, **T9**, el cierre con `just gate-full` una sola vez, los issues de
+seguimiento y los PRs en rebanadas a `main`.
 
 **Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
 
@@ -1015,24 +1330,31 @@ rebanadas a `main`.
    los reales de `deepseek-chat` a T8, y el costo del embedding depende del modelo que T8 pueda elegir.
    El 0 del seminario no es un placeholder: ADR-0021 corre todo localmente, así que un modelo dentro
    del proceso no tiene factura, y D-T12.1 acepta `cost_cop = 0` para una llamada que sí ocurrió y no
-   costó nada. Lo que falta es el cliente DeepSeek y sus claves (`shared/config.py`, T6) y la tarjeta
-   real (T8), no una decisión.
+   costó nada. El cliente DeepSeek y sus claves ya están (`22e3738`: la clave se lee por llamada, no
+   se enlaza al cliente, y un stream sin `usage` termina en conteos cero). Lo que falta es la tarjeta
+   real, y esa es de T8, no una decisión.
 
 Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
 
-1. **D-T12.3: confirmar el límite de 10/día en ambos perfiles.** Sigue anotado como owner-confirmable en
-   `docs/04:22`; si se revierte a solo-`production`, esa fila y [ADR-0007:5](../docs/adr/0007-llm-por-api.md)
-   cambian.
-2. **Open question 1: el umbral de la evaluación de T8.** Ningún documento dice qué puntaje promueve un
-   proveedor; hay que fijarlo **antes** de correr las 30 preguntas. T8 cierra `docs/README.md:68` y
-   escribe los precios reales en `docs/02:78`.
-3. **Open question 2: la revisión de licencia del corpus** ([ADR-0008:32](../docs/adr/0008-rag-pgvector.md)).
-   T3 carga solo fixtures hasta que responda.
+1. **D-T12.3: el límite de 10/día en ambos perfiles — CONFIRMADO por el dueño el 2026-10-21.** Ya no
+   está pendiente: `docs/04:22` lleva la confirmación con la fecha, y las dos ADR que lo contradecían
+   quedan alineadas (`ADR-0007:5` y `ADR-0021:30`: lo que cambia por perfil es el **tope** de
+   presupuesto, no el límite diario). Si algún día se revierte a solo-`production`, esa fila y esas
+   dos ADR cambian otra vez.
+2. **Open question 1: el umbral de la evaluación de T8 — DECIDIDA (delegada por el dueño, 2026-10-23).**
+   [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md) fija el
+   umbral antes de la corrida (≥ 27/30, tres descalificadores) y `docs/README.md:68` y `docs/02:78`
+   quedaron actualizados.
+3. **Open question 2: la revisión de licencia del corpus — DECIDIDA (delegada por el dueño, 2026-10-23).**
+   La política está en [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+   (CC-BY 4.0 o más permisiva; fuera NC/ND/sin licencia); T3 carga el corpus real cuando el dueño
+   firme la lista de documentos.
 4. **Los 315 líneas del corte 3 (`349ac8a..7a81758`) siguen `under_budget`:** sin revisión debida y
    sin recibo. Cerrarlo con recibo exige una decisión explícita del dueño (revisión independiente de
    ese rango); no se reinicia por cuenta propia ni se fabrica un recibo.
 
-En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5** hecho; **T6 ‖ T7 ‖ T8** después.
+En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5, T6 y T7** hechos; **T8** aterrizada
+(U1 verificado, U2 con ADR-0028; queda la corrida graduada y la firma del dueño); **T9** al final.
 Nada en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista
 blanca de `import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene
 `vector`, y ningún otro módulo se tiene que mover para que E12 arranque.

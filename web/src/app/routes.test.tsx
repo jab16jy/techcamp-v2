@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react'
+import { fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -36,7 +36,42 @@ describe('buildRoutes', () => {
     expect(routes[0].children?.some((route) => route.path === 'mas')).toBe(true)
     // docs/07's screen map: `Más --> Indicadores de tecnificación`.
     expect(routes[0].children?.some((route) => route.path === 'mas/indicadores')).toBe(true)
-    expect(routes[0].children?.length).toBe(7)
+    // docs/07:129: `more --> assist[Asistente]`.
+    expect(routes[0].children?.some((route) => route.path === 'mas/asistente')).toBe(true)
+    expect(routes[0].children?.length).toBe(8)
+  })
+
+  /**
+   * A screen that cannot be reached is not a delivered screen, and docs/07:129
+   * hangs the assistant off `Más`. The link and the route are asserted together
+   * because either one alone leaves the producer at a dead end.
+   */
+  it('reaches the assistant screen from the Más list', async () => {
+    setSession('token-prod', 'org-1')
+    saveMeSeed('token-prod', {
+      id: 'prod-1',
+      phone: '+573001234568',
+      email: null,
+      full_name: 'Productor',
+      memberships: [{ org_id: 'org-1', role: 'producer' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/mas'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    const link = await screen.findByRole('link', { name: 'Asistente' })
+    expect(link).toHaveAttribute('href', '/mas/asistente')
+
+    fireEvent.click(link)
+
+    // No plot remembered: the screen says so instead of offering a question it
+    // could not answer (AssistantScreen's empty state).
+    await waitFor(() => expect(screen.getByText('No hay una parcela activa')).toBeInTheDocument())
   })
 })
 
