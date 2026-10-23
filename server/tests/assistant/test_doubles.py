@@ -382,9 +382,10 @@ async def test_the_quota_counts_questions_of_the_local_day_and_nothing_else() ->
     assert await quota.questions_asked_on(user_id=_USER_ID, day=date(2026, 10, 7)) == 1
 
 
-async def test_the_month_spend_reads_the_costs_and_keeps_the_missing_ones() -> None:
-    """D-T12.1: the no-LLM answer stores `cost_cop IS NULL` and the sum ignores
-    it. The double hands the raw values over so the domain rule does the sum."""
+async def test_the_month_spend_sums_the_costs_and_ignores_the_missing_ones() -> None:
+    """D-T12.1: the no-LLM answer stores `cost_cop IS NULL` and the sum ignores it,
+    exactly as SQL `SUM` does. A month of another year is not this month's spend,
+    and a real zero is a zero that counts."""
     conversations = FakeConversationRepository()
     messages = FakeMessageRepository(conversations=conversations)
     quota = FakeUsageQuota(messages=messages)
@@ -423,20 +424,21 @@ async def test_the_month_spend_reads_the_costs_and_keeps_the_missing_ones() -> N
             ),
         )
 
-    costs = await quota.month_costs_cop(user_id=_USER_ID, month=date(2026, 10, 1))
+    spend = await quota.month_spend_cop(user_id=_USER_ID, month=date(2026, 10, 1))
 
-    assert costs == [Decimal("3.5"), None, Decimal(0)]
+    # September's billed answer is not October's spend, and the two missing costs
+    # are skipped rather than added as `0.00`.
+    assert spend == Decimal("3.5")
 
 
-async def test_a_month_with_nothing_recorded_returns_no_costs() -> None:
+async def test_a_month_with_nothing_recorded_spends_nothing() -> None:
+    """No evidence of spending is evidence of no spending, and not "unknown": the
+    cap comparison needs a number."""
     messages = FakeMessageRepository(conversations=FakeConversationRepository())
 
-    assert (
-        await FakeUsageQuota(messages=messages).month_costs_cop(
-            user_id=_USER_ID, month=date(2026, 10, 1)
-        )
-        == []
-    )
+    assert await FakeUsageQuota(messages=messages).month_spend_cop(
+        user_id=_USER_ID, month=date(2026, 10, 1)
+    ) == Decimal(0)
 
 
 def test_a_retrieved_fragment_carries_its_document_content_and_similarity() -> None:
@@ -483,5 +485,9 @@ def test_every_conversation_and_message_method_is_scoped_by_its_user() -> None:
 def test_the_quota_port_is_scoped_by_its_user_too() -> None:
     """The daily limit is per user and the budget is the organization's own: a
     quota read without a user would hand one producer another's count."""
-    for method in (UsageQuotaPort.questions_asked_on, UsageQuotaPort.month_costs_cop):
+    for method in (
+        UsageQuotaPort.questions_asked_on,
+        UsageQuotaPort.month_spend_cop,
+        UsageQuotaPort.admit_question,
+    ):
         assert "user_id" in inspect.signature(method).parameters, method.__qualname__
