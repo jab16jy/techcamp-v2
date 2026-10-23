@@ -156,6 +156,8 @@ flowchart TB
 | Límite alcanzado | "Mañana podés seguir preguntando" con las preguntas usadas; nunca el código `429` ([04](04-api.md#convenciones-http)) |
 | Sin conexión | La pantalla lo dice: necesita red y no finge una respuesta ([ADR-0005](adr/0005-pwa-offline-first.md)). No entra al caché de la PWA: es la única pantalla de datos que no se guarda en disco |
 
+Una respuesta que quedó a medias porque el productor cambió de parcela se **descarta sin aviso**: estaba escrita sobre la parcela que ya dejó, y media respuesta junto a un mensaje de error confunde más que no mostrar nada. El cambio de parcela abre una conversación nueva, y el compositor queda libre de inmediato.
+
 La lectura del stream es un `POST` con `fetch` + `ReadableStream`, nunca `EventSource` ([ADR-0027](adr/0027-stream-asistente-e12.md)). El proveedor de terceros y el mínimo de datos que sale del servidor van en el texto del consentimiento ([ADR-0007:39](adr/0007-llm-por-api.md)), no en una nota dentro de la pantalla.
 
 **Encuesta de inscripción.** Es un formulario corto en el detalle de la parcela (Parcelas → Parcela): cultivo del último ciclo, rendimiento (kg/ha), costo aproximado por hectárea (opcional) y práctica de riego. Lo llenan `owner` o `technician`, y los demás roles lo ven solo para lectura. Mientras la parcela no tiene encuesta, el detalle invita a registrarla, porque sin ella no se puede medir el impacto ([ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
