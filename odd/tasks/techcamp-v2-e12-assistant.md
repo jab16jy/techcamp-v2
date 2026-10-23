@@ -430,22 +430,23 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   > #306 (T5), #310 (T6), #312 (T6a), #314 (T7), #318 (T7 verify), #319 (T8). El issue del
   > verificador de T6, [#313](https://github.com/jab16jy/techcamp-v2/issues/313), se **cerró** con
   > la nota de sus seis correcciones (`bc9f3fb`, `7e8eee4`, `899e1e3`, `f3affb0`, y el
-  > desenmascaramiento del 503 por `75d7fb4`). (3) **Plan de entrega**: PRs encadenados a `main`,
-  > uno por unidad de trabajo, merge en orden, merge commits (nunca squash, para que los shas de
-  > los recibos sigan existiendo), cada slice con `size:exception`:
-  >   1. T0 — decisiones en los docs dueño (`f61adc5`, `1344b74`)
-  >   2. T1 — puertos y dobles (`9bf3b73`, `f68996c`, `706ebc6`, `6b6590b`)
-  >   3. T2 — esquema y pgvector (`4681cf2`, `c0d0b50`, `3241358`, `9338f2c`)
-  >   4. T4 — hechos, recuperación y rama degradada (`f0ef15f`, `349ac8a`, `98bf0f4`, `7a81758`, `4435ced`)
-  >   5. T3 — ingesta del corpus (`df2b783`, `d90853c`, `f44279d`, `1d7e1b8`)
-  >   6. T5 — endpoint de streaming y feedback (`b31ac34`, `53cb281`, `8fcb3ed`, `ea42de1`, `959f8b8`, `4b32d44`, `88268d6`)
-  >   7. T6a — DeepSeek detrás del puerto (`22e3738`)
-  >   8. T6b — admisión atómica (`2acc276`, `8b97fed`)
-  >   9. T6c–f — `429`/degradada, correcciones de #310, tope por perfil (`b8e4987`, `d37a132`, `a9d7a48`, `ab2f458`)
-  >   10. T6 — correcciones de la verificación (#313) y alineación de ADRs (`bc9f3fb`, `7e8eee4`, `899e1e3`, `9083863`, `57d5d75`, `f3affb0`, `dd88e06`)
-  >   11. T7 — pantalla web, ruta y correcciones (`ecf00a9`, `eb89063`, `cfc7e3e`, `e87df11`, `f41e320`, `0f315d1`, `b9189c6`, `e69d405`, `b604e1a`, `7e8506d`, `7b8143b`, `cffe7b6`, `9daaa3b`)
-  >   12. T8 — arnés de evaluación, ADR-0028 y cableado de la tarjeta (`6915f99`, `d5316ce`, `cefb763`, `6d429bc`, `d7cf535`, `d8d3c31`, `b51641f`, `cf55f09`, `75d7fb4`, `2fcc695`, `802474d`)
-  >   13. T9 — cierre (este commit)
+  > desenmascaramiento del 503 por `75d7fb4`). (3) **Plan de entrega** (corregido al abrir los PRs:
+  > el plan anterior de 13 asumía cortes dentro de las lanes de T6/T7/T8, pero esas unidades
+  > entraron a la rama del épico detrás de **un solo merge por lane** —`e40f634`, `7e97ed2`,
+  > `2d0fded`— y partirlas exigiría reescribir los shas que los recibos citan, lo que este épico
+  > prohíbe): **10 PRs** encadenados a `main`, uno por unidad entregable, base `main` desde la
+  > creación (la lección de E9: base-parent hace que CodeRabbit salte los PRs y congela conteos),
+  > merge **en orden obligatorio** 01→10, merge commits sin squash, cada slice con `size:exception`:
+  >   1. `docs/e12-01-t0-decisions` — blockers assessment + T0 (`f61adc5`, `1344b74`; +974/−8)
+  >   2. `feat/e12-02-t1-ports` — puertos, reglas de dominio y dobles (`9bf3b73`…`6b6590b`; +2831/−5)
+  >   3. `feat/e12-03-t2-schema` — esquema, ORM y pgvector (`9338f2c`, `3241358`, merge `a127acb`; +1103/−5)
+  >   4. `feat/e12-04-t3-corpus` — ingesta del corpus (`df2b783`, `d90853c`, `f44279d`; +2683)
+  >   5. `feat/e12-05-t4-facts-retrieval` — hechos, recuperación y rama degradada (lane detrás de `61b0773`, `1d7e1b8`; +4473/−15)
+  >   6. `feat/e12-06-t5-stream-endpoint` — endpoint de streaming y feedback (`b31ac34`…`88268d6`; +3859/−15)
+  >   7. `feat/e12-07-t6-limits-budget` — T6 completa: DeepSeek, admisión atómica, `429`, tope por perfil, correcciones de #313 (lane detrás de `e40f634`, `f3affb0`, `dd88e06`; +3664/−159)
+  >   8. `feat/e12-08-t7-web-screen` — pantalla web, ruta `mas/asistente` y correcciones (lane detrás de `7e97ed2`, `9daaa3b`; +3291/−24)
+  >   9. `feat/e12-09-t8-eval-provider` — arnés de evaluación, ADR-0028 y tarjeta de producción (lane detrás de `2d0fded`; +3305/−53)
+  >   10. `docs/e12-10-t9-close` — cierre: criterios verificados, `gate-full` verde y este plan (`d30330d` y el commit de este ajuste)
   > El push, la apertura y el merge de los PRs siguen siendo del dueño: nada se abre sin que lo
   > pida (la política de la entrega en este épico). **Épico E12 cerrado en el repo**: los once
   > criterios de aceptación quedaron verificados con su evidencia (arriba) y el pendiente de
