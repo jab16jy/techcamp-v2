@@ -1300,9 +1300,22 @@ lineage; no approved receipt means *not reviewed*, never approved.
     peor caso); [docs/README:68](../docs/README.md) cambia el pendiente de "proveedor" a "corrida
     graduada contra el umbral + firma de la lista del corpus"; el índice de ADRs registra la 0028.
   - **Cableado que el propio código dejó a T8** (`deps.py:245`: "The production rate card is wired
-    in E12 T8"): la tarjeta de producción, el default de `TECHCAMP_LLM_MODEL` y el parámetro
-    `thinking` de la llamada entran como unidad de trabajo propia sobre la lane ya refrescada con la
-    rama del épico — el merge de este mismo día trae el cliente y el config de T6.
+    in E12 T8"), aterrizado como unidad propia (`75d7fb4`) sobre la lane ya refrescada con el épico
+    (`bcf0668`, el merge que trae el cliente y el config de T6; conflicto único del doc resuelto a
+    mano): la tarjeta de producción sirve `deepseek-flash` a las tarifas conservadoras de ADR-0028
+    (`Decimal("955.50")` / `Decimal("3822.01")` COP por millón), el default de `TECHCAMP_LLM_MODEL`
+    renombra el alias retirado, y la única llamada del asistente va con `thinking` desactivado. RED
+    observado (3 fallos: el default, la 503 de la tarjeta, `KeyError: 'thinking'`), GREEN en
+    `just gate server/tests/assistant` → **559 passed**.
+  - **Verificación independiente del cableado (segunda pasada de `gentle-ai-verify`, 2026-10-23):
+    0 bloqueadores.** RED re-derivado de primera mano sobre el baseline; los siete ítems de ADR-0028
+    **met** con sondas propias (tarjeta exacta, fail-closed end-to-end con frame de error que nombra
+    el modelo sin precio, contrato de stream intacto, seminario local en cero). El caveat que T6 dejó
+    escrito —el 503 del tope malformado quedaba tapado por el 503 de precios— queda **desenmascarado
+    y observado en ambos árboles**: producción con tope malformado ahora responde "budget cap
+    misconfigured". Advisory único, pre-existente y a [#319](https://github.com/jab16jy/techcamp-v2/issues/319)
+    (`review-follow-up` de la ronda): los dobles web aún nombran `'deepseek-chat'` como cadena de
+    display. Sondas duras de la ronda promovidas a regresiones (`2fcc695`, `Refs #319`).
 
 ## Next step
 
@@ -1331,8 +1344,9 @@ seguimiento y los PRs en rebanadas a `main`.
    El 0 del seminario no es un placeholder: ADR-0021 corre todo localmente, así que un modelo dentro
    del proceso no tiene factura, y D-T12.1 acepta `cost_cop = 0` para una llamada que sí ocurrió y no
    costó nada. El cliente DeepSeek y sus claves ya están (`22e3738`: la clave se lee por llamada, no
-   se enlaza al cliente, y un stream sin `usage` termina en conteos cero). Lo que falta es la tarjeta
-   real, y esa es de T8, no una decisión.
+   se enlaza al cliente, y un stream sin `usage` termina en conteos cero). La tarjeta real quedó
+   cableada el 2026-10-23 (`75d7fb4`, ADR-0028): `deepseek-flash` a 955,50 / 3.822,01 COP por millón,
+   conservadora (peak, cache miss).
 
 Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
 
