@@ -45,6 +45,7 @@ from assistant.eval.report import QUESTION_HEADING, render, write
 from techcamp.assistant.adapters.jobs import SeminarHashEmbedder
 from techcamp.assistant.adapters.kb_ingest import FIXTURE_CORPUS_DIR, load_corpus
 from techcamp.assistant.application.ports import LLMClient
+from techcamp.assistant.domain.limits import RETRIEVAL_TOP_K, SIMILARITY_FLOOR
 
 pytestmark = pytest.mark.anyio
 
@@ -156,6 +157,29 @@ async def test_no_replay_of_the_run_reaches_a_provider() -> None:
     for module in modules:
         for name, value in vars(module).items():
             assert not isinstance(value, LLMClient), f"{module.__name__}.{name}"
+
+
+async def test_every_replayed_question_honors_top_k_the_floor_and_the_prompt_shape() -> None:
+    """The real path keeps ADR-0008:12's pair and D-T12.6's message order for the
+    whole shipped set, not only where the inputs are hand-built.
+
+    The per-question tests prove the contract over corpora built to exercise it;
+    this sweep — a verification probe promoted to a regression test — is the
+    check that none of the thirty can drift past the limits that own them.
+    """
+    replays = (await _run(pin_corpus())).replays
+
+    assert len(replays) == 30
+    for item in replays:
+        assert len(item.fragments) <= RETRIEVAL_TOP_K
+        assert all(fragment.similarity >= SIMILARITY_FLOOR for fragment in item.fragments)
+        assert [message.role.value for message in item.prompt] == [
+            "system",
+            "user",
+            "user",
+            "user",
+        ]
+        assert item.prompt[-1].content.endswith(item.question.question)
 
 
 async def _run(corpus: CorpusPin) -> ReplayReport:
