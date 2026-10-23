@@ -100,8 +100,9 @@ def test_the_digest_the_artifact_records_is_the_fixture_corpus_s() -> None:
 
     The harness says which bytes it replayed; this is the check that the bytes are
     the fixture corpus's and not a set of digests the module made up. The corpus is
-    the packaged fixtures because `TECHCAMP_KB_CORPUS_DIR` is unset in the test run
-    and ADR-0008:32 keeps the real corpus behind the licence review.
+    the packaged fixtures — the package conftest clears `TECHCAMP_KB_CORPUS_DIR`,
+    the owner's licence-review switch, so the suite never replays a corpus the shell
+    points at — and ADR-0008:32 keeps the real corpus behind the licence review.
     """
     corpus = pin_corpus()
 
