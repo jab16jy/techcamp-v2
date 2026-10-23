@@ -570,6 +570,18 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
   mecánica y anotada): `ml/uv.lock` se rancia por el path-dep a `server` (regen) y `web/node_modules`
   ausente (`npm ci`).
 
+- **T8 — `review-3c128bea98f8df25` — aprobado y reconocido (solo el corte de hermeticidad).**
+  Target `sha256:43b7c307…` (2 archivos/26 líneas, medium), lente `review-reliability`, **0 hallazgos**.
+  Recibo quemado con `gentle-ai.review-acknowledged/v1`, `authority: burned` (2026-10-23). El corte
+  revisado es `d7cf535` con `--base-ref` en su padre `6d429bc`: la lección de la sesión del 2026-10-08
+  (el candidato resolvía la lane entera sin base explícita) quedó aplicada y el candidato llegó
+  acotado a la unidad. **El resto de T8 no quema recibo por decisión de alcance del dueño
+  (2026-10-23):** la verificación técnica es del agente `gentle-ai-verify` y el review RDD se usa solo
+  cuando el veredicto lo pida; el verify del 2026-10-23 (abajo) volvió sin bloqueadores, así que no se
+  abrieron más lineages. Un lineage abierto por error bajo la lectura por-commit
+  (`review-44c48cffdf1c9ab0`, sin lentes ni resultados) queda en-flight sin autoridad capturada, igual
+  que los `reviewing` huérfanos de rondas anteriores; nada está aprobado ni quemado en él.
+
 Per work-unit commit: `gentle-ai review assess` against the previous reviewed
 boundary, one lineage per unit, blocking findings in a bounded correction, non-blocking ones to one
 GitHub issue per review round (`review-follow-up`, `epic:e12`, `area:*`, `type:*`) linked from here with
@@ -897,6 +909,40 @@ lineage; no approved receipt means *not reviewed*, never approved.
     claves y su tarjeta de precios (`shared/config.py`), y las tramas que el cliente web de T7
     consumirá con `fetch` + `ReadableStream` + `createSseParser` (`token`, `sources`, `done`, `error`).
 
+- 2026-10-23 — **T8 U1 (el arnés) cerrado, corregido y verificado; U2 sigue bloqueada en el dueño.**
+  La lane lleva seis unidades: `6915f99` (set cerrado de 30 preguntas), `d5316ce` (pin del corpus por
+  digest), `cefb763` (replay por el `retrieve_fragments` y el `build_prompt` reales), `6d429bc`
+  (reporte de evidencia para calificar, sin score/threshold/verdict), y dos de esta sesión:
+  `d7cf535` (hermeticidad) y `d8d3c31` (sonda de barrido).
+  - **Hermeticidad, con RED y GREEN observados (hallazgo de la sesión del 2026-10-08, confirmado).**
+    Con `TECHCAMP_KB_CORPUS_DIR` exportado —el switch del dueño para la revisión de licencia, leído
+    por `pin_corpus()` a la hora de la llamada—, el arnés en `6d429bc` falla: 4 tests (pin, digests,
+    chunk count, digest del artefacto; con una copia idéntica fallan 2, con un directorio vacío, 20).
+    El guard que ya existía en `test_kb_ingest_job.py:105-113` (fixture autouse con
+    `monkeypatch.delenv`) se copió a un `conftest.py` del paquete, y el suite pasa verde con la
+    variable exportada. El comentario del end-to-end que asumía "unset in the test run" ahora nombra
+    al conftest.
+  - **Recibo del corte:** `review-3c128bea98f8df25`, lente `review-reliability`, 0 hallazgos, quemado
+    (ver entrada de Review).
+  - **Verificación técnica (agente `gentle-ai-verify`, contrato ODD, 2026-10-23), sobre la lane
+    completa con base `88268d6`:** sin bloqueadores. Todos los ítems de U1 **met** con evidencia
+    propia (33 sondas: pin repetido igual; dos ciclos seed+replay renderizan byte-idéntico;
+    30 preguntas con ids y textos únicos; textos de `EvalSetError` exactos en 8 negativos;
+    `CorpusPinError` al mutar bytes tras el pin; ≤5 fragmentos, similitudes ≥ 0.75, citas deduplicadas,
+    prompt `[system, user, user, user]` terminando en la pregunta del productor; sin campo con forma
+    de grade y sin `LLMClient` alcanzable). U2 **not implemented — esperado**: espera las Open
+    questions 1 y 2 del dueño, no es bloqueador de U1. Nota del verificador: en `88268d6` el paquete
+    eval no existe todavía, así que el árbol RED de la hermeticidad es `6d429bc`. **Advisories (sin
+    ronda de corrección):** (a) con `SeminarHashEmbedder` las 30 preguntas recuperan 0 fragmentos y 0
+    citas —medido y documentado por el propio arnés
+    (`test_the_stand_in_reaches_no_fragment_above_the_floor`, `test_corpus_pin.py:286`)—, así que la
+    corrida graduada necesita el modelo de ADR-0026, no el stand-in; (b) no hay artefacto de
+    resultados commiteado (la superficie lo permite; el arnés renderiza a demanda; no es violación).
+  - **Sonda dura promovida (`d8d3c31`):** el barrido set-wide que el verify devolvió como regresión —
+    las 30 preguntas deben respetar `RETRIEVAL_TOP_K`, el piso de `SIMILARITY_FLOOR` y el orden
+    `[system, user, user, user]` de D-T12.6, con el último mensaje terminando en la pregunta.
+    `just gate server/tests/assistant/eval` → **97 passed**.
+
 ## Next step
 
 **T1, T2, T4 y T5 están cerrados.** T5 entró por rebanadas (decisión del dueño, con ~4 k líneas) y
@@ -904,8 +950,9 @@ dejó los dos endpoints de `docs/04:227-228` vivos sobre `ea42de1`, con los repo
 y su corrección `53cb281`, el prompt/SSE/precio en `8fcb3ed` y el cierre en `959f8b8`. **T6 puede
 arrancar ya** y comparte el router de T5: el `POST /assistant/messages` que T6limita es el de
 `ea42de1`, y la rama degradada (`answer_without_llm`, de T4) está lista para cablearse detrás de la
-puerta de cuota. T7 es `web/` y no se solapa con nada del servidor. T3 espera la revisión de licencia
-del corpus y T8 el umbral de la evaluación.
+puerta de cuota. T7 es `web/` y no se solapa con nada del servidor. **T8-U1 (el arnés) está hecho y
+verificado (2026-10-23); lo que queda de T8 es U2, los docs, y no espera código sino las dos
+decisiones de abajo.** T3 espera la revisión de licencia del corpus para cargar el corpus real.
 
 **Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
 
