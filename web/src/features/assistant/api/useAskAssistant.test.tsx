@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../../../lib/api/session'
-import { ASSISTANT_COPY } from './assistantCopy'
+import { ASSISTANT_COPY } from '../components/assistantCopy'
 import { MAX_QUESTION_CHARS, useAskAssistant } from './useAskAssistant'
 
 const QUESTION = '¿Por qué no regué ayer?'

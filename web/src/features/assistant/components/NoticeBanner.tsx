@@ -1,5 +1,5 @@
 import { InfoIcon } from '../../../design-system/ui/icons'
-import { ASSISTANT_COPY } from '../api/assistantCopy'
+import { ASSISTANT_COPY } from './assistantCopy'
 import type { AssistantNotice } from '../api/useAskAssistant'
 
 export interface NoticeBannerProps {

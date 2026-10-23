@@ -7,7 +7,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { AssistantCitation } from '../api/assistantStream'
-import { ASSISTANT_COPY } from '../api/assistantCopy'
+import { ASSISTANT_COPY } from './assistantCopy'
 import type { AssistantTurn } from '../api/useAskAssistant'
 import { MessageList } from './MessageList'
 

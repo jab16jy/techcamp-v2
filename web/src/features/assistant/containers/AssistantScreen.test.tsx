@@ -9,7 +9,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { forgetActivePlotId, setActivePlotId } from '../../../lib/api/activePlot'
 import { clearSession, setSession } from '../../../lib/api/session'
-import { ASSISTANT_COPY } from '../api/assistantCopy'
+import { ASSISTANT_COPY } from '../components/assistantCopy'
 import { AssistantScreen } from './AssistantScreen'
 
 const PLOT_ID = 'plot-1'

@@ -10,7 +10,7 @@
  */
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { ASSISTANT_COPY } from '../api/assistantCopy'
+import { ASSISTANT_COPY } from './assistantCopy'
 import { MAX_QUESTION_CHARS } from '../api/useAskAssistant'
 import { Composer } from './Composer'
 

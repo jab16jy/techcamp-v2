@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent } from 'react'
 import { Button } from '../../../design-system/ui/button'
 import { InfoIcon } from '../../../design-system/ui/icons'
-import { ASSISTANT_COPY } from '../api/assistantCopy'
+import { ASSISTANT_COPY } from './assistantCopy'
 import { MAX_QUESTION_CHARS } from '../api/useAskAssistant'
 
 export interface ComposerProps {
