@@ -74,10 +74,12 @@ class LLMClient(Protocol):
     before this call, and the model only explains them (ADR-0007:16 — the LLM
     never computes irrigation, risk or doses, H1).
 
-    The port says nothing about the provider. The adapter built in T3 speaks the
-    OpenAI-compatible DeepSeek chat endpoint, `deepseek-chat` against
+    The port says nothing about the provider. The adapter speaks the
+    OpenAI-compatible DeepSeek chat endpoint — `deepseek-flash` against
     `POST /chat/completions` with `stream: true` and a `data: [DONE]` close
-    (ADR-0026); the Anthropic SDK is not used in v2. Keeping the port
+    (ADR-0026 pinned the endpoint; ADR-0028 confirmed the provider and renamed the
+    model after the API retired the `deepseek-chat` alias); the Anthropic SDK is
+    not used in v2. Keeping the port
     provider-agnostic is what makes that an adapter decision rather than a change
     to every use case.
     """

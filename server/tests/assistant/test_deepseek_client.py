@@ -161,6 +161,10 @@ async def test_the_http_transport_drops_the_done_sentinel() -> None:
         assert payload["stream"] is True
         assert payload["stream_options"] == {"include_usage": True}
         assert payload["model"] == "deepseek-chat"
+        # ADR-0028: the assistant's one call explains computed facts and does not
+        # reason — DeepSeek defaults thinking to enabled, and the request turns it
+        # off explicitly.
+        assert payload["thinking"] == {"type": "disabled"}
         return httpx.Response(200, text=body)
 
     transport = HttpChatCompletionTransport(httpx.MockTransport(respond))

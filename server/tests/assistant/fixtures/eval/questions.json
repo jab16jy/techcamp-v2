@@ -1,0 +1,126 @@
+{
+  "eval_set": "e12-t8-caribe-30",
+  "notice": "Fixture questions written for E12 T8 from the subject matter of the fixture corpus (the three packaged documents under server/src/techcamp/assistant/fixtures/corpus/) and the glossary vocabulary of docs/00-glosario.md; they are placeholders for the producer-collected questions that will replace them. The corpus they are grounded in is the fixture corpus until the licence review is answered (ADR-0008:32). Grading (accuracy, citations, clarity per ADR-0007:15) and the pass threshold are owner decisions and are deliberately absent from every file here.",
+  "questions": [
+    {
+      "id": "q01",
+      "question": "¿Qué es el riego por goteo y en qué lotes del Caribe conviene usarlo?"
+    },
+    {
+      "id": "q02",
+      "question": "¿Cuánto mayor es la eficiencia de aplicación del goteo frente al riego por surco?"
+    },
+    {
+      "id": "q03",
+      "question": "¿Para qué sirve el filtro de malla en un sistema de goteo?"
+    },
+    {
+      "id": "q04",
+      "question": "¿Cada cuánto reviso el filtro y cada cuánto limpio las líneas de goteo?"
+    },
+    {
+      "id": "q05",
+      "question": "¿Qué es el manifold y cómo ayuda a regar lotes con suelos de textura distinta?"
+    },
+    {
+      "id": "q06",
+      "question": "¿En qué punto debo verificar la presión antes de sembrar con goteo?"
+    },
+    {
+      "id": "q07",
+      "question": "¿Qué pasa si opero el sistema de goteo con presión muy alta?"
+    },
+    {
+      "id": "q08",
+      "question": "¿Qué pasa en el suelo cuando un gotero queda tapado?"
+    },
+    {
+      "id": "q09",
+      "question": "¿Cuántos milímetros de lámina debo aplicar en un día sin lluvia?"
+    },
+    {
+      "id": "q10",
+      "question": "¿Qué lámina neta por día exige un cultivo en pleno desarrollo?"
+    },
+    {
+      "id": "q11",
+      "question": "¿Cuánto es la evapotranspiración de referencia del trimestre más caluroso en el Caribe?"
+    },
+    {
+      "id": "q12",
+      "question": "¿Qué hago con el riego durante un episodio de lluvias?"
+    },
+    {
+      "id": "q13",
+      "question": "¿Por qué aplicar más agua que la capacidad de infiltración del suelo solo aumenta la escorrentía?"
+    },
+    {
+      "id": "q14",
+      "question": "¿Qué debo anotar en el registro de riego para comparar la lámina real con la calculada?"
+    },
+    {
+      "id": "q15",
+      "question": "¿Cómo manejo el riego por goteo durante un período Niño o Niña?"
+    },
+    {
+      "id": "q16",
+      "question": "¿En qué estado ENSO estaba el país en septiembre de 2026?"
+    },
+    {
+      "id": "q17",
+      "question": "¿Cuál es la perspectiva de lluvias para la Costa Caribe en octubre?"
+    },
+    {
+      "id": "q18",
+      "question": "¿Hay alertas agroclimáticas nacionales para este mes?"
+    },
+    {
+      "id": "q19",
+      "question": "¿Qué boletín tomo como referencia si no existe uno para mi departamento?"
+    },
+    {
+      "id": "q20",
+      "question": "¿Cuánto llegó la evaporación en el litoral Caribe durante agosto?"
+    },
+    {
+      "id": "q21",
+      "question": "¿En qué estado ENSO estaba la Mesa Técnica Agroclimática de Córdoba en septiembre de 2026?"
+    },
+    {
+      "id": "q22",
+      "question": "¿Cuál es el déficit acumulado de lluvia en el valle del Sinú?"
+    },
+    {
+      "id": "q23",
+      "question": "¿Cuánto llovió en Lorica durante agosto?"
+    },
+    {
+      "id": "q24",
+      "question": "¿Qué anticipa la perspectiva de octubre para el valle del Sinú?"
+    },
+    {
+      "id": "q25",
+      "question": "¿Qué dosis de fertilizante nitrogenado debo aplicar al maíz?"
+    },
+    {
+      "id": "q26",
+      "question": "¿Qué dosis de insecticida uso contra el cogollero del maíz?"
+    },
+    {
+      "id": "q27",
+      "question": "¿Cómo controlo la broca del café en mi lote?"
+    },
+    {
+      "id": "q28",
+      "question": "¿A cómo está la carga de ñame en la plaza de mercado?"
+    },
+    {
+      "id": "q29",
+      "question": "¿Cómo debo almacenar la yuca después de la cosecha?"
+    },
+    {
+      "id": "q30",
+      "question": "¿Cuántos kilos de semilla de maíz necesito por hectárea?"
+    }
+  ]
+}
