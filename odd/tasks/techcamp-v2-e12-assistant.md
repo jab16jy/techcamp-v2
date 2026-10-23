@@ -1177,6 +1177,16 @@ lineage; no approved receipt means *not reviewed*, never approved.
   - **RDD de la corrección:** `gentle-ai review assess --base-ref b604e1a --committed-only` →
     `medium`, 4 rutas / 90 líneas, `review_due: no` (`under_budget`). Sin recibo que quemar y no se
     fabrica uno; la cola revisable de T7 crece y sigue pendiente de la decisión del dueño.
+  - **Verificación independiente de la rebanada (2026-10-23): los seis criterios pasan, 0
+    bloqueantes.** Un worker de solo lectura verificó los commits de T7 (`eb89063..7b8143b`) contra
+    los cuatro estados de docs/07, el wire campo por campo contra `stream.py`, la ruta `mas/asistente`,
+    el layout `api/ containers/ components/` con tokens y copy en español, la corrección `7e8506d` y
+    la disciplina de superficie. Evidencia observada por el verificador: `npm test -- --run
+    src/features/assistant src/app` → **86 passed**; `just gate web/src/features/assistant
+    web/src/app` → exit 0. Las cuatro observaciones no bloqueantes van al issue
+    [#318](https://github.com/jab16jy/techcamp-v2/issues/318); la única con acción posible es la
+    primera (las 2 líneas de `docs/07` que `0f315d1` escribió fuera de la fila de superficie de T7,
+    doc-first y declarado, pero no sancionado por la tabla).
 
 ## Next step
 
