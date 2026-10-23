@@ -364,7 +364,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   > That is the same open item T5 left with its cut 3: closing that range with a receipt takes an
   > explicit owner decision (an independent review of the range), and it does not restart by itself.
 
-- [ ] **T7 — Web screen** (`impeccable`): `web/src/features/assistant/` in the docs/07 layout
+- [x] **T7 — Web screen** (`impeccable`): `web/src/features/assistant/` in the docs/07 layout
   (`api/` `containers/` `components/`), the streamed `POST` read with `fetch` + `ReadableStream` +
   `createSseParser` (D-T12.4), the message list, the composer, the cited-sources list, and the three
   states a producer must be able to distinguish: streaming answer, degraded no-LLM answer, and
@@ -375,6 +375,12 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   (E11's precedent: regenerating it on the epic branch is what made two lanes parallelizable). Spanish UI
   copy from docs/07 and the glossary. ~800 floor. **Route: delegated + `impeccable`** (trigger: writer,
   UI). **Depends T5.** Parallel with T6 (disjoint files: `web/`).
+  **Hecho (2026-10-22):** `eb89063` (lectura del stream), `cfc7e3e` (los tres WARNING de la rebanada
+  `api/`), `0f315d1` (descarte al cambiar de parcela), `e87df11` (la pantalla: lista, compositor,
+  fuentes, los cuatro estados), `f41e320` (la ruta `mas/asistente` bajo Más —sin ella la pantalla
+  existía y no se podía abrir—), `b9189c6` y `e69d405` (seguimiento de la revisión). Recibo
+  `review-45c3ada4ce1f77c4` quemado; `just gate web/src/app web/src/features/assistant` → 16 + 70
+  tests verdes sobre el árbol ya fusionado con la rama del épico.
 
 - [ ] **T8 — Eval and the provider decision**: 30 real Caribbean agronomic questions graded by an
   agronomist on accuracy, citations and clarity (ADR-0007:15) — **the pass threshold is not written in
@@ -636,6 +642,29 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
   unidades `4681cf2` (schema) + `c0d0b50` (deps). Fricción de worktree fresco (fuera de superficie,
   mecánica y anotada): `ml/uv.lock` se rancia por el path-dep a `server` (regen) y `web/node_modules`
   ausente (`npm ci`).
+- **T7 — `review-45c3ada4ce1f77c4` — aprobado y reconocido.** Target `sha256:6b8ded57…`: los 7
+  archivos de `e87df11` (la pantalla: `Composer`, `MessageList`, `NoticeBanner`, `AssistantScreen` y
+  sus tests), 675 líneas, tier `medium`, lente `review-reliability`. Sin hallazgos bloqueantes:
+  ningún CRITICAL/BLOCKER y sin ronda de corrección. Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `consumed_revision sha256:fae238c8…`, `authority: burned`,
+  `delivery: ordinary-repository-policy`. El lineage llevaba abierto desde la unidad de la pantalla
+  con el slot del revisor reofrecido y **cero** resultados admitidos: se continuó (no se abandonó) y
+  su target congelado se revisó tal cual estaba.
+  - **Hallazgos no bloqueantes** (2 WARNING + 2 SUGGESTION, `informational`; ninguno reabre la
+    revisión) → issue **#314** (`review-follow-up`, `area:web`, `type:chore`): `R3-1` (el aviso de
+    fallo no tenía test: ningún test rechazaba el `fetch` ni rompía el stream) cerrado en `b9189c6`,
+    con corrida de mutación que prueba que la aserción no es vacía; `R3-2` (el compositor limpia el
+    borrador antes de saber si el envío falló) **diferido**: docs/07 no fija qué pasa con el borrador
+    tras un `429` y restaurarlo es una decisión de producto, no una corrección mecánica; `R3-3`
+    (la guía de longitud dice "menos de" un máximo que sí se acepta) y `R3-4` (`.length` cuenta
+    unidades UTF-16 y el servidor cuenta caracteres) diferidos al issue.
+  - **Nota arrastrada de la rebanada `api/`:** `assistantCopy.ts` vivía en `api/` con una nota que
+    asignaba el movimiento a la unidad de UI. Movido a `components/` en `e69d405` (mismos textos,
+    solo imports; 70 tests de la feature y 16 de `app` verdes).
+  - **Cola de la lane, sin revisión debida:** `e87df11..HEAD` (`f41e320` la ruta, `b9189c6` el test,
+    `e69d405` la copia; 11 archivos/202 líneas) → `assess` responde `risk: medium`,
+    `review_due: false`, `review_due_reason: under_budget`: queda **pendiente en el corte**, sin
+    recibo que quemar y sin fabricar uno.
 
 Per work-unit commit: `gentle-ai review assess` against the previous reviewed
 boundary, one lineage per unit, blocking findings in a bounded correction, non-blocking ones to one
@@ -1097,18 +1126,44 @@ lineage; no approved receipt means *not reviewed*, never approved.
     (`git diff e12-t6 HEAD -- server/ web/` vacío), así que los 461 passed de la verificación se
     transfieren sin re-correr.
 
+- 2026-10-22 — **T7 cerrada: el recibo de la pantalla y la ruta que le faltaba.** La lane tenía la
+  pantalla completa (lista, compositor, fuentes citadas y los cuatro estados de docs/07) y **no la
+  había montado**: `web/src/app/routes.tsx` no registraba `mas/asistente`, así que la pantalla existía
+  y nadie podía abrirla —y docs/07:129 la cuelga de `Más`, que es alcance explícito de T7—. `f41e320`
+  la monta con el precedente de `mas/indicadores` (chunk perezoso, `Suspense`, la misma fila de lista),
+  con RED observado primero: el test de rutas no encontraba un enlace llamado `Asistente` ni la ruta,
+  y el conteo de hijos pasó de 7 a 8; el test nuevo entra por `/mas`, pulsa el enlace y aterriza en el
+  estado sin parcela de la pantalla.
+  - **El lineage vivo se continuó, no se abandonó.** `review status --lineage … --next-transition`
+    reofrecía el slot del revisor sobre el target congelado de 675 líneas (los 7 archivos de
+    `e87df11`); una corrida `review-reliability` capturó en el acto, el resultado se admitió
+    **aprobado** el target, la captura terminal emitió su operación de reconocimiento y el recibo se
+    quemó (`gentle-ai.review-acknowledged/v1`, `consumed_revision sha256:fae238c8…`,
+    `authority: burned`). El detalle y los hallazgos están en [Review (RDD)](#review-rdd).
+  - **Seguimiento de los cuatro hallazgos no bloqueantes:** issue
+    [#314](https://github.com/jab16jy/techcamp-v2/issues/314). `R3-1` cerrado en `b9189c6` (test del
+    envío fallido, con corrida de mutación que lo rompe si se quita el descarte de la burbuja vacía);
+    `R3-2` diferido porque docs/07 no fija qué pasa con el borrador tras un `429` y restaurarlo es
+    decisión de producto; `R3-3` y `R3-4` quedan en el issue. La nota de la rebanada `api/` sobre
+    `assistantCopy.ts` se cerró moviendo el archivo a `components/` (`e69d405`).
+  - **Antes de registrar nada se fusionó la rama del épico en la lane** (`c72dea9`): `git merge-tree`
+    daba árbol limpio y así el documento no se resuelve dos veces; los gates corrieron sobre el árbol
+    fusionado, no sobre el viejo: `just gate web/src/app web/src/features/assistant` → **16 + 70
+    passed**, con eslint, `tsc`, ruff, mypy, `lint-imports`, una sola cabeza de Alembic y ast-grep
+    verdes.
+  - **La cola de T7 queda sin revisión debida:** `e87df11..HEAD` (11 archivos/202 líneas) → `assess`
+    dice `medium`, `review_due: false`, `under_budget`. No hay recibo que quemar y no se fabrica uno.
+  - **Lo que NO se tocó:** `web/src/design-system/**` (fuera de superficie sin cambio de tokens o
+    primitivas gobernado por `impeccable`) y la pantalla de otra feature.
+
 ## Next step
 
-**T1, T2, T4 y T5 están cerrados.** T5 entró por rebanadas (decisión del dueño, con ~4 k líneas) y
-dejó los dos endpoints de `docs/04:227-228` vivos sobre `ea42de1`, con los repositorios en `b31ac34`
-y su corrección `53cb281`, el prompt/SSE/precio en `8fcb3ed` y el cierre en `959f8b8`. **T6 está en
-marcha y su primera unidad de código ya tiene recibo quemado:** `22e3738` (DeepSeek detrás del puerto
-`LLMClient`) y `2acc276` (la admisión atómica contra el día y el mes) están en `e12-t6`, y el ciclo
-del RDD de `2acc276` cerró aprobado tras la corrección acotada `8b97fed` (está en Progress). T6
-comparte el router de T5: el `POST /assistant/messages` que limita es el de `ea42de1`, y lo que está
-en curso es el `429` con `Retry-After` y el cable de la rama degradada (`answer_without_llm`, de T4)
-detrás de la puerta de cuota. T7 es `web/` y no se solapa con nada del servidor. T3 espera la revisión
-de licencia del corpus y T8 el umbral de la evaluación.
+**T1, T2, T4, T5, T6 y T7 están cerrados.** T6 entró completo en la rama del épico (`e40f634`) con su
+verificación independiente y sus cuatro commits de corrección. T7 se cierra aquí: recibo propio
+(`review-45c3ada4ce1f77c4`), la ruta `mas/asistente` que le faltaba (`f41e320`) y la copia del
+asistente en `components/` (`e69d405`). Lo que queda del épico es **T8** —que no espera código sino
+dos decisiones del dueño: el umbral de la evaluación y la licencia del corpus— y **T9**, el cierre con
+`just gate-full` una sola vez, los issues de seguimiento y los PRs en rebanadas a `main`.
 
 **Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
 
@@ -1143,7 +1198,8 @@ Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
    sin recibo. Cerrarlo con recibo exige una decisión explícita del dueño (revisión independiente de
    ese rango); no se reinicia por cuenta propia ni se fabrica un recibo.
 
-En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5** hecho; **T6 ‖ T7 ‖ T8** después.
+En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5, T6 y T7** hechos; **T8** pendiente de
+las decisiones del dueño; **T9** al final.
 Nada en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista
 blanca de `import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene
 `vector`, y ningún otro módulo se tiene que mover para que E12 arranque.
