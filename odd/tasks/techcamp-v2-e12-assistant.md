@@ -1188,6 +1188,20 @@ lineage; no approved receipt means *not reviewed*, never approved.
     primera (las 2 líneas de `docs/07` que `0f315d1` escribió fuera de la fila de superficie de T7,
     doc-first y declarado, pero no sancionado por la tabla).
 
+- 2026-10-23 — **T7 fusionada a la rama del épico** (`merge(e12): the T7 lane into the epic branch`,
+  `7e97ed2`), con los ocho commits de la lane intactos —cada unidad de trabajo sigue siendo un commit
+  identificable— y **sin PR**: los PRs en rebanadas a `main` se hacen al cerrar el ODD de E12, no
+  ahora (el mismo orden que el merge de T6). El merge fue limpio por construcción: el merge-base era
+  la punta del épico (`dd88e06`, que la lane ya había absorbido en `c72dea9`), así que la lane estaba
+  estrictamente adelante.
+  - **El código fusionado es byte a byte idéntico al de la lane verificada**: `git diff e12-t7 HEAD`
+  vacío y los dos árboles con el mismo hash (`20dbf0be…`), así que los 86 passed de la verificación
+  se transfieren sin re-correr. Spot check del padre sobre el árbol fusionado: `npm test -- --run
+  src/features/assistant src/app` → **86 passed** — el mismo comando re-corriendo, el mismo
+  resultado.
+  - Tras el merge se eliminan la base de datos del worktree `e12-t7` (`just db-down`) y el propio
+  worktree; los shas de la lane quedan alcanzables desde la rama del épico.
+
 ## Next step
 
 **T1, T2, T4, T5, T6 y T7 están cerrados.** T6 entró completo en la rama del épico (`e40f634`) con su
