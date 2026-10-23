@@ -69,11 +69,14 @@ def test_the_provider_key_and_endpoint_come_from_the_environment(
     assert llm_model() == "deepseek-chat"
 
 
-def test_the_endpoint_defaults_to_the_provisional_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_endpoint_defaults_to_the_confirmed_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0028 confirms the provider and renames the model: the retired
+    `deepseek-chat` alias died on 2026-07-24, and the default names the model the
+    API actually serves, `deepseek-flash`."""
     _clear_assistant_environment(monkeypatch)
 
     assert llm_base_url() == "https://api.deepseek.com"
-    assert llm_model() == "deepseek-chat"
+    assert llm_model() == "deepseek-flash"
 
 
 def test_the_seminar_profile_still_answers_locally(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,20 +87,35 @@ def test_the_seminar_profile_still_answers_locally(monkeypatch: pytest.MonkeyPat
 
 
 def test_production_without_keys_still_answers_503(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The 503 of T5 is not removed by T6: the production profile still refuses to
-    answer before its provider key exists (ADR-0026 pins `deepseek-chat`; the real
-    rate card is T8's)."""
+    """The client half of the 503 is not removed by T8: without a provider key the
+    production profile still refuses to answer. The rate card, which T8 did owe the
+    seam, is wired and no longer part of that refusal (ADR-0028)."""
     _clear_assistant_environment(monkeypatch)
     monkeypatch.setenv("TECHCAMP_PROFILE", "production")
 
     with pytest.raises(ProblemError) as llm_failure:
         get_llm_client()
-    with pytest.raises(ProblemError):
-        get_prices()
 
     assert llm_failure.value.status == 503
     # The detail names the variable, or an operator has nothing to set.
     assert _KEY_ENV in (llm_failure.value.detail or "")
+
+
+def test_production_prices_are_the_adr_0028_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rate card the seam said T8 would wire is there: `deepseek-flash` at the
+    conservative rates of ADR-0028 — peak cache-miss input and output converted at
+    the decision day's TRM — so a recorded `cost_cop` can never undercut the real
+    invoice, and a model with no card still fails closed."""
+    from decimal import Decimal
+
+    _clear_assistant_environment(monkeypatch)
+    monkeypatch.setenv("TECHCAMP_PROFILE", "production")
+
+    table = get_prices()
+
+    card = table["deepseek-flash"]
+    assert card.input_cop_per_million == Decimal("955.50")
+    assert card.output_cop_per_million == Decimal("3822.01")
 
 
 def test_production_with_keys_builds_the_deepseek_client(monkeypatch: pytest.MonkeyPatch) -> None:

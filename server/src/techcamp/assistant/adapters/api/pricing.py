@@ -6,12 +6,12 @@ together: `model`, the two token counts and `cost_cop` are all reported or all
 null. So a call that produced tokens **must** be able to produce a cost, which
 means this module needs a price.
 
-**The price is injected, not written here.** ADR-0026 is explicit that
-docs/02:78's figures (Claude Haiku 4.5, USD 1 / 5 per million) are obsolete
-since the provider is `deepseek-chat`, that the real prices are T8's to write
-back into docs/02:78, and that no price of any embedding model is pinned either.
-A number written here would be a number no document owns, and it would silently
-become the budget's basis (docs/11-metricas.md:132 sums this column).
+**The price is injected, not written here.** ADR-0026 left the real prices to
+T8, and ADR-0028 delivered them: `deepseek-flash` at the conservative peak
+cache-miss rates converted to COP at the decision day's TRM, wired into
+`deps.get_prices` and written back into docs/02:78. A number written here would
+be a number no document owns, and it would silently become the budget's basis
+(docs/11-metricas.md:132 sums this column).
 
 So:
 
