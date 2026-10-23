@@ -266,9 +266,11 @@ export async function askAssistant(
  * Reads the frames of one answer.
  *
  * `token` frames are handed to `onToken` as they arrive, so the screen writes
- * while the rest of the answer is still on the wire; `sources` is kept until
- * `done` needs it, and `done` or `error` ends the read — `done` is the terminal
- * frame, `error` arrives with no `done` after it (`stream.py:88-152`).
+ * while the rest of the answer is still on the wire; the degraded branch sends
+ * its whole answer as one `answer` frame, which takes the same path; `sources`
+ * is kept until `done` needs it, and `done` or `error` ends the read — `done`
+ * is the terminal frame, `error` arrives with no `done` after it
+ * (`stream.py:88-152`).
  */
 async function readAssistantStream(
   body: ReadableStream<Uint8Array>,
@@ -297,6 +299,18 @@ async function readAssistantStream(
     const payload = parseJson(event.data)
     switch (event.event) {
       case 'token': {
+        const text = tokenText(payload)
+        if (text === null) return null
+        tokens.push(text)
+        onToken(text)
+        return null
+      }
+      case 'answer': {
+        // The degraded branch's one complete frame (`stream.py`'s
+        // `stream_degraded_answer`): the whole answer instead of a token stream,
+        // then the usual `sources` and `done`. It arrives as text through the
+        // same path a token would, so the screen writes it as soon as it lands
+        // instead of settling the turn with an empty bubble.
         const text = tokenText(payload)
         if (text === null) return null
         tokens.push(text)

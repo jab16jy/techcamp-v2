@@ -122,7 +122,7 @@ describe('AssistantScreen', () => {
     expect(screen.queryByText(ASSISTANT_COPY.answering)).not.toBeInTheDocument()
   })
 
-  it('marks an answer the server made without the LLM as degraded', async () => {
+  it('shows the degraded answer the server sent, not an empty bubble', async () => {
     const stream = controllableStream()
     vi.stubGlobal(
       'fetch',
@@ -133,13 +133,27 @@ describe('AssistantScreen', () => {
     renderScreen()
 
     ask('¿Y el riesgo?')
-    // `model: null` is exactly the no-LLM branch: the answer carries the plot's
-    // own facts and documents, and nothing was spent (D-T12.1).
-    stream.push(frame('token', { text: 'Tus sensores están bien.' }))
+    // The no-LLM branch sends the whole answer in one `answer` frame, then
+    // `sources` and a `done` with `model: null` (`stream.py:180-216`). docs/07
+    // §Asistente asks for "respuesta ya completa" beside the note, so the text
+    // has to survive the frame the server actually sends.
+    stream.push(
+      frame('answer', {
+        text: 'Tus sensores están bien: la humedad del suelo está en 32 %.',
+        degraded: true,
+        reason: 'budget_exhausted',
+        reason_text: 'Se agotó el presupuesto mensual del asistente.',
+      }),
+    )
+    stream.push(frame('sources', { citations: [] }))
     stream.push(frame('done', { ...DONE, model: null }))
     stream.close()
 
     await waitFor(() => expect(screen.getByText(ASSISTANT_COPY.degradedNote)).toBeInTheDocument())
+    expect(
+      screen.getByText('Tus sensores están bien: la humedad del suelo está en 32 %.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText(ASSISTANT_COPY.noSources)).toBeInTheDocument()
   })
 
   it('says the day is done in the producer’s words, never a 429', async () => {

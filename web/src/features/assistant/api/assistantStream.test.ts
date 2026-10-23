@@ -33,6 +33,20 @@ function tokenFrame(text: string): string {
   return `event: token\ndata: ${JSON.stringify({ text })}\n\n`
 }
 
+/**
+ * The one frame the degraded branch sends instead of tokens
+ * (`stream.py:196-204`): the whole answer, the reason, and the sentence the
+ * server would show. It carries no `done`, which still follows it as usual.
+ */
+function answerFrame(text: string, reason = 'budget_exhausted'): string {
+  return `event: answer\ndata: ${JSON.stringify({
+    text,
+    degraded: true,
+    reason,
+    reason_text: 'Se agotó el presupuesto mensual del asistente.',
+  })}\n\n`
+}
+
 function sourcesFrame(citations: unknown[]): string {
   return `event: sources\ndata: ${JSON.stringify({ citations })}\n\n`
 }
@@ -256,15 +270,24 @@ describe('askAssistant', () => {
     })
   })
 
-  it('answers degraded when the done frame carries no model', async () => {
+  it('reads the whole answer the degraded branch sends in one frame', async () => {
     const stream = controllableStream()
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response))
-    const promise = askAssistant({ content: QUESTION }, () => {}, deps(fetchImpl))
+    const onToken = vi.fn()
+    const promise = askAssistant({ content: QUESTION }, onToken, deps(fetchImpl))
 
-    stream.push(tokenFrame('Datos de la parcela "La Esperanza".'))
+    // The server never sends `token` frames on this branch: the answer is one
+    // complete frame, then `sources` and `done` like an answered turn
+    // (`stream.py:180-216`, `router.py:176-200`). A client that only knows
+    // `token` settles this turn with no text at all.
+    stream.push(answerFrame('Datos de la parcela "La Esperanza".'))
     stream.push(sourcesFrame([CITATION]))
     stream.push(doneFrame({ ...DONE_PAYLOAD, model: null }))
     stream.close()
+
+    // Shown as soon as it arrives, not only when `done` closes the turn.
+    await tick()
+    expect(onToken).toHaveBeenCalledWith('Datos de la parcela "La Esperanza".')
 
     await expect(promise).resolves.toEqual({
       status: 'degraded',
