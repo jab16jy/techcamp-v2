@@ -1156,6 +1156,28 @@ lineage; no approved receipt means *not reviewed*, never approved.
   - **Lo que NO se tocó:** `web/src/design-system/**` (fuera de superficie sin cambio de tokens o
     primitivas gobernado por `impeccable`) y la pantalla de otra feature.
 
+- 2026-10-23 — **Corrección de T7 encontrada por la verificación independiente: la respuesta degradada
+  llegaba como burbuja vacía.** La rama sin LLM del servidor manda la respuesta completa en **un**
+  frame `answer` (`stream.py:stream_degraded_answer`), no en tokens, y el cliente
+  (`assistantStream.ts`) solo conocía `token`/`sources`/`done`/`error`: el frame caía en el `default`,
+  `done` cerraba con `model: null` y `tokens.join('')` era `''`, así que el productor veía la nota
+  "sin LLM" al lado de una burbuja sin texto — justo el estado que docs/07 pide distinguir y que el
+  test `b9189c6` no cubría porque alimentaba la respuesta con frames `token` que el servidor degradado
+  nunca manda.
+  - **RED observado antes de tocar nada:** los dos tests nuevos
+    (`assistantStream.test.ts::reads the whole answer the degraded branch sends in one frame`,
+    `AssistantScreen.test.tsx::shows the degraded answer the server sent, not an empty bubble`)
+    fallaron 2/38 contra el árbol sin corregir.
+  - **GREEN:** `case 'answer'` en `readAssistantStream`, que toma el mismo camino de un `token` — el
+    texto entra por `onToken` en cuanto llega y se acumula para el `done`. La condición de degradada
+    sigue siendo `model === null` en `done` (D-T12.1); el `reason_text` del frame no se renderiza
+    todavía: docs/07 no pide mostrarlo y el copy del aviso ya es `ASSISTANT_COPY.degradedNote`.
+  - **Verificación:** `just gate web/src/features/assistant web/src/app` → verde (70 + 16 passed, con
+    gate-fast completo). Sin push, sin PR.
+  - **RDD de la corrección:** `gentle-ai review assess --base-ref b604e1a --committed-only` →
+    `medium`, 4 rutas / 90 líneas, `review_due: no` (`under_budget`). Sin recibo que quemar y no se
+    fabrica uno; la cola revisable de T7 crece y sigue pendiente de la decisión del dueño.
+
 ## Next step
 
 **T1, T2, T4, T5, T6 y T7 están cerrados.** T6 entró completo en la rama del épico (`e40f634`) con su
