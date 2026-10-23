@@ -314,6 +314,15 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
     The harness **produces the graded input and nothing else**: no score, no threshold, no verdict —
     those are owner work (Open question 1) and a structural guard asserts their absence from the
     report shape. **U2 — the docs**, which needs the verdict and therefore waits for the owner.
+  - **U2 landed (2026-10-23), con las decisiones delegadas:** el dueño delegó las Open questions 1 y
+    2 ("usa las decisiones que tengan sentido con el épico 12 y los docs") y fijó el proveedor V4
+    Flash. [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+    cierra las dos: proveedor `deepseek-flash` sin thinking con precios reales y tarjeta COP (TRM
+    3.185,01, 2026-10-23), umbral fijado antes de la corrida, política de licencia del corpus,
+    pin de embedding confirmado **sin** migración y búsqueda híbrida **sin** adoptar. [docs/02:78](../docs/02-estimaciones.md)
+    deja la referencia Haiku; [docs/README:68](../docs/README.md) cambia el pendiente de
+    "proveedor" a "corrida graduada + firma de la lista del corpus". Lo que queda de T8 es trabajo del
+    dueño: correr y calificar las 30 preguntas, y firmar la lista de documentos.
   - **Surface deviation, flagged and not resolved here:** the brief's own *Done means* requires
     "ODD updated (checkbox + Review entry)", but `odd/tasks/**` is absent from its *Allowed edit
     surfaces*. Read as: the done-criterion authorizes this one file. Nothing outside the five listed
@@ -461,8 +470,17 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
    Caribbean questions, graded by an agronomist on accuracy, citations and clarity) but no doc states
    what score promotes a provider. Fix the threshold **before** the run or T8 has no verdict. Pin a
    provisional provider now for D-T12.2's dimension; T8 confirms or rewrites the column.
+   **DECIDIDA — dueño, delegada el 2026-10-23:** [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md).
+   Proveedor `deepseek-flash` (DeepSeek-V4.1-Flash) sin thinking —el alias `deepseek-chat` se retiró
+   de la API el 2026-07-24—; pin de embedding confirmado **sin** migración de dimensión; umbral
+   fijado antes de la corrida: ≥ 27/30 correctas y tres descalificadores de uno solo (cita fabricada,
+   hecho contradicho, respuesta peor que la degradada).
 2. **Corpus licence.** ADR-0008:32 requires review before migration. Which guides may be included, and
    who signs it off? T3 loads only fixtures until this is answered.
+   **DECIDIDA — dueño, delegada el 2026-10-23:** la política está en [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md):
+   solo CC-BY 4.0 o más permisiva, CC-BY-SA y dominio público; fuera NC, ND y sin licencia. La
+   **lista de documentos concretos** la firma el dueño al recolectarlos; con la lista firmada, T3
+   carga el corpus real.
 3. **Retention and deletion of `conversation` / `message`.** Undecided anywhere. Relevant to
    `DELETE /me` (docs/04:36) and to the fact that an assistant transcript is the user's own words.
 4. **Membership check beyond `CurrentUserId`.** Does `POST /assistant/messages` need more than the
@@ -943,6 +961,33 @@ lineage; no approved receipt means *not reviewed*, never approved.
     `[system, user, user, user]` de D-T12.6, con el último mensaje terminando en la pregunta.
     `just gate server/tests/assistant/eval` → **97 passed**.
 
+- 2026-10-23 — **T8 U2 (los docs del proveedor) aterrizada con las decisiones delegadas.** El dueño
+  delegó las Open questions 1 y 2 ("usa las decisiones que tengan sentido con el épico 12 y los
+  docs") y fijó el proveedor: DeepSeek V4 Flash / V4.1 Flash. Verificado con ctx7 el mismo día
+  (`/websites/api-docs_deepseek`, oficial): **`deepseek-chat` se retiró de la API el 2026-07-24**;
+  la tabla vigente lista `deepseek-flash` (V4.1-Flash) y `deepseek-v4-pro`, el thinking viene
+  activado por default y se apaga con `thinking: {"type": "disabled"}`, y los precios por millón son
+  input cache-miss $0.15/$0.30 (off-peak/peak), cache-hit $0.003/$0.006, output $0.60/$1.20. La TRM
+  del día es COP 3.185,01/USD (Banco de la República).
+  - **[ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md) (nueva) cierra las cuatro decisiones:**
+    (1) LLM `deepseek-flash`, una llamada, thinking desactivado —el LLM explica, no decide
+    (ADR-0007)—, con la tarjeta COP conservadora (peak, cache miss): input 955,50 y output 3.822,01
+    por millón; (2) pin de embedding **confirmado sin migración** — la única evidencia en contra es
+    del stand-in, que no recupera nada y no mide el modelo real; (3) **umbral de la evaluación fijado
+    antes de la corrida**: ≥ 27/30 correctas y tres descalificadores de uno solo (cita fabricada,
+    hecho contradicho, peor que la degradada — la línea base de ADR-0019); (4) **política de
+    licencia**: CC-BY 4.0 o más permisiva / CC-BY-SA / dominio público; fuera NC, ND y sin licencia;
+    la lista de documentos la firma el dueño al recolectarlos. La búsqueda híbrida **no se adopta**:
+    su disparador (ADR-0008:19) exige la corrida graduada.
+  - **Docs dueños actualizados:** [docs/02:78](../docs/02-estimaciones.md#costo-del-llm) reemplaza la
+    referencia Haiku (≈ USD 10/día) por los números reales (≈ USD 0,45–0,90 con caché, ≈ USD 2,75
+    peor caso); [docs/README:68](../docs/README.md) cambia el pendiente de "proveedor" a "corrida
+    graduada contra el umbral + firma de la lista del corpus"; el índice de ADRs registra la 0028.
+  - **Cableado que el propio código dejó a T8** (`deps.py:245`: "The production rate card is wired
+    in E12 T8"): la tarjeta de producción, el default de `TECHCAMP_LLM_MODEL` y el parámetro
+    `thinking` de la llamada entran como unidad de trabajo propia después de refrescar la lane con
+    la rama del épico (esta lane no trae T6/T7, y el cliente y el config viven allí).
+
 ## Next step
 
 **T1, T2, T4 y T5 están cerrados.** T5 entró por rebanadas (decisión del dueño, con ~4 k líneas) y
@@ -950,9 +995,12 @@ dejó los dos endpoints de `docs/04:227-228` vivos sobre `ea42de1`, con los repo
 y su corrección `53cb281`, el prompt/SSE/precio en `8fcb3ed` y el cierre en `959f8b8`. **T6 puede
 arrancar ya** y comparte el router de T5: el `POST /assistant/messages` que T6limita es el de
 `ea42de1`, y la rama degradada (`answer_without_llm`, de T4) está lista para cablearse detrás de la
-puerta de cuota. T7 es `web/` y no se solapa con nada del servidor. **T8-U1 (el arnés) está hecho y
-verificado (2026-10-23); lo que queda de T8 es U2, los docs, y no espera código sino las dos
-decisiones de abajo.** T3 espera la revisión de licencia del corpus para cargar el corpus real.
+puerta de cuota. T7 es `web/` y no se solapa con nada del servidor. **T8 está aterrizada: U1 (el
+arnés) verificado el 2026-10-23 y U2 (los docs, ADR-0028) con las decisiones delegadas; lo que queda
+de T8 es del dueño — correr y calificar las 30 preguntas contra el umbral de ADR-0028 con el
+embedding y el corpus reales, y firmar la lista de documentos.** T3 carga el corpus real en cuanto la
+lista firmada exista. Después, **T9**: `just gate-full` una vez, issues de seguimiento y PRs en
+rebanadas a `main`.
 
 **Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
 
