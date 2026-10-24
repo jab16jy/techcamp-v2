@@ -182,14 +182,14 @@ shrink a diff to fit one*).
   D-T16.3. Org-scoped creation, `404` for another org. Forecast: route +
   loader + recorder + tests, floor ~450. **Route: delegated** (trigger:
   writer; new route + job). **Depends T1.** Parallel with T2.
-- [ ] **T4 — `expected` checker + domain test.** Checker asserting the
+- [x] **T4 — `expected` checker + domain test.** Checker asserting the
   `expected` grammar (alerts, irrigation kind, advice) against live state;
   domain test with each scenario's soil/crop parameters that `water_stress`
   opens iff `Dr > RAW` (docs/06:486) — scenario A numbers (θ_estrés 15.3 %,
   crossing day 10.4, docs/06:442-448) and E numbers (day 16 open, day 18
   critical, docs/06:465-471) as cases. Forecast: checker + domain tests,
   floor ~350. **Route: delegated** (trigger: writer; pure + checker).
-  **Depends T1, T2.**
+  **Depends T1, T2.** Implemented 2026-10-24 on `e16-t4` (evidence below).
 - [ ] **T5 — Playwright harness + CI job.** `web/e2e/scenarios/` harness per
   D-T16.4 (Playwright API verified via `find-docs`), CI job running
   `expected` e2e (docs/06:485), offline (fixtures only). Forecast: harness +
@@ -460,3 +460,24 @@ commit is a passive doc-only candidate (C6).
   the epic worktree against its own database: simulator suite green
   (numbers in the merge's verification run), ruff, mypy strict,
   lint-imports, ast-grep green.
+- 2026-10-24: **T4 implemented** on branch `e16-t4` (base `b79fc55`),
+  worktree `techcamp-v2-worktrees/e16-t4`, two work units: `920e7dc` (the
+  `expected` checker — a pure core judging `ScenarioExpected` against an
+  observed state and naming every failed assertion, exact match both ways
+  per docs/06:473-480, plus one async edge gathering state through the repos
+  the stack already serves; node-scoped alerts (`node_offline`) never pass
+  the plot listing's `plot_id` filter, so each of the plot's own nodes is
+  asked per rule with `get_non_resolved_for_target` — the node ids the
+  loader's 202 already answers), `9b1a4f8` (the domain test H5: scenario A
+  crosses θ_estrés = 15,3 % on day 10,4 and the seeded 360-min rule opens
+  ≈ 6 h later — not at day 10, not at day 10,5; scenario E's daily balance
+  passes RAW = 77 mm on day 16 and is critical on day 18; `Dr == RAW` and
+  θ == θ_estrés never open, ADR-0022's strict edge; recommendation facets:
+  A `irrigate` with depth > 0, E `rainfed` + `conserve_moisture`, never
+  `prioritize_harvest`). Verified: touched tests 30 passed (random and
+  fixed order); simulator suite 254 passed / 27 skipped; ruff format/check,
+  mypy strict (269 files), lint-imports, ast-grep green. Independent
+  verification PASS on all 8 claims, 0 blocking findings; non-blocking: a
+  one-off `test_provision` flake outside T4's scope (passes in isolation,
+  fixed order and later runs), and the rule × node read count noted for
+  T5/T6. No push, no PR — delivery stays owner-owned.
