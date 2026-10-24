@@ -480,4 +480,4 @@ commit is a passive doc-only candidate (C6).
   verification PASS on all 8 claims, 0 blocking findings; non-blocking: a
   one-off `test_provision` flake outside T4's scope (passes in isolation,
   fixed order and later runs), and the rule × node read count noted for
-  T5/T6. No push, no PR — delivery stays owner-owned.
+  T5/T6 (#338). No push, no PR — delivery stays owner-owned.
