@@ -1,15 +1,33 @@
 """Simulator application facade: the use cases the seminar tooling runs.
 
-E16 T3: `load_weather_fixture`, the scenario's recorded weather landing in
-`weather_daily` (docs/04-api.md:263; D-T16.2).
+E16 T3: `load_scenario`, the base data `POST /dev/scenarios/{name}:load`
+prepares (docs/04-api.md:263; D-T16.2).
 """
 
-from techcamp.simulator.application.load_weather import (
-    WeatherFixtureWriter,
-    load_weather_fixture,
+from techcamp.simulator.application.load_scenario import (
+    ScenarioAmbiguousOrgError,
+    ScenarioCropNotFoundError,
+    ScenarioDataInAnotherOrgError,
+    ScenarioLoad,
+    ScenarioNode,
+    ScenarioNodeProvisioner,
+    ScenarioNotFoundError,
+    ScenarioOrgNotFoundError,
+    ScenarioPlotRef,
+    ScenarioSensor,
+    load_scenario,
 )
 
 __all__ = [
-    "WeatherFixtureWriter",
-    "load_weather_fixture",
+    "ScenarioAmbiguousOrgError",
+    "ScenarioCropNotFoundError",
+    "ScenarioDataInAnotherOrgError",
+    "ScenarioLoad",
+    "ScenarioNode",
+    "ScenarioNodeProvisioner",
+    "ScenarioNotFoundError",
+    "ScenarioOrgNotFoundError",
+    "ScenarioPlotRef",
+    "ScenarioSensor",
+    "load_scenario",
 ]

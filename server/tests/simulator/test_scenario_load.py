@@ -1,0 +1,243 @@
+"""E16 T3: the scenario loader route (docs/04-api.md:263; D-T16.2).
+
+`POST /dev/scenarios/{name}:load` prepares the base a scenario needs and
+nothing else. Three things about it are worth stating out loud, because each
+one is a rule the route can be wrong about:
+
+- it is **idempotent per (scenario, day-anchor)**: a second load of the same
+  scenario on the same day answers the same ids instead of a second parcel;
+- it is **organization-scoped**: a load that belongs to another organization
+  answers 404, never 403 (docs/04-api.md:16);
+- it **writes through the modules' own use cases**: the farm, the parcel, the
+  cycle and the nodes are the same rows the API writes for a farmer.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import timedelta
+from uuid import UUID
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow, SoilProfileRow
+from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
+from techcamp.identity.adapters.security.token_issuer import issue_token
+from techcamp.main import app
+from techcamp.shared.dates import local_today
+from techcamp.shared.ids import uuid7
+from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
+
+pytestmark = pytest.mark.anyio
+
+
+@dataclass(frozen=True, slots=True)
+class Org:
+    org_id: UUID
+    user_id: UUID
+    token: str
+
+
+async def _org(session: AsyncSession, *, phone: str) -> Org:
+    """One organization with one owner, the way a seminar stack starts."""
+    org_id, user_id = uuid7(), uuid7()
+    session.add(AppUserRow(id=user_id, phone=phone, full_name="Owner"))
+    session.add(OrganizationRow(id=org_id, name=f"Org {org_id.hex[:6]}", kind="individual"))
+    await session.commit()
+    session.add(MembershipRow(org_id=org_id, user_id=user_id, role="owner"))
+    await session.commit()
+    return Org(org_id=org_id, user_id=user_id, token=issue_token(str(user_id)))
+
+
+def _client() -> TestClient:
+    return TestClient(app, base_url="http://testserver/api/v1")
+
+
+def _auth(org: Org) -> dict[str, str]:
+    return {"Authorization": f"Bearer {org.token}"}
+
+
+async def test_the_load_prepares_the_base_and_answers_the_ids(
+    db_session: AsyncSession,
+) -> None:
+    """202 with the ids the simulator publishes to, and the base data behind
+    them: the farm, the parcel, the cycle and the claimed nodes."""
+    org = await _org(db_session, phone="+573000000001")
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["scenario"] == "el-nino"
+    assert len(body["plot_ids"]) == 1
+    assert len(body["node_ids"]) == 2
+
+    plot = (
+        await db_session.execute(select(PlotRow).where(PlotRow.id == UUID(body["plot_ids"][0])))
+    ).scalar_one()
+    assert plot.org_id == org.org_id
+    assert plot.irrigation_system == "drip"
+
+    farm = (
+        await db_session.execute(select(FarmRow).where(FarmRow.id == plot.farm_id))
+    ).scalar_one()
+    assert farm.org_id == org.org_id
+
+    cycle = (
+        await db_session.execute(select(CropCycleRow).where(CropCycleRow.plot_id == plot.id))
+    ).scalar_one()
+    assert cycle.status == "active"
+
+    nodes = (
+        (await db_session.execute(select(NodeRow).where(NodeRow.plot_id == plot.id)))
+        .scalars()
+        .all()
+    )
+    assert len(nodes) == 2
+    assert all(node.org_id == org.org_id for node in nodes)
+    assert all(node.claimed_at is not None for node in nodes)
+
+
+async def test_the_node_carries_the_sensors_the_scenario_publishes(
+    db_session: AsyncSession,
+) -> None:
+    """The node publishes the scenario's channels, so it carries a sensor per
+    trajectory (docs/06-diseno-detallado.md:432-434)."""
+    org = await _org(db_session, phone="+573000000002")
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+    node_id = UUID(response.json()["node_ids"][0])
+
+    sensors = (
+        (await db_session.execute(select(SensorRow).where(SensorRow.node_id == node_id)))
+        .scalars()
+        .all()
+    )
+
+    assert {sensor.channel_key for sensor in sensors} == {
+        "soil_moisture_30cm",
+        "air_temp",
+        "air_rh",
+    }
+    soil = next(sensor for sensor in sensors if sensor.channel_key == "soil_moisture_30cm")
+    assert soil.metric == "soil_moisture"
+    assert soil.depth_cm == 30
+
+
+async def test_the_soil_carries_the_scenario_water_limits(
+    db_session: AsyncSession,
+) -> None:
+    """The scenario's soil block is the authority of its arithmetic
+    (docs/06-diseno-detallado.md:427), so the parcel's profile carries it and
+    not FAO-56's table value."""
+    org = await _org(db_session, phone="+573000000003")
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+    plot_id = UUID(response.json()["plot_ids"][0])
+
+    profile = (
+        await db_session.execute(select(SoilProfileRow).where(SoilProfileRow.plot_id == plot_id))
+    ).scalar_one()
+
+    assert float(profile.field_capacity_pct) == 23.0
+    assert float(profile.wilting_point_pct) == 9.0
+    assert float(profile.root_depth_cm) == 60.0
+
+
+async def test_a_second_load_of_the_same_day_answers_the_same_ids(
+    db_session: AsyncSession,
+) -> None:
+    """Idempotent per (scenario, day-anchor): the second load finds what the
+    first one left instead of creating a second parcel."""
+    org = await _org(db_session, phone="+573000000004")
+    client = _client()
+
+    first = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+    second = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert second.json()["plot_ids"] == first.json()["plot_ids"]
+    assert second.json()["node_ids"] == first.json()["node_ids"]
+
+    plots = (await db_session.execute(select(PlotRow))).scalars().all()
+    assert len(plots) == 1
+
+
+async def test_a_replace_recreates_the_base_data(db_session: AsyncSession) -> None:
+    """`replace=true` recreates the load: a new parcel, a new cycle and new
+    nodes, and the previous ones leave no balance behind."""
+    org = await _org(db_session, phone="+573000000005")
+    client = _client()
+
+    first = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+    replaced = client.post(
+        "/dev/scenarios/el-nino:load", json={"replace": True}, headers=_auth(org)
+    )
+
+    assert replaced.status_code == 202
+    assert replaced.json()["plot_ids"] != first.json()["plot_ids"]
+    assert replaced.json()["node_ids"] != first.json()["node_ids"]
+
+    old_plot_id = UUID(first.json()["plot_ids"][0])
+    old_cycle = (
+        await db_session.execute(select(CropCycleRow).where(CropCycleRow.plot_id == old_plot_id))
+    ).scalar_one()
+    assert old_cycle.status != "active"
+
+    old_nodes = (
+        (await db_session.execute(select(NodeRow).where(NodeRow.plot_id == old_plot_id)))
+        .scalars()
+        .all()
+    )
+    assert all(node.status == "retired" for node in old_nodes)
+
+
+async def test_a_day_that_has_not_happened_yet_is_unprocessable(
+    db_session: AsyncSession,
+) -> None:
+    """Like `/dev/jobs`: a future day is 422, not a scenario nobody can load."""
+    org = await _org(db_session, phone="+573000000006")
+    tomorrow = local_today() + timedelta(days=1)
+
+    response = _client().post(
+        "/dev/scenarios/el-nino:load", json={"day": tomorrow.isoformat()}, headers=_auth(org)
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_an_unknown_scenario_is_not_found(db_session: AsyncSession) -> None:
+    org = await _org(db_session, phone="+573000000007")
+
+    response = _client().post("/dev/scenarios/no-existe:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 404
+
+
+async def test_a_load_that_belongs_to_another_organization_is_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """The load is a resource of the organization that owns it, so another
+    organization answers 404 — never 403, which would reveal that it exists
+    (docs/04-api.md:16)."""
+    first = await _org(db_session, phone="+573000000008")
+    second = await _org(db_session, phone="+573000000009")
+    client = _client()
+
+    loaded = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(first))
+    assert loaded.status_code == 202
+
+    response = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(second))
+
+    assert response.status_code == 404
+
+
+async def test_a_caller_without_a_session_is_unauthorized(db_session: AsyncSession) -> None:
+    response = _client().post("/dev/scenarios/el-nino:load", json={})
+
+    assert response.status_code == 401
