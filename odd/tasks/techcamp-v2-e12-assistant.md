@@ -217,7 +217,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   planning is never delegated; the `domain-modeling` skill is not installed in this repo, so the
   existing doc conventions are followed (E10 T0 precedent).
 
-- [ ] **T1 — Ports and test doubles**: `LLMClient.stream(messages) → tokens`, `Embedder.embed(texts)`,
+- [x] **T1 — Ports and test doubles**: `LLMClient.stream(messages) → tokens`, `Embedder.embed(texts)`,
   `KnowledgeRepository` (search by embedding with a similarity floor; document lookup for citations),
   conversation/message persistence, and a usage/quota port that answers *questions used today* and
   *month spend so far* as pure domain rules. Domain: the daily-limit arithmetic in `America/Bogota`
@@ -461,7 +461,30 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
 
 ## Review (RDD)
 
-Empty until T0 lands. Per work-unit commit: `gentle-ai review assess` against the previous reviewed
+- **T1 — `review-ac9e8e40979d08c2` — aprobado y reconocido.** Target `sha256:5bdc4edd…`, lente
+  `review-reliability` (medium, 2811 líneas, presupuesto de corrección 200). Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `consumed_revision sha256:89d40da5…`, `authority: burned`,
+  `delivery: ordinary-repository-policy`.
+  - Un lineage previo (`review-ac30d09f29b4d91f`) encontró **R3-QUOTA-RACE** (CRITICAL): la admisión de
+    cuota era un read/check no atómico y el puerto de cuota no tenía reserva. La corrección fue
+    `UsageQuotaPort.admit_question` (reserva atómica) + `evaluate_quota` usándola + doble in-memory +
+    test de carrera, en 170 líneas de diff, admitidas por el plan de corrección.
+  - **Lección de proceso:** `capture-correction-plan` es un forecast **pre-edit**. Editar antes de
+    declarar el plan mueve el target y el binding emitido deja de coincidir; el ciclo correcto es
+    plan → edición → validación. Ese lineage quedó en `correction_required` porque su binding de
+    validación dirigida apuntaba al target del candidato de corrección y el controller lo rechazó
+    (`review repair --preflight` lo declara `unsupported`), así que se resolvió con un START fresco
+    sobre el árbol ya corregido.
+  - **Hallazgos no bloqueantes** (WARNING, `informational`; ninguno reabre la revisión; van al
+    issue `review-follow-up` #302 de la ronda): `R3-BLANK-MODEL-EVIDENCE`, `R3-CITATION-KIND-STRING-BYPASS`,
+    `R3-MESSAGE-CONVERSATION-MISMATCH`, `R3-QUOTA-RACE-DOUBLE`, `R3-QUOTA-REASON-PRECEDENCE`,
+    `R3-RESERVATION-DOUBLE-COUNT`, `R3-UNSTABLE-FRAGMENT-IDS`, `R3-USER-MESSAGE-LLM-EVIDENCE`. Los
+    que tocan el código de T1 (`BLANK-MODEL-EVIDENCE`, `CITATION-KIND-STRING-BYPASS`,
+    `USER-MESSAGE-LLM-EVIDENCE`, `QUOTA-REASON-PRECEDENCE`) se corrigen en su propio commit con
+    `Refs #302`, diferidos hasta que T2/T4 aterricen (decisión del dueño 2026-10-07); los que son
+    solo del doble de prueba se resuelven al escribir el adaptador.
+
+Per work-unit commit: `gentle-ai review assess` against the previous reviewed
 boundary, one lineage per unit, blocking findings in a bounded correction, non-blocking ones to one
 GitHub issue per review round (`review-follow-up`, `epic:e12`, `area:*`, `type:*`) linked from here with
 `Refs #N`. This document's own commit is a passive doc-only candidate.
@@ -563,12 +586,51 @@ lineage; no approved receipt means *not reviewed*, never approved.
     ([ADR-0007:39](../docs/adr/0007-llm-por-api.md)), que es coordinación con `identity` y `docs/04:33`.
   - Sin código fuente: documentación pasiva, sin pytest (C6).
 
+- 2026-10-07 — **T1, puertos y dobles de prueba.** Superficie: `assistant/{domain,application}/**` y
+  `server/tests/assistant/**`; nada más (ni `shared/**`, ni `pyproject.toml`, ni migraciones).
+  **Sin adaptadores todavía**: no hay cliente HTTP, ni ORM, ni SDK de proveedor.
+  - `domain/limits.py`: `DAILY_QUESTION_LIMIT = 10`, `RETRIEVAL_TOP_K = 5`, `SIMILARITY_FLOOR = 0.75`
+    como constantes nombradas, `questions_remaining`, `daily_limit_exhausted`,
+    `seconds_until_local_midnight` (America/Bogota, valor del `Retry-After`),
+    `month_spend_cop` (ignora `None`, D-T12.1) y `budget_exhausted`.
+  - `domain/prompt_policy.py`: las cinco reglas de docs/06:381-387 en español simple, el
+    `PromptSection` con la lista de envío de D-T12.6 (`system`, `plot_facts`, `fragments`,
+    `question`) y `validate_prompt_sections` que rechaza cualquier otra sección.
+  - `domain/citations.py`: `Citation` con `source` obligatorio y `model_version` + `is_baseline`
+    obligatorios cuando la cita habla de una predicción; `domain/models.py`: `MessageRole`,
+    `ChatMessage`, `MessageEvidence` (todo o nada en `None`: `0` nunca sustituye evidencia ausente,
+    y `model is None` distingue "no se llamó al LLM" de "se llamó y no costó nada"), `Conversation`
+    (sin `org_id`, D-T12.5) y `Message` (`helpful` solo en turnos del asistente).
+  - `application/ports.py`: `LLMClient.stream` (una llamada, tokens, el último token con `usage` y
+    `model` → `cost_cop`, ADR-0026), `Embedder.embed` con `EMBEDDING_DIMENSION = 384`
+    (`intfloat/multilingual-e5-small`, ADR-0026), `KnowledgeRepository.search_by_embedding` +
+    `get_document` **sin filtro de org** (D-T12.5), persistencia de conversación/mensajes con
+    `user_id` en cada método (404, nunca 403), y `UsageQuotaPort`.
+  - `application/usage.py`: `evaluate_quota` → `QuotaDecision`; el tope llega como argumento porque
+    es lo único que cambia por perfil (D-T12.3). **La función no tiene forma de alcanzar al
+    proveedor**, así que "presupuesto agotado → cero llamadas al LLM" es estructural, no una promesa.
+  - `tests/assistant/`: dobles in-memory de los seis puertos (`doubles.py`) y 98 tests en seis
+    módulos, uno por comportamiento, con RED observado antes de cada GREEN.
+  - **Verificación:** `just gate-fast` → verde; `just gate server/tests/assistant` → verde, 98
+    passed (seed aleatorio, más dos semillas fijas sin acoplamiento de orden).
+  - **Desviación declarada:** `domain/limits.py` importa `techcamp.shared.dates.BOGOTA_TZ`; es el
+    primer `domain` del repo que importa `techcamp.shared` (import-linter no lo ve porque `shared`
+    no es un contenedor). Se sigue la instrucción del brief y se conserva un único dueño de la zona
+    horaria del producto; si el dueño prefiere cero imports desde `domain`, es una línea a cambiar.
+  - **Superficie que T1 deja deliberadamente fuera:** `KnowledgeRepository` **no** tiene puerto de
+    escritura (`upsert_document`/`upsert_chunks`, la clave idempotente `(source_url, sha256)` y la
+    columna `sha256`): se definen juntas con el esquema de T2, no antes. `UsageQuotaPort` devuelve
+    **las filas** del mes con sus `None` y no un `SUM` SQL, para que `month_spend_cop` siga siendo la
+    regla que ignora el costo ausente; a ~54 000 filas/mes (ADR-0007:9) el `SUM` en SQL es la lectura
+    más barata, así que T6 debe revisarlo.
+
 ## Next step
 
-**T1 arranca ya, y el padre marca T0 cerrada.** El pin ya no bloquea a nadie: con `384` fijado,
-**T2 también puede arrancar** (`vector(384)` + HNSW coseno) en cuanto T1 le cierre los contratos de puerto.
+**T2 puede arrancar ya** (el pin de 384 y los contratos de puerto están), y **T4 en paralelo**
+(superficies disjuntas). T3 espera la revisión de licencia del corpus. El pin ya no bloquea a nadie: con `384` fijado,
+**T2 también puede arrancar** (`vector(384)` + HNSW coseno) con los contratos de puerto ya cerrados.
 
-Lo que queda es decisión del dueño, y ninguna de las tres bloquea a T1 ni a T2:
+Lo que queda es decisión del dueño, y ninguna de las tres bloquea a T2 ni a T4:
 
 1. **D-T12.3: confirmar el límite de 10/día en ambos perfiles.** Sigue anotado como owner-confirmable en
    `docs/04:22`; si se revierte a solo-`production`, esa fila y [ADR-0007:5](../docs/adr/0007-llm-por-api.md)
