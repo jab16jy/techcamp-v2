@@ -176,7 +176,7 @@ shrink a diff to fit one*).
   extension + tests, floor ~500. **Route: delegated** (trigger: writer;
   extends `simulator/`). **Depends T1.** Parallel with T3 (disjoint files:
   CLI vs `/dev` route).
-- [ ] **T3 — `/dev/scenarios/{name}:load` + `record-weather`.**
+- [x] **T3 — `/dev/scenarios/{name}:load` + `record-weather`.**
   Seminar-only route per D-T16.2 (base data + fixture load → 202,
   `docs/04-api.md:263`); `sim record-weather` capturing Open-Meteo once per
   D-T16.3. Org-scoped creation, `404` for another org. Forecast: route +
@@ -378,3 +378,39 @@ commit is a passive doc-only candidate (C6).
   facade/snake_case trap no foreign lineage was started and no correction
   opened — the lineage sits in `collect` and needs a maintainer runtime fix,
   not a source change. Delivery of this lane remains owner-owned.
+- 2026-10-24: **T3 implemented** on branch `e16-t3` (base `6c56be1`), worktree
+  `techcamp-v2-worktrees/e16-t3`. Eight work units: `9117308` (the library
+  loads the synthetic fixture — its envelope needed `synthetic_reason` as an
+  optional key), `419f109` (the fixture lands in `weather_daily` through a
+  `WeatherFixtureWriter` port), `159ab5e` (the seminar-only route + the
+  loader), `d821130` (the recorder and `sim record-weather`), `219aa57` (the
+  domain errors the load raises are translated), `d871b5f` (a refused load
+  writes nothing; a broken contract answers problem+json), `f4f19ab` (the
+  recorder refuses with a message, not a traceback), `0314f25` (the whole
+  recording is guarded, and the pre-flight asks farms' and telemetry's write
+  roles). 15 files, +2850/−8. **No push, no PR** — delivery stays owner-owned.
+- T3 observations: the route is registered only under `is_seminar_profile()`
+  (ADR-0021) and requires a bearer token (H9); it answers 404 for a load in
+  another organization, never 403. The idempotency key is the plot's own name
+  (`Escenario <scenario> <day-anchor>`), so a reload returns the same ids and
+  rotates the node credential; `replace` retires the previous cycle and nodes
+  because farms has no delete use case. The response adds `cycle_ids` and
+  `node_credentials` to the documented `{scenario, plot_ids, node_ids}`
+  (docs/04 allows adding fields): the claim's password is readable only once.
+  The default anchor is today minus the fixture's observed days. The
+  organization is **not** created (identity has no use case for it), so the
+  loader resolves the caller's own and `sim run` (T2) has to create it first.
+  One deviation from the read-only list: `scenario_library.py`'s envelope
+  gained `synthetic_reason` as an optional key.
+- T3 checks: `uv run pytest tests/simulator/ -q` → 188 passed, 27 skipped;
+  `ruff format --check`, `ruff check`, `mypy`, `lint-imports`, `ast-grep test`
+  green. RDD in three rounds: PASS-WITH-FINDINGS (0 blocking), then FAIL (two
+  blocking: telemetry keeps its own `InsufficientRoleError`, which reached
+  the route untranslated, and the credential-rotation test stayed green even
+  without the rotation), then PASS-WITH-FINDINGS (0 blocking) twice. The
+  blocking findings were corrected in the branch's own commits; the
+  non-blocking ones went to #333 (a replaced rainfed parcel stays in the
+  balance scope), #334 (retired nodes still open `node_offline`), #335 (the
+  four fixtures share a cell and overwrite each other) and #337 (a scenario
+  YAML that does not parse escapes as a traceback — the fix belongs to
+  `scenario_schema.py`, T1's file). The rounds are tracked in #336.
