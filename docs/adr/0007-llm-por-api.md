@@ -2,7 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-22
-- **Alcance:** ambos perfiles. En el perfil `seminar` se usa la API real con un tope total de USD 5 y un modo sin LLM; el límite diario por usuario y el tope mensual son el presupuesto del perfil `production` (futuro) ([ADR-0021](0021-perfil-seminario-local.md)).
+- **Alcance:** ambos perfiles. En el perfil `seminar` se usa la API real con un tope total de USD 5 y un modo sin LLM; el **tope mensual** es el presupuesto del perfil `production` (futuro) ([ADR-0021](0021-perfil-seminario-local.md)). El **límite diario por usuario (10 preguntas/día) aplica en los dos perfiles**, confirmado por el dueño el 2026-10-21 (E12, `D-T12.3`): lo que cambia por perfil es el tope de presupuesto, no el límite diario.
 
 ## Contexto
 

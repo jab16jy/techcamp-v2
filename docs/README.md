@@ -65,7 +65,6 @@ flowchart LR
 
 | Pendiente | Cuándo |
 |---|---|
-| Proveedor de LLM y de embeddings (evaluación con 30 preguntas). **Sigue abierto**: E12 solo fijó un pin provisional (DeepSeek para el LLM y un embedding local barato) en [ADR-0026](adr/0026-proveedor-provisional-e12.md); lo cierra la evaluación de T8, que también escribe los precios reales en [02:78](02-estimaciones.md#costo-del-llm) | E12 (T8) |
 | Proveedor S3 y de SMS/WhatsApp | Producción futura |
 | Hardware de nodos LoRaWAN para el plan AU915 (915–928 MHz, ya fijado en [02](02-estimaciones.md#restricciones)); verificar los límites de potencia del Anexo 1 de la Res. ANE 105 de 2020 antes de comprar | Producción futura (E13) |
 | Grabar los fixtures de clima de cada escenario | E16 |

@@ -29,8 +29,9 @@ Cada ADR registra una decisión importante: su contexto, las alternativas y las 
 | [0023](0023-parcelas-con-riego-y-secano.md) | Parcelas con riego y de secano: el mismo balance hídrico, con lámina o con recomendación de secano | Aceptada |
 | [0024](0024-metricas-de-impacto-y-adopcion-digital.md) | Métricas de impacto y adopción digital: impacto contra la encuesta de inscripción e índice que cuenta acciones | Aceptada; modificada por 0025 |
 | [0025](0025-la-accion-de-water-stress-es-de-la-parcela.md) | La acción de `water_stress` que cuenta en el índice de adopción es de la parcela, no del ciclo de cultivo | Aceptada |
-| [0026](0026-proveedor-provisional-e12.md) | Proveedor provisional del asistente: `deepseek-chat` por API compatible con OpenAI y embeddings locales `multilingual-e5-small` (384, MIT) | Aceptada |
+| [0026](0026-proveedor-provisional-e12.md) | Proveedor provisional del asistente: `deepseek-chat` por API compatible con OpenAI y embeddings locales `multilingual-e5-small` (384, MIT) | Aceptada; el nombre del LLM lo actualiza 0028 |
 | [0027](0027-stream-asistente-e12.md) | El stream del asistente es el cuerpo de su propia respuesta (`POST` + `text/event-stream`), no el stream de tiempo real del hub | Aceptada |
+| [0028](0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md) | Proveedor confirmado `deepseek-flash` sin thinking (el alias `deepseek-chat` se retiró), umbral de la evaluación de 30 preguntas fijado antes de correr, política de licencia del corpus y sin migración de dimensión | Aceptada |
 
 Los ADRs 0004, 0007 (en parte), 0014, 0016, 0017 y 0018 describen el perfil `production` (futuro). Cada uno lleva una nota de **Alcance** que remite al [ADR-0021](0021-perfil-seminario-local.md), donde se definen los adaptadores del perfil `seminar`. Esa nota no cambia la decisión.
 

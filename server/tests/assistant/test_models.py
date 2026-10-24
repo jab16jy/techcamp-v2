@@ -37,7 +37,18 @@ _USER_ID = UUID("33333333-3333-3333-3333-333333333333")
 
 
 def test_a_turn_is_written_by_the_user_or_by_the_assistant() -> None:
-    assert {role.value for role in MessageRole} == {"user", "assistant"}
+    """A **stored** turn has two roles (docs/03-modelo-datos.md:368-376).
+
+    T5 widened the vocabulary by one role for the *outbound* payload: the rules
+    need a `system` message of their own so the facts and the fragments can
+    travel as data (docs/09:75, D-T12.6). `Message` refuses that role
+    (`SystemRoleOnStoredMessageError`, asserted in `test_prompt_assembly`), so
+    the roles a transcript may hold are still exactly these two — pinned here as
+    the set minus the wire-only one, and not as the whole enum.
+    """
+    stored = {role.value for role in MessageRole} - {MessageRole.SYSTEM.value}
+
+    assert stored == {"user", "assistant"}
 
 
 def test_a_conversation_carries_its_owner_its_plot_and_nothing_else() -> None:

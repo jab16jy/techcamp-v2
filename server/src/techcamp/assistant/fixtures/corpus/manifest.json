@@ -1,0 +1,33 @@
+{
+  "corpus": "fixture-seminario-e12-t3",
+  "notice": "FIXTURES ONLY (ADR-0008:32). Every document below is a test fixture written for E12 T3, not a real bulletin or guide, and every source_url names a host reserved for examples (RFC 2606) so nothing here can be mistaken for a document the repository has the right to load. The real corpus is a directory the owner points TECHCAMP_KB_CORPUS_DIR at once the licence review is signed; it is never downloaded.",
+  "documents": [
+    {
+      "file": "boletin-agroclimatico-nacional-2026-09.md",
+      "title": "Boletín Agroclimático Nacional — septiembre de 2026 (fixture)",
+      "source_url": "https://example.invalid/boletin-agroclimatico-nacional-2026-09",
+      "license": "CC-BY-4.0 (test fixture)",
+      "kind": "agroclimatic_bulletin",
+      "published_on": "2026-09-30",
+      "department": null
+    },
+    {
+      "file": "boletin-mesa-tecnica-cordoba-2026-09.md",
+      "title": "Boletín Mesa Técnica Agroclimática de Córdoba — septiembre de 2026 (fixture)",
+      "source_url": "https://example.invalid/boletin-mesa-tecnica-cordoba-2026-09",
+      "license": "CC-BY-4.0 (test fixture)",
+      "kind": "agroclimatic_bulletin",
+      "published_on": "2026-09-28",
+      "department": "Córdoba"
+    },
+    {
+      "file": "guia-riego-goteo-caribe.md",
+      "title": "Guía de riego por goteo para el Caribe colombiano (fixture)",
+      "source_url": "https://example.invalid/guia-riego-goteo-caribe",
+      "license": "CC-BY-4.0 (test fixture)",
+      "kind": "guide",
+      "published_on": "2026-09-15",
+      "department": null
+    }
+  ]
+}
