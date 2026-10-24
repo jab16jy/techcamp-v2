@@ -68,14 +68,28 @@ async def claim_node(
     )
 
 
-def _calibration_payload(sensor: dict[str, Any], *, valid_from: datetime) -> dict[str, Any]:
-    """docs/03-modelo-datos.md:463-467. A `%` sensor (soil moisture) gets the
-    doc's own two-point example; any other unit gets an identity linear
-    calibration — no other unit/range convention is documented, so this
-    doesn't invent one (T8 gap, see the task report)."""
-    if sensor["unit"] == "%":
+def _calibration_payload(
+    sensor: dict[str, Any],
+    *,
+    valid_from: datetime,
+    soil_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The calibration one sensor gets (docs/03-modelo-datos.md:463-467).
+
+    The branch is the sensor's metric, not its unit: soil moisture is the one
+    channel that travels as raw ADC (docs/04:313), so it gets the two-point
+    calibration — the scenario path passes the node's own `soil_params`
+    (docs/06:484: each simulated node has its own). An air channel travels as
+    its physical value (docs/04:304: `at 31.2, rh 68`), so it gets an identity
+    linear calibration; a `rh` sensor reading `%` must not inherit the soil
+    probe's two-point span."""
+    if sensor["metric"] == "soil_moisture":
         method: CalibrationMethod = CalibrationMethod.TWO_POINT
-        params: dict[str, Any] = {"raw_dry": 2900, "raw_wet": 1300, "vwc_dry": 5, "vwc_wet": 45}
+        params: dict[str, Any] = (
+            dict(soil_params)
+            if soil_params is not None
+            else {"raw_dry": 2900, "raw_wet": 1300, "vwc_dry": 5, "vwc_wet": 45}
+        )
     else:
         method = CalibrationMethod.LINEAR
         params = {"scale": 1.0, "offset": 0.0}
@@ -88,15 +102,23 @@ def _calibration_payload(sensor: dict[str, Any], *, valid_from: datetime) -> dic
 
 
 async def ensure_calibrations(
-    client: httpx.AsyncClient, *, token: str, node: ClaimedNode, valid_from: datetime
+    client: httpx.AsyncClient,
+    *,
+    token: str,
+    node: ClaimedNode,
+    valid_from: datetime,
+    soil_params: dict[str, Any] | None = None,
 ) -> None:
     """POST one calibration per sensor so backfilled readings land calibrated
-    (docs/06 §10: "cada nodo simulado tiene su calibración")."""
+    (docs/06 §10: "cada nodo simulado tiene su calibración"). `soil_params` is
+    the node's own two-point coefficients — the same `soil_two_point_params`
+    the runner inverts, so what calibrates the readings is exactly what
+    produced them."""
     headers = {"Authorization": f"Bearer {token}"}
     for sensor in node.sensors:
         response = await client.post(
             f"/sensors/{sensor['id']}/calibrations",
-            json=_calibration_payload(sensor, valid_from=valid_from),
+            json=_calibration_payload(sensor, valid_from=valid_from, soil_params=soil_params),
             headers=headers,
         )
         response.raise_for_status()
