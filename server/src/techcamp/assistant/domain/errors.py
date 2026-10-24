@@ -32,6 +32,29 @@ class PromptSectionNotAllowedError(Exception):
         super().__init__(f"Prompt section {section!r} is not part of the send-list")
 
 
+class SystemRoleOnStoredMessageError(Exception):
+    """Raised when a stored message claims to be the system prompt (T5, D-T12.6).
+
+    `MessageRole` carries `SYSTEM` because the **outbound** payload needs a role
+    for the rules: docs/06-diseno-detallado.md §9 sends "sistema + hechos de la
+    parcela + fragmentos + pregunta", and the fragments and the producer's own
+    text travel as *data* in user messages (docs/09-cuellos-de-botella.md
+    §Seguridad), so the rules need a role of their own to stay separable from
+    them.
+
+    A **stored** turn may never be one. The system prompt is assembled per
+    request and never persisted — `PromptSection.SYSTEM` is not a transcript — so
+    a `message` row with `role = 'system'` would be an instruction kept in the
+    database, which is exactly what D-T12.6 keeps out of storage.
+    """
+
+    def __init__(self, message_id: UUID) -> None:
+        self.message_id = message_id
+        super().__init__(
+            f"message {message_id} claims role 'system': the system prompt is never stored"
+        )
+
+
 class CitationMissingModelVersionError(Exception):
     """Raised when a citation about a prediction does not name the version that
     produced it (docs/06-diseno-detallado.md §9, docs/04-api.md §Riesgo,
