@@ -18,7 +18,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from .scenario_library import (
+from techcamp.simulator.scenario_library import (
     FORECAST_DAYS,
     SCENARIO_NAMES,
     WEATHER_DIR,

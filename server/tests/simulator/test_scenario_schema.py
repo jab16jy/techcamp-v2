@@ -19,8 +19,8 @@ from typing import Any
 import pytest
 import yaml
 
-from .scenario_library import SCENARIOS_DIR, WEATHER_DIR, file_sha256
-from .scenario_schema import MAX_NODES, ScenarioSchemaError, parse_scenario
+from techcamp.simulator.scenario_library import SCENARIOS_DIR, WEATHER_DIR, file_sha256
+from techcamp.simulator.scenario_schema import MAX_NODES, ScenarioSchemaError, parse_scenario
 
 FIXTURE = "el-nino-caribe.json"
 """The recording scenario A pins; present since U1, so its digest is real here."""

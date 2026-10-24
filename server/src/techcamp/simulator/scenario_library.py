@@ -31,7 +31,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-SERVER_DIR = Path(__file__).resolve().parents[2]
+SERVER_DIR = Path(__file__).resolve().parents[3]
 SCENARIOS_DIR = SERVER_DIR / "src" / "techcamp" / "simulator" / "scenarios"
 WEATHER_DIR = SCENARIOS_DIR / "weather"
 
@@ -202,6 +202,7 @@ def _parse_day(index: int, row: Any, where: str) -> FixtureDay:
 
 
 def _parse_envelope(name: str, raw: Any, where: str) -> dict[str, Any]:
+    assert isinstance(raw, dict)
     _require_keys(raw, REQUIRED_ENVELOPE_KEYS, where)
     _require(raw["name"] == name.removesuffix(".json"), f"{where}: name must match the filename")
     _require(raw["scenario"] in SCENARIO_NAMES, f"{where}: unknown scenario {raw['scenario']!r}")
@@ -233,7 +234,8 @@ def _parse_envelope(name: str, raw: Any, where: str) -> dict[str, Any]:
         raw["synthetic"] == ("synthetic_reason" in raw),
         f"{where}: synthetic_reason must be present exactly when synthetic is true",
     )
-    _require(isinstance(raw["days"], list) and raw["days"], f"{where}: days must be non-empty")
+    days = raw["days"]
+    _require(isinstance(days, list) and bool(days), f"{where}: days must be non-empty")
     return raw
 
 
