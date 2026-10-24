@@ -168,7 +168,7 @@ shrink a diff to fit one*).
   Forecast: 6 YAMLs + 2 fixtures + schema validation tests, floor ~300.
   **Route: delegated** (trigger: writer; new files, frozen schema five tasks
   consume). **Depends T0.**
-- [ ] **T2 — Runner `--scenario` + faults + truth.** `sim run --scenario
+- [x] **T2 — Runner `--scenario` + faults + truth.** `sim run --scenario
   <name> --backfill <dur> [--live]` (docs/06:408): multi-node trajectories,
   faults (`offline` hours, out-of-range `quality = 2`, `seq` gaps —
   docs/06:488), raw ADC + per-node calibration (docs/06:484), `--seed`
@@ -378,3 +378,39 @@ commit is a passive doc-only candidate (C6).
   facade/snake_case trap no foreign lineage was started and no correction
   opened — the lineage sits in `collect` and needs a maintainer runtime fix,
   not a source change. Delivery of this lane remains owner-owned.
+- 2026-10-24: T2 implemented on `e16-t2` (base `6c56be1`) as four work-unit
+  commits — `55dbbf1` (scenario trajectory math: ramp, daily bands, seeded
+  noise via crc32 sub-seeds, per-node two-point params with ordinal 1 =
+  docs/03:463-467's example, `invert_two_point` proved against the server's
+  own `apply_calibration`), `3c17765` (`publish_scenario_backfill/live`:
+  one publisher per node per the broker ACL of docs/04:294, `seq` counts
+  ticks so an `offline` pause leaves a jump on resume — node-failure skips
+  32 ticks at day 4, seq 384 → 417 —, `--seed` byte-identical replay, and
+  the noiseless truth export per tick, pauses included; ~600 authored lines,
+  tests dominate, sliced no further because the runner is one behavior),
+  `bc4d2a0` (`provision_scenario`: org/owner/farm/plot/cycle/soil/nodes in
+  one transaction with staged flushes — the unit of work cannot order
+  cross-module rows without `relationship()`s), `eeb92ca` (the `run`
+  subcommand beside the unchanged legacy flags, `14d`-style durations,
+  `--seed` default 0, `--truth-export PATH` defaulting to
+  `<scenario>-truth.json`, per-node calibration posting; node-less scenario
+  E provisions and exits without MQTT; the runner never writes
+  `weather_daily`, which T3 owns). Verified: touched tests 47 passed;
+  simulator suite 175 passed / 27 skipped (also under `--randomly-seed=4242`);
+  ruff format/check, mypy strict (260 files), lint-imports and ast-grep green.
+  Fast-forward merged into `docs/e16-blockers-assessment`
+  (`6c56be1` → `eeb92ca`, no conflicts — T3 had not landed) and re-verified
+  in the epic worktree against its own database.
+- T2 decisions: docs/06:488 read as — the out-of-range `quality = 2` reading
+  belongs to *noise* configuration ("el ruido y las fallas son configurables
+  … lecturas fuera de rango"), not to an `offline` pause; D-T16.8's own
+  parenthetical narrows the fault to a pure publish pause, so the runner
+  emits no synthetic out-of-range uplink (no scenario's noise ≤ 1.2 can push
+  a value out of [0, 100] today). Truth export per D-T16.7 written separately
+  from the noisy published values, byte-deterministic (sorted keys, compact
+  separators, no generation timestamp), seed recorded as provenance.
+  `parse_args` is now subcommand-based: T3's `record-weather` slots in as
+  another `add_parser` (its lane was cut from `6c56be1` and will conflict
+  textually in `__main__.py`).
+- T2 RDD: pending, owner-owned — the four commits (`55dbbf1`, `3c17765`,
+  `bc4d2a0`, `eeb92ca`) are native review candidates against `6c56be1`.
