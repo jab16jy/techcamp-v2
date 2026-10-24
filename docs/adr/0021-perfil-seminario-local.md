@@ -27,7 +27,7 @@ Dos **perfiles de ejecución** sobre la misma base de código. Cambian los **ada
 | Clima | Open-Meteo gratis (uso no comercial) **más fixtures grabados** por escenario | Open-Meteo con plan comercial si aplica |
 | Suelo (SoilGrids) | Respuesta **grabada** de ISRIC SoilGrids (offline, determinista, mismo patrón que el clima) | API real de ISRIC SoilGrids |
 | Almacenamiento de objetos | MinIO en Docker | S3 compatible ([ADR-0018](0018-almacenamiento-de-objetos.md)) |
-| LLM | API real con **tope de presupuesto de USD 5** y modo sin LLM disponible | API real con tope mensual ([ADR-0007](0007-llm-por-api.md)) |
+| LLM | API real con **tope de presupuesto de USD 5** y modo sin LLM disponible; el límite de 10 preguntas/día aplica en los **dos** perfiles (E12, `D-T12.3`) | API real con tope mensual ([ADR-0007](0007-llm-por-api.md)) |
 | Jobs diarios | Programados **y** ejecutables al instante con `POST /dev/jobs/{name}:run` | Solo programados |
 | Proxy y TLS | Vite dev server; túnel HTTPS (cloudflared o ngrok) solo para probar en un teléfono | Caddy con TLS automático |
 | Backups, monitoreo, DR | No aplica | pgBackRest, Prometheus, Grafana ([09](../09-cuellos-de-botella.md)) |

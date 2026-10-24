@@ -341,60 +341,71 @@ class FakeMessageRepository:
 
 
 class FakeUsageQuota:
-    """A `UsageQuotaPort` over the turns a `MessageRepository` holds, plus the
-    questions it has admitted.
+    """A `UsageQuotaPort` over the turns a `MessageRepository` holds.
 
     Both reads resolve the day and the month in **America/Bogota**
     (docs/06-diseno-detallado.md §9), which is the whole reason this is not a
     `date(created_at)`: 2026-10-07T02:00Z is still the 6th for the quota, and a
     question counts whether it was answered by the model or degraded without it.
 
-    The reservations are what `admit_question` records, and a count that read
-    `questions_asked_on` includes them: a real adapter's reservation is the write
-    that makes the count true, so a question that was admitted but not yet
-    answered is still a question of that day.
+    The month read adds the stored `cost_cop` values through
+    `domain.limits.month_spend_cop` — the rule `SqlAlchemyUsageQuota` executes as a
+    `SUM`. The double and the adapter have to agree on what a missing cost means
+    (D-T12.1), or a test that passes with this one fails against Postgres.
+
+    `admit_question` stores the question and then answers from the store that now
+    holds it: a single-threaded double's serialization stands in for the adapter's
+    advisory lock, so a second call sees the first one's question.
     """
 
     def __init__(self, *, messages: FakeMessageRepository) -> None:
         self.messages = messages
-        self._reserved: list[tuple[UUID, date]] = []
 
     async def questions_asked_on(self, *, user_id: UUID, day: date) -> int:
-        stored = sum(
+        return sum(
             1
             for message in await self._visible(user_id=user_id)
             if message.role is MessageRole.USER and _local(message.created_at).date() == day
         )
-        return stored + sum(
-            1
-            for reserved_user, reserved_day in self._reserved
-            if (reserved_user, reserved_day) == (user_id, day)
-        )
 
-    async def month_costs_cop(self, *, user_id: UUID, month: date) -> list[Decimal | None]:
-        return [
+    async def month_spend_cop(self, *, user_id: UUID, month: date) -> Decimal:
+        return month_spend_cop(
             message.evidence.cost_cop
             for message in await self._visible(user_id=user_id)
             if (_local(message.created_at).year, _local(message.created_at).month)
             == (month.year, month.month)
-        ]
+        )
 
     async def admit_question(
-        self, *, user_id: UUID, day: date, month: date, budget_cap_cop: Decimal
+        self,
+        *,
+        user_id: UUID,
+        conversation_id: UUID,
+        question: Message,
+        day: date,
+        month: date,
+        budget_cap_cop: Decimal | None,
     ) -> bool:
-        """Reserve the question, or refuse it without recording anything.
+        """Store the question, then answer from the store that now holds it.
 
-        The refusal is decided before the reservation is appended, which is the
-        whole point of the atomic admission (R3-QUOTA-RACE): two callers that both
-        arrived at the ninth question cannot both be served the tenth, because the
-        second one counts the first one's reservation.
+        The count and the sum are read **before** the write, so the question being
+        decided is not counted against itself: with nine questions on the day this
+        one is the tenth and is admitted, which is exactly docs/04:22.
+
+        The write still happens before the decision is returned, so a second caller
+        sees this one's question — the serialization a single-threaded double gets
+        for free is what stands in for the adapter's advisory lock.
         """
+        if question.conversation_id != conversation_id:
+            raise ConversationNotFoundError(conversation_id)
         asked_today = await self.questions_asked_on(user_id=user_id, day=day)
-        spend = month_spend_cop(await self.month_costs_cop(user_id=user_id, month=month))
-        if daily_limit_exhausted(asked_today) or budget_exhausted(spend, budget_cap_cop):
-            return False
-        self._reserved.append((user_id, day))
-        return True
+        spend = await self.month_spend_cop(user_id=user_id, month=month)
+        admitted = not (
+            daily_limit_exhausted(asked_today)
+            or (budget_cap_cop is not None and budget_exhausted(spend, budget_cap_cop))
+        )
+        await self.messages.add(user_id=user_id, conversation_id=conversation_id, message=question)
+        return admitted
 
     async def _visible(self, *, user_id: UUID) -> list[Message]:
         visible: list[Message] = []
