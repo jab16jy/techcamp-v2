@@ -123,3 +123,127 @@ async def test_provision_unclaimed_node_leaves_no_node_when_the_sensor_insert_fa
 
     after = set((await db_session.execute(select(NodeRow.id))).scalars().all())
     assert after == before
+
+
+async def test_provision_scenario_creates_the_full_org_farm_plot_cycle_soil_and_nodes(
+    db_session: AsyncSession,
+) -> None:
+    """D-T16.5 (docs/06:409): `sim run --scenario` absorbs creation of org,
+    finca, parcela, ciclo y nodos; the nodes come back as claim codes for the
+    existing HTTP claim path, not as pre-claimed rows."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from techcamp.farms.adapters.orm import (
+        CropCycleRow,
+        CropRow,
+        FarmRow,
+        PlotRow,
+        SoilProfileRow,
+    )
+    from techcamp.identity.adapters.orm import AppUserRow, MembershipRow
+    from techcamp.shared.dates import local_today
+    from techcamp.simulator.provision import provision_scenario
+    from techcamp.simulator.scenario_schema import load_scenario
+
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
+    provision = await provision_scenario(db_session, load_scenario("el-nino"), now=now)
+
+    membership = (await db_session.execute(select(MembershipRow))).scalar_one()
+    assert membership.role == "owner"
+    user = (
+        await db_session.execute(select(AppUserRow).where(AppUserRow.id == membership.user_id))
+    ).scalar_one()
+    assert user.phone == provision.phone
+    farm = (await db_session.execute(select(FarmRow))).scalar_one()
+    assert farm.org_id == membership.org_id
+    plot = (await db_session.execute(select(PlotRow))).scalar_one()
+    assert plot.farm_id == farm.id
+    assert plot.org_id == membership.org_id
+    assert plot.irrigation_system == "drip"
+    assert str(provision.plot_id) == str(plot.id)
+
+    cycle = (await db_session.execute(select(CropCycleRow))).scalar_one()
+    assert cycle.plot_id == plot.id
+    assert cycle.status == "active"
+    crop = (
+        await db_session.execute(select(CropRow).where(CropRow.id == cycle.crop_id))
+    ).scalar_one()
+    assert crop.code == "maize"
+    assert cycle.sown_on == local_today(now) - timedelta(days=42)
+
+    soil = (await db_session.execute(select(SoilProfileRow))).scalar_one()
+    assert soil.plot_id == plot.id
+    assert float(soil.field_capacity_pct) == 23.0
+    assert float(soil.wilting_point_pct) == 9.0
+
+    nodes = (
+        (await db_session.execute(select(NodeRow).where(NodeRow.plot_id.is_(None)))).scalars().all()
+    )
+    assert len(nodes) == 2
+    assert all(node.claim_code is not None for node in nodes)
+    assert {node.claim_code for node in nodes} == {n.claim_code for n in provision.nodes}
+    sensors = (await db_session.execute(select(SensorRow).order_by(SensorRow.id))).scalars().all()
+    assert len(sensors) == 6  # 2 nodes x (sm_30, at, rh)
+    soil_sensor = next(s for s in sensors if s.metric == "soil_moisture")
+    assert soil_sensor.channel_key == "sm_30"
+    assert soil_sensor.depth_cm == 30
+
+
+async def test_provision_scenario_supports_the_node_less_rainfed_plot(
+    db_session: AsyncSession,
+) -> None:
+    """docs/06:457 (scenario E): `count: 0` provisions the plot and its cycle
+    only — the balance runs on weather alone with `K = 0`."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from techcamp.farms.adapters.orm import PlotRow
+    from techcamp.simulator.provision import provision_scenario
+    from techcamp.simulator.scenario_schema import load_scenario
+
+    provision = await provision_scenario(
+        db_session, load_scenario("dry-spell-rainfed"), now=datetime(2026, 10, 24, tzinfo=UTC)
+    )
+
+    assert provision.nodes == ()
+    plot = (
+        await db_session.execute(select(PlotRow).where(PlotRow.id == provision.plot_id))
+    ).scalar_one()
+    assert plot.irrigation_system == "none"
+
+
+async def test_provision_scenario_is_atomic_when_a_sensor_insert_fails(
+    db_session: AsyncSession,
+) -> None:
+    """The #40 lesson of `provision_unclaimed_node`, one level up: a failed
+    sensor insert must leave no organization behind either, or a re-run piles
+    half-built orgs into the seminar stack."""
+    from datetime import UTC, datetime
+
+    from techcamp.identity.adapters.orm import OrganizationRow
+    from techcamp.simulator.provision import provision_scenario
+    from techcamp.simulator.scenario_schema import load_scenario
+
+    def _fail_on_sensor(session: object, flush_context: object, instances: object) -> None:
+        if any(isinstance(obj, SensorRow) for obj in session.new):  # type: ignore[attr-defined]
+            raise RuntimeError("sensor insert failed")
+
+    before = set((await db_session.execute(select(OrganizationRow.id))).scalars().all())
+
+    event.listen(db_session.sync_session, "before_flush", _fail_on_sensor)
+    try:
+        with pytest.raises(RuntimeError, match="sensor insert failed"):
+            await provision_scenario(
+                db_session,
+                load_scenario("el-nino"),
+                now=datetime(2026, 10, 24, tzinfo=UTC),
+            )
+    finally:
+        event.remove(db_session.sync_session, "before_flush", _fail_on_sensor)
+    await db_session.rollback()
+
+    after = set((await db_session.execute(select(OrganizationRow.id))).scalars().all())
+    assert after == before
