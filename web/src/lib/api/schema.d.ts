@@ -812,17 +812,19 @@ export interface paths {
         /**
          * Get Organization Metrics
          * @description The organization's indicators for one month, computed on read
-         *     (docs/04-api.md:236; D-T0.12, D-T0.10).
+         *     (docs/04-api.md:236; D-T0.12, D-T0.10, D-T7.2).
          *
          *     Owner or technician (`403` for any other member); a caller who is not a
          *     member of the organization is `404`, so the endpoint never reveals that it
          *     exists.
          *
-         *     A month with no stored report is `200` with every figure `null`, not `404`:
+         *     A month with nothing to report is `200` with every figure `null`, not `404`:
          *     the organization exists and the month simply has nothing to say yet
-         *     (docs/03-modelo-datos.md:441). `harvested_cycles_ratio` and
-         *     `median_hours_to_first_reading` are `null` in every answer of this lane
-         *     (D-T7.1) and unlock in the follow-up lane that adds their views.
+         *     (docs/03-modelo-datos.md:441). "Nothing" is per figure and never `0`: the
+         *     first three come from the month the job stored, and `harvested_cycles_ratio`
+         *     and `median_hours_to_first_reading` are read from the views over the logbook
+         *     and the telemetry tables, so either group can answer while the other is still
+         *     empty (docs/11-metricas.md:72-75).
          */
         get: operations["get_organization_metrics_api_v1_organizations__org_id__metrics_get"];
         put?: never;
@@ -852,6 +854,80 @@ export interface paths {
         get: operations["get_cycle_summary_api_v1_plots__plot_id__cycles__crop_cycle_id__summary_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plots/{plot_id}/risk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plot Risk
+         * @description docs/04-api.md §Riesgo: `GET /plots/{plot_id}/risk → RiskPrediction[]`.
+         *
+         *     The plot's current prediction per event (`flood`, `drought`) of the served
+         *     version, or the most recent one when the current month has none. Unknown plot
+         *     or another organization's plot answers 404, never 403
+         *     (docs/09-cuellos-de-botella.md §Seguridad); a plot without a cell answers `[]`.
+         */
+        get: operations["get_plot_risk_api_v1_plots__plot_id__risk_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assistant/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask
+         * @description One question, answered as a stream of tokens with its cited sources.
+         *
+         *     The status code is decided before the first token: everything that can answer
+         *     `404` (a conversation of another user, a plot of another organization)
+         *     happens inside the short session below, and everything that can fail a
+         *     provider call is resolved before the response exists.
+         */
+        post: operations["ask_api_v1_assistant_messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assistant/messages/{message_id}:feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Feedback
+         * @description Rate one answer as helpful or not (docs/04-api.md:228).
+         *
+         *     `204`, and `404` for a message of another user: `set_helpful` answers `False`
+         *     for anything that user may not see, and a rating endpoint that answered `403`
+         *     would reveal that the message exists (docs/04 §Convenciones HTTP).
+         */
+        post: operations["set_feedback_api_v1_assistant_messages__message_id__feedback_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -943,6 +1019,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dev/jobs/risk:run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Risk Jobs */
+        post: operations["run_risk_jobs_api_v1_dev_jobs_risk_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dev/outbox": {
         parameters: {
             query?: never;
@@ -960,6 +1053,23 @@ export interface paths {
         get: operations["get_dev_outbox_api_v1_dev_outbox_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dev/jobs/kb:ingest:run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Kb Ingest */
+        post: operations["run_kb_ingest_api_v1_dev_jobs_kb_ingest_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1123,6 +1233,22 @@ export interface components {
             escalated_at: string | null;
             /** Resolution Note */
             resolution_note: string | null;
+        };
+        /**
+         * AskRequest
+         * @description `POST /assistant/messages` (docs/04-api.md:227).
+         * @example {
+         *       "content": "¿Por qué no regué ayer?",
+         *       "plot_id": "0f9d2c1e-7a44-4a1f-9c8e-2b6d5f3a1c77"
+         *     }
+         */
+        AskRequest: {
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Plot Id */
+            plot_id?: string | null;
+            /** Content */
+            content: string;
         };
         /** CalibrationCreateRequest */
         CalibrationCreateRequest: {
@@ -1567,6 +1693,14 @@ export interface components {
             /** Technician Id */
             technician_id: string | null;
         };
+        /**
+         * FeedbackRequest
+         * @description `POST /assistant/messages/{message_id}:feedback` (docs/04-api.md:228).
+         */
+        FeedbackRequest: {
+            /** Helpful */
+            helpful: boolean;
+        };
         /** GeoJSONPoint */
         GeoJSONPoint: {
             /** Type */
@@ -1651,6 +1785,25 @@ export interface components {
          * @enum {string}
          */
         IrrigationSystem: "none" | "drip" | "sprinkler" | "gravity";
+        /**
+         * KbJobsRunRequest
+         * @description `{ directory? }`: the corpus to ingest, defaulting to `corpus_dir()` inside the
+         *     job — `TECHCAMP_KB_CORPUS_DIR`, else the packaged fixtures (ADR-0008:32). A plain
+         *     string rather than a validated path, for the reason in this module's docstring.
+         */
+        KbJobsRunRequest: {
+            /** Directory */
+            directory?: string | null;
+        };
+        /**
+         * KbJobsRunResponse
+         * @description The queued run: one job, because the ingestion walks the corpus directory itself
+         *     and there is nothing to fan out over (D-T12.2).
+         */
+        KbJobsRunResponse: {
+            /** Job Id */
+            job_id: number;
+        };
         /**
          * LatestView
          * @description A metric without a valid reading in the last 24 h is `null`, never 0;
@@ -1871,6 +2024,25 @@ export interface components {
             /** Job Id */
             job_id: number;
         };
+        /**
+         * ModelVersionView
+         * @description The nested `model_version` (docs/04-api.md §Riesgo): which registered
+         *     version answered, and whether it is a baseline (docs/08-ml.md §M2 "Línea base
+         *     servida"). Every prediction is traceable to one row of `model_version`
+         *     (docs/06-diseno-detallado.md §8).
+         */
+        ModelVersionView: {
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+            /** Is Baseline */
+            is_baseline: boolean;
+            /** Metrics */
+            metrics: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** MqttCredentials */
         MqttCredentials: {
             /** Username */
@@ -2019,16 +2191,16 @@ export interface components {
         /**
          * OrgMetricsView
          * @description The organization's indicators for one month
-         *     (docs/04-api.md:236, docs/11-metricas.md:69-75; D-T0.12, D-T7.1).
+         *     (docs/04-api.md:236, docs/11-metricas.md:69-75; D-T0.12, D-T7.2).
          *
          *     Named for the module, like `PlotMetricMonthlyView`: `OrgMetrics` is the
          *     application value and a response model sharing that name would collide in
          *     the OpenAPI components (`tests/test_openapi_schema_names.py`).
          *
-         *     `harvested_cycles_ratio` and `median_hours_to_first_reading` are always `null`
-         *     in this lane (D-T7.1): the org-month listing carries neither cycles nor node
-         *     instants, and `0` would report "no cycle was harvested" and "every node
-         *     answered instantly" instead.
+         *     Every figure is `null` when it has no evidence, and the two sources differ:
+         *     a month the monthly job never stored leaves the first three `null` while the
+         *     harvested-cycle ratio and the enrollment median still answer, and a month with
+         *     no closed cycle or no answering node leaves those two `null` (docs/11:72-75).
          */
         OrgMetricsView: {
             /**
@@ -2452,6 +2624,52 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * RiskJobsRunRequest
+         * @description `{ day? }`: the day whose month is predicted, defaulting to local today
+         *     (docs/04-api.md §Solo perfil seminario). A `date` field, so a malformed value
+         *     is FastAPI's 422 rather than a `fromisoformat` failure inside the job.
+         */
+        RiskJobsRunRequest: {
+            /** Day */
+            day?: string | null;
+        };
+        /**
+         * RiskJobsRunResponse
+         * @description The queued run: one job, because the run itself walks the cells
+         *     (D-T6b.2).
+         */
+        RiskJobsRunResponse: {
+            /** Job Id */
+            job_id: number;
+        };
+        /**
+         * RiskPredictionView
+         * @description `RiskPrediction` (docs/04-api.md §Riesgo).
+         */
+        RiskPredictionView: {
+            /** Event Type */
+            event_type: string;
+            /**
+             * Horizon Start
+             * Format: date
+             */
+            horizon_start: string;
+            /** Horizon Days */
+            horizon_days: number;
+            /** Probability */
+            probability: number;
+            /** Severity */
+            severity: string;
+            /** Top Factors */
+            top_factors: components["schemas"]["TopFactorView"][];
+            model_version: components["schemas"]["ModelVersionView"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** SensorView */
         SensorView: {
             /** Id */
@@ -2528,6 +2746,20 @@ export interface components {
              * @default bearer
              */
             token_type: string;
+        };
+        /**
+         * TopFactorView
+         * @description One entry of `top_factors` (docs/04-api.md §Riesgo): `{ feature, value,
+         *     contribution }`, the three features with the largest contribution and their
+         *     value (docs/08-ml.md §M2 "Factores").
+         */
+        TopFactorView: {
+            /** Feature */
+            feature: string;
+            /** Value */
+            value: number;
+            /** Contribution */
+            contribution: number;
         };
         /**
          * TrayItemView
@@ -4227,6 +4459,109 @@ export interface operations {
             };
         };
     };
+    get_plot_risk_api_v1_plots__plot_id__risk_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskPredictionView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_api_v1_assistant_messages_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_feedback_api_v1_assistant_messages__message_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     request_otp_api_v1_dev_auth_otp_post: {
         parameters: {
             query?: never;
@@ -4390,6 +4725,39 @@ export interface operations {
             };
         };
     };
+    run_risk_jobs_api_v1_dev_jobs_risk_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RiskJobsRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskJobsRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_dev_outbox_api_v1_dev_outbox_get: {
         parameters: {
             query?: never;
@@ -4406,6 +4774,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OutboxMessageView"][];
+                };
+            };
+        };
+    };
+    run_kb_ingest_api_v1_dev_jobs_kb_ingest_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KbJobsRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbJobsRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

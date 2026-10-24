@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from techcamp.alerts.adapters import jobs as _alerts_jobs  # noqa: F401  registers tasks
 from techcamp.alerts.adapters.evaluate_risk import build_risk_evaluation
+from techcamp.assistant.adapters import jobs as _assistant_jobs  # noqa: F401  registers tasks
 from techcamp.irrigation.adapters import jobs as _irrigation_jobs  # noqa: F401  registers tasks
 from techcamp.metrics.adapters import jobs as _metrics_jobs  # noqa: F401  registers tasks
 from techcamp.notifications.adapters import (
@@ -40,6 +41,7 @@ def main() -> None:
             _alerts_jobs.QUEUE_NAME,
             _notifications_jobs.QUEUE_NAME,
             _risk_jobs.QUEUE_NAME,
+            _assistant_jobs.QUEUE_NAME,
         ]
     )
 

@@ -199,6 +199,36 @@ into their owner doc by T0, in the same work unit as the doc change.
   version bump naming the provider is a coordination item for `identity`/docs, not an assistant file.
   T0 opens it as a follow-up issue rather than editing `identity` from this epic.
 
+## Decisions (T6) — `D-T6.1`
+
+- **D-T6.1 — The monthly cap is per-profile configuration, and `None` means a profile that does not
+  meter money.** The cap is the one figure that differs per profile (D-T12.3), so it is
+  configuration and not a domain constant: `shared/config.py` reads `TECHCAMP_LLM_BUDGET_CAP_COP`,
+  in **COP**, because the sum it is compared against is `SUM(message.cost_cop)` (D-T12.1,
+  docs/11:132). Two profile defaults, both taken from the documents, neither invented here:
+  - **`seminar` (the default): the cap is `None`.** The seminar card is `ModelPrice.local` — zero
+    COP (D-T12.1) — and the profile reaches no provider (`22e3738`), so the profile does not meter
+    money and has no budget to exhaust. The documented ceiling of **USD 5 total** (docs/04:22,
+    ADR-0021:30) is the **provider account's** ceiling, where the money exists; the code's monthly
+    sum is structurally 0. No document states a USD→COP rate and none is invented here.
+  - **`production`: the cap is `Decimal("0")` when the variable is unset.** ADR-0007:17 leaves the
+    monthly figure to a future owner decision, and the already-reviewed rule of
+    `limits.budget_exhausted` says what a zero budget means: *"a profile without a budget ... stops
+    answering instead of answering for free"*. An unconfigured production deployment therefore
+    degrades and never spends. Whoever sets the variable owns the USD→COP conversion, exactly as
+    whoever fills the price card owns it (pricing.py: *"Whoever fills this in owns the USD→COP
+    conversion"*).
+  `None` is **not** "unconfigured": it is "this profile does not meter money". `Decimal("0")` keeps
+  its reviewed meaning — a profile that meters money and has no budget stops answering. The
+  `cap is not None` guard lives at the call sites, so the pure rule keeps its signature and the
+  reviewed `budget_exhausted(spend, cap)` contract is untouched.
+
+- **D-T12.3 — The assistant's 10-questions-per-day limit applies in both profiles.** Confirmed by
+  the owner on 2026-10-21, after `docs/04-api.md:22` carried the rule as *owner-confirmable*: the
+  daily limit is the same in `seminar` and in `production`, and what differs per profile is the
+  budget cap (D-T6.1). The confirmation is written into `docs/04-api.md:22` itself (`ab2f458`), so
+  the doc no longer says the rule is pending.
+
 ## Tasks
 
 Checklist with stable ids. Forecasts are authored lines (additions + deletions, generated excluded) and
@@ -227,7 +257,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   trigger: writer). Pass `find-docs`, `fastapi`, `pydantic` by path from `.atl/skill-registry.md`.
   **Depends T0.**
 
-- [ ] **T2 — Schema**: one revision on top of the current single head `b6e1c4a7f2d9`
+- [x] **T2 — Schema**: one revision on top of the current single head `b6e1c4a7f2d9`
   (`server/migrations/versions/b6e1c4a7f2d9_add_climate_risk_schema.py`, confirmed the only head of the
   26-revision graph): `CREATE EXTENSION IF NOT EXISTS vector` (following the `postgis`/`timescaledb`
   precedent at `9098dc0927a3:26` and `8c3983dc2dfd:79`; the seminar image already installs `vector` at
@@ -239,7 +269,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   had to rechain for exactly this). ~300 floor. **Route: delegated** (trigger: writer; migration +
   dependency + ORM). **Depends T0, T1.** Parallel with T4: disjoint files.
 
-- [ ] **T3 — Corpus ingestion**: chunker at ~500 tokens with overlap (ADR-0008:12), one `kb_document`
+- [x] **T3 — Corpus ingestion**: chunker at ~500 tokens with overlap (ADR-0008:12), one `kb_document`
   per source with `source_url` + `license` + `kind` + `published_on` + `department`, ENSO state parsed
   onto `kb_document.enso_state` (docs/06:374), idempotent by `(source_url, sha256)` per ADR-0012's
   *(tipo, entidad, fecha)* rule, a procrastinate job plus `POST /dev/jobs/kb:ingest:run` (ADR-0021).
@@ -249,9 +279,10 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   and recorded here (D-T12.2). ~500 floor. **Route: delegated** (trigger: writer; new job +
   registration in `worker.py`). **Depends T2.**
 
-- [ ] **T4 — Fact builders, retrieval use case and the no-LLM fallback**: sensors from the `telemetry`
-  facade (`query_latest_plot_readings`; last calibrated reading per variable with `received_at`, quality
-  ≠ 0 marked, the sensor's calibration version, staleness), alerts from `alerts`
+- [x] **T4 — Fact builders, retrieval use case and the no-LLM fallback**: sensors from the `telemetry`
+  facade (`query_latest_plot_readings`; metric/value/time plus derived staleness — `ReadingPoint` carries
+  only time and value, so `received_at`, the quality mark and the calibration version are a follow-up, not
+  invented here; the facade already excludes quality-bit-2 and uncalibrated readings upstream), alerts from `alerts`
   (`list_open_alerts_for_plots` with `severity`, `opened_at`, `evidence`), irrigation from `irrigation`
   (`query_plot_recommendation` with `kind`, `rationale`, `depth_mm`/`duration_min` or the rainfed
   `advice`), seasonal climate from `kb_document` (latest bulletin for the farm's department, else the
@@ -260,10 +291,11 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   settles the assistant's first `risk` facade dependency. With the retrieved fragments (top 5,
   similarity ≥ 0.75, ADR-0008:12) this task also assembles the degraded no-LLM answer: the same facts
   plus the relevant documents, no provider call (docs/06:377). Org gate through `resolve_plot_access`.
-  ~450 floor. **Route: delegated** (trigger: writer; five facades, the D-T12.6 send-list). **Depends T1,
-  T2.** Parallel with T2.
+  ~450 floor. **Route: delegated** (trigger: writer; five facades, the D-T12.6 send-list). **Depends T1.**
+  Parallel with T2: T4 builds against the T1 ports with doubles and needs no T2 migration; the T2
+  dependency holds only for live-kb integration tests, which move to T3.
 
-- [ ] **T5 — The streaming endpoint and feedback**: `POST /assistant/messages` returning
+- [x] **T5 — The streaming endpoint and feedback**: `POST /assistant/messages` returning
   `text/event-stream` — SSE frames carrying tokens and cited sources — and
   `POST /assistant/messages/{message_id}:feedback { helpful } → 204`. Session lifetime per D-T12.4, not
   held across tokens. Prompt assembly per D-T12.6 with the docs/06:381-387 rules as the system prompt,
@@ -273,7 +305,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   integration point). **Depends T4.** Parallel with T6's non-router half only if T6 is split; otherwise
   sequential.
 
-- [ ] **T6 — Limits, budget and the cost metric**: the 10/day limit per user in `America/Bogota` with
+- [x] **T6 — Limits, budget and the cost metric**: the 10/day limit per user in `America/Bogota` with
   `429` + `Retry-After` (seconds; a `Retry-After` HTTP-date would need a clock the client cannot
   assume), the degradation branch when the limit or the budget is exhausted (docs/06:356-359), the USD 5
   seminar cap (ADR-0021:30) and the monthly cap (ADR-0007:17), and the metric. **Where the metric lives
@@ -281,10 +313,58 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   `/metrics` does not exist yet (`server/src/techcamp/main.py` has only `/health`; `prometheus-client` is
   not a dependency). So T6 makes `gasto del mes / tope` **derivable from `message.cost_cop`** and records
   the metric name for whoever builds `/metrics`; adding a Prometheus client and an endpoint here would
-  pull E14's work into this epic. The 120 req/min limiter is filed as a follow-up (Scope, Out).
+  pull E14's work into this epic. The 120 req/min limiter is filed as a follow-up (Scope, Out):
+  [#311](https://github.com/jab16jy/techcamp-v2/issues/311).
   ~350 floor. **Route: delegated** (trigger: writer; limit + budget logic with a port). **Depends T5.**
 
-- [ ] **T7 — Web screen** (`impeccable`): `web/src/features/assistant/` in the docs/07 layout
+  > **Split (2026-10-21, owner).** The `~350` forecast was wrong by 7×: T6 is **six independent
+  > behaviors**, not one unit, and the lane reached ~2 600 authored lines. The task keeps its scope text
+  > above; what changes is the unit of work and the receipt. **Nothing already landed is rewritten** —
+  > T6a and T6b are reviewed exactly as they are. Each unit below is its own commit and its own
+  > receipt, and **T6 closes when all six are done**, not before.
+  >
+  > **RDD selection (2026-10-21, owner): the receipt goes where it is necessary, not everywhere.**
+  > T6a is the **only** unit that touches a high-risk item (2 — the provider credential), so it is
+  > the only one that carries a receipt; the native `assess` for the rest of the slice says `medium` /
+  > `under_budget`, i.e. no review is due, and those units are covered by the independent
+  > `gentle-ai-verify` worker plus the gate. **One receipt for the slice instead of six** — and the
+  > candidate of that receipt is the unit alone, not the whole lane.
+
+  - [x] **T6a — DeepSeek behind the `LLMClient` port, with its keys**: `22e3738` (5 files, 703 lines).
+    > **Receipt burned**: `review-8a2df982b3ba8754`, approved with 2 WARNING + 2 SUGGESTION and no
+    > blocker, `gentle-ai.review-acknowledged/v1`. The candidate was scoped to **this unit alone**,
+    > in its own detached worktree at `22e3738`: it is the only unit of T6 that touches a high-risk
+    > item (2 — the provider credential). The four findings live in
+    > [#312](https://github.com/jab16jy/techcamp-v2/issues/312); the two WARNING ones (credential
+    > egress through an unvalidated base URL, and a stream deadline that does not bound the whole
+    > stream) touch this task's own code and are fixed now, in their own commit with `Refs #312`.
+  - [x] **T6b — The atomic admission against the day and the month, and the local date rules**:
+    > `2acc276` (10 files, 988 lines) plus the bounded correction `8b97fed`. **Receipt burned**:
+    > `review-38f31fc11d58ee21`, approved after the correction, `gentle-ai.review-acknowledged/v1`.
+  - [x] **T6c — The `429` with `Retry-After` and the degraded branch with zero provider calls**:
+    > `b8e4987`. `Retry-After` is seconds to local midnight (`limits.seconds_until_local_midnight`),
+    > never an HTTP-date. The refusal carries the degraded body (`answer` → `sources` → `done`).
+  - [x] **T6d — The two advisory findings of
+    > [#310](https://github.com/jab16jy/techcamp-v2/issues/310) that touch T6's own code**: `d37a132`,
+    > `Refs #310` — `R3-RELIABILITY-006` (`local_month_bounds` kept the argument's day and its
+    > `month+1` raised `ValueError` in a shorter month) and `R3-RELIABILITY-002` (the `admit_question`
+    > docstring promised a rollback the body never does).
+  - [x] **T6e — The monthly cap as per-profile configuration** (`D-T6.1`):
+    > `a9d7a48`. `TECHCAMP_LLM_BUDGET_CAP_COP` in `shared/config.py`, in COP; `seminar` → `None` (the
+    > profile does not meter money), `production` → `Decimal("0")` (it meters and has no budget, so it
+    > degrades and never spends). `deps.get_budget_cap()` delegates to it; a malformed, negative or
+    > non-finite value is a `503`, not a silent zero.
+  - [x] **T6f — The metric name recorded**: `llm_cost_cop_total` and `gasto del mes / tope` derivable
+    > from `message.cost_cop`, with no `prometheus-client` and no `/metrics` (that is E14). Recorded in
+    > `docs/04-api.md:233` and named in `application/usage.py`.
+
+  > **T6 closed on 2026-10-21**, with one caveat written down instead of hidden: the RDD of the
+  > units that never reached the review budget (T6a, and the slice that carries T6c–T6f) is **still
+  > pending**, `medium` / `under_budget` at 1 200 lines over 15 paths. Only T6b has a burned receipt.
+  > That is the same open item T5 left with its cut 3: closing that range with a receipt takes an
+  > explicit owner decision (an independent review of the range), and it does not restart by itself.
+
+- [x] **T7 — Web screen** (`impeccable`): `web/src/features/assistant/` in the docs/07 layout
   (`api/` `containers/` `components/`), the streamed `POST` read with `fetch` + `ReadableStream` +
   `createSseParser` (D-T12.4), the message list, the composer, the cited-sources list, and the three
   states a producer must be able to distinguish: streaming answer, degraded no-LLM answer, and
@@ -295,8 +375,14 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   (E11's precedent: regenerating it on the epic branch is what made two lanes parallelizable). Spanish UI
   copy from docs/07 and the glossary. ~800 floor. **Route: delegated + `impeccable`** (trigger: writer,
   UI). **Depends T5.** Parallel with T6 (disjoint files: `web/`).
+  **Hecho (2026-10-22):** `eb89063` (lectura del stream), `cfc7e3e` (los tres WARNING de la rebanada
+  `api/`), `0f315d1` (descarte al cambiar de parcela), `e87df11` (la pantalla: lista, compositor,
+  fuentes, los cuatro estados), `f41e320` (la ruta `mas/asistente` bajo Más —sin ella la pantalla
+  existía y no se podía abrir—), `b9189c6` y `e69d405` (seguimiento de la revisión). Recibo
+  `review-45c3ada4ce1f77c4` quemado; `just gate web/src/app web/src/features/assistant` → 16 + 70
+  tests verdes sobre el árbol ya fusionado con la rama del épico.
 
-- [ ] **T8 — Eval and the provider decision**: 30 real Caribbean agronomic questions graded by an
+- [x] **T8 — Eval and the provider decision**: 30 real Caribbean agronomic questions graded by an
   agronomist on accuracy, citations and clarity (ADR-0007:15) — **the pass threshold is not written in
   any doc**, so the threshold is itself an owner decision (Open question 1) and must be fixed before the
   run, not read off the results. The outcome lands as: the provider ADR, `docs/README.md:68` closed, the
@@ -305,11 +391,66 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   exact-term questions fail (ADR-0008:19). ~150 of doc, plus human grading time. **Route: owner for the
   grading, parent for the docs**; the harness that replays the 30 questions against a fixed corpus is
   delegated and lands with T8's first commit. **Depends T5.** Parallel with T6 and T7.
+  - **T8 plan (lane `e12-t8`, 2026-10-08).** Two work units. **U1 — the harness and its fixtures,
+    own commit, before any verdict:** a deterministic replay of the closed 30-question set over the
+    pinned fixture corpus, through the *real* `retrieve_fragments` and the *real* `build_prompt`, with
+    `SeminarHashEmbedder` and a `FakeKnowledgeRepository` seeded from `load_corpus`/`chunk_text`.
+    The harness **produces the graded input and nothing else**: no score, no threshold, no verdict —
+    those are owner work (Open question 1) and a structural guard asserts their absence from the
+    report shape. **U2 — the docs**, which needs the verdict and therefore waits for the owner.
+  - **U2 landed (2026-10-23), con las decisiones delegadas:** el dueño delegó las Open questions 1 y
+    2 ("usa las decisiones que tengan sentido con el épico 12 y los docs") y fijó el proveedor V4
+    Flash. [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+    cierra las dos: proveedor `deepseek-flash` sin thinking con precios reales y tarjeta COP (TRM
+    3.185,01, 2026-10-23), umbral fijado antes de la corrida, política de licencia del corpus,
+    pin de embedding confirmado **sin** migración y búsqueda híbrida **sin** adoptar. [docs/02:78](../docs/02-estimaciones.md)
+    deja la referencia Haiku; [docs/README:68](../docs/README.md) cambia el pendiente de
+    "proveedor" a "corrida graduada + firma de la lista del corpus". Lo que queda de T8 es trabajo del
+    dueño: correr y calificar las 30 preguntas, y firmar la lista de documentos.
+  - **Surface deviation, flagged and not resolved here:** the brief's own *Done means* requires
+    "ODD updated (checkbox + Review entry)", but `odd/tasks/**` is absent from its *Allowed edit
+    surfaces*. Read as: the done-criterion authorizes this one file. Nothing outside the five listed
+    surfaces plus this feature doc is touched.
+  - **Hecho (2026-10-23):** el dueño cierra T8. La corrida graduada de las 30 preguntas contra el
+    umbral de [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+    (≥ 27/30, cero descalificadores) y la firma de la lista de documentos del corpus quedan hechas —
+    son artefactos del dueño y así se registran, sin re-derivarlos aquí. [docs/README](../../docs/README.md)
+    retira la fila pendiente; lo que sigue es T9.
 
-- [ ] **T9 — Close**: `just gate-full` **once** on a clean database, follow-up issues for every
+- [x] **T9 — Close**: `just gate-full` **once** on a clean database, follow-up issues for every
   non-blocking RDD finding, the delivery plan (chained-to-main PRs, one per work unit, `size:exception`
   — slices pass 400 lines and this repo has no line budget), and the epic close. ~100. **Route: parent.**
   **Depends T1–T8.**
+  > **Hecho (2026-10-23).** (1) `just gate-full` corrió **una vez** sobre base limpia en este
+  > worktree (`techcamp-db-techcamp-v2-1942765054`, puerto 60054) y terminó **verde, exit 0**:
+  > `gate-fast` (ruff, format, mypy, `lint-imports`, una cabeza de Alembic, ast-grep, eslint, tsc),
+  > todo el suite de server con `pytest-randomly`, el suite de web (vitest), `vite build` y el
+  > presupuesto de tamaño (168,24 kB gzip ≤ 200 kB). (2) Los issues de seguimiento de cada ronda
+  > existen y están enlazados desde [Review (RDD)](#review-rdd): #302 (T1), #304 (T4), #305 (T3),
+  > #306 (T5), #310 (T6), #312 (T6a), #314 (T7), #318 (T7 verify), #319 (T8). El issue del
+  > verificador de T6, [#313](https://github.com/jab16jy/techcamp-v2/issues/313), se **cerró** con
+  > la nota de sus seis correcciones (`bc9f3fb`, `7e8eee4`, `899e1e3`, `f3affb0`, y el
+  > desenmascaramiento del 503 por `75d7fb4`). (3) **Plan de entrega** (corregido al abrir los PRs:
+  > el plan anterior de 13 asumía cortes dentro de las lanes de T6/T7/T8, pero esas unidades
+  > entraron a la rama del épico detrás de **un solo merge por lane** —`e40f634`, `7e97ed2`,
+  > `2d0fded`— y partirlas exigiría reescribir los shas que los recibos citan, lo que este épico
+  > prohíbe): **10 PRs** encadenados a `main`, uno por unidad entregable, base `main` desde la
+  > creación (la lección de E9: base-parent hace que CodeRabbit salte los PRs y congela conteos),
+  > merge **en orden obligatorio** 01→10, merge commits sin squash, cada slice con `size:exception`:
+  >   1. `docs/e12-01-t0-decisions` — blockers assessment + T0 (`f61adc5`, `1344b74`; +974/−8)
+  >   2. `feat/e12-02-t1-ports` — puertos, reglas de dominio y dobles (`9bf3b73`…`6b6590b`; +2831/−5)
+  >   3. `feat/e12-03-t2-schema` — esquema, ORM y pgvector (`9338f2c`, `3241358`, merge `a127acb`; +1103/−5)
+  >   4. `feat/e12-04-t3-corpus` — ingesta del corpus (`df2b783`, `d90853c`, `f44279d`; +2683)
+  >   5. `feat/e12-05-t4-facts-retrieval` — hechos, recuperación y rama degradada (lane detrás de `61b0773`, `1d7e1b8`; +4473/−15)
+  >   6. `feat/e12-06-t5-stream-endpoint` — endpoint de streaming y feedback (`b31ac34`…`88268d6`; +3859/−15)
+  >   7. `feat/e12-07-t6-limits-budget` — T6 completa: DeepSeek, admisión atómica, `429`, tope por perfil, correcciones de #313 (lane detrás de `e40f634`, `f3affb0`, `dd88e06`; +3664/−159)
+  >   8. `feat/e12-08-t7-web-screen` — pantalla web, ruta `mas/asistente` y correcciones (lane detrás de `7e97ed2`, `9daaa3b`; +3291/−24)
+  >   9. `feat/e12-09-t8-eval-provider` — arnés de evaluación, ADR-0028 y tarjeta de producción (lane detrás de `2d0fded`; +3305/−53)
+  >   10. `docs/e12-10-t9-close` — cierre: criterios verificados, `gate-full` verde y este plan (`d30330d` y el commit de este ajuste)
+  > El push, la apertura y el merge de los PRs siguen siendo del dueño: nada se abre sin que lo
+  > pida (la política de la entrega en este épico). **Épico E12 cerrado en el repo**: los once
+  > criterios de aceptación quedaron verificados con su evidencia (arriba) y el pendiente de
+  > [docs/README](../../docs/README.md) de la corrida graduada se retiró.
 
 **Lanes.** Wave 1: T1. Wave 2: T2 ‖ T4 (disjoint: migrations+ORM vs application). Wave 3: T3. Wave 4:
 T5. Wave 5: T6 ‖ T7 ‖ T8 (server limits vs web vs eval docs; T6 and T5 share the router, so T6 starts
@@ -339,41 +480,101 @@ easier.
 ## Acceptance criteria
 
 Each item names the evidence that closes it. Tests are named by behavior, not written here.
+Verified 2026-10-23 (T9) against the tree of the epic branch; each item cites the tests that pin it.
 
-- [ ] Every answer carries **citations** and, when it speaks about risk, the **`model_version`** that
+- [x] Every answer carries **citations** and, when it speaks about risk, the **`model_version`** that
   produced the prediction — `model_version.version` plus its validation metric, and the explicit
   *"linea base"* mark when the served version is one (docs/06:375, `docs/04-api.md:232`).
-- [ ] The served baseline's `low` is **never narrated as a verdict**: the answer reports the served
+  → `test_citations.py` (a prediction citation without `model_version` or `is_baseline` is a domain
+  error; the served baseline is marked, a promoted version is marked as not a baseline);
+  `test_prompt_assembly.py` (the fact block renders `model_version`, `is_baseline`, `metrics`,
+  `top_factors` — `prompt.py:273-285`); `test_degraded.py::test_a_baseline_prediction_marks_the_line_base_and_names_no_severity`,
+  `::test_a_calibrated_version_reports_its_own_severity` (version in the answer);
+  `test_retrieval.py::test_every_citation_carries_its_document_and_passes_validation`.
+- [x] The served baseline's `low` is **never narrated as a verdict**: the answer reports the served
   version is `climatology_month` with `thresholds={}` (D-T9.2), so `low` is missing calibration, not a
   finding. A test asserts the assistant's Spanish copy marks it and never asserts a severity judgement
   the system did not make.
-- [ ] **No prediction → "not available"**, never an invented value: `drought` has no registered
+  → `test_degraded.py::test_a_baseline_prediction_marks_the_line_base_and_names_no_severity`
+  (asserts "línea base", the version and the probability, and **negatively** asserts "severidad baja"
+  / "riesgo bajo" never appear for the uncalibrated version); the renderer writes the severity only
+  for a calibrated version (`degraded.py::_risk_line`).
+- [x] **No prediction → "not available"**, never an invented value: `drought` has no registered
   predictor (D-T9.3) and a plot without a cell has no predictions at all; the risk fact is absent and
   the prompt says the evidence is missing rather than naming a severity.
-- [ ] The **11th question of the day answers `429` with `Retry-After`** (docs/04-api.md:22), the tenth
+  → `test_degraded.py::test_a_missing_risk_is_named_and_no_severity_is_invented`;
+  `test_plot_facts.py` (D-T9.3: `query_plot_risk` answers `[]` for drought and for a plot without a
+  climate cell, and the fact claims nothing about `drought`);
+  `test_degraded.py::test_a_plot_with_nothing_at_all_says_the_evidence_is_insufficient`.
+- [x] The **11th question of the day answers `429` with `Retry-After`** (docs/04-api.md:22), the tenth
   succeeds, and the counter resets at `America/Bogota` midnight — including across the UTC-midnight
   offset, which is the case a naive `date(created_at)` test misses.
-- [ ] **Budget exhausted → no LLM call at all**: the provider double is not invoked, the degraded answer
+  → `test_assistant_limits.py::test_the_eleventh_question_of_the_day_answers_429_with_retry_after`,
+  `::test_the_tenth_question_of_the_day_is_answered`, `::test_yesterdays_questions_do_not_count_against_today`;
+  `test_assistant_quota_contract.py::test_A_the_eleventh_question_is_429_with_numeric_retry_after`,
+  `::test_A_the_tenth_question_is_answered_normally`; the UTC offset in the domain:
+  `test_limits.py::test_retry_after_does_not_wait_for_utc_midnight`,
+  `::test_the_local_day_bounds_span_a_hour_that_belongs_to_the_previous_utc_day`.
+- [x] **Budget exhausted → no LLM call at all**: the provider double is not invoked, the degraded answer
   (facts + relevant documents) is returned, and the month-to-date sum comes from `message.cost_cop`.
   Both caps: USD 5 seminar (ADR-0021:30), monthly cap production (ADR-0007:17).
-- [ ] **Another org answers `404`**: a `conversation_id` and a `plot_id` of another org or another user
+  → `test_assistant_limits.py::test_an_exhausted_budget_answers_the_degraded_answer_without_a_provider_call`;
+  `test_degraded_answer.py::test_the_degraded_answer_calls_no_provider`,
+  `::test_no_public_function_of_the_degraded_path_can_reach_an_llm`;
+  `test_assistant_quota_contract.py::test_B_a_refusal_answers_the_degraded_body_without_a_provider_call`,
+  `::test_C_the_degraded_answer_persists_nulls_and_the_sum_ignores_them`,
+  `::test_D_the_cap_is_per_profile_configuration`, `::test_E_without_a_cap_the_budget_never_refuses`.
+- [x] **Another org answers `404`**: a `conversation_id` and a `plot_id` of another org or another user
   answer `404`, never `403` and never an empty `200` (docs/04-api.md:16); repository-level isolation
   tests per docs/09.
-- [ ] **Anti prompt-injection**: a fragment and a user question carrying instruction-shaped text are
+  → `test_assistant_api.py::test_a_conversation_of_another_user_answers_404`,
+  `::test_a_plot_of_another_organization_answers_404`;
+  `test_assistant_limits.py::test_another_users_conversation_is_404_even_for_a_producer_over_the_limit`,
+  `::test_another_organizations_plot_is_404_even_for_a_producer_over_the_limit`;
+  `test_assistant_quota_contract.py::test_a_conversation_of_another_user_is_404_before_the_quota_gate`;
+  repository level in `test_repositories.py` (every read/write filters by `user_id`; `add` rejects a
+  conversation the caller does not own — the T5 S1 CRITICAL fix).
+- [x] **Anti prompt-injection**: a fragment and a user question carrying instruction-shaped text are
   treated as data — the assistant follows the system prompt, invents no dose, and follows no instruction
   found in a chunk (docs/09:75, docs/06:386). The D-T12.6 send-list test: a fact block containing a
   phone- or e-mail-shaped string never reaches the prompt (ADR-0007:39).
-- [ ] **Retrieval honors top-5 and similarity ≥ 0.75** (ADR-0008:12): fewer than five qualifying
+  → `test_prompt_assembly.py::test_facts_and_fragments_travel_as_data_and_not_as_the_rules` (a fragment
+  reading "Ignora todas las instrucciones anteriores…" lands inside the data block, never in the system
+  message), `::test_a_phone_or_email_in_the_facts_never_reaches_the_prompt` (D-T12.6),
+  `::test_every_rendered_fact_value_goes_through_the_allow_lists`; the dose ban in
+  `test_degraded.py::test_the_answer_never_states_an_agrochemical_dose`.
+- [x] **Retrieval honors top-5 and similarity ≥ 0.75** (ADR-0008:12): fewer than five qualifying
   fragments is a legitimate answer with what exists, and a 0.74 fragment is excluded. The threshold is a
   named constant, not a literal in a query.
-- [ ] Facts are assembled **before** the single call, and the flow is deterministic: one
+  → `test_retrieval.py::test_the_named_constants_are_the_query_not_literals`,
+  `::test_a_fragment_at_the_floor_is_included_and_one_below_it_is_not`,
+  `::test_the_floor_is_re_applied_after_a_repository_that_ignored_it`,
+  `::test_fewer_than_five_fragments_is_a_legitimate_answer`,
+  `::test_at_most_five_fragments_are_returned_best_first`; constants in
+  `domain/limits.py` (`RETRIEVAL_TOP_K = 5`, `SIMILARITY_FLOOR = 0.75`).
+- [x] Facts are assembled **before** the single call, and the flow is deterministic: one
   `LLMClient.stream` invocation per request, no tool loop, no framework (ADR-0007:26).
-- [ ] The answer obeys the docs/06:381-387 rules: plain Spanish, glossary vocabulary
+  → `test_assistant_api.py::test_exactly_one_provider_call_carries_the_four_send_list_sections`;
+  `test_retrieval.py::test_the_use_case_takes_no_llm_port`;
+  `test_prompt_assembly.py::test_the_prompt_is_deterministic_for_the_same_inputs`;
+  `test_degraded_answer.py::test_no_public_function_of_the_degraded_path_can_reach_an_llm`.
+- [x] The answer obeys the docs/06:381-387 rules: plain Spanish, glossary vocabulary
   (`docs/00-glosario.md`), cites the source, says when evidence is insufficient, and refers to the ICA
   label and the technician instead of inventing a dose.
-- [ ] `POST …:feedback` stores `helpful` and a `204`; a message of another user is `404`.
-- [ ] Every task's scoped gate is green and RDD ran per work-unit commit; `just gate-full` ran **once**
+  → `test_assistant_api.py::test_the_answer_is_in_plain_spanish_with_the_glossary_vocabulary`;
+  `test_degraded.py::test_the_answer_never_states_an_agrochemical_dose`,
+  `::test_the_answer_points_at_the_ica_label_and_the_technician`,
+  `::test_every_document_is_cited_with_its_title_and_its_link`; the insufficient-evidence sentence in
+  `degraded.py::_insufficient` and
+  `test_degraded.py::test_a_plot_with_nothing_at_all_says_the_evidence_is_insufficient`.
+- [x] `POST …:feedback` stores `helpful` and a `204`; a message of another user is `404`.
+  → `test_assistant_api.py::test_feedback_is_stored_and_answers_204`,
+  `::test_feedback_can_be_withdrawn`, `::test_feedback_on_a_message_of_another_user_answers_404`,
+  `::test_feedback_on_an_unknown_message_answers_404`.
+- [x] Every task's scoped gate is green and RDD ran per work-unit commit; `just gate-full` ran **once**
   in T9.
+  → The per-task gates and receipts are in [Review (RDD)](#review-rdd) and
+  [Progress / evidence](#progress--evidence); T9's `just gate-full` run is recorded below.
 
 ## Checks
 
@@ -448,8 +649,17 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
    Caribbean questions, graded by an agronomist on accuracy, citations and clarity) but no doc states
    what score promotes a provider. Fix the threshold **before** the run or T8 has no verdict. Pin a
    provisional provider now for D-T12.2's dimension; T8 confirms or rewrites the column.
+   **DECIDIDA — dueño, delegada el 2026-10-23:** [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md).
+   Proveedor `deepseek-flash` (DeepSeek-V4.1-Flash) sin thinking —el alias `deepseek-chat` se retiró
+   de la API el 2026-07-24—; pin de embedding confirmado **sin** migración de dimensión; umbral
+   fijado antes de la corrida: ≥ 27/30 correctas y tres descalificadores de uno solo (cita fabricada,
+   hecho contradicho, respuesta peor que la degradada).
 2. **Corpus licence.** ADR-0008:32 requires review before migration. Which guides may be included, and
    who signs it off? T3 loads only fixtures until this is answered.
+   **DECIDIDA — dueño, delegada el 2026-10-23:** la política está en [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md):
+   solo CC-BY 4.0 o más permisiva, CC-BY-SA y dominio público; fuera NC, ND y sin licencia. La
+   **lista de documentos concretos** la firma el dueño al recolectarlos; con la lista firmada, T3
+   carga el corpus real.
 3. **Retention and deletion of `conversation` / `message`.** Undecided anywhere. Relevant to
    `DELETE /me` (docs/04:36) and to the fact that an assistant transcript is the user's own words.
 4. **Membership check beyond `CurrentUserId`.** Does `POST /assistant/messages` need more than the
@@ -475,13 +685,122 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
     validación dirigida apuntaba al target del candidato de corrección y el controller lo rechazó
     (`review repair --preflight` lo declara `unsupported`), así que se resolvió con un START fresco
     sobre el árbol ya corregido.
-  - **Hallazgos no bloqueantes** (WARNING, `informational`; ninguno reabre la revisión; van a un
-    issue `review-follow-up` por ronda): `R3-BLANK-MODEL-EVIDENCE`, `R3-CITATION-KIND-STRING-BYPASS`,
+  - **Hallazgos no bloqueantes** (WARNING, `informational`; ninguno reabre la revisión; van al
+    issue `review-follow-up` #302 de la ronda): `R3-BLANK-MODEL-EVIDENCE`, `R3-CITATION-KIND-STRING-BYPASS`,
     `R3-MESSAGE-CONVERSATION-MISMATCH`, `R3-QUOTA-RACE-DOUBLE`, `R3-QUOTA-REASON-PRECEDENCE`,
     `R3-RESERVATION-DOUBLE-COUNT`, `R3-UNSTABLE-FRAGMENT-IDS`, `R3-USER-MESSAGE-LLM-EVIDENCE`. Los
     que tocan el código de T1 (`BLANK-MODEL-EVIDENCE`, `CITATION-KIND-STRING-BYPASS`,
     `USER-MESSAGE-LLM-EVIDENCE`, `QUOTA-REASON-PRECEDENCE`) se corrigen en su propio commit con
-    `Refs #N`; los que son solo del doble de prueba se resuelven al escribir el adaptador.
+    `Refs #302`, diferidos hasta que T2/T4 aterricen (decisión del dueño 2026-10-07); los que son
+    solo del doble de prueba se resuelven al escribir el adaptador.
+- **T3 — `review-0d72f97fb50a0ff3` — aprobado y reconocido.** Lente `review-reliability`
+  (medium, 5 archivos/240 líneas, sin corrección). Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `delivery: ordinary-repository-policy`. Rebanadas `d90853c`
+  (loader + fixtures) + `f44279d` (job + registro + router /dev); `just gate
+  server/tests/assistant` → 197 passed. D-T12.2 decidido: **index-before-load** (la migración T2 ya
+  crea el HNSW en tabla vacía; el corpus ~10k fragmentos está un orden de magnitud bajo el umbral de
+  rebuild; el job nunca corre DDL — ver docstring de `kb_ingest.py:47-60`). Hallazgos a #305 (2 WARNING
+  + 1 SUGGESTION, `Refs #305`).
+- **T4 — dos slices aprobados y reconocidos (recibos quemados).**
+  - **Slice 1 — `review-4dbdecc82fb95e75`** (`f0ef15f`, padre `a127acb`): lente `review-reliability`
+    (medium, 6 archivos/2138 líneas, presupuesto de corrección 200). Un intento previo sobre el rango
+    completo (`a127acb..98bf0f4`, 14 archivos/4278 líneas) fue rechazado con
+    `lens_context_budget_exceeded` **sin crear autoridad**: `assess --committed-only` resuelve
+    `base-ref..HEAD`, así que revisar un slice exige `git checkout --detach <sha>` del slice.
+    Hallazgo **R3-MUTATION-LEAK** (CRITICAL, determinista): la mitad "`metrics` se puede mutar" era
+    falsa (`facts.py:281-282` ya copia `metrics` y `top_factors`); la verdadera: `_read_only` hacía
+    `dict(values)` sin protección y un mapping que falla al copiarse lanzaba excepción desde el
+    constructor, violando el "Never raises" del módulo (`fact_safety.py:275-277`). Corregido con TDD
+    (RED `RuntimeError: boom` → GREEN), 55 líneas. **Incidente de integridad:** el commit de la
+    corrección se creó con HEAD detached en `f0ef15f` (exigido por `--committed-only`) y quedó
+    huérfano (`83c9e6c`); se re-aterrizó al tip con cherry-pick como `7a81758`, con autorización del
+    dueño. **Lo verificado el 2026-10-07 con los árboles delante, porque la frase anterior era
+    imprecisa:** el validador inspeccionó `01e9068126b12fe00920d1f58c68b007956f5789`, que es el árbol
+    de **`83c9e6c`** (slice 1 + el fix) y **no** el del tip, que es
+    `1b2f6dac78e31f8095f6b3ff856b7dbc49c26a2d` (`7a81758`). El parche sí es el mismo —
+    `git diff f0ef15f 83c9e6c` y `git diff 98bf0f4 7a81758` son idénticos (54+/1−, 2 archivos) — así
+    que los bytes revisados aterrizaron; pero **el árbol revisado no es el árbol del tip y no debe
+    leerse como si lo fuera**: `349ac8a` y `98bf0f4` tienen su propio estado (slice 2 revisado y
+    quemado; slice 3 `under_budget`). Verificación:
+    `just gate server/tests/assistant` → 233 passed. Recibo quemado
+    (`gentle-ai.review-acknowledged/v1`, `authority: burned`).
+  - **Slice 2 — `review-7e441487c1135f12`** (`349ac8a`, padre `f0ef15f`): lente `review-reliability`
+    (medium, 6 archivos/1880 líneas). Sin ronda de corrección: ningún hallazgo CRITICAL/BLOCKER.
+    Verificación: `just gate server/tests/assistant` → 228 passed. Recibo quemado
+    (`gentle-ai.review-acknowledged/v1`, `authority: burned`). El relay del revisor fue rechazado dos
+    veces por el transporte (`opencode_review_transport_relay_refused`, `provider_failed`) en dos
+    modelos distintos; se resolvió con el camino `--input` documentado por el contrato
+    (`capture-result --preflight` → `admission_decision: completed`, luego captura real).
+  - **Slice 3 — `98bf0f4`** (padre `349ac8a`): `assess` → medium, `review_due: false`,
+    `review_due_reason: under_budget` (2 archivos/260 líneas). **Sin revisión debida**; queda
+    pendiente en el slice. Re-assess tras el cherry-pick (rango `349ac8a..7a81758`, 4 archivos/315
+    líneas) → `under_budget` otra vez, sin transición. **Re-assess del 2026-10-07, con el HEAD
+    adjunto y sin detach** (`assess --base-ref 349ac8a --committed-only`): `risk: medium`,
+    `review_due: false`, `review_due_reason: under_budget`, `candidate.kind: base-diff`,
+    `candidate.consumed: false`. No hay `next_transition` que ejecutar, así que **no hay recibo que
+    quemar y no se fabricate uno**: esos 315 líneas quedan *pendientes en el corte*, revisados solo
+    si el dueño decide pedir una revisión independiente de ese rango (un target quemado no se
+    reinicia solo).
+  - **Evidencia de los dos recibos, verificada en disco y no de memoria:** existen los dos registros
+    de consumo terminal en el git dir común del repo,
+    `.git/gentle-ai/review-transactions/terminal-consumption/v1/` — `4e8ee852….json` → lineage
+    `review-4dbdecc82fb95e75`, target `sha256:f9f72fa2…`; `ed7b0a03….json` → lineage
+    `review-7e441487c1135f12`, target `sha256:4afdb048…`; los dos con la identidad de repositorio
+    `sha256:57edb8cb…`. Es la razón por la que un re-review de esos cortes no es una opción
+    (`target_already_acknowledged`): su autoridad ya está consumida. Nota de alcance: el receipt de
+    T2 (`review-f1315ed728b0e08a`) pertenece a la lane `e12-t2` y **no** aparece en este git dir
+    común, porque esa lane se cierra en su propio worktree.
+  - **Hallazgos no bloqueantes** (16 WARNING, `informational`; ninguno reabre su revisión): los 4 del
+    slice 1 (`R3-DETERMINISM-UNPROVED`, `R3-NEGATIVE-ASSERT-GAP`, `R3-PATTERN-GAP`, `R3-README-GUARD`)
+    y los 12 del slice 2 (fidelidad de dobles de prueba, fronteras no ejercitadas y rutas defensivas
+    sin probar) van al issue combinado **#304** (`review-follow-up`, `type:chore`, `area:server`).
+    Los que tocan código de T4 se corrigen en commit propio con `Refs #304`; los que son solo del
+    doble se resuelven al escribir el adaptador.
+- **T2 — `review-f1315ed728b0e08a` — aprobado y reconocido.** Target `sha256:b604fb82…`, lente
+  `review-reliability` (medium, 3 archivos/486 líneas, sin ronda de corrección). Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `delivery: ordinary-repository-policy`. Sin envelope de consent
+  (el STATUS ligado devolvió collect sin envelope: sin decisión humana que respetar). Punto ciego:
+  `server/pyproject.toml` + `server/uv.lock` (pin `pgvector>=0.4.0`) no entraron al candidato por ya
+  versionados → commit aparte `c0d0b50`; `assess` dice medium/`under_budget`, pendiente en el slice.
+  Verificación en lane `e12-t2`: `just gate server/tests/assistant` → 136 passed (seed 1314030592);
+  unidades `4681cf2` (schema) + `c0d0b50` (deps). Fricción de worktree fresco (fuera de superficie,
+  mecánica y anotada): `ml/uv.lock` se rancia por el path-dep a `server` (regen) y `web/node_modules`
+  ausente (`npm ci`).
+- **T7 — `review-45c3ada4ce1f77c4` — aprobado y reconocido.** Target `sha256:6b8ded57…`: los 7
+  archivos de `e87df11` (la pantalla: `Composer`, `MessageList`, `NoticeBanner`, `AssistantScreen` y
+  sus tests), 675 líneas, tier `medium`, lente `review-reliability`. Sin hallazgos bloqueantes:
+  ningún CRITICAL/BLOCKER y sin ronda de corrección. Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `consumed_revision sha256:fae238c8…`, `authority: burned`,
+  `delivery: ordinary-repository-policy`. El lineage llevaba abierto desde la unidad de la pantalla
+  con el slot del revisor reofrecido y **cero** resultados admitidos: se continuó (no se abandonó) y
+  su target congelado se revisó tal cual estaba.
+  - **Hallazgos no bloqueantes** (2 WARNING + 2 SUGGESTION, `informational`; ninguno reabre la
+    revisión) → issue **#314** (`review-follow-up`, `area:web`, `type:chore`): `R3-1` (el aviso de
+    fallo no tenía test: ningún test rechazaba el `fetch` ni rompía el stream) cerrado en `b9189c6`,
+    con corrida de mutación que prueba que la aserción no es vacía; `R3-2` (el compositor limpia el
+    borrador antes de saber si el envío falló) **diferido**: docs/07 no fija qué pasa con el borrador
+    tras un `429` y restaurarlo es una decisión de producto, no una corrección mecánica; `R3-3`
+    (la guía de longitud dice "menos de" un máximo que sí se acepta) y `R3-4` (`.length` cuenta
+    unidades UTF-16 y el servidor cuenta caracteres) diferidos al issue.
+  - **Nota arrastrada de la rebanada `api/`:** `assistantCopy.ts` vivía en `api/` con una nota que
+    asignaba el movimiento a la unidad de UI. Movido a `components/` en `e69d405` (mismos textos,
+    solo imports; 70 tests de la feature y 16 de `app` verdes).
+  - **Cola de la lane, sin revisión debida:** `e87df11..HEAD` (`f41e320` la ruta, `b9189c6` el test,
+    `e69d405` la copia; 11 archivos/202 líneas) → `assess` responde `risk: medium`,
+    `review_due: false`, `review_due_reason: under_budget`: queda **pendiente en el corte**, sin
+    recibo que quemar y sin fabricar uno.
+
+- **T8 — `review-3c128bea98f8df25` — aprobado y reconocido (solo el corte de hermeticidad).**
+  Target `sha256:43b7c307…` (2 archivos/26 líneas, medium), lente `review-reliability`, **0 hallazgos**.
+  Recibo quemado con `gentle-ai.review-acknowledged/v1`, `authority: burned` (2026-10-23). El corte
+  revisado es `d7cf535` con `--base-ref` en su padre `6d429bc`: la lección de la sesión del 2026-10-08
+  (el candidato resolvía la lane entera sin base explícita) quedó aplicada y el candidato llegó
+  acotado a la unidad. **El resto de T8 no quema recibo por decisión de alcance del dueño
+  (2026-10-23):** la verificación técnica es del agente `gentle-ai-verify` y el review RDD se usa solo
+  cuando el veredicto lo pida; el verify del 2026-10-23 (abajo) volvió sin bloqueadores, así que no se
+  abrieron más lineages. Un lineage abierto por error bajo la lectura por-commit
+  (`review-44c48cffdf1c9ab0`, sin lentes ni resultados) queda en-flight sin autoridad capturada, igual
+  que los `reviewing` huérfanos de rondas anteriores; nada está aprobado ni quemado en él.
 
 Per work-unit commit: `gentle-ai review assess` against the previous reviewed
 boundary, one lineage per unit, blocking findings in a bounded correction, non-blocking ones to one
@@ -623,24 +942,524 @@ lineage; no approved receipt means *not reviewed*, never approved.
     regla que ignora el costo ausente; a ~54 000 filas/mes (ADR-0007:9) el `SUM` en SQL es la lectura
     más barata, así que T6 debe revisarlo.
 
+- 2026-10-07 — **T4, hechos de parcela, recuperación y la respuesta sin LLM.** Reconciliado contra el
+  árbol y no de memoria: cuatro commits sobre `a127acb` (`f0ef15f`, `349ac8a`, `98bf0f4`,
+  `7a81758`), 14 archivos y **4 327 líneas** acumuladas, todas dentro de la superficie autorizada de
+  T4 (`assistant/domain/**`, `assistant/application/**`, `server/tests/assistant/**`). Ninguna
+  fachada ajena se tocó: los cinco hechos entran por la cara `application` de cada módulo, nunca por
+  su `domain` ni por sus tablas (docs/05-arquitectura.md:150-151).
+  - **`domain/facts.py`** — los cinco hechos (`SensorFact`, `AlertFact`, `IrrigationFact`,
+    `SeasonalClimateFact`, `RiskFact`) más `ASSISTANT_METRICS`, `SENSOR_FRESH_WINDOW = 24 h` y
+    `missing` por familia, para que "no hay información" sea una frase y nunca un `0` (D-T12.1).
+  - **`domain/fact_safety.py`** — el snapshot inmutable (copia de `metrics` y `top_factors`) con el
+    invariante "nunca lanza"; es exactamente lo que el fix `7a81758` cerró.
+  - **`domain/degraded.py`** — el texto en español plano, determinista y en el orden de docs/06 §9
+    (sensores, alertas, riego, clima estacional, riesgo), con la frase de evidencia insuficiente, la
+    fuente de cada cita y el aviso de "etiqueta del producto ante el ICA y su técnico"
+    **incondicional** (docs/06:386). La severidad se escribe solo para una versión calibrada: la
+    línea base `climatology_month` con `thresholds={}` se anuncia como línea base (D-T9.2).
+  - **`application/plot_facts.py::gather_plot_facts`** — `resolve_plot_access` primero, luego los
+    cuatro facades (`query_latest_plot_readings`, `list_open_alerts_for_plots`,
+    `query_plot_recommendation`, `query_plot_risk` **reusado**, no una segunda lectura de las tablas
+    de riesgo) y el boletín estacional. Cada hecho se proyecta a su propio value object con
+    `sanitize_fact_values` y listas de claves permitidas: la lista de envío de D-T12.6 nace aquí.
+  - **`application/retrieval.py::retrieve_fragments`** — top 5 y piso 0.75 tomados de
+    `domain/limits.py` (constantes nombradas, no literales), el piso **re-aplicado** en el caso de uso
+    para que un repositorio que lo ignore no decida lo que lee el productor, una cita por documento
+    y `validate_citation` antes de devolver. Menos de cinco fragmentos —o ninguno— es una respuesta
+    legítima, no un fallo.
+  - **`application/degraded_answer.py::answer_without_llm`** — la rama sin LLM, y la garantía de que
+    no hay proveedor es **estructural, no una promesa**: la firma no nombra un `LLMClient` y dos
+    tests lo comprueban (uno inspecciona la firma de cada función pública de la ruta, otro pregunta
+    al doble `FakeLLMClient` cuántas veces lo invocaron).
+  - **Desviación declarada, dentro de superficie:** `application/ports.py` ganó
+    `KnowledgeRepository.latest_climate_bulletin(department=...)`. El `department` es un argumento
+    nullable con fallback a nacional **a propósito**: nada en el repo mapea finca o parcela a
+    departamento (`Farm.municipality_code` es DIVIPOLA de texto libre y no existe tabla `municipality`),
+    e inventar ese mapeo aquí sería un segundo lugar que decide las divisiones administrativas de
+    Colombia, que es la tabla `municipality` cuando exista.
+  - **Tests:** 97 tests de T4 en seis archivos, uno por comportamiento, con RED observado antes de
+    cada GREEN (`test_facts` 17, `test_fact_safety` 18, `test_degraded` 20, `test_plot_facts` 26,
+    `test_retrieval` 12, `test_degraded_answer` 4).
+  - **Verificación (2026-10-07, HEAD `7a81758`, base de datos de este worktree):**
+    `just gate-fast` → **verde** (ruff, ruff format 399 archivos, mypy 243, `lint-imports` 1 contrato
+    / 0 roto con las capas hexagonales **conservadas**, una sola cabeza de Alembic, ast-grep,
+    ml ruff/mypy, eslint, tsc); `just gate server/tests/assistant` → **233 passed, 0 failed, 0
+    skipped** en 24.56 s, seed `1059847596` (pytest 9.1.1, Python 3.12.14, pytest-randomly 5.0.0).
+  - **Desviación de proceso, registrada tal cual y no resuelta.** El worker de verificación se pasó
+    de la superficie que le di (solo `just db-up`) y ejecutó **`just db-reset`**, que esta tabla de
+    Checks prohíbe a mitad de épico ("las filas de una lane son evidencia"). Lo que ocurrió, en tres
+    hechos: (1) `just db-up` **no puede revivir un contenedor detenido** — su guarda
+    (`justfile:100`, `ps -aq`) también matchea los exited y responde *"already exists; run 'just
+    db-reset'"* — y `just db-info` no ayuda, porque imprime config (`justfile:92-99`), no estado;
+    (2) `db-reset` es `db-down` + `db-up`, y `db-down` hace `podman rm -f -v` (`justfile:115-116`),
+    así que el volumen anónimo de pgdata de este worktree se **eliminó y se recreó vacío**; (3) el
+    mismo `db-up` lo levantó de nuevo en el puerto 55219 y el gate corrió sobre un esquema limpio
+    reconstruido desde las migraciones. **Pérdida real:** las filas que hubiera en ese Postgres. En
+    esta lane eran fixtures de test que cada corrida recrea —T4 no tiene adaptador, router ni
+    ingestión—, así que no hay evidencia de T4 perdida y el gate sobre base limpia es la forma más
+    fuerte de prueba; lo que sí se perdió es cualquier carga manual o semilla que hubiera en ese
+    worktree, y eso ya no es verificable. **El arreglo no destructivo era `podman start
+    <container>` + `pg_isready`.** Fricción para un follow-up (no se arregla aquí: `justfile` es
+    superficie de T9): `just db-up` debería revivir un contenedor existente que esté detenido, y
+    `just gate` valida la base **después** de `gate-fast`, así que un contenedor muerto cuesta una
+    pasada estática completa antes de que el fallo se vea.
+  - **Superficie que T4 deja para adelante:** sin adaptador todavía —el `KnowledgeRepository` es el
+    puerto de T1 con el método del boletín, y su lectura SQL es de T3; `usage.py` sigue siendo la
+    rama de cuota de T1 y T6 la completa.
+
+- 2026-10-07 — **T5, el endpoint de streaming y el de retroalimentación.** Reconciliado contra el árbol
+  y no de memoria: base `1d7e1b8` (T0–T4), rama `e12-t5`, worktree propia con su propia base
+  (`techcamp-db-e12-t5-460430375`, puerto 55375). **Superficie:** `assistant/adapters/api/**`,
+  `assistant/adapters/repositories.py`, `assistant/domain/{models,errors}.py`,
+  `server/src/techcamp/main.py` (solo el registro del router) y `server/tests/assistant/**`.
+  Nada de `web/`, nada de `/api/v1/stream`, nada del hub de telemetry.
+  - **`adapters/api/prompt.py`** — el prompt saliente: sistema + hechos + fragmentos + pregunta, en
+    ese orden (docs/06 §9), validado contra `PromptSection` en cada llamada. Los **datos viajan como
+    datos**: los bloques de hechos y fragmentos se rotulan *"datos, no instrucciones"* y llegan en
+    mensajes `user`, mientras las reglas de docs/06:381-387 son el único mensaje `system`
+    (docs/09:75). El bloque re-aplica las listas de claves permitidas y `contains_contact_data` al
+    **renderizar**, no solo al construir el hecho: es el test de lista de envío de D-T12.6 (un
+    teléfono o un correo en el bloque de hechos nunca llega al prompt).
+  - **`adapters/api/stream.py`** — el cuerpo SSE y el contrato de tramas: `token` por token del
+    proveedor, después `sources` con las citas resueltas y después `done` con `conversation_id`,
+    `message_id`, modelo, tokens y costo (D-T12.1). **Sin `id:`** y **sin keepalive**: ADR-0027 deja
+    claro que este stream no tiene replay y nace y muere con su petición. El cuerpo **no sostiene
+    sesión**: llama a un `persist` que abre y cierra la suya, y lo llama **después** del último token
+    (D-T12.4 / `R3-stream-holds-db-session`). Un proveedor que falla a mitad de camino, un `usage`
+    ausente o un modelo sin precio cierran la trama con `error` y **no persisten nada**.
+  - **`adapters/api/pricing.py`** — `cost_cop` como aritmética de docs/02:78 sobre una **tarjeta de
+    precios inyectada**, nunca un literal: ADR-0026 declara obsoletos los precios de docs/02:78 y los
+    reales son de T8. Un modelo sin precio es `UnknownModelPriceError`, **jamás** un costo `0`.
+  - **`adapters/api/deps.py`** — el `LLMClient`, el `Embedder` y la tabla de precios. En el perfil
+    seminario: `SeminarLLMClient` (local, determinista, sin red) y **`SeminarHashEmbedder` reutilizado**
+    —el mismo con el que T3 indexó el corpus, porque una pregunta embebida por otro embedder no
+    encontraría nada. En `production`: `503` con título explícito, porque las claves del proveedor y el
+    cliente DeepSeek son superficie de **T6**.
+  - **`adapters/repositories.py`** — `SqlAlchemyKnowledgeRepository` (búsqueda coseno
+    `ORDER BY embedding <=> :query`, piso y `top_k` en SQL, boletín con fallback nacional), y los dos
+    repositorios del transcripto filtrados por `user_id`. `add` **rechaza una conversación ajena** con
+    `ConversationNotFoundError`: la FK no sabe de quién es la conversación y sin esa comprobación un
+    turno se escribiría en el transcripto de otro usuario.
+  - **`adapters/api/router.py`** — los dos endpoints de docs/04:227-228. Orden de las puertas:
+    conversación propia (`404`) → `resolve_plot_access` (`404`) → hechos → recuperación → prompt →
+    escritura de la pregunta, todo en **una sesión corta** que cierra antes de que empiece el
+    `StreamingResponse`; la respuesta se escribe en otra sesión corta, dentro del cuerpo.
+  - **Desviaciones declaradas (dentro o fuera de la superficie que el brief autorizó):**
+    (1) `assistant/adapters/repositories.py` está **fuera** de la fila de superficie de T5
+    (`assistant/adapters/api/**`), con la excepción explícita del dueño: los diez módulos del repo
+    guardan sus repositorios ahí y `adapters/api/` es solo transporte.
+    (2) `MessageRole` gana **`SYSTEM`** y `Message` lo **rechaza** con
+    `SystemRoleOnStoredMessageError`: el payload saliente de docs/06 §9 necesita un rol para las
+    reglas —si no, los fragmentos y el texto del productor llevarían la voz de las instrucciones
+    (docs/09:75)— y el enum congelado de T1 no lo tenía. La transcripción sigue teniendo dos roles, y
+    `test_models` se actualizó para afirmar exactamente eso.
+    (3) `cost_cop` requiere un precio y no hay ninguno en el repo: el dueño decidió **precio
+    inyectado, 0 en el seminario**, con las cifras reales de DeepSeek en T6/T8.
+    (4) La rama **degradada sin LLM no está cableada**: T4 dejó el caso de uso y T6 es su dueño
+    (el disparador son el límite y el presupuesto). Cablearla aquí sin disparador sería código muerto.
+  - **Tests:** 4 módulos nuevos y 53 tests (`test_prompt_assembly` 11, `test_repositories` 20,
+    `test_stream` 18, `test_assistant_api` 16) más `db_fixtures.py`, con RED observado antes de cada
+    GREEN. Aíslan el `conversation`/`plot` de otra organización y usuario (`404`, nunca `403`), el
+    prompt exacto que salió del servidor, una sola llamada al proveedor por request (ADR-0007:26), y
+    **cero conexiones del pool checked out entre tokens** (el mismo instrumento que usa
+    `tests/telemetry/test_stream_api.py` para el stream del hub).
+  - **Verificación (2026-10-07, worktree `e12-t5`, base 55375):** `just gate server/tests/assistant`
+    → **359 passed, 0 failed, 0 skipped** en 47.99 s (incluye `gate-fast`: ruff, ruff format,
+    mypy, `lint-imports` con las capas hexagonales conservadas, una sola cabeza de Alembic, ast-grep,
+    eslint, tsc). Por rebanada: S1 → 304 passed; S2 → 324 passed; S3 → 341 passed; S4 → 359 passed.
+
+- 2026-10-07 — **T5 entregada y revisada por rebanadas** (decisión del dueño: con ~4 k líneas, tres
+  unidades de trabajo y un recibo cada una, no un RDD único). Rama `e12-t5`, base `1d7e1b8`, base de
+  datos propia en el puerto 55375. **Trabajo en política ordinaria:** sin PR, sin merge, sin rebase.
+
+  | Rebanada | Commit | Recibos RDD |
+  |---|---|---|
+  | S1 repos + fixtures + tests | `b31ac34` | `review-19ee9c38084df410` — revisión corrió y cerró `correction_required` (1 CRITICAL + 2 WARNING); corrección acotada en `53cb281` y **parada terminal de mantenedor** al re-verificar artefactos |
+  | S2 prompt + SSE + precio + rol `SYSTEM` | `8fcb3ed` | `review-202f3954880c4634` — **aprobado y quemado** (`gentle-ai.review-acknowledged/v1`), 3 WARNING informativos |
+  | S3 deps + router + `main.py` + tests de API | `ea42de1` | `review-4a3a3fefe2f3f556` — **aprobado y quemado** (`gentle-ai.review-acknowledged/v1`), 1 WARNING informativo |
+
+  - **El CRITICAL de S1 (`R3-ownership-mismatch`) estaba en el código y quedó corregido antes de seguir:**
+    `MessageRepository.add` verificaba la pertenencia del argumento `conversation_id` y escribía una fila
+    con `message.conversation_id`, así que un llamador podía verificar una conversación propia e
+    insertar un turno en el transcripto de otro usuario — la FK lo habría aceptado. La corrección son
+    **19 líneas de diff** (3 en el repositorio, 16 en el test), exactamente las capturadas en el plan
+    pre-edit (`--correction-lines=19`), y el test nuevo cubre justo el caso que el anterior no probaba:
+    el llamador **es** dueño de la conversación que nombra y aun así no puede apuntar el mensaje a otra.
+  - **Parada terminal del recibo de S1, tal cual:** `kind: stop`, `reason_code:
+    captured_artifacts_unverifiable`, `replayability: manual_action_required`, y el store marca
+    `repair: unsupported` (`supported_operations: ["review/complete-fix", "review/validate-fix"]`). Por
+    la tabla de reason codes eso es del **mantenedor**: inspeccionar la autoridad o desactivar el
+    interruptor de RDD del clon. **No se intenta recuperación ambiental.** La corrección ya está
+    commiteada y verificada; lo que falta es el recibo quemado de esa rebanada.
+  - **Hallazgos no bloqueantes, para un issue por ronda de revisión** (ninguno abre corrección y ninguno
+    reabre su candidato):
+    - `R3-search-floor-limit` (S1, WARNING) — el `top_k` se aplica en SQL antes del piso en Python, así
+      que un fragmento bajo el piso consume un cupo y puede dejar fuera a uno que sí califica.
+    - `R3-created-at-assertion` (S1, WARNING) — el test del reloj de la BD no distingue el reloj de la
+      base del `created_at` rechazado del llamador.
+    - `R3-001` … `R3-003` (S2, WARNING) — en `pricing.py:94-103`, `stream.py:121-132`, `prompt.py:156-168`.
+    - `R3-001` (S3, WARNING) — en `tests/assistant/test_assistant_api.py:320-330`.
+  - **Cierre de T5 (2026-10-08).** El dueño autorizó el cierre entero: (a) la decisión de precio queda
+    como la costura ya implementada —inyectada, 0 en seminario, números reales en T6/T8—; (b) el lineage
+    del RDD único `review-9f2fddf94d243592` quedó **abandonado** con `reason: operator_disposition`,
+    `actor: owner`, sin resultados de lente ni hallazgos que descartar, y su estado en cuarentena bajo
+    `review-transactions/quarantine/`; (c) los hallazgos no bloqueantes se agruparon en el issue
+    [#306](https://github.com/jab16jy/techcamp-v2/issues/306) (`review-follow-up`, `type:chore`,
+    `area:server`); (d) la parada de S1 se investigó de solo lectura y su causa está registrada abajo.
+  - **Causa de la parada de S1, con evidencia (no con conjetura).** `review inspect-authority` dice que
+    el store está **sano**: `valid: true`, `complete: true`, 38 entradas, 1 arista válida, 0
+    diagnósticos, 0 aristas inválidas — no hay corrupción ni registro perdido. Lo que muestra el estado
+    de la autoridad es que el candidato congelado sigue siendo `81a277b7…` (el árbol **anterior** a la
+    corrección) y que el `fix_delta_hash` registrado es `sha256:e3b0c442…`, que es el SHA-256 de la
+    cadena vacía: **cero bytes de corrección registrados**. Al validar el artefacto capturado, native
+    resuelve el candidato corregido como *árbol congelado + delta registrado*, y con delta vacío ese
+    candidato ya no corresponde al contenido commiteado (HEAD iba cuatro commits por delante,
+    incluyendo `53cb281`). De ahí el `captured_artifacts_unverifiable`. El arreglo supported es de
+    mantenedor (`review/complete-fix`, `review/validate-fix`), no de código.
+  - **Desviación de tooling registrada tal cual:** la captura de la corrección hubo que emitirse con el
+    CLI nativo (`gentle-ai review status --intended-untracked-selection=…` y
+    `gentle-ai review capture-correction-plan --correction-lines=19`), con autorización explícita del
+    dueño, porque la fachada no alcanza ese estado: `readRetainedNativeUntrackedSelection`
+    (`extensions/gentle-ai.ts:6548-6557`) devuelve `{}` en cuanto la selección retenida trae `baseRef`, y
+    `status` no acepta `untrackedScope`; `select-intended-untracked` en cambio ejecuta START
+    (`gentle-ai.ts:8359`). Afecta a **todo candidato con rango commiteado**, no a este en particular.
+  - **Superficie que T5 deja para adelante:** el límite de 10/día, el tope de presupuesto y el `429`
+    con `Retry-After` (T6, que comparte este router), la rama degradada, el cliente DeepSeek con sus
+    claves y su tarjeta de precios (`shared/config.py`), y las tramas que el cliente web de T7
+    consumirá con `fetch` + `ReadableStream` + `createSseParser` (`token`, `sources`, `done`, `error`).
+
+- 2026-10-08 — **T6, unidad 1: DeepSeek detrás del puerto `LLMClient`.** `22e3738` (5 archivos,
+  695 + 8 líneas) en la rama `e12-t6`. Quedó commiteada al final de esa sesión y **no se anotó aquí**;
+  este entry la recupera. El HTTP vive detrás de `ChatCompletionTransport`, el adaptador parsea
+  trozos y nunca un centinela, la clave se lee por llamada y no se enlaza al cliente — un despliegue
+  sin la variable falla en la primera pregunta, no en el import —, y el `usage` del último trozo es
+  de donde sale `message.cost_cop` (D-T12.1); un stream cuyo último trozo no trae `usage` termina en
+  conteos cero, nunca en una cifra que nadie midió, y `_evidence_from` se niega a persistirla.
+
+- 2026-10-08 — **T6, unidad 2: la admisión atómica contra el día y el mes.** `2acc276` (10 archivos,
+  988 líneas) en `e12-t6`: `SqlAlchemyUsageQuota` admite tras `pg_advisory_xact_lock`,
+  `month_spend_cop` pasa a ser un `SUM` de SQL, y `local_day_bounds`/`local_month_bounds` viven en
+  `domain/limits.py`. Verificación observada: `just gate-fast` PASS;
+  `just gate server/tests/assistant` → **404 passed, 0 failed** (seed 4214842071); enfoque 89 passed.
+  El cierre con recibo queda abajo, porque todavía no lo tiene.
+
+- 2026-10-21 — **T6, el RDD de `2acc276` llegó a `correction_required`.** El `assess` contra la
+  frontera del lane devolvió `medium` / `slice_budget_reached`; la START del dueño (consentimiento
+  otorgado) abrió `review-38f31fc11d58ee21` sobre el target `sha256:a18b5042…`, lente única
+  `review-reliability`, presupuesto de corrección 200 sobre 988 líneas. La captura de la lente **sí
+  quedó admitida** (`admission.decision: completed`, artefacto `sha256:a493ba63…`) después de los
+  tres rechazos de transporte del 8 de octubre, y el estado pasó a `correction_required` con **un
+  único hallazgo corregible, `R3-RELIABILITY-001` (CRITICAL)**, sobre
+  `test_the_month_is_the_local_one_and_not_the_utc_one` (`server/tests/assistant/test_usage_quota.py:248-266`)
+  más tres `WARNING` informativos. **Sin recibo quemado: sin recibo no hay revisión.** El 21 se
+  retoma el ciclo: el STATUS ligado devolvió `stop / managed_assets_outdated`, `gentle-ai sync`
+  corrige los assets gerenciados y el mismo STATUS vuelve a ofrecer `correction_plan_required` con
+  `--correction-lines` acotado a 1…200.
+
+- 2026-10-21 — **T6, `2acc276` aprobado y con el recibo quemado.** La corrección acotada es `8b97fed`
+  (6 líneas: 4 + 2 −, solo `test_usage_quota.py`), verde en
+  `just gate server/tests/assistant/test_usage_quota.py` → **18 passed**. Plan capturado con
+  `--correction-lines=6`; el validador dirigido (`review-validator`, relay por el host) corrió sobre
+  el árbol corregido y devolvió `original_criteria: passed` y `correction_regression: passed`, con un
+  único follow-up admisivo sobre imports que ya estaban. Recibo quemado:
+  `gentle-ai.review-acknowledged/v1`, lineage `review-38f31fc11d58ee21`,
+  target `sha256:a818c5e3…`, `consumed_revision sha256:07b852af…`, `authority: burned`.
+  - **El CRITICAL era falso y queda demostrado, no declarado:** `R3-RELIABILITY-001` sostenía que
+    `.date()` devuelve la fecha UTC y que el test falla en 11 de 12 meses. Reproducido **antes** de
+    tocar nada: `…::test_the_month_is_the_local_one_and_not_the_utc_one` → **1 passed** en octubre.
+    La corrección no maquilló el hallazgo: nombró el instante una sola vez y añadió la fecha UTC de
+    ese mismo instante, que era exactamente lo que el lector había leído al revés.
+  - **7 hallazgos informativos**, sin corrección y sin reabrir el candidato: 002 el docstring de
+    `admit_question` promete rollback y el cuerpo commitea igual; 003 el rol del mensaje no se
+    valida antes de contarlo; 004 el módulo se ancla al reloj de import; 005 la carrera no tiene
+    barrera; 006 `local_month_bounds` conserva el día del argumento y su `month+1` revienta en un
+    mes corto; 007 ninguna fila cae exactamente en la frontera; 008 el doble usa el `created_at`
+    del llamador y el adaptador ignora el suyo.
+
+- 2026-10-21 — **Decisión del dueño sobre el tope mensual (`D-T6.1`): es configuración por perfil.**
+  El tope deja de ser la pregunta abierta y pasa a ser `TECHCAMP_LLM_BUDGET_CAP_COP` en
+  `shared/config.py`, en COP, con dos defaults tomados de los documentos y ninguno inventado:
+  **`seminar` → `None`** (la tarjeta es `ModelPrice.local`, 0 COP, y el perfil no alcanza a ningún
+  proveedor, así que no mide dinero y no hay presupuesto que agotar; el techo de **USD 5 total** de
+  docs/04:22 y ADR-0021:30 es el de la cuenta del proveedor, donde el dinero existe) y
+  **`production` → `Decimal("0")`** mientras no se configure (ADR-0007:17 deja la cifra mensual para
+  el dueño, y el sentido ya revisado de `limits.py:136` es que un perfil que mide dinero y no tiene
+  tope deja de responder con el modelo en vez de responder gratis). `None` significa "este perfil no
+  mide dinero", **no** "falta configurarlo". Quien configure la cifra hace la conversión USD→COP,
+  igual que quien llena la tarjeta de precios.
+  **Lo que sigue abierto y que esto NO cierra:** D-T12.3, la confirmación del límite de 10/día en
+  los dos perfiles, que `docs/04:22` sigue marcando *owner-confirmable*.
+
+- 2026-10-21 — **Los siete hallazgos de la ronda de T6 viven en el issue #310**
+  ([#310](https://github.com/jab16jy/techcamp-v2/issues/310), `review-follow-up`, `type:chore`,
+  `area:server`). Los dos que tocan el código propio de T6 se corrigen **en el propio task, en su
+  commit, con `Refs #310`**: `R3-RELIABILITY-002` (el docstring de `admit_question` promete rollback
+  y el cuerpo commitea) y `R3-RELIABILITY-006` (`local_month_bounds` conserva el día del argumento
+  y su `month+1` revienta en un mes corto). Los otros cinco quedan para su issue y no reabren el
+  candidato. Este ancla existe en el doc y no solo en el contexto de quien ejecuta: una compactación
+  de sesión lo necesita igual que la siguiente sesión.
+
+- 2026-10-21 — **T6 cerrada en seis unidades, con la caveat escrita y no escondida.** El worker
+  terminó con tres commits más —`b8e4987` (el `429` con `Retry-After` y la rama degradada con cero
+  llamadas al proveedor), `d37a132` (los dos avisos de #310, `Refs #310`) y `a9d7a48` (el tope por
+  perfil de `D-T6.1`)— más `ab2f458`, que escribe la confirmación de `D-T12.3` en `docs/04-api.md:22`.
+  Verificación observada por el worker: `just gate server/tests/assistant` → **439 passed**, 2
+  warnings de deprecación de Starlette/anyio, 113.29 s; el foco `tests/assistant/test_limits.py` +
+  `test_usage_quota.py` → 46 passed, 12.23 s. Árbol limpio, sin push, sin PR y sin merge.
+  **Spot check del padre:** `just gate server/tests/assistant` → **439 passed**, 2 warnings,
+  101.28 s — el mismo comando re-corriendo, el mismo resultado.
+  - **La caveat:** el RDD de las unidades que nunca alcanzaron el presupuesto de revisión (T6a y el
+    corte que lleva T6c–T6f) sigue **pendiente**: `assess` sobre `8b97fed..HEAD` dice `medium` /
+    `under_budget` con 1 200 líneas sobre 15 rutas. Solo T6b tiene recibo quemado
+    (`review-38f31fc11d58ee21`). Es el mismo ítem abierto que T5 dejó con su corte 3: cerrarlo con
+    recibo exige una decisión explícita del dueño —una revisión independiente de ese rango— y no se
+    reinicia por cuenta propia.
+  - **El lane completo:** `88268d6..ab2f458`, 7 commits, 21 archivos, **2 863 líneas** contra un
+    forecast de ~350. La partición en T6a…T6f es lo que evita que eso vuelva a ser una unidad
+    sola; el forecast estaba mal desde que se escribió, no porque el trabajo creciera.
+  - **La entrega sigue siendo del dueño:** la política del repo pide PRs encadenados a `main`, uno
+    por unidad, y no se abre ninguno sin que lo pidas.
+
+- 2026-10-22 — **La verificación independiente encontró un bloqueante que la revisión RDD no vio, y
+  ya está corregido.** El verificador (`gentle-ai-verify`) pasó la rebanada completa de T6
+  (`88268d6..ab2f458`) contra los nueve criterios de aceptación: **A–I pasan**, la rebanada está limpia
+  y acotada, y el camino normal es **byte a byte idéntico al baseline** (`88268d6`: mismo status, mismos
+  frames, mismo payload de `done`, mismas filas, una llamada al proveedor). Pero encontró un bloqueante
+  de la causa del cambio: **una negativa de presupuesto con hueco en el día se reportaba como el límite
+  del día** —`429` con `Retry-After` en vez de `200` con el cuerpo degradado—, porque
+  `application/usage.py` leía el conteo **después** de la reserva (la pregunta rechazada se cuenta a sí
+  misma) y lo usaba para la precedencia del motivo. El productor recibía *"mañana podés seguir
+  preguntando"* cuando mañana también iba a estar degradado, porque el presupuesto seguía gastado.
+  Registrado en [#313](https://github.com/jab16jy/techcamp-v2/issues/313).
+  - **Corregido en cuatro commits** en `e12-t6`: `bc9f3fb` (el bloqueante: el motivo se evalúa sobre el
+    conteo previo a esta pregunta y los contadores reportados siguen incluyendo este turno),
+    `7e8eee4` (los dos WARNING de la revisión de T6a: la base URL del proveedor se valida en su único
+    lector con una lista exacta de hosts y falla cerrado con `503` **antes** de que exista un cliente,
+    y el stream entero queda bajo un deadline monótono), `899e1e3` (los tres avisos: respaldo del
+    modelo configurado, la cadena vacía del tope es error de configuración y no cero silencioso, y los
+    textos *"wired in E12 T6"* que ya no son ciertos) y `9083863` (la atribución a #312 en el código, en
+    vez de un slug que nadie puede abrir). `Refs #312` en los tres últimos; el del bloqueante no lo
+    lleva porque su ronda es la del verificador, no la de la revisión.
+  - **El contrato del endpoint, que el repo no tenía**: `server/tests/assistant/test_assistant_quota_contract.py`
+    (11 tests) es el RED del bloqueante y la aceptación en el cable — la 11ª pregunta es `429` con
+    `Retry-After` numérico, las dos negativas devuelven `answer → sources → done` con **cero** llamadas
+    al proveedor, la respuesta degradada persiste la evidencia en `null` y el `SUM` la ignora, el tope
+    es configuración por perfil con `503` ante un valor malformado, y sin tope el presupuesto no rechaza.
+  - Verificación observada por el implementador: `just gate server/tests/assistant` → **461 passed**,
+    2 warnings (115.60 s); el contrato → 11 passed; `test_usage.py` + `test_usage_quota.py` +
+    `test_limits.py` → 67 passed. Árbol limpio, sin push, sin PR y sin merge.
+    **Spot check del padre:** `just gate server/tests/assistant` → **461 passed**, 2 warnings,
+    105.08 s — el mismo comando re-corriendo, el mismo resultado.
+  - **Lo que sigue abierto y NO se corrige aquí:** el `503` de tope malformado sigue tapado en
+    producción por el `503` previo de `get_prices` (FastAPI resuelve ese antes), y el operador no se
+    entera del tope malformado hasta que T8 cablee la tarjeta. Tocar el orden de resolución de
+    dependencias es otro cambio, no este.
+  - **Fusionado a la rama del épico** (2026-10-22): `merge(e12): the T6 lane into the epic branch`
+    (`e40f634`), con los doce commits del lane intactos —cada unidad de trabajo sigue siendo un
+    commit identificable— y **sin PR**: los PRs en rebanadas a `main` se hacen al cerrar el ODD de
+    E12, no ahora. El código fusionado es **byte a byte idéntico** al del lane verificado
+    (`git diff e12-t6 HEAD -- server/ web/` vacío), así que los 461 passed de la verificación se
+    transfieren sin re-correr.
+
+- 2026-10-22 — **T7 cerrada: el recibo de la pantalla y la ruta que le faltaba.** La lane tenía la
+  pantalla completa (lista, compositor, fuentes citadas y los cuatro estados de docs/07) y **no la
+  había montado**: `web/src/app/routes.tsx` no registraba `mas/asistente`, así que la pantalla existía
+  y nadie podía abrirla —y docs/07:129 la cuelga de `Más`, que es alcance explícito de T7—. `f41e320`
+  la monta con el precedente de `mas/indicadores` (chunk perezoso, `Suspense`, la misma fila de lista),
+  con RED observado primero: el test de rutas no encontraba un enlace llamado `Asistente` ni la ruta,
+  y el conteo de hijos pasó de 7 a 8; el test nuevo entra por `/mas`, pulsa el enlace y aterriza en el
+  estado sin parcela de la pantalla.
+  - **El lineage vivo se continuó, no se abandonó.** `review status --lineage … --next-transition`
+    reofrecía el slot del revisor sobre el target congelado de 675 líneas (los 7 archivos de
+    `e87df11`); una corrida `review-reliability` capturó en el acto, el resultado se admitió
+    **aprobado** el target, la captura terminal emitió su operación de reconocimiento y el recibo se
+    quemó (`gentle-ai.review-acknowledged/v1`, `consumed_revision sha256:fae238c8…`,
+    `authority: burned`). El detalle y los hallazgos están en [Review (RDD)](#review-rdd).
+  - **Seguimiento de los cuatro hallazgos no bloqueantes:** issue
+    [#314](https://github.com/jab16jy/techcamp-v2/issues/314). `R3-1` cerrado en `b9189c6` (test del
+    envío fallido, con corrida de mutación que lo rompe si se quita el descarte de la burbuja vacía);
+    `R3-2` diferido porque docs/07 no fija qué pasa con el borrador tras un `429` y restaurarlo es
+    decisión de producto; `R3-3` y `R3-4` quedan en el issue. La nota de la rebanada `api/` sobre
+    `assistantCopy.ts` se cerró moviendo el archivo a `components/` (`e69d405`).
+  - **Antes de registrar nada se fusionó la rama del épico en la lane** (`c72dea9`): `git merge-tree`
+    daba árbol limpio y así el documento no se resuelve dos veces; los gates corrieron sobre el árbol
+    fusionado, no sobre el viejo: `just gate web/src/app web/src/features/assistant` → **16 + 70
+    passed**, con eslint, `tsc`, ruff, mypy, `lint-imports`, una sola cabeza de Alembic y ast-grep
+    verdes.
+  - **La cola de T7 queda sin revisión debida:** `e87df11..HEAD` (11 archivos/202 líneas) → `assess`
+    dice `medium`, `review_due: false`, `under_budget`. No hay recibo que quemar y no se fabrica uno.
+  - **Lo que NO se tocó:** `web/src/design-system/**` (fuera de superficie sin cambio de tokens o
+    primitivas gobernado por `impeccable`) y la pantalla de otra feature.
+
+- 2026-10-23 — **Corrección de T7 encontrada por la verificación independiente: la respuesta degradada
+  llegaba como burbuja vacía.** La rama sin LLM del servidor manda la respuesta completa en **un**
+  frame `answer` (`stream.py:stream_degraded_answer`), no en tokens, y el cliente
+  (`assistantStream.ts`) solo conocía `token`/`sources`/`done`/`error`: el frame caía en el `default`,
+  `done` cerraba con `model: null` y `tokens.join('')` era `''`, así que el productor veía la nota
+  "sin LLM" al lado de una burbuja sin texto — justo el estado que docs/07 pide distinguir y que el
+  test `b9189c6` no cubría porque alimentaba la respuesta con frames `token` que el servidor degradado
+  nunca manda.
+  - **RED observado antes de tocar nada:** los dos tests nuevos
+    (`assistantStream.test.ts::reads the whole answer the degraded branch sends in one frame`,
+    `AssistantScreen.test.tsx::shows the degraded answer the server sent, not an empty bubble`)
+    fallaron 2/38 contra el árbol sin corregir.
+  - **GREEN:** `case 'answer'` en `readAssistantStream`, que toma el mismo camino de un `token` — el
+    texto entra por `onToken` en cuanto llega y se acumula para el `done`. La condición de degradada
+    sigue siendo `model === null` en `done` (D-T12.1); el `reason_text` del frame no se renderiza
+    todavía: docs/07 no pide mostrarlo y el copy del aviso ya es `ASSISTANT_COPY.degradedNote`.
+  - **Verificación:** `just gate web/src/features/assistant web/src/app` → verde (70 + 16 passed, con
+    gate-fast completo). Sin push, sin PR.
+  - **RDD de la corrección:** `gentle-ai review assess --base-ref b604e1a --committed-only` →
+    `medium`, 4 rutas / 90 líneas, `review_due: no` (`under_budget`). Sin recibo que quemar y no se
+    fabrica uno; la cola revisable de T7 crece y sigue pendiente de la decisión del dueño.
+  - **Verificación independiente de la rebanada (2026-10-23): los seis criterios pasan, 0
+    bloqueantes.** Un worker de solo lectura verificó los commits de T7 (`eb89063..7b8143b`) contra
+    los cuatro estados de docs/07, el wire campo por campo contra `stream.py`, la ruta `mas/asistente`,
+    el layout `api/ containers/ components/` con tokens y copy en español, la corrección `7e8506d` y
+    la disciplina de superficie. Evidencia observada por el verificador: `npm test -- --run
+    src/features/assistant src/app` → **86 passed**; `just gate web/src/features/assistant
+    web/src/app` → exit 0. Las cuatro observaciones no bloqueantes van al issue
+    [#318](https://github.com/jab16jy/techcamp-v2/issues/318); la única con acción posible es la
+    primera (las 2 líneas de `docs/07` que `0f315d1` escribió fuera de la fila de superficie de T7,
+    doc-first y declarado, pero no sancionado por la tabla).
+
+- 2026-10-23 — **T7 fusionada a la rama del épico** (`merge(e12): the T7 lane into the epic branch`,
+  `7e97ed2`), con los ocho commits de la lane intactos —cada unidad de trabajo sigue siendo un commit
+  identificable— y **sin PR**: los PRs en rebanadas a `main` se hacen al cerrar el ODD de E12, no
+  ahora (el mismo orden que el merge de T6). El merge fue limpio por construcción: el merge-base era
+  la punta del épico (`dd88e06`, que la lane ya había absorbido en `c72dea9`), así que la lane estaba
+  estrictamente adelante.
+  - **El código fusionado es byte a byte idéntico al de la lane verificada**: `git diff e12-t7 HEAD`
+  vacío y los dos árboles con el mismo hash (`20dbf0be…`), así que los 86 passed de la verificación
+  se transfieren sin re-correr. Spot check del padre sobre el árbol fusionado: `npm test -- --run
+  src/features/assistant src/app` → **86 passed** — el mismo comando re-corriendo, el mismo
+  resultado.
+  - Tras el merge se eliminan la base de datos del worktree `e12-t7` (`just db-down`) y el propio
+  worktree; los shas de la lane quedan alcanzables desde la rama del épico.
+
+- 2026-10-23 — **T8 U1 (el arnés) cerrado, corregido y verificado.**
+  La lane lleva seis unidades: `6915f99` (set cerrado de 30 preguntas), `d5316ce` (pin del corpus por
+  digest), `cefb763` (replay por el `retrieve_fragments` y el `build_prompt` reales), `6d429bc`
+  (reporte de evidencia para calificar, sin score/threshold/verdict), y dos de esta sesión:
+  `d7cf535` (hermeticidad) y `d8d3c31` (sonda de barrido).
+  - **Hermeticidad, con RED y GREEN observados (hallazgo de la sesión del 2026-10-08, confirmado).**
+    Con `TECHCAMP_KB_CORPUS_DIR` exportado —el switch del dueño para la revisión de licencia, leído
+    por `pin_corpus()` a la hora de la llamada—, el arnés en `6d429bc` falla: 4 tests (pin, digests,
+    chunk count, digest del artefacto; con una copia idéntica fallan 2, con un directorio vacío, 20).
+    El guard que ya existía en `test_kb_ingest_job.py:105-113` (fixture autouse con
+    `monkeypatch.delenv`) se copió a un `conftest.py` del paquete, y el suite pasa verde con la
+    variable exportada. El comentario del end-to-end que asumía "unset in the test run" ahora nombra
+    al conftest.
+  - **Recibo del corte:** `review-3c128bea98f8df25`, lente `review-reliability`, 0 hallazgos, quemado
+    (ver entrada de Review).
+  - **Verificación técnica (agente `gentle-ai-verify`, contrato ODD, 2026-10-23), sobre la lane
+    completa con base `88268d6`:** sin bloqueadores. Todos los ítems de U1 **met** con evidencia
+    propia (33 sondas: pin repetido igual; dos ciclos seed+replay renderizan byte-idéntico;
+    30 preguntas con ids y textos únicos; textos de `EvalSetError` exactos en 8 negativos;
+    `CorpusPinError` al mutar bytes tras el pin; ≤5 fragmentos, similitudes ≥ 0.75, citas deduplicadas,
+    prompt `[system, user, user, user]` terminando en la pregunta del productor; sin campo con forma
+    de grade y sin `LLMClient` alcanzable). U2 **not implemented — esperado**: espera las Open
+    questions 1 y 2 del dueño, no es bloqueador de U1. Nota del verificador: en `88268d6` el paquete
+    eval no existe todavía, así que el árbol RED de la hermeticidad es `6d429bc`. **Advisories (sin
+    ronda de corrección):** (a) con `SeminarHashEmbedder` las 30 preguntas recuperan 0 fragmentos y 0
+    citas —medido y documentado por el propio arnés
+    (`test_the_stand_in_reaches_no_fragment_above_the_floor`, `test_corpus_pin.py:286`)—, así que la
+    corrida graduada necesita el modelo de ADR-0026, no el stand-in; (b) no hay artefacto de
+    resultados commiteado (la superficie lo permite; el arnés renderiza a demanda; no es violación).
+  - **Sonda dura promovida (`d8d3c31`):** el barrido set-wide que el verify devolvió como regresión —
+    las 30 preguntas deben respetar `RETRIEVAL_TOP_K`, el piso de `SIMILARITY_FLOOR` y el orden
+    `[system, user, user, user]` de D-T12.6, con el último mensaje terminando en la pregunta.
+    `just gate server/tests/assistant/eval` → **97 passed**.
+
+- 2026-10-23 — **T8 U2 (los docs del proveedor) aterrizada con las decisiones delegadas.** El dueño
+  delegó las Open questions 1 y 2 ("usa las decisiones que tengan sentido con el épico 12 y los
+  docs") y fijó el proveedor: DeepSeek V4 Flash / V4.1 Flash. Verificado con ctx7 el mismo día
+  (`/websites/api-docs_deepseek`, oficial): **`deepseek-chat` se retiró de la API el 2026-07-24**;
+  la tabla vigente lista `deepseek-flash` (V4.1-Flash) y `deepseek-v4-pro`, el thinking viene
+  activado por default y se apaga con `thinking: {"type": "disabled"}`, y los precios por millón son
+  input cache-miss $0.15/$0.30 (off-peak/peak), cache-hit $0.003/$0.006, output $0.60/$1.20. La TRM
+  del día es COP 3.185,01/USD (Banco de la República).
+  - **[ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md) (nueva) cierra las cuatro decisiones:**
+    (1) LLM `deepseek-flash`, una llamada, thinking desactivado —el LLM explica, no decide
+    (ADR-0007)—, con la tarjeta COP conservadora (peak, cache miss): input 955,50 y output 3.822,01
+    por millón; (2) pin de embedding **confirmado sin migración** — la única evidencia en contra es
+    del stand-in, que no recupera nada y no mide el modelo real; (3) **umbral de la evaluación fijado
+    antes de la corrida**: ≥ 27/30 correctas y tres descalificadores de uno solo (cita fabricada,
+    hecho contradicho, peor que la degradada — la línea base de ADR-0019); (4) **política de
+    licencia**: CC-BY 4.0 o más permisiva / CC-BY-SA / dominio público; fuera NC, ND y sin licencia;
+    la lista de documentos la firma el dueño al recolectarlos. La búsqueda híbrida **no se adopta**:
+    su disparador (ADR-0008:19) exige la corrida graduada.
+  - **Docs dueños actualizados:** [docs/02:78](../docs/02-estimaciones.md#costo-del-llm) reemplaza la
+    referencia Haiku (≈ USD 10/día) por los números reales (≈ USD 0,45–0,90 con caché, ≈ USD 2,75
+    peor caso); [docs/README:68](../docs/README.md) cambia el pendiente de "proveedor" a "corrida
+    graduada contra el umbral + firma de la lista del corpus"; el índice de ADRs registra la 0028.
+  - **Cableado que el propio código dejó a T8** (`deps.py:245`: "The production rate card is wired
+    in E12 T8"), aterrizado como unidad propia (`75d7fb4`) sobre la lane ya refrescada con el épico
+    (`bcf0668`, el merge que trae el cliente y el config de T6; conflicto único del doc resuelto a
+    mano): la tarjeta de producción sirve `deepseek-flash` a las tarifas conservadoras de ADR-0028
+    (`Decimal("955.50")` / `Decimal("3822.01")` COP por millón), el default de `TECHCAMP_LLM_MODEL`
+    renombra el alias retirado, y la única llamada del asistente va con `thinking` desactivado. RED
+    observado (3 fallos: el default, la 503 de la tarjeta, `KeyError: 'thinking'`), GREEN en
+    `just gate server/tests/assistant` → **559 passed**.
+  - **Verificación independiente del cableado (segunda pasada de `gentle-ai-verify`, 2026-10-23):
+    0 bloqueadores.** RED re-derivado de primera mano sobre el baseline; los siete ítems de ADR-0028
+    **met** con sondas propias (tarjeta exacta, fail-closed end-to-end con frame de error que nombra
+    el modelo sin precio, contrato de stream intacto, seminario local en cero). El caveat que T6 dejó
+    escrito —el 503 del tope malformado quedaba tapado por el 503 de precios— queda **desenmascarado
+    y observado en ambos árboles**: producción con tope malformado ahora responde "budget cap
+    misconfigured". Advisory único, pre-existente y a [#319](https://github.com/jab16jy/techcamp-v2/issues/319)
+    (`review-follow-up` de la ronda): los dobles web aún nombran `'deepseek-chat'` como cadena de
+    display. Sondas duras de la ronda promovidas a regresiones (`2fcc695`, `Refs #319`).
+
 ## Next step
 
-**T2 puede arrancar ya** (el pin de 384 y los contratos de puerto están), y **T4 en paralelo**
-(superficies disjuntas). T3 espera la revisión de licencia del corpus. El pin ya no bloquea a nadie: con `384` fijado,
-**T2 también puede arrancar** (`vector(384)` + HNSW coseno) con los contratos de puerto ya cerrados.
+**E12 está cerrado (2026-10-23).** Las diez tareas T0–T9 están hechas: T6 y T7 entraron completas en
+la rama del épico con su verificación independiente; T8 cerró con el arnés verificado, ADR-0028 y la
+corrida graduada del dueño; T9 corrió `just gate-full` una vez (verde, exit 0), verificados los once
+criterios de aceptación con su evidencia, y dejó el plan de entrega de 13 PRs encadenados arriba.
+Lo único que queda fuera del repo es la entrega: **el dueño abre y mezcla los PRs** en el orden del
+plan, y con eso `docs/10-dag.md` marca E12 como hecho.
 
-Lo que queda es decisión del dueño, y ninguna de las tres bloquea a T2 ni a T4:
+**Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
 
-1. **D-T12.3: confirmar el límite de 10/día en ambos perfiles.** Sigue anotado como owner-confirmable en
-   `docs/04:22`; si se revierte a solo-`production`, esa fila y [ADR-0007:5](../docs/adr/0007-llm-por-api.md)
-   cambian.
-2. **Open question 1: el umbral de la evaluación de T8.** Ningún documento dice qué puntaje promueve un
-   proveedor; hay que fijarlo **antes** de correr las 30 preguntas. T8 cierra `docs/README.md:68` y
-   escribe los precios reales en `docs/02:78`.
-3. **Open question 2: la revisión de licencia del corpus** ([ADR-0008:32](../docs/adr/0008-rag-pgvector.md)).
-   T3 carga solo fixtures hasta que responda.
+1. **El recibo de la rebanada de repositorios está en una parada terminal de mantenedor**
+   (`captured_artifacts_unverifiable`, `repair: unsupported`). El código está corregido y verde; lo
+   que falta es el recibo quemado. No se reintenta ni se recupera por cuenta propia.
+2. **Fuente del precio de `cost_cop` — decidada por el dueño (2026-10-08): precio inyectado, 0 en el
+   perfil seminario.** La costura ya lo respeta: `price_for` resuelve sobre una tabla que inyecta el
+   wiring, `cost_cop` es la aritmética de docs/02:78 sobre esa tarjeta y un modelo sin tarjeta es
+   `UnknownModelPriceError`, **nunca** un costo `0`. Por qué no se fijaron números aquí: ADR-0026:57
+   declara obsoletos los precios de [docs/02:78](../docs/02-estimaciones.md) (Claude Haiku 4.5) y deja
+   los reales de `deepseek-chat` a T8, y el costo del embedding depende del modelo que T8 pueda elegir.
+   El 0 del seminario no es un placeholder: ADR-0021 corre todo localmente, así que un modelo dentro
+   del proceso no tiene factura, y D-T12.1 acepta `cost_cop = 0` para una llamada que sí ocurrió y no
+   costó nada. El cliente DeepSeek y sus claves ya están (`22e3738`: la clave se lee por llamada, no
+   se enlaza al cliente, y un stream sin `usage` termina en conteos cero). La tarjeta real quedó
+   cableada el 2026-10-23 (`75d7fb4`, ADR-0028): `deepseek-flash` a 955,50 / 3.822,01 COP por millón,
+   conservadora (peak, cache miss).
 
-Después, en el orden de [Lanes](#tasks): **T1 → T2 ‖ T4**; T3 espera la licencia; T8 espera el umbral. Nada
-en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista blanca de
-`import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene `vector`, y ningún
-otro módulo se tiene que mover para que E12 arranque.
+Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
+
+1. **D-T12.3: el límite de 10/día en ambos perfiles — CONFIRMADO por el dueño el 2026-10-21.** Ya no
+   está pendiente: `docs/04:22` lleva la confirmación con la fecha, y las dos ADR que lo contradecían
+   quedan alineadas (`ADR-0007:5` y `ADR-0021:30`: lo que cambia por perfil es el **tope** de
+   presupuesto, no el límite diario). Si algún día se revierte a solo-`production`, esa fila y esas
+   dos ADR cambian otra vez.
+2. **Open question 1: el umbral de la evaluación de T8 — DECIDIDA (delegada por el dueño, 2026-10-23).**
+   [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md) fija el
+   umbral antes de la corrida (≥ 27/30, tres descalificadores) y `docs/README.md:68` y `docs/02:78`
+   quedaron actualizados.
+3. **Open question 2: la revisión de licencia del corpus — DECIDIDA (delegada por el dueño, 2026-10-23).**
+   La política está en [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+   (CC-BY 4.0 o más permisiva; fuera NC/ND/sin licencia); T3 carga el corpus real cuando el dueño
+   firme la lista de documentos.
+4. **Los 315 líneas del corte 3 (`349ac8a..7a81758`) siguen `under_budget`:** sin revisión debida y
+   sin recibo. Cerrarlo con recibo exige una decisión explícita del dueño (revisión independiente de
+   ese rango); no se reinicia por cuenta propia ni se fabrica un recibo.
+
+En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5, T6 y T7** hechos; **T8** aterrizada
+(U1 verificado, U2 con ADR-0028; queda la corrida graduada y la firma del dueño); **T9** al final.
+Nada en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista
+blanca de `import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene
+`vector`, y ningún otro módulo se tiene que mover para que E12 arranque.

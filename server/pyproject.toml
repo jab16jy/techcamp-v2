@@ -15,6 +15,10 @@ dependencies = [
     "fastapi>=0.141.1",
     "geoalchemy2>=0.20.0",
     "httpx>=0.28.1",
+    # `Vector(dim)` is how `kb_chunk.embedding` is declared (`vector(384)`,
+    # ADR-0026) and how the HNSW cosine index is built. The dim is the width of
+    # `intfloat/multilingual-e5-small`, never a preference of the caller.
+    "pgvector>=0.4.0",
     # Pinned exactly, not a range: Alembic migration `231a40930eb5` applies
     # `SchemaManager.get_schema()` from the *installed* library, so a floating
     # range would apply a different schema to a database whose Alembic version

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal, InvalidOperation
+from urllib.parse import urlsplit
 
 
 def database_url() -> str:
@@ -33,6 +35,142 @@ def jwt_audience() -> str:
 
 def open_meteo_api_key() -> str | None:
     return os.environ.get("OPEN_METEO_API_KEY")
+
+
+LLM_API_KEY_ENV = "TECHCAMP_LLM_API_KEY"
+LLM_BASE_URL_ENV = "TECHCAMP_LLM_BASE_URL"
+LLM_MODEL_ENV = "TECHCAMP_LLM_MODEL"
+
+LLM_BASE_URL_DEFAULT = "https://api.deepseek.com"
+"""DeepSeek's OpenAI-compatible endpoint, pinned by ADR-0026 for the cost formula
+and the streaming shape and confirmed by ADR-0028, whose rate card is the one
+`get_prices` serves. The model name is the only other thing configured here."""
+
+LLM_MODEL_DEFAULT = "deepseek-flash"
+"""ADR-0028: the confirmed model, DeepSeek-V4.1-Flash, called without thinking.
+The retired `deepseek-chat` alias pointed here in non-thinking mode until the API
+removed it on 2026-07-24, so the name, not the provider, is what changed."""
+
+
+def llm_api_key() -> str | None:
+    """The provider key, or `None` when there is none.
+
+    No default in either profile, on purpose. A committed default for a provider
+    credential would be a live key in the repository (docs/09 §Seguridad,
+    "Secretos"), and the seminar profile does not need one: it answers with the
+    local stand-in of `assistant.adapters.api.deps`. An unset key in production is
+    what the assistant dependency reports as `503`.
+    """
+    return os.environ.get(LLM_API_KEY_ENV) or None
+
+
+_default_base_url_host = urlsplit(LLM_BASE_URL_DEFAULT).hostname
+if _default_base_url_host is None:  # pragma: no cover - the default is a literal URL
+    raise ValueError(f"{LLM_BASE_URL_ENV}'s default must name a host: {LLM_BASE_URL_DEFAULT!r}")
+
+LLM_ALLOWED_BASE_URL_HOSTS: frozenset[str] = frozenset({_default_base_url_host})
+"""The hosts `TECHCAMP_LLM_BASE_URL` may name, because the provider **credential**
+is sent to whatever host that variable points at (the credential-egress-through-an-
+unvalidated-base-URL WARNING of #312; docs/09 §Seguridad "Secretos").
+
+Derived from `LLM_BASE_URL_DEFAULT` so the default and the allowlist cannot drift
+apart. An allowlist in code and not in the environment: a host that receives the key
+is a code change somebody reviews, never a second variable that silently redirects
+the credential to a host of its own. The default is the only entry because ADR-0026
+pins exactly one provider; a gateway in front of it is a new entry here, with its own
+review."""
+
+
+def llm_base_url() -> str:
+    """The provider's endpoint, or a `ValueError` when the key may not be sent there.
+
+    The check is here, at the single reader of the variable, so every caller inherits
+    it — including `DeepSeekLLMClient`, which reads this per call. An `http://` URL
+    would put the bearer key in clear text on the wire and a host outside
+    `LLM_ALLOWED_BASE_URL_HOSTS` would hand the provider's credential to somebody
+    else, so both are configuration errors and never a best-effort request.
+    """
+    raw = os.environ.get(LLM_BASE_URL_ENV, LLM_BASE_URL_DEFAULT)
+    _validate_llm_base_url(raw)
+    return raw
+
+
+def _validate_llm_base_url(raw: str) -> None:
+    """Raise `ValueError` unless `raw` is an `https` URL to an allowed host.
+
+    Fail-closed on anything unparsable, on a non-`https` scheme, on credentials
+    embedded in the URL, and on any host outside the allowlist. The host is compared
+    exactly (case-insensitively): a suffix check would accept
+    `api.deepseek.com.example`, which is the shape an exfiltration attempt takes.
+    """
+    try:
+        parts = urlsplit(raw)
+        host = parts.hostname
+    except ValueError as error:  # a malformed port, brackets, a broken netloc
+        raise ValueError(f"{LLM_BASE_URL_ENV} is not a URL: {raw!r}") from error
+    if parts.scheme != "https":
+        raise ValueError(f"{LLM_BASE_URL_ENV} must be an https URL: {raw!r}")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(f"{LLM_BASE_URL_ENV} must not carry credentials: {raw!r}")
+    if host is None or host.lower() not in LLM_ALLOWED_BASE_URL_HOSTS:
+        raise ValueError(
+            f"{LLM_BASE_URL_ENV} must point at a provider the key may be sent to "
+            f"({', '.join(sorted(LLM_ALLOWED_BASE_URL_HOSTS))}): {raw!r}"
+        )
+
+
+def llm_model() -> str:
+    return os.environ.get(LLM_MODEL_ENV, LLM_MODEL_DEFAULT)
+
+
+LLM_BUDGET_CAP_COP_ENV = "TECHCAMP_LLM_BUDGET_CAP_COP"
+"""The month's budget in COP for the profile that measures money (D-T6.1).
+
+The figure is compared against `SUM(message.cost_cop)` over the local month
+(docs/11:132), so it is in COP and whoever configures it owns the USD→COP
+conversion, exactly like whoever fills the price card of
+`assistant.adapters.api.pricing`."""
+
+
+def llm_budget_cap_cop() -> Decimal | None:
+    """The month's cap in COP, or `None` when the profile does not measure money.
+
+    The profile decides, never the variable alone. `seminar` is the profile that
+    does not measure money: its answer is `ModelPrice.local` — zero COP — and it
+    never reaches a provider (ADR-0021), so the monthly sum is structurally zero
+    and there is no money to cap. `None` says exactly that, and never a converted
+    USD 5: the USD 5 total of docs/04:22 and ADR-0021:30 is the provider account's
+    ceiling, where money exists, and no documented rate converts it.
+
+    `production` measures money, and the figure is the owner's future amount
+    (ADR-0007:17). Unset is `Decimal("0")`, the sense `limits.budget_exhausted`
+    already gives a zero cap: a profile that measures money and has no cap stops
+    answering with the model instead of answering for free. A value that is not a
+    non-negative finite decimal is a configuration error, never a silent zero — and
+    so is a variable that is *set* and reads blank: unset is a deployment that
+    never configured a cap, while an empty one is an operator mid-edit or a compose
+    file that interpolated nothing, and answering that with `0` stops the assistant
+    for a month with nothing saying why.
+    """
+    if is_seminar_profile():
+        return None
+    raw = os.environ.get(LLM_BUDGET_CAP_COP_ENV)
+    if raw is None:
+        return Decimal(0)
+    if not raw.strip():
+        raise ValueError(
+            f"{LLM_BUDGET_CAP_COP_ENV} is set but has no figure: "
+            f"{raw!r}; unset it for no cap, or set a number of COP"
+        )
+    try:
+        cap = Decimal(raw.strip())
+    except InvalidOperation as error:
+        raise ValueError(f"{LLM_BUDGET_CAP_COP_ENV} is not a number of COP: {raw!r}") from error
+    if not cap.is_finite() or cap < 0:
+        raise ValueError(
+            f"{LLM_BUDGET_CAP_COP_ENV} must be a non-negative finite number of COP: {raw!r}"
+        )
+    return cap
 
 
 def vapid_private_key() -> str | None:

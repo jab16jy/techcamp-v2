@@ -30,6 +30,7 @@ from techcamp.assistant.application.usage import (
     QuotaDecision,
     evaluate_quota,
 )
+from techcamp.assistant.domain.errors import ConversationNotFoundError
 from techcamp.assistant.domain.models import Message, MessageEvidence, MessageRole
 
 pytestmark = pytest.mark.anyio
@@ -91,12 +92,34 @@ async def _quota_with(
     return quota
 
 
-async def _decide(quota: FakeUsageQuota, *, cap: Decimal = _CAP) -> QuotaDecision:
+async def _decide(
+    quota: FakeUsageQuota,
+    *,
+    cap: Decimal = _CAP,
+    conversation_id: UUID | None = None,
+) -> QuotaDecision:
+    """The decision for one question, in the conversation `quota` already holds.
+
+    `now` is the default instant the rest of this module decides with, so the
+    question handed to `admit_question` is stamped at the same moment the decision
+    is taken rather than at the wall clock.
+    """
+    now = datetime(2026, 10, 6, 23, 0, tzinfo=UTC)
+    if conversation_id is None:
+        owned = await quota.messages.conversations.list_for_user(user_id=_USER_ID)
+        conversation_id = owned[0].id
     return await evaluate_quota(
         user_id=_USER_ID,
         budget_cap_cop=cap,
         quota=quota,
-        now=datetime(2026, 10, 6, 23, 0, tzinfo=UTC),
+        question=Message(
+            id=uuid4(),
+            conversation_id=conversation_id,
+            role=MessageRole.USER,
+            content="una pregunta",
+            created_at=now,
+        ),
+        now=now,
     )
 
 
@@ -157,12 +180,7 @@ async def test_the_counter_is_the_local_day_and_not_the_utc_one() -> None:
     """
     quota = await _quota_with(questions=10, at=datetime(2026, 10, 7, 2, 0, tzinfo=UTC))
 
-    decision = await evaluate_quota(
-        user_id=_USER_ID,
-        budget_cap_cop=_CAP,
-        quota=quota,
-        now=datetime(2026, 10, 6, 23, 0, tzinfo=UTC),
-    )
+    decision = await _decide(quota)
 
     assert decision.allowed is False
     assert decision.reason is DegradationReason.DAILY_LIMIT
@@ -231,12 +249,20 @@ async def test_the_daily_limit_is_the_same_in_both_profiles() -> None:
 
 async def test_another_users_questions_and_costs_are_not_this_users() -> None:
     quota = await _quota_with(questions=10, costs=[Decimal("5")], user_id=_OTHER_USER_ID)
+    mine = await quota.messages.conversations.create(user_id=_USER_ID, plot_id=_PLOT_ID)
 
-    decision = await _decide(quota)
+    decision = await _decide(quota, conversation_id=mine.id)
 
     assert decision.allowed is True
     assert decision.questions_asked == 1
     assert decision.month_spend_cop == Decimal(0)
+
+
+async def test_an_admission_in_a_strangers_conversation_is_refused() -> None:
+    quota = await _quota_with()
+
+    with pytest.raises(ConversationNotFoundError):
+        await _decide(quota, conversation_id=uuid4())
 
 
 async def test_the_month_spend_counts_the_local_month_and_not_the_utc_one() -> None:
@@ -252,3 +278,100 @@ async def test_the_month_spend_counts_the_local_month_and_not_the_utc_one() -> N
 
 async def test_the_reasons_read_as_one_of_the_two_documented_degradations() -> None:
     assert {reason.value for reason in DegradationReason} == {"daily_limit", "budget_exhausted"}
+
+
+async def test_an_exhausted_day_and_an_exhausted_budget_read_as_the_day() -> None:
+    """R3-QUOTA-REASON-PRECEDENCE: both limits refuse the turn, and the reported
+    reason is the one the producer can act on tonight.
+
+    The day resets at local midnight and `Retry-After` counts the seconds to it; a
+    budget that ran out is a fact about the month. Naming the budget here would
+    tell him to wait for something that does not free a single question, and would
+    send `Retry-After` nowhere useful.
+    """
+    quota = await _quota_with(questions=10, costs=[Decimal("5")])
+
+    decision = await _decide(quota)
+
+    assert decision.allowed is False
+    assert decision.reason is DegradationReason.DAILY_LIMIT
+    assert decision.month_spend_cop == Decimal("5")
+
+
+async def test_room_in_the_day_and_an_exhausted_budget_read_as_the_budget() -> None:
+    quota = await _quota_with(costs=[Decimal("5")])
+
+    decision = await _decide(quota)
+
+    assert decision.allowed is False
+    assert decision.reason is DegradationReason.BUDGET_EXHAUSTED
+
+
+async def test_a_budget_refusal_with_one_slot_left_in_the_day_reads_as_the_budget() -> None:
+    """Nine questions asked, the cap already spent, and the day's tenth slot free:
+    the budget is what stopped this call.
+
+    The refused question is stored — the port writes it either way — so afterwards
+    the day holds ten, and a count read *after* the write is already at the limit.
+    That post-write figure is what made the refusal name the day (and the endpoint
+    answer `429`, telling the producer to wait for a midnight that frees no budget);
+    the reason names what stopped the call, so it is decided on the nine questions
+    that were there **before** this one.
+    """
+    quota = await _quota_with(questions=9, costs=[Decimal("5")])
+
+    decision = await _decide(quota)
+
+    assert decision.allowed is False
+    assert decision.reason is DegradationReason.BUDGET_EXHAUSTED
+    # The reported figure still includes this turn: it was asked and stored.
+    assert decision.questions_asked == 10
+
+
+async def test_a_refusal_neither_figure_explains_has_no_reason() -> None:
+    """A port that refuses without either limit being reached is not one of the
+    two documented degradations, and naming one would be inventing a reason.
+
+    The decision still says `allowed is False`, so the caller degrades; it simply
+    does not claim to know why.
+    """
+
+    class _StubbornQuota(FakeUsageQuota):
+        async def admit_question(self, **_kwargs: object) -> bool:
+            return False
+
+    conversations = FakeConversationRepository()
+    conversation = await conversations.create(user_id=_USER_ID, plot_id=_PLOT_ID)
+    quota = _StubbornQuota(messages=FakeMessageRepository(conversations=conversations))
+
+    decision = await _decide(quota, conversation_id=conversation.id)
+
+    assert decision.allowed is False
+    assert decision.reason is None
+
+
+async def test_the_question_is_stored_even_when_it_is_refused() -> None:
+    """The port owns the reservation and writes the question either way: a refused
+    turn was still asked, and the degraded answer belongs to a transcript that
+    holds the question it answers (docs/06 §9: "guardar el mensaje")."""
+    quota = await _quota_with(questions=10)
+    conversation = (await quota.messages.conversations.list_for_user(user_id=_USER_ID))[0]
+
+    decision = await _decide(quota)
+
+    stored = await quota.messages.list_for_user(user_id=_USER_ID, conversation_id=conversation.id)
+    assert decision.allowed is False
+    assert [message.content for message in stored if message.role is MessageRole.USER][-1] == (
+        "una pregunta"
+    )
+
+
+async def test_a_question_of_a_conversation_that_is_not_the_callers_is_refused() -> None:
+    """The same check `MessageRepository.add` carries (T5's R3-ownership-mismatch
+    fix): the row written below belongs to `conversation_id`, so a caller who
+    verified one conversation must not be able to write the turn into another."""
+    quota = await _quota_with()
+    stranger = await quota.messages.conversations.create(user_id=_OTHER_USER_ID, plot_id=_PLOT_ID)
+
+    with pytest.raises(ConversationNotFoundError):
+        await _decide(quota, conversation_id=stranger.id)

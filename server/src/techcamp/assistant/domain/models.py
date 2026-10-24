@@ -26,20 +26,29 @@ from uuid import UUID
 from techcamp.assistant.domain.errors import (
     HelpfulFlagOnUserMessageError,
     InvalidMessageEvidenceError,
+    SystemRoleOnStoredMessageError,
 )
 
 
 class MessageRole(StrEnum):
     """Who wrote a turn (docs/03-modelo-datos.md:368-376, `message.role`).
 
-    Two roles, because the endpoint writes both halves of the exchange and only an
-    assistant answer may be marked helpful (D-T12.1). The system prompt is **not**
-    a role here: it is a `PromptSection`, assembled by T5 and never stored, so a
-    transcript never holds the instructions.
+    Two roles are **stored**, because the endpoint writes both halves of the
+    exchange and only an assistant answer may be marked helpful (D-T12.1).
+
+    `SYSTEM` exists for the **outbound** payload and is refused by `Message`
+    (T5, D-T12.6): docs/06-diseno-detallado.md §9 sends "sistema + hechos de la
+    parcela + fragmentos + pregunta (stream)", and the fragments and the
+    producer's own text must travel as *data* (docs/09-cuellos-de-botella.md
+    §Seguridad), which a shared `user` role cannot express. So the rules need a
+    role of their own on the wire — and none at all in the database: the system
+    prompt is a `PromptSection` assembled per request and never stored, which is
+    what `SystemRoleOnStoredMessageError` enforces.
     """
 
     USER = "user"
     ASSISTANT = "assistant"
+    SYSTEM = "system"
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,5 +195,7 @@ class Message:
     helpful: bool | None = None
 
     def __post_init__(self) -> None:
+        if self.role is MessageRole.SYSTEM:
+            raise SystemRoleOnStoredMessageError(self.id)
         if self.helpful is not None and self.role is not MessageRole.ASSISTANT:
             raise HelpfulFlagOnUserMessageError(self.id)
