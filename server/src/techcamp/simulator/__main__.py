@@ -1,13 +1,17 @@
 """`python -m techcamp.simulator`: the single-node MQTT publish path for the
-seminar profile (docs/06-diseno-detallado.md §10; ADR-0021). Scenario YAML,
-weather fixtures, faults, `/dev/scenarios`/`/dev/jobs` calls and multi-node
-runs are E16 — out of scope here."""
+seminar profile (docs/06-diseno-detallado.md §10; ADR-0021), plus the
+`record-weather` subcommand that records a scenario's weather fixture
+(docs/06-diseno-detallado.md:490; D-T16.3). Scenario YAML, faults,
+`/dev/scenarios`/`/dev/jobs` calls and multi-node runs are E16 — out of scope
+here."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import UTC, datetime, timedelta
+import sys
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 import aiomqtt
@@ -18,7 +22,14 @@ from techcamp.shared.db import async_session_factory
 from techcamp.simulator.node_client import claim_node, ensure_calibrations, request_otp, verify_otp
 from techcamp.simulator.provision import provision_unclaimed_node
 from techcamp.simulator.publisher import MqttUplinkPublisher
+from techcamp.simulator.recorder import (
+    RECORD_COMMAND,
+    fixture_cell,
+    record_weather,
+    scenario_fixture_name,
+)
 from techcamp.simulator.runner import LIVE_INTERVAL_S, publish_backfill, publish_live
+from techcamp.simulator.scenario_library import SCENARIOS_DIR
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -123,8 +134,91 @@ async def run(args: argparse.Namespace) -> None:
             )
 
 
+def parse_record_weather_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """`sim record-weather`: the capture that leaves a fixture behind
+    (docs/06-diseno-detallado.md:490; D-T16.3)."""
+    parser = argparse.ArgumentParser(
+        prog=f"python -m techcamp.simulator {RECORD_COMMAND}",
+        description="Record a scenario's weather fixture from Open-Meteo (docs/06 §10).",
+    )
+    parser.add_argument("--scenario", required=True, help="Scenario the fixture belongs to.")
+    parser.add_argument(
+        "--from",
+        dest="from_day",
+        required=True,
+        type=date.fromisoformat,
+        help="First day of the capture (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--days",
+        required=True,
+        type=int,
+        help="Days to capture: one observed day plus the seven-day forecast window.",
+    )
+    parser.add_argument(
+        "--name", default=None, help="Fixture name (defaults to the one the scenario pins)."
+    )
+    parser.add_argument(
+        "--lat", type=float, default=None, help="Cell latitude (defaults to the recorded cell)."
+    )
+    parser.add_argument(
+        "--lon", type=float, default=None, help="Cell longitude (defaults to the recorded cell)."
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="Where to write the fixture (defaults to the library's weather directory).",
+    )
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Write a synthetic capture instead of recording one (D-T16.3: last resort).",
+    )
+    parser.add_argument(
+        "--synthetic-reason",
+        default=None,
+        help="Why the recording could not reproduce the scenario's arithmetic.",
+    )
+    args = parser.parse_args(argv)
+    if args.days < 1:
+        parser.error("--days must be greater than 0")
+    if args.synthetic and not (args.synthetic_reason or "").strip():
+        parser.error("--synthetic requires --synthetic-reason")
+    return args
+
+
+async def record_weather_command(args: argparse.Namespace) -> None:
+    """Capture the window and write the fixture the scenario library reads."""
+    name = args.name or scenario_fixture_name(args.scenario)
+    if args.lat is None or args.lon is None:
+        lat, lon = fixture_cell(name)
+    else:
+        lat, lon = args.lat, args.lon
+    out_dir = Path(args.out_dir) if args.out_dir else SCENARIOS_DIR / "weather"
+
+    recorded = await record_weather(
+        scenario=args.scenario,
+        name=name,
+        from_day=args.from_day,
+        days=args.days,
+        lat=lat,
+        lon=lon,
+        out_dir=out_dir,
+        synthetic=args.synthetic,
+        synthetic_reason=args.synthetic_reason,
+    )
+    print(f"[sim] recorded {recorded.path}")
+    print(f"[sim] data_sha256={recorded.data_sha256}")
+    print(f"[sim] file_sha256={recorded.file_sha256}")
+    print(f"[sim] update {args.scenario}.yaml's weather_fixture_sha256 with {recorded.file_sha256}")
+
+
 def main() -> None:
-    asyncio.run(run(parse_args()))
+    argv = sys.argv[1:]
+    if argv and argv[0] == RECORD_COMMAND:
+        asyncio.run(record_weather_command(parse_record_weather_args(argv[1:])))
+        return
+    asyncio.run(run(parse_args(argv)))
 
 
 if __name__ == "__main__":
