@@ -147,6 +147,17 @@ flowchart TB
 - **Parcela activa.** Muestra el índice de adopción digital del mes elegido (por defecto, el último calculado) con sus cuatro componentes. Un componente `null` se muestra como "Sin datos este mes", nunca como 0. Debajo va el resumen del ciclo actual o del último: rendimiento, cambio frente a la encuesta, agua aplicada, días en estrés, costos y margen. Las métricas que no aplican, como el agua aplicada en secano, no se muestran.
 - **Organización.** Solo la ven `owner` y `technician`. Muestra los indicadores de `OrgMetrics` del mismo mes.
 
+**Asistente** (Más, E12; RF-14). Una pantalla de conversación sobre la parcela activa: la lista de turnos, un cuadro de escritura y, debajo de cada respuesta, las **fuentes citadas** que el productor puede abrir. Los cuatro estados que un productor de baja alfabetización digital tiene que poder distinguir, cada uno con su texto y no con un código:
+
+| Estado | Qué ve |
+|---|---|
+| Respondiendo | La respuesta aparece token a token mientras llega |
+| Sin LLM (degradado) | Misma pantalla, respuesta ya completa con los datos de la parcela y los documentos relevantes, y una nota que diga que el detalle no está disponible y que vuelva a preguntar mañana ([06 §9](06-diseno-detallado.md#9-asistente-agronómico)) |
+| Límite alcanzado | "Mañana podés seguir preguntando" con las preguntas usadas; nunca el código `429` ([04](04-api.md#convenciones-http)) |
+| Sin conexión | La pantalla lo dice: necesita red y no finge una respuesta ([ADR-0005](adr/0005-pwa-offline-first.md)). No entra al caché de la PWA: es la única pantalla de datos que no se guarda en disco |
+
+La lectura del stream es un `POST` con `fetch` + `ReadableStream`, nunca `EventSource` ([ADR-0027](adr/0027-stream-asistente-e12.md)). El proveedor de terceros y el mínimo de datos que sale del servidor van en el texto del consentimiento ([ADR-0007:39](adr/0007-llm-por-api.md)), no en una nota dentro de la pantalla.
+
 **Encuesta de inscripción.** Es un formulario corto en el detalle de la parcela (Parcelas → Parcela): cultivo del último ciclo, rendimiento (kg/ha), costo aproximado por hectárea (opcional) y práctica de riego. Lo llenan `owner` o `technician`, y los demás roles lo ven solo para lectura. Mientras la parcela no tiene encuesta, el detalle invita a registrarla, porque sin ella no se puede medir el impacto ([ADR-0024](adr/0024-metricas-de-impacto-y-adopcion-digital.md)).
 
 En **Inicio**, el estado de la parcela muestra `digital_adoption_index` como una línea discreta con su mes ("Adopción digital: 72 · septiembre"). Si es `null`, no se muestra nada.

@@ -354,8 +354,9 @@ sequenceDiagram
 
   U->>API: pregunta + plot_id
   API->>API: límite diario del usuario y presupuesto mensual
-  alt límite o presupuesto agotado
+  alt límite (10/día) o presupuesto agotado
     API-->>U: respuesta sin LLM: datos de la parcela + documentos relevantes
+    API->>API: guardar el mensaje con model, tokens y costo nulos
   else
     API->>F: hechos de la parcela (sensores, alertas, riego, riesgo)
     API->>DB: embedding de la pregunta → top 5 fragmentos (similitud ≥ 0,75)
@@ -375,6 +376,10 @@ sequenceDiagram
 - **Riesgo climático** (`risk`): la `risk_prediction` vigente de la celda de la parcela con `probability`, `severity` y `top_factors`, más el modelo que la produjo: `model_version.version` y su métrica de validación de `model_version.metrics`. Si la predicción viene de la heurística de línea base, se indica.
 
 En la respuesta sin LLM se devuelven estos mismos hechos junto con los documentos relevantes.
+
+**Qué se guarda de cada turno.** Cada mensaje persiste su `created_at`, y la respuesta guarda además el modelo que la produjo (`model`), los tokens de entrada y salida y el costo en COP (`cost_cop`). La respuesta sin LLM guarda `model` nulo, tokens nulos y `cost_cop` nulo: **la ausencia de evidencia es `null`, nunca `0`**, y `model IS NULL` es lo que distingue "no se llamó al LLM" de "se llamó y no costó nada". El límite diario cuenta por `created_at` en la zona horaria del usuario (`America/Bogota`) y el tope de presupuesto es la suma de `cost_cop` del mes contra la fuente de [docs/11:132](11-metricas.md); no hay tabla libro ni agregado mensual. Columnas, `CHECK` e índices en [03](03-modelo-datos.md#kb_document-kb_chunk-conversation-y-message-el-asistente-e12) (E12, D-T12.1).
+
+**Proveedor provisional.** El LLM provisional es `deepseek-chat` y el embedding es un modelo local barato cuya dimensión fija la migración del corpus; el detalle, la evidencia de la API y las opciones están en [ADR-0026](adr/0026-proveedor-provisional-e12.md). El flujo no cambia: sigue siendo **una** llamada, sin bucle de herramientas ni framework ([ADR-0007:26](adr/0007-llm-por-api.md)).
 
 **Corpus (RAG).** Cada documento guarda su fuente y su licencia ([ADR-0008](adr/0008-rag-pgvector.md)). Además de las guías agronómicas revisadas por licencia, el corpus incluye los boletines agroclimáticos: el Boletín Agroclimático Nacional mensual (MADR, FAO e IDEAM) y los de las Mesas Técnicas Agroclimáticas con mesa en el Caribe (Córdoba, Sucre y Magdalena–Cesar–La Guajira–Atlántico). Son la fuente institucional de la perspectiva estacional y ENSO para la región (brecha G08 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
 

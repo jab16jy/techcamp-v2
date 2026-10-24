@@ -129,7 +129,7 @@ Estado de los modelos de la v1: ver [08-ml](08-ml.md).
 | Nodos en línea | `nodos con lectura en la última hora / nodos activos` | ≥ 90 % |
 | Éxito de sincronización | `lotes de sincronización aceptados / enviados` | ≥ 99 % |
 | Entrega de notificaciones | `enviadas con éxito / intentadas` | ≥ 98 % |
-| Presupuesto de LLM | `gasto del mes / tope` | < 100 % (al llegar al tope se degrada) |
+| Presupuesto de LLM | `SUM(message.cost_cop)` del mes / tope, sobre `created_at` | < 100 % (al llegar al tope se degrada). El gasto se lee de `message.cost_cop` y las respuestas sin LLM aportan `null`, que el `SUM` ignora (E12 D-T12.1, [03](03-modelo-datos.md#kb_document-kb_chunk-conversation-y-message-el-asistente-e12)) |
 
 ## 5. Producto
 
