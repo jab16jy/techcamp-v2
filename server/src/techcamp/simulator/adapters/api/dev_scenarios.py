@@ -38,6 +38,7 @@ from techcamp.shared.dates import local_today
 from techcamp.shared.db import SessionDep
 from techcamp.shared.errors import ProblemError
 from techcamp.telemetry.adapters.api.deps import NodeRepoDep
+from techcamp.telemetry.domain.errors import InsufficientRoleError as TelemetryInsufficientRoleError
 from techcamp.weather.adapters.api.deps import WeatherRepoDep
 
 from ...application.load_scenario import (
@@ -48,7 +49,7 @@ from ...application.load_scenario import (
     ScenarioOrgNotFoundError,
     load_scenario,
 )
-from ...scenario_library import FixtureSchemaError, load_fixture
+from ...scenario_library import SCENARIOS_DIR, load_fixture
 from ...scenario_schema import ScenarioSchemaError
 from ...scenario_schema import load_scenario as load_scenario_definition
 from ..scenario_data import SqlAlchemyScenarioLoadRegistry, SqlAlchemyScenarioNodeProvisioner
@@ -111,6 +112,17 @@ def _default_anchor(observed_days: int) -> datetime.date:
     return local_today() - datetime.timedelta(days=observed_days)
 
 
+def _scenario_is_in_the_library(name: str) -> bool:
+    """Whether the scenario itself is in the library.
+
+    Loading a scenario reads the YAML and the fixture it pins, and a missing
+    file is one of the two: the scenario is not there (404) or the scenario is
+    there and a file it needs is not (a broken contract, 500). The YAML's own
+    existence tells them apart.
+    """
+    return (SCENARIOS_DIR / f"{name}.yaml").exists()
+
+
 @router.post("/{name}:load", response_model=ScenarioLoadResponse, status_code=202)
 async def load_scenario_route(
     name: str,
@@ -130,6 +142,15 @@ async def load_scenario_route(
     try:
         scenario = load_scenario_definition(name)
     except FileNotFoundError as error:
+        if _scenario_is_in_the_library(name):
+            # The scenario is in the library but a file it needs is not: the
+            # contract is broken, not the caller's request, so it is not a
+            # "no scenario named X".
+            raise ProblemError(
+                status=500,
+                title="Scenario contract is broken",
+                detail=f"The scenario {name!r} does not satisfy its own contract.",
+            ) from error
         raise ProblemError(
             status=404, title="Scenario not found", detail=f"No scenario named {name!r}."
         ) from error
@@ -145,7 +166,10 @@ async def load_scenario_route(
         ) from error
     try:
         fixture = load_fixture(scenario.weather_fixture.removesuffix(".json"))
-    except FixtureSchemaError as error:
+    except (OSError, ValueError) as error:
+        # A fixture that cannot be read or does not satisfy the contract is the
+        # same broken contract: `FixtureSchemaError` is a `ValueError`, and a
+        # file that is not the recorded JSON is one too.
         raise ProblemError(
             status=500,
             title="Scenario contract is broken",
@@ -214,7 +238,11 @@ async def load_scenario_route(
         ) from error
     except NotAMemberError as error:
         raise ProblemError(status=404, title="Organization not found") from error
-    except InsufficientRoleError as error:
+    except (InsufficientRoleError, TelemetryInsufficientRoleError) as error:
+        # Two modules, two role errors: `domain` never imports another module's
+        # `domain`, so telemetry keeps its own `InsufficientRoleError`. Both
+        # mean the same thing to the caller — the role may not write — and
+        # both are the documented 403.
         raise ProblemError(status=403, title="Role cannot load scenarios") from error
 
     return _response(loaded)

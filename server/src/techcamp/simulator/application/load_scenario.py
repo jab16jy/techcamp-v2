@@ -48,8 +48,9 @@ from techcamp.farms.application.ports import (
     PlotRepository,
     SoilProfileRepository,
 )
-from techcamp.farms.domain.models import CropCycleStatus, IrrigationSystem
+from techcamp.farms.domain.models import CropCycleStatus, IrrigationSystem, ensure_can_write
 from techcamp.identity.application.ports import MembershipRepository
+from techcamp.identity.domain.models import Role
 from techcamp.telemetry.application.manage_nodes import claim_node, rotate_credentials, update_node
 from techcamp.telemetry.application.ports import NodeRepository
 from techcamp.telemetry.domain.models import NodeStatus
@@ -255,8 +256,9 @@ def scenario_root_depth_cm(scenario: Scenario) -> float:
     return float(depth) * 2.0
 
 
-async def _target_org(*, user_id: UUID, memberships: MembershipRepository) -> UUID:
-    """The organization the load belongs to: the caller's own.
+async def _target_org(*, user_id: UUID, memberships: MembershipRepository) -> tuple[UUID, Role]:
+    """The organization the load belongs to, and the caller's role in it: the
+    caller's own.
 
     The body carries no organization (docs/04-api.md:263), so a caller that
     belongs to several of them has no way to say which one the scenario is for
@@ -267,7 +269,8 @@ async def _target_org(*, user_id: UUID, memberships: MembershipRepository) -> UU
         raise ScenarioOrgNotFoundError(user_id)
     if len(caller_memberships) > 1:
         raise ScenarioAmbiguousOrgError(user_id)
-    return caller_memberships[0].org_id
+    membership = caller_memberships[0]
+    return membership.org_id, membership.role
 
 
 async def _farm_for(
@@ -417,12 +420,19 @@ async def load_scenario(
     except FileNotFoundError as error:
         raise ScenarioNotFoundError(name) from error
 
-    org_id = await _target_org(user_id=user_id, memberships=memberships)
+    org_id, role = await _target_org(user_id=user_id, memberships=memberships)
     plot_name = plot_name_for(scenario.name, day)
 
     previous = await registry.find_plot(plot_name)
     if previous is not None and previous.org_id != org_id:
         raise ScenarioDataInAnotherOrgError(previous.org_id)
+
+    # The caller's role is checked before the first write. The use cases below
+    # check it too, but they are reached one row at a time: the weather fixture
+    # lands before the parcel does, so a refusal that came from a use case
+    # would already have left the shared weather rows behind. A load that is
+    # refused writes nothing at all.
+    ensure_can_write(role)
 
     # The fixture lands here, after the organization and the previous load are
     # known: a request that ends in 404 must not write anything. It lands

@@ -26,10 +26,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow, SoilProfileRow
 from techcamp.identity.adapters.orm import AppUserRow, MembershipRow, OrganizationRow
 from techcamp.identity.adapters.security.token_issuer import issue_token
+from techcamp.identity.domain.models import Role
+from techcamp.irrigation.adapters.jobs import eligible_plot_ids
 from techcamp.main import app
+from techcamp.shared.credentials import verify_password
 from techcamp.shared.dates import local_today
 from techcamp.shared.ids import uuid7
+from techcamp.simulator.adapters.api import dev_scenarios
+from techcamp.simulator.application.load_scenario import ScenarioLoad
+from techcamp.simulator.scenario_library import FixtureSchemaError, WeatherFixture
+from techcamp.simulator.scenario_schema import Scenario, ScenarioSchemaError
 from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
+from techcamp.telemetry.domain.errors import InsufficientRoleError as TelemetryInsufficientRoleError
 
 pytestmark = pytest.mark.anyio
 
@@ -50,6 +58,16 @@ async def _org(session: AsyncSession, *, phone: str) -> Org:
     session.add(MembershipRow(org_id=org_id, user_id=user_id, role="owner"))
     await session.commit()
     return Org(org_id=org_id, user_id=user_id, token=issue_token(str(user_id)))
+
+
+async def _member(session: AsyncSession, *, org_id: UUID, phone: str, role: Role) -> str:
+    """Another member of an organization, with the role the test needs."""
+    user_id = uuid7()
+    session.add(AppUserRow(id=user_id, phone=phone, full_name=role.value.title()))
+    await session.commit()
+    session.add(MembershipRow(org_id=org_id, user_id=user_id, role=role.value))
+    await session.commit()
+    return issue_token(str(user_id))
 
 
 def _client() -> TestClient:
@@ -308,9 +326,16 @@ async def test_a_reload_rotates_the_node_credential(db_session: AsyncSession) ->
     assert first.status_code == 202
     assert second.status_code == 202
     assert second.json()["node_ids"] == first.json()["node_ids"]
-    assert (
-        second.json()["node_credentials"][0]["mqtt_password"]
-        != (first.json()["node_credentials"][0]["mqtt_password"])
+    password = second.json()["node_credentials"][0]["mqtt_password"]
+    assert password, "the rotated credential is a password, not an empty string"
+    assert password != (first.json()["node_credentials"][0]["mqtt_password"])
+    node = (
+        await db_session.execute(
+            select(NodeRow).where(NodeRow.id == UUID(second.json()["node_ids"][0]))
+        )
+    ).scalar_one()
+    assert verify_password(password, node.credential_hash), (
+        "the rotated password is the one the node's stored hash was written for"
     )
 
 
@@ -336,3 +361,122 @@ async def test_a_rainfed_replace_leaves_the_old_parcel_in_the_balance_scope(
         await db_session.execute(select(PlotRow).where(PlotRow.id == old_plot_id))
     ).scalar_one_or_none()
     assert still_there is not None, "#333: the replaced rainfed parcel is still there"
+    eligible = await eligible_plot_ids(db_session)
+    assert old_plot_id in eligible, (
+        "#333: the replaced rainfed parcel is still in the balance's scope"
+    )
+
+
+async def test_a_read_only_caller_is_refused_without_writing_anything(
+    db_session: AsyncSession,
+) -> None:
+    """A role that may not write is refused before the load writes anything.
+    The weather fixture is the first thing the loader writes, so a refusal
+    that came after it would leave the shared reference rows behind."""
+    org = await _org(db_session, phone="+573000000017")
+    token = await _member(db_session, org_id=org.org_id, phone="+573000000018", role=Role.PRODUCER)
+
+    response = _client().post(
+        "/dev/scenarios/el-nino:load", json={}, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/problem+json")
+    weather_rows = (
+        await db_session.execute(text("SELECT count(*) FROM weather_daily"))
+    ).scalar_one()
+    assert weather_rows == 0, "the refused load wrote no weather"
+    plots = (await db_session.execute(select(PlotRow))).scalars().all()
+    assert plots == [], "the refused load wrote no parcel"
+
+
+async def test_a_read_only_caller_is_refused_on_the_reload(db_session: AsyncSession) -> None:
+    """The reload rotates the node's credential, which is a telemetry write, so
+    the same read-only role is refused there too — with the documented 403
+    instead of a stack trace."""
+    org = await _org(db_session, phone="+573000000019")
+    client = _client()
+    loaded = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+    assert loaded.status_code == 202
+    token = await _member(db_session, org_id=org.org_id, phone="+573000000020", role=Role.VIEWER)
+
+    response = client.post(
+        "/dev/scenarios/el-nino:load", json={}, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_the_route_translates_the_telemetry_role_error(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Telemetry keeps its own `InsufficientRoleError` (`domain` never imports
+    another module's `domain`), so the route has to translate that one too: a
+    role that may not write is a 403, never a stack trace."""
+    org = await _org(db_session, phone="+573000000021")
+
+    async def refuse(**kwargs: object) -> ScenarioLoad:
+        raise TelemetryInsufficientRoleError(Role.PRODUCER)
+
+    monkeypatch.setattr(dev_scenarios, "load_scenario", refuse)
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_a_broken_scenario_contract_answers_a_problem(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scenario's own contract not holding is the library's problem, not the
+    caller's, but it still answers with a problem document instead of a bare
+    traceback."""
+    org = await _org(db_session, phone="+573000000022")
+
+    def broken(name: str) -> Scenario:
+        raise ScenarioSchemaError("the recorded fixture's pin does not match")
+
+    monkeypatch.setattr(dev_scenarios, "load_scenario_definition", broken)
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_a_missing_fixture_answers_a_broken_contract(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scenario is in the library but the file it pins is not: that is a
+    broken contract (500), not a scenario nobody can load (404)."""
+    org = await _org(db_session, phone="+573000000023")
+
+    def missing(name: str) -> Scenario:
+        raise FileNotFoundError("the fixture the scenario pins is not there")
+
+    monkeypatch.setattr(dev_scenarios, "load_scenario_definition", missing)
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_an_unreadable_fixture_answers_a_broken_contract(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fixture the library cannot read is the same broken contract, and it
+    answers the same way."""
+    org = await _org(db_session, phone="+573000000024")
+
+    def unreadable(name: str) -> WeatherFixture:
+        raise FixtureSchemaError("the fixture is not the recorded one")
+
+    monkeypatch.setattr(dev_scenarios, "load_fixture", unreadable)
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/problem+json")
