@@ -57,6 +57,7 @@ app.include_router(risk_router, prefix="/api/v1")
 if is_seminar_profile():
     # /dev routes only exist in the seminar profile (ADR-0021); still part of
     # the versioned REST API, so they get the same /api/v1 prefix.
+    from techcamp.assistant.adapters.api.dev_jobs import router as dev_kb_jobs_router
     from techcamp.identity.adapters.api.dev_auth import router as dev_auth_router
     from techcamp.irrigation.adapters.api.dev_jobs import router as dev_irrigation_jobs_router
     from techcamp.metrics.adapters.api.dev_jobs import router as dev_metrics_jobs_router
@@ -70,6 +71,7 @@ if is_seminar_profile():
     app.include_router(dev_metrics_jobs_router, prefix="/api/v1")
     app.include_router(dev_risk_jobs_router, prefix="/api/v1")
     app.include_router(dev_outbox_router, prefix="/api/v1")
+    app.include_router(dev_kb_jobs_router, prefix="/api/v1")
 
 
 @app.get("/health")
