@@ -216,9 +216,7 @@ def test_only_scenario_b_asserts_the_humidity_alert(library: tuple[Scenario, ...
             1
             for day in load_fixture(scenario.weather_fixture.removesuffix(".json")).observed
             if day.rh_mean_pct > FUNGAL_RH_PCT
-            and FUNGAL_TEMP_RANGE_C[0]
-            <= day.mean_daily_temp_c
-            <= FUNGAL_TEMP_RANGE_C[1]
+            and FUNGAL_TEMP_RANGE_C[0] <= day.mean_daily_temp_c <= FUNGAL_TEMP_RANGE_C[1]
         )
         assert humid_days == 0, (
             f"{name}: its recording has {humid_days} days that satisfy both halves of "
