@@ -24,11 +24,13 @@ from typing import Any
 import httpx
 import pytest
 
-from techcamp.simulator.__main__ import parse_record_weather_args
+from techcamp.simulator import __main__ as simulator_main
+from techcamp.simulator.__main__ import parse_record_weather_args, record_weather_command
 from techcamp.simulator.recorder import (
     ARCHIVE_ENDPOINT,
     DAILY_VARIABLES,
     DEFAULT_SYNTHETIC_ET0_MM,
+    RecordedFixture,
     RecorderError,
     archive_url,
     build_envelope,
@@ -384,8 +386,10 @@ async def test_recording_over_a_pinned_fixture_needs_force(tmp_path: Path) -> No
         lon=LON,
         out_dir=tmp_path,
         client=_client(handler),
+        recorded_at=datetime(2026, 10, 7, 2, 27, 43, tzinfo=UTC),
     )
     assert first.path.exists()
+    first_bytes = first.path.read_bytes()
 
     with pytest.raises(RecorderError, match="--force"):
         await record_weather(
@@ -408,6 +412,55 @@ async def test_recording_over_a_pinned_fixture_needs_force(tmp_path: Path) -> No
         lon=LON,
         out_dir=tmp_path,
         client=_client(handler),
+        recorded_at=datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC),
         force=True,
     )
     assert forced.path == first.path
+    assert forced.path.read_bytes() != first_bytes, "the forced recording rewrote the file"
+    fixture = parse_fixture("el-nino-caribe", json.loads(forced.path.read_text(encoding="utf-8")))
+    assert fixture.data_sha256 == forced.data_sha256, "the rewritten file still parses"
+
+
+def test_the_cli_carries_the_force_flag() -> None:
+    """Replacing a pinned fixture is a deliberate act, so the CLI carries the
+    flag that says so — and leaves it off by default."""
+    args = parse_record_weather_args(
+        ["--scenario", "el-nino", "--from", "2016-12-14", "--days", "28"]
+    )
+    assert args.force is False
+
+    forced = parse_record_weather_args(
+        ["--scenario", "el-nino", "--from", "2016-12-14", "--days", "28", "--force"]
+    )
+    assert forced.force is True
+
+
+async def test_a_refused_recording_exits_with_a_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal the recorder states — the fixture is already recorded, the
+    window is too short — is a message the operator reads, not a stack trace."""
+
+    async def refuse(**kwargs: object) -> RecordedFixture:
+        raise RecorderError(
+            "el-nino-caribe.json already exists; replacing a pinned fixture needs --force"
+        )
+
+    monkeypatch.setattr(simulator_main, "record_weather", refuse)
+    args = parse_record_weather_args(
+        [
+            "--scenario",
+            "el-nino",
+            "--from",
+            "2016-12-14",
+            "--days",
+            "28",
+            "--out-dir",
+            str(tmp_path),
+        ]
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        await record_weather_command(args)
+
+    assert "--force" in str(exit_info.value)

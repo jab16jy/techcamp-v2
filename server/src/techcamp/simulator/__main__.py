@@ -24,6 +24,7 @@ from techcamp.simulator.provision import provision_unclaimed_node
 from techcamp.simulator.publisher import MqttUplinkPublisher
 from techcamp.simulator.recorder import (
     RECORD_COMMAND,
+    RecorderError,
     fixture_cell,
     record_weather,
     scenario_fixture_name,
@@ -201,18 +202,24 @@ async def record_weather_command(args: argparse.Namespace) -> None:
         lat, lon = args.lat, args.lon
     out_dir = Path(args.out_dir) if args.out_dir else SCENARIOS_DIR / "weather"
 
-    recorded = await record_weather(
-        scenario=args.scenario,
-        name=name,
-        from_day=args.from_day,
-        days=args.days,
-        lat=lat,
-        lon=lon,
-        out_dir=out_dir,
-        synthetic=args.synthetic,
-        synthetic_reason=args.synthetic_reason,
-        force=args.force,
-    )
+    try:
+        recorded = await record_weather(
+            scenario=args.scenario,
+            name=name,
+            from_day=args.from_day,
+            days=args.days,
+            lat=lat,
+            lon=lon,
+            out_dir=out_dir,
+            synthetic=args.synthetic,
+            synthetic_reason=args.synthetic_reason,
+            force=args.force,
+        )
+    except RecorderError as error:
+        # A refusal the recorder states — the fixture is already recorded, the
+        # window is too short, the scenario pins no fixture — is a message the
+        # operator reads, not a stack trace.
+        raise SystemExit(str(error)) from error
     print(f"[sim] recorded {recorded.path}")
     print(f"[sim] data_sha256={recorded.data_sha256}")
     print(f"[sim] file_sha256={recorded.file_sha256}")
