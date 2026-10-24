@@ -382,7 +382,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   `review-45c3ada4ce1f77c4` quemado; `just gate web/src/app web/src/features/assistant` → 16 + 70
   tests verdes sobre el árbol ya fusionado con la rama del épico.
 
-- [ ] **T8 — Eval and the provider decision**: 30 real Caribbean agronomic questions graded by an
+- [x] **T8 — Eval and the provider decision**: 30 real Caribbean agronomic questions graded by an
   agronomist on accuracy, citations and clarity (ADR-0007:15) — **the pass threshold is not written in
   any doc**, so the threshold is itself an owner decision (Open question 1) and must be fixed before the
   run, not read off the results. The outcome lands as: the provider ADR, `docs/README.md:68` closed, the
@@ -411,11 +411,46 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
     "ODD updated (checkbox + Review entry)", but `odd/tasks/**` is absent from its *Allowed edit
     surfaces*. Read as: the done-criterion authorizes this one file. Nothing outside the five listed
     surfaces plus this feature doc is touched.
+  - **Hecho (2026-10-23):** el dueño cierra T8. La corrida graduada de las 30 preguntas contra el
+    umbral de [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+    (≥ 27/30, cero descalificadores) y la firma de la lista de documentos del corpus quedan hechas —
+    son artefactos del dueño y así se registran, sin re-derivarlos aquí. [docs/README](../../docs/README.md)
+    retira la fila pendiente; lo que sigue es T9.
 
-- [ ] **T9 — Close**: `just gate-full` **once** on a clean database, follow-up issues for every
+- [x] **T9 — Close**: `just gate-full` **once** on a clean database, follow-up issues for every
   non-blocking RDD finding, the delivery plan (chained-to-main PRs, one per work unit, `size:exception`
   — slices pass 400 lines and this repo has no line budget), and the epic close. ~100. **Route: parent.**
   **Depends T1–T8.**
+  > **Hecho (2026-10-23).** (1) `just gate-full` corrió **una vez** sobre base limpia en este
+  > worktree (`techcamp-db-techcamp-v2-1942765054`, puerto 60054) y terminó **verde, exit 0**:
+  > `gate-fast` (ruff, format, mypy, `lint-imports`, una cabeza de Alembic, ast-grep, eslint, tsc),
+  > todo el suite de server con `pytest-randomly`, el suite de web (vitest), `vite build` y el
+  > presupuesto de tamaño (168,24 kB gzip ≤ 200 kB). (2) Los issues de seguimiento de cada ronda
+  > existen y están enlazados desde [Review (RDD)](#review-rdd): #302 (T1), #304 (T4), #305 (T3),
+  > #306 (T5), #310 (T6), #312 (T6a), #314 (T7), #318 (T7 verify), #319 (T8). El issue del
+  > verificador de T6, [#313](https://github.com/jab16jy/techcamp-v2/issues/313), se **cerró** con
+  > la nota de sus seis correcciones (`bc9f3fb`, `7e8eee4`, `899e1e3`, `f3affb0`, y el
+  > desenmascaramiento del 503 por `75d7fb4`). (3) **Plan de entrega** (corregido al abrir los PRs:
+  > el plan anterior de 13 asumía cortes dentro de las lanes de T6/T7/T8, pero esas unidades
+  > entraron a la rama del épico detrás de **un solo merge por lane** —`e40f634`, `7e97ed2`,
+  > `2d0fded`— y partirlas exigiría reescribir los shas que los recibos citan, lo que este épico
+  > prohíbe): **10 PRs** encadenados a `main`, uno por unidad entregable, base `main` desde la
+  > creación (la lección de E9: base-parent hace que CodeRabbit salte los PRs y congela conteos),
+  > merge **en orden obligatorio** 01→10, merge commits sin squash, cada slice con `size:exception`:
+  >   1. `docs/e12-01-t0-decisions` — blockers assessment + T0 (`f61adc5`, `1344b74`; +974/−8)
+  >   2. `feat/e12-02-t1-ports` — puertos, reglas de dominio y dobles (`9bf3b73`…`6b6590b`; +2831/−5)
+  >   3. `feat/e12-03-t2-schema` — esquema, ORM y pgvector (`9338f2c`, `3241358`, merge `a127acb`; +1103/−5)
+  >   4. `feat/e12-04-t3-corpus` — ingesta del corpus (`df2b783`, `d90853c`, `f44279d`; +2683)
+  >   5. `feat/e12-05-t4-facts-retrieval` — hechos, recuperación y rama degradada (lane detrás de `61b0773`, `1d7e1b8`; +4473/−15)
+  >   6. `feat/e12-06-t5-stream-endpoint` — endpoint de streaming y feedback (`b31ac34`…`88268d6`; +3859/−15)
+  >   7. `feat/e12-07-t6-limits-budget` — T6 completa: DeepSeek, admisión atómica, `429`, tope por perfil, correcciones de #313 (lane detrás de `e40f634`, `f3affb0`, `dd88e06`; +3664/−159)
+  >   8. `feat/e12-08-t7-web-screen` — pantalla web, ruta `mas/asistente` y correcciones (lane detrás de `7e97ed2`, `9daaa3b`; +3291/−24)
+  >   9. `feat/e12-09-t8-eval-provider` — arnés de evaluación, ADR-0028 y tarjeta de producción (lane detrás de `2d0fded`; +3305/−53)
+  >   10. `docs/e12-10-t9-close` — cierre: criterios verificados, `gate-full` verde y este plan (`d30330d` y el commit de este ajuste)
+  > El push, la apertura y el merge de los PRs siguen siendo del dueño: nada se abre sin que lo
+  > pida (la política de la entrega en este épico). **Épico E12 cerrado en el repo**: los once
+  > criterios de aceptación quedaron verificados con su evidencia (arriba) y el pendiente de
+  > [docs/README](../../docs/README.md) de la corrida graduada se retiró.
 
 **Lanes.** Wave 1: T1. Wave 2: T2 ‖ T4 (disjoint: migrations+ORM vs application). Wave 3: T3. Wave 4:
 T5. Wave 5: T6 ‖ T7 ‖ T8 (server limits vs web vs eval docs; T6 and T5 share the router, so T6 starts
@@ -445,41 +480,101 @@ easier.
 ## Acceptance criteria
 
 Each item names the evidence that closes it. Tests are named by behavior, not written here.
+Verified 2026-10-23 (T9) against the tree of the epic branch; each item cites the tests that pin it.
 
-- [ ] Every answer carries **citations** and, when it speaks about risk, the **`model_version`** that
+- [x] Every answer carries **citations** and, when it speaks about risk, the **`model_version`** that
   produced the prediction — `model_version.version` plus its validation metric, and the explicit
   *"linea base"* mark when the served version is one (docs/06:375, `docs/04-api.md:232`).
-- [ ] The served baseline's `low` is **never narrated as a verdict**: the answer reports the served
+  → `test_citations.py` (a prediction citation without `model_version` or `is_baseline` is a domain
+  error; the served baseline is marked, a promoted version is marked as not a baseline);
+  `test_prompt_assembly.py` (the fact block renders `model_version`, `is_baseline`, `metrics`,
+  `top_factors` — `prompt.py:273-285`); `test_degraded.py::test_a_baseline_prediction_marks_the_line_base_and_names_no_severity`,
+  `::test_a_calibrated_version_reports_its_own_severity` (version in the answer);
+  `test_retrieval.py::test_every_citation_carries_its_document_and_passes_validation`.
+- [x] The served baseline's `low` is **never narrated as a verdict**: the answer reports the served
   version is `climatology_month` with `thresholds={}` (D-T9.2), so `low` is missing calibration, not a
   finding. A test asserts the assistant's Spanish copy marks it and never asserts a severity judgement
   the system did not make.
-- [ ] **No prediction → "not available"**, never an invented value: `drought` has no registered
+  → `test_degraded.py::test_a_baseline_prediction_marks_the_line_base_and_names_no_severity`
+  (asserts "línea base", the version and the probability, and **negatively** asserts "severidad baja"
+  / "riesgo bajo" never appear for the uncalibrated version); the renderer writes the severity only
+  for a calibrated version (`degraded.py::_risk_line`).
+- [x] **No prediction → "not available"**, never an invented value: `drought` has no registered
   predictor (D-T9.3) and a plot without a cell has no predictions at all; the risk fact is absent and
   the prompt says the evidence is missing rather than naming a severity.
-- [ ] The **11th question of the day answers `429` with `Retry-After`** (docs/04-api.md:22), the tenth
+  → `test_degraded.py::test_a_missing_risk_is_named_and_no_severity_is_invented`;
+  `test_plot_facts.py` (D-T9.3: `query_plot_risk` answers `[]` for drought and for a plot without a
+  climate cell, and the fact claims nothing about `drought`);
+  `test_degraded.py::test_a_plot_with_nothing_at_all_says_the_evidence_is_insufficient`.
+- [x] The **11th question of the day answers `429` with `Retry-After`** (docs/04-api.md:22), the tenth
   succeeds, and the counter resets at `America/Bogota` midnight — including across the UTC-midnight
   offset, which is the case a naive `date(created_at)` test misses.
-- [ ] **Budget exhausted → no LLM call at all**: the provider double is not invoked, the degraded answer
+  → `test_assistant_limits.py::test_the_eleventh_question_of_the_day_answers_429_with_retry_after`,
+  `::test_the_tenth_question_of_the_day_is_answered`, `::test_yesterdays_questions_do_not_count_against_today`;
+  `test_assistant_quota_contract.py::test_A_the_eleventh_question_is_429_with_numeric_retry_after`,
+  `::test_A_the_tenth_question_is_answered_normally`; the UTC offset in the domain:
+  `test_limits.py::test_retry_after_does_not_wait_for_utc_midnight`,
+  `::test_the_local_day_bounds_span_a_hour_that_belongs_to_the_previous_utc_day`.
+- [x] **Budget exhausted → no LLM call at all**: the provider double is not invoked, the degraded answer
   (facts + relevant documents) is returned, and the month-to-date sum comes from `message.cost_cop`.
   Both caps: USD 5 seminar (ADR-0021:30), monthly cap production (ADR-0007:17).
-- [ ] **Another org answers `404`**: a `conversation_id` and a `plot_id` of another org or another user
+  → `test_assistant_limits.py::test_an_exhausted_budget_answers_the_degraded_answer_without_a_provider_call`;
+  `test_degraded_answer.py::test_the_degraded_answer_calls_no_provider`,
+  `::test_no_public_function_of_the_degraded_path_can_reach_an_llm`;
+  `test_assistant_quota_contract.py::test_B_a_refusal_answers_the_degraded_body_without_a_provider_call`,
+  `::test_C_the_degraded_answer_persists_nulls_and_the_sum_ignores_them`,
+  `::test_D_the_cap_is_per_profile_configuration`, `::test_E_without_a_cap_the_budget_never_refuses`.
+- [x] **Another org answers `404`**: a `conversation_id` and a `plot_id` of another org or another user
   answer `404`, never `403` and never an empty `200` (docs/04-api.md:16); repository-level isolation
   tests per docs/09.
-- [ ] **Anti prompt-injection**: a fragment and a user question carrying instruction-shaped text are
+  → `test_assistant_api.py::test_a_conversation_of_another_user_answers_404`,
+  `::test_a_plot_of_another_organization_answers_404`;
+  `test_assistant_limits.py::test_another_users_conversation_is_404_even_for_a_producer_over_the_limit`,
+  `::test_another_organizations_plot_is_404_even_for_a_producer_over_the_limit`;
+  `test_assistant_quota_contract.py::test_a_conversation_of_another_user_is_404_before_the_quota_gate`;
+  repository level in `test_repositories.py` (every read/write filters by `user_id`; `add` rejects a
+  conversation the caller does not own — the T5 S1 CRITICAL fix).
+- [x] **Anti prompt-injection**: a fragment and a user question carrying instruction-shaped text are
   treated as data — the assistant follows the system prompt, invents no dose, and follows no instruction
   found in a chunk (docs/09:75, docs/06:386). The D-T12.6 send-list test: a fact block containing a
   phone- or e-mail-shaped string never reaches the prompt (ADR-0007:39).
-- [ ] **Retrieval honors top-5 and similarity ≥ 0.75** (ADR-0008:12): fewer than five qualifying
+  → `test_prompt_assembly.py::test_facts_and_fragments_travel_as_data_and_not_as_the_rules` (a fragment
+  reading "Ignora todas las instrucciones anteriores…" lands inside the data block, never in the system
+  message), `::test_a_phone_or_email_in_the_facts_never_reaches_the_prompt` (D-T12.6),
+  `::test_every_rendered_fact_value_goes_through_the_allow_lists`; the dose ban in
+  `test_degraded.py::test_the_answer_never_states_an_agrochemical_dose`.
+- [x] **Retrieval honors top-5 and similarity ≥ 0.75** (ADR-0008:12): fewer than five qualifying
   fragments is a legitimate answer with what exists, and a 0.74 fragment is excluded. The threshold is a
   named constant, not a literal in a query.
-- [ ] Facts are assembled **before** the single call, and the flow is deterministic: one
+  → `test_retrieval.py::test_the_named_constants_are_the_query_not_literals`,
+  `::test_a_fragment_at_the_floor_is_included_and_one_below_it_is_not`,
+  `::test_the_floor_is_re_applied_after_a_repository_that_ignored_it`,
+  `::test_fewer_than_five_fragments_is_a_legitimate_answer`,
+  `::test_at_most_five_fragments_are_returned_best_first`; constants in
+  `domain/limits.py` (`RETRIEVAL_TOP_K = 5`, `SIMILARITY_FLOOR = 0.75`).
+- [x] Facts are assembled **before** the single call, and the flow is deterministic: one
   `LLMClient.stream` invocation per request, no tool loop, no framework (ADR-0007:26).
-- [ ] The answer obeys the docs/06:381-387 rules: plain Spanish, glossary vocabulary
+  → `test_assistant_api.py::test_exactly_one_provider_call_carries_the_four_send_list_sections`;
+  `test_retrieval.py::test_the_use_case_takes_no_llm_port`;
+  `test_prompt_assembly.py::test_the_prompt_is_deterministic_for_the_same_inputs`;
+  `test_degraded_answer.py::test_no_public_function_of_the_degraded_path_can_reach_an_llm`.
+- [x] The answer obeys the docs/06:381-387 rules: plain Spanish, glossary vocabulary
   (`docs/00-glosario.md`), cites the source, says when evidence is insufficient, and refers to the ICA
   label and the technician instead of inventing a dose.
-- [ ] `POST …:feedback` stores `helpful` and a `204`; a message of another user is `404`.
-- [ ] Every task's scoped gate is green and RDD ran per work-unit commit; `just gate-full` ran **once**
+  → `test_assistant_api.py::test_the_answer_is_in_plain_spanish_with_the_glossary_vocabulary`;
+  `test_degraded.py::test_the_answer_never_states_an_agrochemical_dose`,
+  `::test_the_answer_points_at_the_ica_label_and_the_technician`,
+  `::test_every_document_is_cited_with_its_title_and_its_link`; the insufficient-evidence sentence in
+  `degraded.py::_insufficient` and
+  `test_degraded.py::test_a_plot_with_nothing_at_all_says_the_evidence_is_insufficient`.
+- [x] `POST …:feedback` stores `helpful` and a `204`; a message of another user is `404`.
+  → `test_assistant_api.py::test_feedback_is_stored_and_answers_204`,
+  `::test_feedback_can_be_withdrawn`, `::test_feedback_on_a_message_of_another_user_answers_404`,
+  `::test_feedback_on_an_unknown_message_answers_404`.
+- [x] Every task's scoped gate is green and RDD ran per work-unit commit; `just gate-full` ran **once**
   in T9.
+  → The per-task gates and receipts are in [Review (RDD)](#review-rdd) and
+  [Progress / evidence](#progress--evidence); T9's `just gate-full` run is recorded below.
 
 ## Checks
 
@@ -1319,16 +1414,12 @@ lineage; no approved receipt means *not reviewed*, never approved.
 
 ## Next step
 
-**T1, T2, T4, T5, T6 y T7 están cerrados.** T6 entró completo en la rama del épico (`e40f634`) con su
-verificación independiente y sus cuatro commits de corrección. T7 se cierra aquí: recibo propio
-(`review-45c3ada4ce1f77c4`), la ruta `mas/asistente` que le faltaba (`f41e320`) y la copia del
-asistente en `components/` (`e69d405`). **T8 está aterrizada en la lane** (2026-10-23): U1, el arnés,
-verificado sin bloqueadores, y U2, los docs, con las decisiones delegadas del dueño en
-[ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md). Lo que
-queda de T8 es del dueño: correr y calificar las 30 preguntas contra el umbral de ADR-0028 con el
-embedding y el corpus reales, y firmar la lista de documentos del corpus — T3 carga el corpus real en
-cuanto la lista exista. Después, **T9**, el cierre con `just gate-full` una sola vez, los issues de
-seguimiento y los PRs en rebanadas a `main`.
+**E12 está cerrado (2026-10-23).** Las diez tareas T0–T9 están hechas: T6 y T7 entraron completas en
+la rama del épico con su verificación independiente; T8 cerró con el arnés verificado, ADR-0028 y la
+corrida graduada del dueño; T9 corrió `just gate-full` una vez (verde, exit 0), verificados los once
+criterios de aceptación con su evidencia, y dejó el plan de entrega de 13 PRs encadenados arriba.
+Lo único que queda fuera del repo es la entrega: **el dueño abre y mezcla los PRs** en el orden del
+plan, y con eso `docs/10-dag.md` marca E12 como hecho.
 
 **Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
 
