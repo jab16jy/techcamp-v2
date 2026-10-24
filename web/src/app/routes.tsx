@@ -41,6 +41,13 @@ const IndicatorsScreen = lazy(() =>
   })),
 )
 
+// eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
+const AssistantScreen = lazy(() =>
+  import('../features/assistant/containers/AssistantScreen').then((module) => ({
+    default: module.AssistantScreen,
+  })),
+)
+
 /**
  * Inicio tab wrapper: renders TrayScreen when the caller has the technician role
  * in the active organization, and PlotStatusScreen for any other role (D-T0.9, docs/07).
@@ -152,6 +159,18 @@ function MasTab() {
       <ul className="mx-4 mt-4 divide-y divide-text/10 rounded-lg bg-surface-raised">
         <li>
           <Link
+            to="/mas/asistente"
+            className="flex min-h-12 items-center justify-between gap-3 px-4 py-3"
+          >
+            <span className="text-base text-text">Asistente</span>
+            <ChevronDownIcon
+              className="size-5 shrink-0 -rotate-90 text-text-muted"
+              aria-hidden="true"
+            />
+          </Link>
+        </li>
+        <li>
+          <Link
             to="/mas/indicadores"
             className="flex min-h-12 items-center justify-between gap-3 px-4 py-3"
           >
@@ -181,6 +200,15 @@ function IndicatorsRoute() {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
+function AsistenteRoute() {
+  return (
+    <Suspense fallback={null}>
+      <AssistantScreen />
+    </Suspense>
+  )
+}
+
 const tabRoutes: RouteObject[] = [
   { index: true, element: <InicioTab /> },
   { path: 'estado', element: <EstadoRoute /> },
@@ -189,6 +217,7 @@ const tabRoutes: RouteObject[] = [
   { path: 'parcelas', element: <PlotsTab /> },
   { path: 'mas', element: <MasTab /> },
   { path: 'mas/indicadores', element: <IndicatorsRoute /> },
+  { path: 'mas/asistente', element: <AsistenteRoute /> },
 ]
 
 /**
