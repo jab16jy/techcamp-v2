@@ -239,7 +239,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   had to rechain for exactly this). ~300 floor. **Route: delegated** (trigger: writer; migration +
   dependency + ORM). **Depends T0, T1.** Parallel with T4: disjoint files.
 
-- [ ] **T3 — Corpus ingestion**: chunker at ~500 tokens with overlap (ADR-0008:12), one `kb_document`
+- [x] **T3 — Corpus ingestion**: chunker at ~500 tokens with overlap (ADR-0008:12), one `kb_document`
   per source with `source_url` + `license` + `kind` + `published_on` + `department`, ENSO state parsed
   onto `kb_document.enso_state` (docs/06:374), idempotent by `(source_url, sha256)` per ADR-0012's
   *(tipo, entidad, fecha)* rule, a procrastinate job plus `POST /dev/jobs/kb:ingest:run` (ADR-0021).
@@ -249,7 +249,7 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   and recorded here (D-T12.2). ~500 floor. **Route: delegated** (trigger: writer; new job +
   registration in `worker.py`). **Depends T2.**
 
-- [ ] **T4 — Fact builders, retrieval use case and the no-LLM fallback**: sensors from the `telemetry`
+- [x] **T4 — Fact builders, retrieval use case and the no-LLM fallback**: sensors from the `telemetry`
   facade (`query_latest_plot_readings`; metric/value/time plus derived staleness — `ReadingPoint` carries
   only time and value, so `received_at`, the quality mark and the calibration version are a follow-up, not
   invented here; the facade already excludes quality-bit-2 and uncalibrated readings upstream), alerts from `alerts`
@@ -485,6 +485,69 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
     `USER-MESSAGE-LLM-EVIDENCE`, `QUOTA-REASON-PRECEDENCE`) se corrigen en su propio commit con
     `Refs #302`, diferidos hasta que T2/T4 aterricen (decisión del dueño 2026-10-07); los que son
     solo del doble de prueba se resuelven al escribir el adaptador.
+- **T3 — `review-0d72f97fb50a0ff3` — aprobado y reconocido.** Lente `review-reliability`
+  (medium, 5 archivos/240 líneas, sin corrección). Recibo quemado con
+  `gentle-ai.review-acknowledged/v1`, `delivery: ordinary-repository-policy`. Rebanadas `d90853c`
+  (loader + fixtures) + `f44279d` (job + registro + router /dev); `just gate
+  server/tests/assistant` → 197 passed. D-T12.2 decidido: **index-before-load** (la migración T2 ya
+  crea el HNSW en tabla vacía; el corpus ~10k fragmentos está un orden de magnitud bajo el umbral de
+  rebuild; el job nunca corre DDL — ver docstring de `kb_ingest.py:47-60`). Hallazgos a #305 (2 WARNING
+  + 1 SUGGESTION, `Refs #305`).
+- **T4 — dos slices aprobados y reconocidos (recibos quemados).**
+  - **Slice 1 — `review-4dbdecc82fb95e75`** (`f0ef15f`, padre `a127acb`): lente `review-reliability`
+    (medium, 6 archivos/2138 líneas, presupuesto de corrección 200). Un intento previo sobre el rango
+    completo (`a127acb..98bf0f4`, 14 archivos/4278 líneas) fue rechazado con
+    `lens_context_budget_exceeded` **sin crear autoridad**: `assess --committed-only` resuelve
+    `base-ref..HEAD`, así que revisar un slice exige `git checkout --detach <sha>` del slice.
+    Hallazgo **R3-MUTATION-LEAK** (CRITICAL, determinista): la mitad "`metrics` se puede mutar" era
+    falsa (`facts.py:281-282` ya copia `metrics` y `top_factors`); la verdadera: `_read_only` hacía
+    `dict(values)` sin protección y un mapping que falla al copiarse lanzaba excepción desde el
+    constructor, violando el "Never raises" del módulo (`fact_safety.py:275-277`). Corregido con TDD
+    (RED `RuntimeError: boom` → GREEN), 55 líneas. **Incidente de integridad:** el commit de la
+    corrección se creó con HEAD detached en `f0ef15f` (exigido por `--committed-only`) y quedó
+    huérfano (`83c9e6c`); se re-aterrizó al tip con cherry-pick como `7a81758`, con autorización del
+    dueño. **Lo verificado el 2026-10-07 con los árboles delante, porque la frase anterior era
+    imprecisa:** el validador inspeccionó `01e9068126b12fe00920d1f58c68b007956f5789`, que es el árbol
+    de **`83c9e6c`** (slice 1 + el fix) y **no** el del tip, que es
+    `1b2f6dac78e31f8095f6b3ff856b7dbc49c26a2d` (`7a81758`). El parche sí es el mismo —
+    `git diff f0ef15f 83c9e6c` y `git diff 98bf0f4 7a81758` son idénticos (54+/1−, 2 archivos) — así
+    que los bytes revisados aterrizaron; pero **el árbol revisado no es el árbol del tip y no debe
+    leerse como si lo fuera**: `349ac8a` y `98bf0f4` tienen su propio estado (slice 2 revisado y
+    quemado; slice 3 `under_budget`). Verificación:
+    `just gate server/tests/assistant` → 233 passed. Recibo quemado
+    (`gentle-ai.review-acknowledged/v1`, `authority: burned`).
+  - **Slice 2 — `review-7e441487c1135f12`** (`349ac8a`, padre `f0ef15f`): lente `review-reliability`
+    (medium, 6 archivos/1880 líneas). Sin ronda de corrección: ningún hallazgo CRITICAL/BLOCKER.
+    Verificación: `just gate server/tests/assistant` → 228 passed. Recibo quemado
+    (`gentle-ai.review-acknowledged/v1`, `authority: burned`). El relay del revisor fue rechazado dos
+    veces por el transporte (`opencode_review_transport_relay_refused`, `provider_failed`) en dos
+    modelos distintos; se resolvió con el camino `--input` documentado por el contrato
+    (`capture-result --preflight` → `admission_decision: completed`, luego captura real).
+  - **Slice 3 — `98bf0f4`** (padre `349ac8a`): `assess` → medium, `review_due: false`,
+    `review_due_reason: under_budget` (2 archivos/260 líneas). **Sin revisión debida**; queda
+    pendiente en el slice. Re-assess tras el cherry-pick (rango `349ac8a..7a81758`, 4 archivos/315
+    líneas) → `under_budget` otra vez, sin transición. **Re-assess del 2026-10-07, con el HEAD
+    adjunto y sin detach** (`assess --base-ref 349ac8a --committed-only`): `risk: medium`,
+    `review_due: false`, `review_due_reason: under_budget`, `candidate.kind: base-diff`,
+    `candidate.consumed: false`. No hay `next_transition` que ejecutar, así que **no hay recibo que
+    quemar y no se fabricate uno**: esos 315 líneas quedan *pendientes en el corte*, revisados solo
+    si el dueño decide pedir una revisión independiente de ese rango (un target quemado no se
+    reinicia solo).
+  - **Evidencia de los dos recibos, verificada en disco y no de memoria:** existen los dos registros
+    de consumo terminal en el git dir común del repo,
+    `.git/gentle-ai/review-transactions/terminal-consumption/v1/` — `4e8ee852….json` → lineage
+    `review-4dbdecc82fb95e75`, target `sha256:f9f72fa2…`; `ed7b0a03….json` → lineage
+    `review-7e441487c1135f12`, target `sha256:4afdb048…`; los dos con la identidad de repositorio
+    `sha256:57edb8cb…`. Es la razón por la que un re-review de esos cortes no es una opción
+    (`target_already_acknowledged`): su autoridad ya está consumida. Nota de alcance: el receipt de
+    T2 (`review-f1315ed728b0e08a`) pertenece a la lane `e12-t2` y **no** aparece en este git dir
+    común, porque esa lane se cierra en su propio worktree.
+  - **Hallazgos no bloqueantes** (16 WARNING, `informational`; ninguno reabre su revisión): los 4 del
+    slice 1 (`R3-DETERMINISM-UNPROVED`, `R3-NEGATIVE-ASSERT-GAP`, `R3-PATTERN-GAP`, `R3-README-GUARD`)
+    y los 12 del slice 2 (fidelidad de dobles de prueba, fronteras no ejercitadas y rutas defensivas
+    sin probar) van al issue combinado **#304** (`review-follow-up`, `type:chore`, `area:server`).
+    Los que tocan código de T4 se corrigen en commit propio con `Refs #304`; los que son solo del
+    doble se resuelven al escribir el adaptador.
 - **T2 — `review-f1315ed728b0e08a` — aprobado y reconocido.** Target `sha256:b604fb82…`, lente
   `review-reliability` (medium, 3 archivos/486 líneas, sin ronda de corrección). Recibo quemado con
   `gentle-ai.review-acknowledged/v1`, `delivery: ordinary-repository-policy`. Sin envelope de consent
@@ -636,13 +699,82 @@ lineage; no approved receipt means *not reviewed*, never approved.
     regla que ignora el costo ausente; a ~54 000 filas/mes (ADR-0007:9) el `SUM` en SQL es la lectura
     más barata, así que T6 debe revisarlo.
 
+- 2026-10-07 — **T4, hechos de parcela, recuperación y la respuesta sin LLM.** Reconciliado contra el
+  árbol y no de memoria: cuatro commits sobre `a127acb` (`f0ef15f`, `349ac8a`, `98bf0f4`,
+  `7a81758`), 14 archivos y **4 327 líneas** acumuladas, todas dentro de la superficie autorizada de
+  T4 (`assistant/domain/**`, `assistant/application/**`, `server/tests/assistant/**`). Ninguna
+  fachada ajena se tocó: los cinco hechos entran por la cara `application` de cada módulo, nunca por
+  su `domain` ni por sus tablas (docs/05-arquitectura.md:150-151).
+  - **`domain/facts.py`** — los cinco hechos (`SensorFact`, `AlertFact`, `IrrigationFact`,
+    `SeasonalClimateFact`, `RiskFact`) más `ASSISTANT_METRICS`, `SENSOR_FRESH_WINDOW = 24 h` y
+    `missing` por familia, para que "no hay información" sea una frase y nunca un `0` (D-T12.1).
+  - **`domain/fact_safety.py`** — el snapshot inmutable (copia de `metrics` y `top_factors`) con el
+    invariante "nunca lanza"; es exactamente lo que el fix `7a81758` cerró.
+  - **`domain/degraded.py`** — el texto en español plano, determinista y en el orden de docs/06 §9
+    (sensores, alertas, riego, clima estacional, riesgo), con la frase de evidencia insuficiente, la
+    fuente de cada cita y el aviso de "etiqueta del producto ante el ICA y su técnico"
+    **incondicional** (docs/06:386). La severidad se escribe solo para una versión calibrada: la
+    línea base `climatology_month` con `thresholds={}` se anuncia como línea base (D-T9.2).
+  - **`application/plot_facts.py::gather_plot_facts`** — `resolve_plot_access` primero, luego los
+    cuatro facades (`query_latest_plot_readings`, `list_open_alerts_for_plots`,
+    `query_plot_recommendation`, `query_plot_risk` **reusado**, no una segunda lectura de las tablas
+    de riesgo) y el boletín estacional. Cada hecho se proyecta a su propio value object con
+    `sanitize_fact_values` y listas de claves permitidas: la lista de envío de D-T12.6 nace aquí.
+  - **`application/retrieval.py::retrieve_fragments`** — top 5 y piso 0.75 tomados de
+    `domain/limits.py` (constantes nombradas, no literales), el piso **re-aplicado** en el caso de uso
+    para que un repositorio que lo ignore no decida lo que lee el productor, una cita por documento
+    y `validate_citation` antes de devolver. Menos de cinco fragmentos —o ninguno— es una respuesta
+    legítima, no un fallo.
+  - **`application/degraded_answer.py::answer_without_llm`** — la rama sin LLM, y la garantía de que
+    no hay proveedor es **estructural, no una promesa**: la firma no nombra un `LLMClient` y dos
+    tests lo comprueban (uno inspecciona la firma de cada función pública de la ruta, otro pregunta
+    al doble `FakeLLMClient` cuántas veces lo invocaron).
+  - **Desviación declarada, dentro de superficie:** `application/ports.py` ganó
+    `KnowledgeRepository.latest_climate_bulletin(department=...)`. El `department` es un argumento
+    nullable con fallback a nacional **a propósito**: nada en el repo mapea finca o parcela a
+    departamento (`Farm.municipality_code` es DIVIPOLA de texto libre y no existe tabla `municipality`),
+    e inventar ese mapeo aquí sería un segundo lugar que decide las divisiones administrativas de
+    Colombia, que es la tabla `municipality` cuando exista.
+  - **Tests:** 97 tests de T4 en seis archivos, uno por comportamiento, con RED observado antes de
+    cada GREEN (`test_facts` 17, `test_fact_safety` 18, `test_degraded` 20, `test_plot_facts` 26,
+    `test_retrieval` 12, `test_degraded_answer` 4).
+  - **Verificación (2026-10-07, HEAD `7a81758`, base de datos de este worktree):**
+    `just gate-fast` → **verde** (ruff, ruff format 399 archivos, mypy 243, `lint-imports` 1 contrato
+    / 0 roto con las capas hexagonales **conservadas**, una sola cabeza de Alembic, ast-grep,
+    ml ruff/mypy, eslint, tsc); `just gate server/tests/assistant` → **233 passed, 0 failed, 0
+    skipped** en 24.56 s, seed `1059847596` (pytest 9.1.1, Python 3.12.14, pytest-randomly 5.0.0).
+  - **Desviación de proceso, registrada tal cual y no resuelta.** El worker de verificación se pasó
+    de la superficie que le di (solo `just db-up`) y ejecutó **`just db-reset`**, que esta tabla de
+    Checks prohíbe a mitad de épico ("las filas de una lane son evidencia"). Lo que ocurrió, en tres
+    hechos: (1) `just db-up` **no puede revivir un contenedor detenido** — su guarda
+    (`justfile:100`, `ps -aq`) también matchea los exited y responde *"already exists; run 'just
+    db-reset'"* — y `just db-info` no ayuda, porque imprime config (`justfile:92-99`), no estado;
+    (2) `db-reset` es `db-down` + `db-up`, y `db-down` hace `podman rm -f -v` (`justfile:115-116`),
+    así que el volumen anónimo de pgdata de este worktree se **eliminó y se recreó vacío**; (3) el
+    mismo `db-up` lo levantó de nuevo en el puerto 55219 y el gate corrió sobre un esquema limpio
+    reconstruido desde las migraciones. **Pérdida real:** las filas que hubiera en ese Postgres. En
+    esta lane eran fixtures de test que cada corrida recrea —T4 no tiene adaptador, router ni
+    ingestión—, así que no hay evidencia de T4 perdida y el gate sobre base limpia es la forma más
+    fuerte de prueba; lo que sí se perdió es cualquier carga manual o semilla que hubiera en ese
+    worktree, y eso ya no es verificable. **El arreglo no destructivo era `podman start
+    <container>` + `pg_isready`.** Fricción para un follow-up (no se arregla aquí: `justfile` es
+    superficie de T9): `just db-up` debería revivir un contenedor existente que esté detenido, y
+    `just gate` valida la base **después** de `gate-fast`, así que un contenedor muerto cuesta una
+    pasada estática completa antes de que el fallo se vea.
+  - **Superficie que T4 deja para adelante:** sin adaptador todavía —el `KnowledgeRepository` es el
+    puerto de T1 con el método del boletín, y su lectura SQL es de T3; `usage.py` sigue siendo la
+    rama de cuota de T1 y T6 la completa.
+
 ## Next step
 
-**T2 puede arrancar ya** (el pin de 384 y los contratos de puerto están), y **T4 en paralelo**
-(superficies disjuntas). T3 espera la revisión de licencia del corpus. El pin ya no bloquea a nadie: con `384` fijado,
-**T2 también puede arrancar** (`vector(384)` + HNSW coseno) con los contratos de puerto ya cerrados.
+**T1, T2 y T4 están cerrados.** **T5 puede arrancar ya**: la ruta que consume ya existe y está
+revisada —`gather_plot_facts` (hechos) → `retrieve_fragments` (fragmentos y citas) →
+`answer_without_llm` (la rama degradada)—, con los puertos de T1 cerrados y el `LLMClient` todavía
+sin tocar, que es exactamente el borde de T5. T6 empieza después de T5 (comparten el router); T7 es
+`web/` y no se solapa con nada del servidor. T3 espera la revisión de licencia del corpus y T8 el
+umbral de la evaluación.
 
-Lo que queda es decisión del dueño, y ninguna de las tres bloquea a T2 ni a T4:
+Lo que queda es decisión del dueño, y ninguna bloquea a T5:
 
 1. **D-T12.3: confirmar el límite de 10/día en ambos perfiles.** Sigue anotado como owner-confirmable en
    `docs/04:22`; si se revierte a solo-`production`, esa fila y [ADR-0007:5](../docs/adr/0007-llm-por-api.md)
@@ -652,8 +784,11 @@ Lo que queda es decisión del dueño, y ninguna de las tres bloquea a T2 ni a T4
    escribe los precios reales en `docs/02:78`.
 3. **Open question 2: la revisión de licencia del corpus** ([ADR-0008:32](../docs/adr/0008-rag-pgvector.md)).
    T3 carga solo fixtures hasta que responda.
+4. **Los 315 líneas del corte 3 (`349ac8a..7a81758`) siguen `under_budget`:** sin revisión debida y
+   sin recibo. Cerrarlo con recibo exige una decisión explícita del dueño (revisión independiente de
+   ese rango); no se reinicia por cuenta propia ni se fabrica un recibo.
 
-Después, en el orden de [Lanes](#tasks): **T1 → T2 ‖ T4**; T3 espera la licencia; T8 espera el umbral. Nada
-en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista blanca de
-`import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene `vector`, y ningún
-otro módulo se tiene que mover para que E12 arranque.
+En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5** siguiente; **T6 ‖ T7 ‖ T8** después.
+Nada en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista
+blanca de `import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene
+`vector`, y ningún otro módulo se tiene que mover para que E12 arranque.

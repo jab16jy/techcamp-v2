@@ -1,4 +1,5 @@
-"""In-memory doubles for the assistant's six ports (E12 T1).
+"""In-memory doubles for the assistant's six ports, and for the foreign
+repositories its fact builder takes (E12 T1, E12 T4).
 
 They stand in for the adapters T2/T3 build, and they are held to the same rules
 those adapters are: the knowledge repository filters by `similarity_floor` and cuts
@@ -6,6 +7,14 @@ at `top_k`, the transcript answers only to the owner of a conversation, and the
 quota counts questions in **America/Bogota** rather than in UTC (docs/06 §9). A
 double that agreed with everything would let a use case pass a test and fail in
 production, so each one refuses the shape the real thing refuses.
+
+E12 T4 appends the doubles for the **foreign** repositories — `farms`,
+`identity`, `telemetry`, `alerts`, `irrigation` and `risk` — which the
+assistant reaches only through those modules' public `application` facades
+(docs/05-arquitectura.md:150-151). They implement the methods that path calls and
+no others, and each one carries the rule the real repository holds: a plot of
+another org is absent, a metric without a reading is `None`, a resolved alert does
+not come back, and a recommendation that was never calculated raises.
 """
 
 from __future__ import annotations
@@ -13,10 +22,11 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import AsyncIterator, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from techcamp.alerts.domain.models import Alert, AlertState, Severity
 from techcamp.assistant.application.ports import (
     EMBEDDING_DIMENSION,
     KnowledgeDocument,
@@ -31,7 +41,12 @@ from techcamp.assistant.domain.limits import (
     month_spend_cop,
 )
 from techcamp.assistant.domain.models import ChatMessage, Conversation, Message, MessageRole
+from techcamp.farms.domain.models import Plot
+from techcamp.identity.domain.models import Membership
+from techcamp.irrigation.domain.models import IrrigationRecommendation
+from techcamp.risk.domain.models import EventType, ModelVersion, RiskPrediction
 from techcamp.shared.dates import BOGOTA_TZ
+from techcamp.telemetry.domain.models import ReadingPoint
 
 DEFAULT_MODEL = "deepseek-chat"
 """The provisional provider of ADR-0026, so a test reads the same model name a real
@@ -142,12 +157,23 @@ class FakeKnowledgeRepository:
     so `similarity_floor` and `top_k` mean here what they will mean against
     pgvector. A vector with no direction scores `0.0` rather than dividing by zero,
     so it can never sneak past the floor.
+
+    E12 T4 added two things and changed no other: the `ignore_similarity_floor`
+    flag below, and `latest_climate_bulletin`. Every T1 test keeps the double it
+    had, because both additions default to what the constructor did before.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, ignore_similarity_floor: bool = False) -> None:
         self._documents: dict[UUID, KnowledgeDocument] = {}
         self._chunks: list[_Chunk] = []
+        self._ignore_floor = ignore_similarity_floor
         self.calls: list[tuple[Sequence[float], int, float]] = []
+        """`ignore_similarity_floor` makes this double answer with whatever the
+        query finds, floor or no floor. It is how the **defensive re-filter** of
+        `application.retrieval` is testable: an adapter that forgot the floor would
+        contribute a 0.74 fragment, and the use case has to refuse it without
+        trusting the port to have done what its docstring says. `False` by default,
+        so a test that does not say otherwise gets the honest repository."""
 
     def add_document(
         self,
@@ -181,10 +207,11 @@ class FakeKnowledgeRepository:
         self, embedding: Sequence[float], *, top_k: int, similarity_floor: float
     ) -> list[RetrievedFragment]:
         self.calls.append((list(embedding), top_k, similarity_floor))
+        floor = -1.0 if self._ignore_floor else similarity_floor
         scored = [
             (_chunk, similarity)
             for _chunk in self._chunks
-            if (similarity := _cosine(embedding, _chunk.embedding)) >= similarity_floor
+            if (similarity := _cosine(embedding, _chunk.embedding)) >= floor
         ]
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return [
@@ -199,6 +226,37 @@ class FakeKnowledgeRepository:
 
     async def get_document(self, document_id: UUID) -> KnowledgeDocument | None:
         return self._documents.get(document_id)
+
+    async def latest_climate_bulletin(self, *, department: str | None) -> KnowledgeDocument | None:
+        """The newest bulletin of `department`, else the newest national one.
+
+        E12 T4, the port added to `KnowledgeRepository` on top of T1's shape: the
+        regional bulletin first, the national one as docs/06 §9's own fallback,
+        and `None` when the corpus holds neither — an empty corpus is missing
+        evidence, not an error.
+
+        **Only bulletins, and only the ones that carry a publication date.** A
+        document of another `kind` is not the seasonal source, and a bulletin with
+        no `published_on` cannot be the *latest* of anything: ordering it against
+        dated ones would mean comparing a date with nothing, so it is not
+        returned at all rather than returned as though it were current.
+        """
+        bulletins = [
+            document
+            for document in self._documents.values()
+            if document.kind == "agroclimatic_bulletin" and document.published_on is not None
+        ]
+        regional = [
+            bulletin
+            for bulletin in bulletins
+            if department is not None and bulletin.department == department
+        ]
+        if regional:
+            return max(regional, key=_bulletin_order)
+        national = [bulletin for bulletin in bulletins if bulletin.department is None]
+        if national:
+            return max(national, key=_bulletin_order)
+        return None
 
 
 class FakeConversationRepository:
@@ -361,3 +419,237 @@ def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
 
 def _local(instant: datetime) -> datetime:
     return instant.astimezone(BOGOTA_TZ)
+
+
+# ---------------------------------------------------------------------------
+# E12 T4: the foreign ports `application.plot_facts` takes.
+#
+# These stand in for the repositories of `farms`, `identity`, `telemetry`,
+# `alerts`, `irrigation` and `risk`, which the assistant reaches only through
+# their public `application` facades (docs/05-arquitectura.md:150-151). Each one
+# implements the methods that path calls and refuses the shape the real thing
+# refuses: a plot of another org is absent rather than forbidden, a metric with no
+# reading in the window is `None` rather than `0.0`, an alert that is resolved
+# does not come back, and a recommendation that was never calculated raises
+# instead of answering a zero depth.
+# ---------------------------------------------------------------------------
+
+
+def _bulletin_order(bulletin: KnowledgeDocument) -> tuple[date, str]:
+    """Ordering key for "the latest bulletin". The title breaks a tie between two
+    documents of the same date, so the answer is the same bulletin whatever order
+    the corpus was stored in."""
+    assert bulletin.published_on is not None, "only dated bulletins are ordered"
+    return (bulletin.published_on, bulletin.title)
+
+
+class FakePlotRepository:
+    """A `farms` `PlotRepository` over plots held in memory.
+
+    **Implements `get_for_orgs` and nothing else**, which is the only method
+    `resolve_plot_access` calls — the access gate every plot-scoped read in the
+    system uses (docs/09-cuellos-de-botella.md §Seguridad). That one method is
+    also where this double earns its place: a plot whose `org_id` is not among
+    the caller's orgs answers `None`, which `resolve_plot_access` turns into
+    `PlotNotFoundError`, so **a plot of another org and an absent plot are the
+    same 404** (docs/04-api.md §Convenciones HTTP) rather than a `403` that would
+    confirm the plot exists.
+    """
+
+    def __init__(self, plots: Sequence[Plot] = ()) -> None:
+        self._plots = list(plots)
+
+    def add(self, plot: Plot) -> Plot:
+        self._plots.append(plot)
+        return plot
+
+    async def get_for_orgs(self, plot_id: UUID, org_ids: Sequence[UUID]) -> Plot | None:
+        for plot in self._plots:
+            if plot.id == plot_id and plot.org_id in org_ids:
+                return plot
+        return None
+
+
+class FakeMembershipRepository:
+    """An `identity` `MembershipRepository` over memberships held in memory.
+
+    `resolve_plot_access` reads `list_for_user` and turns the org ids into the set
+    the plot repository is asked about, so the org-isolation tests are decided
+    here: a user with one membership cannot reach a plot of another org, and the
+    plot repository's answer above is the same `None` either way.
+    """
+
+    def __init__(self, memberships: Sequence[Membership] = ()) -> None:
+        self._memberships = list(memberships)
+
+    async def list_for_user(self, user_id: UUID) -> list[Membership]:
+        return [m for m in self._memberships if m.user_id == user_id]
+
+    async def list_for_org(self, org_id: UUID) -> list[Membership]:
+        return [m for m in self._memberships if m.org_id == org_id]
+
+    async def get(self, user_id: UUID, org_id: UUID) -> Membership | None:
+        for membership in self._memberships:
+            if membership.user_id == user_id and membership.org_id == org_id:
+                return membership
+        return None
+
+
+class FakeReadingRepository:
+    """A `telemetry` `ReadingRepository` over one reading per metric.
+
+    **Implements `query_latest_valid_by_metric`**, the read
+    `query_latest_plot_readings` is a wrapper over (D-T0.4). The 24-hour window is
+    applied **here** so the facade's own contract is what the tests exercise: a
+    reading outside `[now - 24h, now]` is not returned at all, and a metric with
+    nothing inside the window comes back absent, which the facade maps to `None`
+    — never to `0.0`.
+
+    `latest_valid_by_metric` records the metrics it was asked for and the `now` it
+    was given, so a test can assert the assistant asks the facade for exactly
+    `ASSISTANT_METRICS` rather than for every metric the glossary names.
+    """
+
+    def __init__(self, points: Sequence[tuple[str, ReadingPoint]] = ()) -> None:
+        self._points = list(points)
+        self.latest_valid_by_metric_calls: list[tuple[Sequence[str], datetime]] = []
+
+    def add(self, metric: str, point: ReadingPoint) -> None:
+        self._points.append((metric, point))
+
+    async def query_latest_valid_by_metric(
+        self,
+        plot_id: UUID,
+        org_id: UUID,
+        *,
+        metrics: Sequence[str],
+        now: datetime,
+    ) -> dict[str, ReadingPoint]:
+        self.latest_valid_by_metric_calls.append((list(metrics), now))
+        window_start = now - timedelta(hours=24)
+        newest: dict[str, ReadingPoint] = {}
+        for metric, point in self._points:
+            if metric not in metrics or not window_start <= point.time <= now:
+                continue
+            current = newest.get(metric)
+            if current is None or point.time > current.time:
+                newest[metric] = point
+        return newest
+
+
+class FakeAlertRepository:
+    """An `alerts` `AlertRepository` over alerts held in memory.
+
+    **Implements `list_open_for_plots`**, the read behind
+    `list_open_alerts_for_plots` (D-T0.3): `state <> 'resolved'`, scoped by
+    `plot_ids` **and** `org_ids`, ordered critical first and then newest first.
+    The order is the facade's promise, so the facts it assembles are ordered the
+    same way on every question.
+
+    A resolved alert is not returned even when it is in the list, which is what
+    makes "the producer closed it" observable in a test.
+    """
+
+    def __init__(self, alerts: Sequence[Alert] = ()) -> None:
+        self._alerts = list(alerts)
+
+    def add(self, alert: Alert) -> Alert:
+        self._alerts.append(alert)
+        return alert
+
+    async def list_open_for_plots(
+        self, plot_ids: Sequence[UUID], org_ids: Sequence[UUID]
+    ) -> list[Alert]:
+        wanted = set(plot_ids)
+        visible = [
+            alert
+            for alert in self._alerts
+            if alert.plot_id in wanted
+            and alert.org_id in set(org_ids)
+            and alert.state is not AlertState.RESOLVED
+        ]
+        return sorted(
+            visible,
+            key=lambda alert: (alert.severity is not Severity.CRITICAL, -_epoch(alert.opened_at)),
+        )
+
+
+class FakeIrrigationRecommendationRepository:
+    """An `irrigation` `IrrigationRecommendationRepository` over rows held in
+    memory.
+
+    **Implements `get_for_plot`**, the read `query_plot_recommendation` wraps: a
+    missing row answers `None` and the facade raises `RecommendationNotFoundError`
+    from it (irrigation/application/query_irrigation.py:77-79), which is the path
+    the fact builder has to survive. `missing=True` is that path — the flag
+    configures the **repository**, not an exception in the double, because the
+    real repository never raises and a double that did would test a shape the
+    adapter does not have.
+
+    `org_id` is honoured, so a recommendation of another org is absent rather than
+    served.
+    """
+
+    def __init__(
+        self, recommendations: Sequence[IrrigationRecommendation] = (), *, missing: bool = False
+    ) -> None:
+        self._recommendations = list(recommendations)
+        self._missing = missing
+
+    async def get_for_plot(
+        self, plot_id: UUID, day: date, org_id: UUID | None = None
+    ) -> IrrigationRecommendation | None:
+        if self._missing:
+            return None
+        for recommendation in self._recommendations:
+            if recommendation.plot_id == plot_id and recommendation.day == day:
+                return recommendation
+        return None
+
+
+class FakeRiskRepository:
+    """A `risk` `RiskRepository` over versions and predictions held in memory.
+
+    **Implements `served_version` and `latest_prediction`**, the two reads
+    `query_plot_risk` makes per event. `served_version` answers `None` for an
+    event with no registered version, which is how `drought` behaves until M3
+    exists (D-T9.3) and how the use case decides that event is simply absent
+    rather than predicted at `0`.
+    """
+
+    def __init__(
+        self,
+        *,
+        versions: Sequence[ModelVersion] = (),
+        predictions: Sequence[RiskPrediction] = (),
+    ) -> None:
+        self._versions = list(versions)
+        self._predictions = list(predictions)
+
+    async def served_version(self, name: str) -> ModelVersion | None:
+        for version in self._versions:
+            if version.name == name:
+                return version
+        return None
+
+    async def latest_prediction(
+        self, cell_id: int, event_type: EventType, model_version_id: UUID
+    ) -> RiskPrediction | None:
+        candidates = [
+            prediction
+            for prediction in self._predictions
+            if prediction.cell_id == cell_id
+            and prediction.event_type is event_type
+            and prediction.model_version_id == model_version_id
+        ]
+        if not candidates:
+            return None
+        # Newest `created_at`, then `id`: the same tie-break the real repository
+        # uses, so "the latest" means one row and not whichever was inserted last.
+        return max(candidates, key=lambda prediction: (prediction.created_at, prediction.id))
+
+
+def _epoch(instant: datetime) -> float:
+    """`instant` as a sortable number, so a descending order reads as one
+    expression instead of a negated key."""
+    return instant.timestamp()
