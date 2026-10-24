@@ -179,6 +179,11 @@ def parse_record_weather_args(argv: list[str] | None = None) -> argparse.Namespa
         default=None,
         help="Why the recording could not reproduce the scenario's arithmetic.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace the fixture that is already recorded (it breaks the scenario's pin).",
+    )
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be greater than 0")
@@ -206,6 +211,7 @@ async def record_weather_command(args: argparse.Namespace) -> None:
         out_dir=out_dir,
         synthetic=args.synthetic,
         synthetic_reason=args.synthetic_reason,
+        force=args.force,
     )
     print(f"[sim] recorded {recorded.path}")
     print(f"[sim] data_sha256={recorded.data_sha256}")

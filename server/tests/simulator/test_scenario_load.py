@@ -20,7 +20,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from techcamp.farms.adapters.orm import CropCycleRow, FarmRow, PlotRow, SoilProfileRow
@@ -241,3 +241,98 @@ async def test_a_caller_without_a_session_is_unauthorized(db_session: AsyncSessi
     response = _client().post("/dev/scenarios/el-nino:load", json={})
 
     assert response.status_code == 401
+
+
+async def test_the_load_enqueues_nothing(db_session: AsyncSession) -> None:
+    """docs/04-api.md:263: the route prepares base data and nothing else. The
+    backfill is the CLI's, so the load leaves no job behind — the parcel's own
+    write path defers a provider fetch for a cell with no rows, and the
+    fixture lands first precisely so that it does not."""
+    org = await _org(db_session, phone="+573000000012")
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+    assert response.status_code == 202
+
+    jobs = (await db_session.execute(text("SELECT count(*) FROM procrastinate_jobs"))).scalar_one()
+    assert jobs == 0
+
+
+async def test_a_caller_without_an_organization_is_not_found(db_session: AsyncSession) -> None:
+    """The load belongs to an organization; a caller that belongs to none has
+    no organization to load into, so there is nothing to find."""
+    user_id = uuid7()
+    db_session.add(AppUserRow(id=user_id, phone="+573000000013", full_name="Sin organización"))
+    await db_session.commit()
+    token = issue_token(str(user_id))
+
+    response = _client().post(
+        "/dev/scenarios/el-nino:load", json={}, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 404
+
+
+async def test_a_caller_with_several_organizations_is_unprocessable(
+    db_session: AsyncSession,
+) -> None:
+    """The body names no organization (docs/04-api.md:263), so a caller that
+    belongs to several of them has no way to say which one the scenario is for:
+    the loader says so instead of picking one."""
+    user_id = uuid7()
+    db_session.add(AppUserRow(id=user_id, phone="+573000000014", full_name="Dos organizaciones"))
+    for index in range(2):
+        org_id = uuid7()
+        db_session.add(OrganizationRow(id=org_id, name=f"Org {index}", kind="individual"))
+        await db_session.commit()
+        db_session.add(MembershipRow(org_id=org_id, user_id=user_id, role="owner"))
+    await db_session.commit()
+    token = issue_token(str(user_id))
+
+    response = _client().post(
+        "/dev/scenarios/el-nino:load", json={}, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 422
+
+
+async def test_a_reload_rotates_the_node_credential(db_session: AsyncSession) -> None:
+    """The claim's password is only readable once, so a reload that reuses the
+    node has to hand a credential that works now — and a caller that published
+    with an earlier response has to use the latest one."""
+    org = await _org(db_session, phone="+573000000015")
+    client = _client()
+
+    first = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+    second = client.post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert second.json()["node_ids"] == first.json()["node_ids"]
+    assert (
+        second.json()["node_credentials"][0]["mqtt_password"]
+        != (first.json()["node_credentials"][0]["mqtt_password"])
+    )
+
+
+async def test_a_rainfed_replace_leaves_the_old_parcel_in_the_balance_scope(
+    db_session: AsyncSession,
+) -> None:
+    """A characterization test for #333: a replaced rainfed parcel stays in the
+    daily balance scope, because the balance takes every rainfed parcel and
+    closing its cycle does not take it out. The fix belongs to the module that
+    owns the balance; until then this test says what happens."""
+    org = await _org(db_session, phone="+573000000016")
+    client = _client()
+
+    first = client.post("/dev/scenarios/dry-spell-rainfed:load", json={}, headers=_auth(org))
+    replaced = client.post(
+        "/dev/scenarios/dry-spell-rainfed:load", json={"replace": True}, headers=_auth(org)
+    )
+
+    assert first.status_code == 202
+    assert replaced.status_code == 202
+    old_plot_id = UUID(first.json()["plot_ids"][0])
+    still_there = (
+        await db_session.execute(select(PlotRow).where(PlotRow.id == old_plot_id))
+    ).scalar_one_or_none()
+    assert still_there is not None, "#333: the replaced rainfed parcel is still there"

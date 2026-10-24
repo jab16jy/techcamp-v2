@@ -54,8 +54,10 @@ from techcamp.telemetry.application.manage_nodes import claim_node, rotate_crede
 from techcamp.telemetry.application.ports import NodeRepository
 from techcamp.telemetry.domain.models import NodeStatus
 
+from ..scenario_library import WeatherFixture
 from ..scenario_schema import Scenario
 from ..scenario_schema import load_scenario as load_scenario_definition
+from .load_weather import WeatherFixtureWriter, load_weather_fixture
 
 MUNICIPALITY_CODE = "47001"
 """Santa Marta's DIVIPOLA code, the municipality the Caribe cell's recorded
@@ -96,10 +98,6 @@ class ScenarioAmbiguousOrgError(Exception):
 
 class ScenarioDataInAnotherOrgError(Exception):
     """The load exists, in another organization."""
-
-
-class ScenarioCropNotFoundError(Exception):
-    """The scenario names a crop the catalog does not have."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +399,7 @@ async def load_scenario(
     crop_id: int,
     lat: float,
     lon: float,
+    fixture: WeatherFixture,
     farms: FarmRepository,
     plots: PlotRepository,
     crops: CropRepository,
@@ -408,6 +407,7 @@ async def load_scenario(
     soil_profiles: SoilProfileRepository,
     nodes: NodeRepository,
     memberships: MembershipRepository,
+    weather: WeatherFixtureWriter,
     provisioner: ScenarioNodeProvisioner,
     registry: ScenarioLoadRegistry,
 ) -> ScenarioLoad:
@@ -423,6 +423,14 @@ async def load_scenario(
     previous = await registry.find_plot(plot_name)
     if previous is not None and previous.org_id != org_id:
         raise ScenarioDataInAnotherOrgError(previous.org_id)
+
+    # The fixture lands here, after the organization and the previous load are
+    # known: a request that ends in 404 must not write anything. It lands
+    # before the parcel does, because the parcel's write path defers a
+    # provider fetch for a cell that has no rows yet (farms
+    # `get_or_create_cell`), and a scenario's weather is the recording, not the
+    # provider's answer.
+    await load_weather_fixture(fixture=fixture, day=day, weather=weather)
 
     if previous is not None and not replace:
         return await _reuse(

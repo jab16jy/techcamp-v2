@@ -31,7 +31,9 @@ from techcamp.farms.adapters.api.deps import (
     PlotRepoDep,
     SoilProfileRepoDep,
 )
+from techcamp.farms.domain.errors import InsufficientRoleError
 from techcamp.identity.adapters.api.deps import CurrentUserId, MembershipRepoDep
+from techcamp.identity.domain.errors import NotAMemberError
 from techcamp.shared.dates import local_today
 from techcamp.shared.db import SessionDep
 from techcamp.shared.errors import ProblemError
@@ -40,15 +42,14 @@ from techcamp.weather.adapters.api.deps import WeatherRepoDep
 
 from ...application.load_scenario import (
     ScenarioAmbiguousOrgError,
-    ScenarioCropNotFoundError,
     ScenarioDataInAnotherOrgError,
     ScenarioLoad,
     ScenarioNotFoundError,
     ScenarioOrgNotFoundError,
     load_scenario,
 )
-from ...application.load_weather import load_weather_fixture
-from ...scenario_library import load_fixture
+from ...scenario_library import FixtureSchemaError, load_fixture
+from ...scenario_schema import ScenarioSchemaError
 from ...scenario_schema import load_scenario as load_scenario_definition
 from ..scenario_data import SqlAlchemyScenarioLoadRegistry, SqlAlchemyScenarioNodeProvisioner
 
@@ -132,7 +133,24 @@ async def load_scenario_route(
         raise ProblemError(
             status=404, title="Scenario not found", detail=f"No scenario named {name!r}."
         ) from error
-    fixture = load_fixture(scenario.weather_fixture.removesuffix(".json"))
+    except ScenarioSchemaError as error:
+        # The scenario's own contract does not hold — its recorded fixture's pin
+        # does not match the file, or a block is off the schema. That is the
+        # library's problem, not the caller's, but it still answers with a
+        # problem document instead of a bare traceback.
+        raise ProblemError(
+            status=500,
+            title="Scenario contract is broken",
+            detail=f"The scenario {name!r} does not satisfy its own contract.",
+        ) from error
+    try:
+        fixture = load_fixture(scenario.weather_fixture.removesuffix(".json"))
+    except FixtureSchemaError as error:
+        raise ProblemError(
+            status=500,
+            title="Scenario contract is broken",
+            detail=f"The fixture of {name!r} does not satisfy the recorded contract.",
+        ) from error
 
     day = payload.day if payload.day is not None else _default_anchor(len(fixture.observed))
     if day > local_today():
@@ -149,11 +167,6 @@ async def load_scenario_route(
         )
 
     try:
-        # The fixture lands before the parcel does: the parcel's write path
-        # defers a provider fetch for a cell that has no rows yet (farms
-        # `get_or_create_cell`), and a scenario's weather is the recording, not
-        # the provider's answer.
-        await load_weather_fixture(fixture=fixture, day=day, weather=weather)
         loaded = await load_scenario(
             name=name,
             day=day,
@@ -162,6 +175,7 @@ async def load_scenario_route(
             crop_id=crop_id,
             lat=fixture.lat,
             lon=fixture.lon,
+            fixture=fixture,
             farms=farms,
             plots=plots,
             crops=crops,
@@ -169,6 +183,7 @@ async def load_scenario_route(
             soil_profiles=soil_profiles,
             nodes=nodes,
             memberships=memberships,
+            weather=weather,
             provisioner=SqlAlchemyScenarioNodeProvisioner(session),
             registry=SqlAlchemyScenarioLoadRegistry(session),
         )
@@ -197,10 +212,10 @@ async def load_scenario_route(
             title="Scenario not found",
             detail="That scenario was loaded in another organization.",
         ) from error
-    except ScenarioCropNotFoundError as error:
-        raise ProblemError(
-            status=422, title="Unknown crop", detail="The catalog has no such crop."
-        ) from error
+    except NotAMemberError as error:
+        raise ProblemError(status=404, title="Organization not found") from error
+    except InsufficientRoleError as error:
+        raise ProblemError(status=403, title="Role cannot load scenarios") from error
 
     return _response(loaded)
 

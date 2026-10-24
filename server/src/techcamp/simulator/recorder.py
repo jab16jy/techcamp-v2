@@ -314,8 +314,16 @@ async def record_weather(
     synthetic_reason: str | None = None,
     recorded_at: datetime | None = None,
     synthetic_et0_mm: float = DEFAULT_SYNTHETIC_ET0_MM,
+    force: bool = False,
 ) -> RecordedFixture:
     """Capture the window and write the fixture the contract accepts."""
+    path = out_dir / f"{name}.json"
+    if path.exists() and not force:
+        # A recorded fixture is pinned by the scenario's `weather_fixture_sha256`
+        # over its exact bytes, so overwriting one breaks the pin the library
+        # verifies — and the scenario stops loading at all. Replacing one is a
+        # deliberate act, so it asks for `--force`.
+        raise RecorderError(f"{path.name} already exists; replacing a pinned fixture needs --force")
     if days < MIN_RECORDED_DAYS:
         raise RecorderError(
             f"a capture must cover at least {MIN_RECORDED_DAYS} days "
@@ -341,4 +349,4 @@ async def record_weather(
         synthetic=synthetic,
         synthetic_reason=synthetic_reason,
     )
-    return write_fixture(out_dir / f"{name}.json", envelope)
+    return write_fixture(path, envelope)

@@ -6,7 +6,6 @@ prepares (docs/04-api.md:263; D-T16.2).
 
 from techcamp.simulator.application.load_scenario import (
     ScenarioAmbiguousOrgError,
-    ScenarioCropNotFoundError,
     ScenarioDataInAnotherOrgError,
     ScenarioLoad,
     ScenarioNode,
@@ -20,7 +19,6 @@ from techcamp.simulator.application.load_scenario import (
 
 __all__ = [
     "ScenarioAmbiguousOrgError",
-    "ScenarioCropNotFoundError",
     "ScenarioDataInAnotherOrgError",
     "ScenarioLoad",
     "ScenarioNode",

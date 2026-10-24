@@ -365,3 +365,49 @@ def test_the_cli_refuses_a_synthetic_capture_without_its_reason() -> None:
         parse_record_weather_args(
             ["--scenario", "el-nino", "--from", "2016-12-14", "--days", "28", "--synthetic"]
         )
+
+
+async def test_recording_over_a_pinned_fixture_needs_force(tmp_path: Path) -> None:
+    """A recorded fixture is pinned by the scenario's `weather_fixture_sha256`
+    over its exact bytes, so replacing one breaks the pin the library verifies
+    and the scenario stops loading. Replacing one is deliberate, so it asks."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_archive_payload())
+
+    first = await record_weather(
+        scenario="el-nino",
+        name="el-nino-caribe",
+        from_day=FROM_DAY,
+        days=DAYS,
+        lat=LAT,
+        lon=LON,
+        out_dir=tmp_path,
+        client=_client(handler),
+    )
+    assert first.path.exists()
+
+    with pytest.raises(RecorderError, match="--force"):
+        await record_weather(
+            scenario="el-nino",
+            name="el-nino-caribe",
+            from_day=FROM_DAY,
+            days=DAYS,
+            lat=LAT,
+            lon=LON,
+            out_dir=tmp_path,
+            client=_client(handler),
+        )
+
+    forced = await record_weather(
+        scenario="el-nino",
+        name="el-nino-caribe",
+        from_day=FROM_DAY,
+        days=DAYS,
+        lat=LAT,
+        lon=LON,
+        out_dir=tmp_path,
+        client=_client(handler),
+        force=True,
+    )
+    assert forced.path == first.path
