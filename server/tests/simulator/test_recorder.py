@@ -464,3 +464,33 @@ async def test_a_refused_recording_exits_with_a_message(
         await record_weather_command(args)
 
     assert "--force" in str(exit_info.value)
+
+
+async def test_a_refusal_before_the_capture_exits_with_a_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scenario's own name and cell are read before the capture, and they
+    refuse too: a scenario that is not in the library, or a fixture that pins
+    none, is a message the operator reads."""
+
+    async def forbidden(**kwargs: object) -> RecordedFixture:
+        raise AssertionError("the capture must not start when the scenario is not there")
+
+    monkeypatch.setattr(simulator_main, "record_weather", forbidden)
+    args = parse_record_weather_args(
+        [
+            "--scenario",
+            "no-existe",
+            "--from",
+            "2016-12-14",
+            "--days",
+            "28",
+            "--out-dir",
+            str(tmp_path),
+        ]
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        await record_weather_command(args)
+
+    assert "no-existe" in str(exit_info.value)

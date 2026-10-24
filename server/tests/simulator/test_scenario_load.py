@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from importlib import import_module
 from uuid import UUID
 
 import pytest
@@ -40,6 +41,10 @@ from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
 from techcamp.telemetry.domain.errors import InsufficientRoleError as TelemetryInsufficientRoleError
 
 pytestmark = pytest.mark.anyio
+
+loader = import_module("techcamp.simulator.application.load_scenario")
+"""The loader's module, and not the `load_scenario` the package re-exports:
+the test patches the module's own names."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,3 +485,44 @@ async def test_an_unreadable_fixture_answers_a_broken_contract(
 
     assert response.status_code == 500
     assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_a_scenario_file_that_cannot_be_read_answers_a_problem(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file the library cannot open is the library's problem, not the
+    caller's, but it still answers with a problem document."""
+    org = await _org(db_session, phone="+573000000025")
+
+    def unreadable(name: str) -> Scenario:
+        raise PermissionError("the scenario file cannot be read")
+
+    monkeypatch.setattr(dev_scenarios, "load_scenario_definition", unreadable)
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_the_pre_flight_consults_the_telemetry_rule_too(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The load writes farms' rows and telemetry's, and each module states its
+    own write roles. The pre-flight asks both, so a role one of them rejects
+    is refused before anything is written — not after the weather landed."""
+    org = await _org(db_session, phone="+573000000026")
+
+    def refuse(role: Role) -> None:
+        raise TelemetryInsufficientRoleError(role)
+
+    monkeypatch.setattr(loader, "ensure_can_write_telemetry", refuse)
+
+    response = _client().post("/dev/scenarios/el-nino:load", json={}, headers=_auth(org))
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/problem+json")
+    weather_rows = (
+        await db_session.execute(text("SELECT count(*) FROM weather_daily"))
+    ).scalar_one()
+    assert weather_rows == 0, "the refused load wrote no weather"

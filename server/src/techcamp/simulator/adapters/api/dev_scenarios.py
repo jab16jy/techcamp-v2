@@ -164,6 +164,15 @@ async def load_scenario_route(
             title="Scenario contract is broken",
             detail=f"The scenario {name!r} does not satisfy its own contract.",
         ) from error
+    except OSError as error:
+        # A file the library cannot open — a permission the operator has to
+        # fix — is the library's problem too, and it answers the same way
+        # instead of escaping as a traceback.
+        raise ProblemError(
+            status=500,
+            title="Scenario cannot be read",
+            detail=f"The scenario {name!r} could not be read from the library.",
+        ) from error
     try:
         fixture = load_fixture(scenario.weather_fixture.removesuffix(".json"))
     except (OSError, ValueError) as error:

@@ -195,14 +195,14 @@ def parse_record_weather_args(argv: list[str] | None = None) -> argparse.Namespa
 
 async def record_weather_command(args: argparse.Namespace) -> None:
     """Capture the window and write the fixture the scenario library reads."""
-    name = args.name or scenario_fixture_name(args.scenario)
-    if args.lat is None or args.lon is None:
-        lat, lon = fixture_cell(name)
-    else:
-        lat, lon = args.lat, args.lon
-    out_dir = Path(args.out_dir) if args.out_dir else SCENARIOS_DIR / "weather"
-
     try:
+        name = args.name or scenario_fixture_name(args.scenario)
+        if args.lat is None or args.lon is None:
+            lat, lon = fixture_cell(name)
+        else:
+            lat, lon = args.lat, args.lon
+        out_dir = Path(args.out_dir) if args.out_dir else SCENARIOS_DIR / "weather"
+
         recorded = await record_weather(
             scenario=args.scenario,
             name=name,
@@ -216,8 +216,9 @@ async def record_weather_command(args: argparse.Namespace) -> None:
             force=args.force,
         )
     except RecorderError as error:
-        # A refusal the recorder states — the fixture is already recorded, the
-        # window is too short, the scenario pins no fixture — is a message the
+        # Every refusal the recorder states — the scenario is not in the
+        # library, it pins no fixture, there is no cell to read, the fixture is
+        # already recorded, the window is too short — is a message the
         # operator reads, not a stack trace.
         raise SystemExit(str(error)) from error
     print(f"[sim] recorded {recorded.path}")

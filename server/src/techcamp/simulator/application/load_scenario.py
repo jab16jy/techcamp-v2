@@ -54,6 +54,7 @@ from techcamp.identity.domain.models import Role
 from techcamp.telemetry.application.manage_nodes import claim_node, rotate_credentials, update_node
 from techcamp.telemetry.application.ports import NodeRepository
 from techcamp.telemetry.domain.models import NodeStatus
+from techcamp.telemetry.domain.models import ensure_can_write as ensure_can_write_telemetry
 
 from ..scenario_library import WeatherFixture
 from ..scenario_schema import Scenario
@@ -432,7 +433,14 @@ async def load_scenario(
     # lands before the parcel does, so a refusal that came from a use case
     # would already have left the shared weather rows behind. A load that is
     # refused writes nothing at all.
+    #
+    # Both modules' rules are asked, not just one: the load writes farms' rows
+    # and telemetry's, and each module states its own write roles (ADR-0002:
+    # `domain` never imports another module's `domain`, so the two rules are
+    # two functions). Today they name the same roles; the day they differ,
+    # the load still refuses before it writes.
     ensure_can_write(role)
+    ensure_can_write_telemetry(role)
 
     # The fixture lands here, after the organization and the previous load are
     # known: a request that ends in 404 must not write anything. It lands
