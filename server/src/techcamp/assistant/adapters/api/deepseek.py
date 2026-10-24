@@ -1,6 +1,8 @@
 """The `LLMClient` adapter for DeepSeek (E12 T6; ADR-0026; ADR-0007:14; H2).
 
-ADR-0026 pins `deepseek-chat` as the provisional provider and records why: the API
+ADR-0026 pinned `deepseek-chat` as the provisional provider and ADR-0028 renames
+it to `deepseek-flash` — the API retired the alias on 2026-07-24 — and records
+why the endpoint stands: the API
 is OpenAI-compatible, so `POST /chat/completions` with `stream: true` speaks
 `Authorization: Bearer`, one `data:` line per chunk, a `delta.content` piece per
 chunk and `data: [DONE]` to close — and the **last** chunk carries `usage`, which

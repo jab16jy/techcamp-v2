@@ -391,6 +391,26 @@ has **no line budget** (AGENTS.md: *never shrink a diff to fit one*).
   exact-term questions fail (ADR-0008:19). ~150 of doc, plus human grading time. **Route: owner for the
   grading, parent for the docs**; the harness that replays the 30 questions against a fixed corpus is
   delegated and lands with T8's first commit. **Depends T5.** Parallel with T6 and T7.
+  - **T8 plan (lane `e12-t8`, 2026-10-08).** Two work units. **U1 — the harness and its fixtures,
+    own commit, before any verdict:** a deterministic replay of the closed 30-question set over the
+    pinned fixture corpus, through the *real* `retrieve_fragments` and the *real* `build_prompt`, with
+    `SeminarHashEmbedder` and a `FakeKnowledgeRepository` seeded from `load_corpus`/`chunk_text`.
+    The harness **produces the graded input and nothing else**: no score, no threshold, no verdict —
+    those are owner work (Open question 1) and a structural guard asserts their absence from the
+    report shape. **U2 — the docs**, which needs the verdict and therefore waits for the owner.
+  - **U2 landed (2026-10-23), con las decisiones delegadas:** el dueño delegó las Open questions 1 y
+    2 ("usa las decisiones que tengan sentido con el épico 12 y los docs") y fijó el proveedor V4
+    Flash. [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+    cierra las dos: proveedor `deepseek-flash` sin thinking con precios reales y tarjeta COP (TRM
+    3.185,01, 2026-10-23), umbral fijado antes de la corrida, política de licencia del corpus,
+    pin de embedding confirmado **sin** migración y búsqueda híbrida **sin** adoptar. [docs/02:78](../docs/02-estimaciones.md)
+    deja la referencia Haiku; [docs/README:68](../docs/README.md) cambia el pendiente de
+    "proveedor" a "corrida graduada + firma de la lista del corpus". Lo que queda de T8 es trabajo del
+    dueño: correr y calificar las 30 preguntas, y firmar la lista de documentos.
+  - **Surface deviation, flagged and not resolved here:** the brief's own *Done means* requires
+    "ODD updated (checkbox + Review entry)", but `odd/tasks/**` is absent from its *Allowed edit
+    surfaces*. Read as: the done-criterion authorizes this one file. Nothing outside the five listed
+    surfaces plus this feature doc is touched.
 
 - [ ] **T9 — Close**: `just gate-full` **once** on a clean database, follow-up issues for every
   non-blocking RDD finding, the delivery plan (chained-to-main PRs, one per work unit, `size:exception`
@@ -534,8 +554,17 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
    Caribbean questions, graded by an agronomist on accuracy, citations and clarity) but no doc states
    what score promotes a provider. Fix the threshold **before** the run or T8 has no verdict. Pin a
    provisional provider now for D-T12.2's dimension; T8 confirms or rewrites the column.
+   **DECIDIDA — dueño, delegada el 2026-10-23:** [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md).
+   Proveedor `deepseek-flash` (DeepSeek-V4.1-Flash) sin thinking —el alias `deepseek-chat` se retiró
+   de la API el 2026-07-24—; pin de embedding confirmado **sin** migración de dimensión; umbral
+   fijado antes de la corrida: ≥ 27/30 correctas y tres descalificadores de uno solo (cita fabricada,
+   hecho contradicho, respuesta peor que la degradada).
 2. **Corpus licence.** ADR-0008:32 requires review before migration. Which guides may be included, and
    who signs it off? T3 loads only fixtures until this is answered.
+   **DECIDIDA — dueño, delegada el 2026-10-23:** la política está en [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md):
+   solo CC-BY 4.0 o más permisiva, CC-BY-SA y dominio público; fuera NC, ND y sin licencia. La
+   **lista de documentos concretos** la firma el dueño al recolectarlos; con la lista firmada, T3
+   carga el corpus real.
 3. **Retention and deletion of `conversation` / `message`.** Undecided anywhere. Relevant to
    `DELETE /me` (docs/04:36) and to the fact that an assistant transcript is the user's own words.
 4. **Membership check beyond `CurrentUserId`.** Does `POST /assistant/messages` need more than the
@@ -665,6 +694,18 @@ T0 resolves all six in the same work unit as the doc change. Numbering is preser
     `e69d405` la copia; 11 archivos/202 líneas) → `assess` responde `risk: medium`,
     `review_due: false`, `review_due_reason: under_budget`: queda **pendiente en el corte**, sin
     recibo que quemar y sin fabricar uno.
+
+- **T8 — `review-3c128bea98f8df25` — aprobado y reconocido (solo el corte de hermeticidad).**
+  Target `sha256:43b7c307…` (2 archivos/26 líneas, medium), lente `review-reliability`, **0 hallazgos**.
+  Recibo quemado con `gentle-ai.review-acknowledged/v1`, `authority: burned` (2026-10-23). El corte
+  revisado es `d7cf535` con `--base-ref` en su padre `6d429bc`: la lección de la sesión del 2026-10-08
+  (el candidato resolvía la lane entera sin base explícita) quedó aplicada y el candidato llegó
+  acotado a la unidad. **El resto de T8 no quema recibo por decisión de alcance del dueño
+  (2026-10-23):** la verificación técnica es del agente `gentle-ai-verify` y el review RDD se usa solo
+  cuando el veredicto lo pida; el verify del 2026-10-23 (abajo) volvió sin bloqueadores, así que no se
+  abrieron más lineages. Un lineage abierto por error bajo la lectura por-commit
+  (`review-44c48cffdf1c9ab0`, sin lentes ni resultados) queda en-flight sin autoridad capturada, igual
+  que los `reviewing` huérfanos de rondas anteriores; nada está aprobado ni quemado en él.
 
 Per work-unit commit: `gentle-ai review assess` against the previous reviewed
 boundary, one lineage per unit, blocking findings in a bounded correction, non-blocking ones to one
@@ -1202,14 +1243,92 @@ lineage; no approved receipt means *not reviewed*, never approved.
   - Tras el merge se eliminan la base de datos del worktree `e12-t7` (`just db-down`) y el propio
   worktree; los shas de la lane quedan alcanzables desde la rama del épico.
 
+- 2026-10-23 — **T8 U1 (el arnés) cerrado, corregido y verificado.**
+  La lane lleva seis unidades: `6915f99` (set cerrado de 30 preguntas), `d5316ce` (pin del corpus por
+  digest), `cefb763` (replay por el `retrieve_fragments` y el `build_prompt` reales), `6d429bc`
+  (reporte de evidencia para calificar, sin score/threshold/verdict), y dos de esta sesión:
+  `d7cf535` (hermeticidad) y `d8d3c31` (sonda de barrido).
+  - **Hermeticidad, con RED y GREEN observados (hallazgo de la sesión del 2026-10-08, confirmado).**
+    Con `TECHCAMP_KB_CORPUS_DIR` exportado —el switch del dueño para la revisión de licencia, leído
+    por `pin_corpus()` a la hora de la llamada—, el arnés en `6d429bc` falla: 4 tests (pin, digests,
+    chunk count, digest del artefacto; con una copia idéntica fallan 2, con un directorio vacío, 20).
+    El guard que ya existía en `test_kb_ingest_job.py:105-113` (fixture autouse con
+    `monkeypatch.delenv`) se copió a un `conftest.py` del paquete, y el suite pasa verde con la
+    variable exportada. El comentario del end-to-end que asumía "unset in the test run" ahora nombra
+    al conftest.
+  - **Recibo del corte:** `review-3c128bea98f8df25`, lente `review-reliability`, 0 hallazgos, quemado
+    (ver entrada de Review).
+  - **Verificación técnica (agente `gentle-ai-verify`, contrato ODD, 2026-10-23), sobre la lane
+    completa con base `88268d6`:** sin bloqueadores. Todos los ítems de U1 **met** con evidencia
+    propia (33 sondas: pin repetido igual; dos ciclos seed+replay renderizan byte-idéntico;
+    30 preguntas con ids y textos únicos; textos de `EvalSetError` exactos en 8 negativos;
+    `CorpusPinError` al mutar bytes tras el pin; ≤5 fragmentos, similitudes ≥ 0.75, citas deduplicadas,
+    prompt `[system, user, user, user]` terminando en la pregunta del productor; sin campo con forma
+    de grade y sin `LLMClient` alcanzable). U2 **not implemented — esperado**: espera las Open
+    questions 1 y 2 del dueño, no es bloqueador de U1. Nota del verificador: en `88268d6` el paquete
+    eval no existe todavía, así que el árbol RED de la hermeticidad es `6d429bc`. **Advisories (sin
+    ronda de corrección):** (a) con `SeminarHashEmbedder` las 30 preguntas recuperan 0 fragmentos y 0
+    citas —medido y documentado por el propio arnés
+    (`test_the_stand_in_reaches_no_fragment_above_the_floor`, `test_corpus_pin.py:286`)—, así que la
+    corrida graduada necesita el modelo de ADR-0026, no el stand-in; (b) no hay artefacto de
+    resultados commiteado (la superficie lo permite; el arnés renderiza a demanda; no es violación).
+  - **Sonda dura promovida (`d8d3c31`):** el barrido set-wide que el verify devolvió como regresión —
+    las 30 preguntas deben respetar `RETRIEVAL_TOP_K`, el piso de `SIMILARITY_FLOOR` y el orden
+    `[system, user, user, user]` de D-T12.6, con el último mensaje terminando en la pregunta.
+    `just gate server/tests/assistant/eval` → **97 passed**.
+
+- 2026-10-23 — **T8 U2 (los docs del proveedor) aterrizada con las decisiones delegadas.** El dueño
+  delegó las Open questions 1 y 2 ("usa las decisiones que tengan sentido con el épico 12 y los
+  docs") y fijó el proveedor: DeepSeek V4 Flash / V4.1 Flash. Verificado con ctx7 el mismo día
+  (`/websites/api-docs_deepseek`, oficial): **`deepseek-chat` se retiró de la API el 2026-07-24**;
+  la tabla vigente lista `deepseek-flash` (V4.1-Flash) y `deepseek-v4-pro`, el thinking viene
+  activado por default y se apaga con `thinking: {"type": "disabled"}`, y los precios por millón son
+  input cache-miss $0.15/$0.30 (off-peak/peak), cache-hit $0.003/$0.006, output $0.60/$1.20. La TRM
+  del día es COP 3.185,01/USD (Banco de la República).
+  - **[ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md) (nueva) cierra las cuatro decisiones:**
+    (1) LLM `deepseek-flash`, una llamada, thinking desactivado —el LLM explica, no decide
+    (ADR-0007)—, con la tarjeta COP conservadora (peak, cache miss): input 955,50 y output 3.822,01
+    por millón; (2) pin de embedding **confirmado sin migración** — la única evidencia en contra es
+    del stand-in, que no recupera nada y no mide el modelo real; (3) **umbral de la evaluación fijado
+    antes de la corrida**: ≥ 27/30 correctas y tres descalificadores de uno solo (cita fabricada,
+    hecho contradicho, peor que la degradada — la línea base de ADR-0019); (4) **política de
+    licencia**: CC-BY 4.0 o más permisiva / CC-BY-SA / dominio público; fuera NC, ND y sin licencia;
+    la lista de documentos la firma el dueño al recolectarlos. La búsqueda híbrida **no se adopta**:
+    su disparador (ADR-0008:19) exige la corrida graduada.
+  - **Docs dueños actualizados:** [docs/02:78](../docs/02-estimaciones.md#costo-del-llm) reemplaza la
+    referencia Haiku (≈ USD 10/día) por los números reales (≈ USD 0,45–0,90 con caché, ≈ USD 2,75
+    peor caso); [docs/README:68](../docs/README.md) cambia el pendiente de "proveedor" a "corrida
+    graduada contra el umbral + firma de la lista del corpus"; el índice de ADRs registra la 0028.
+  - **Cableado que el propio código dejó a T8** (`deps.py:245`: "The production rate card is wired
+    in E12 T8"), aterrizado como unidad propia (`75d7fb4`) sobre la lane ya refrescada con el épico
+    (`bcf0668`, el merge que trae el cliente y el config de T6; conflicto único del doc resuelto a
+    mano): la tarjeta de producción sirve `deepseek-flash` a las tarifas conservadoras de ADR-0028
+    (`Decimal("955.50")` / `Decimal("3822.01")` COP por millón), el default de `TECHCAMP_LLM_MODEL`
+    renombra el alias retirado, y la única llamada del asistente va con `thinking` desactivado. RED
+    observado (3 fallos: el default, la 503 de la tarjeta, `KeyError: 'thinking'`), GREEN en
+    `just gate server/tests/assistant` → **559 passed**.
+  - **Verificación independiente del cableado (segunda pasada de `gentle-ai-verify`, 2026-10-23):
+    0 bloqueadores.** RED re-derivado de primera mano sobre el baseline; los siete ítems de ADR-0028
+    **met** con sondas propias (tarjeta exacta, fail-closed end-to-end con frame de error que nombra
+    el modelo sin precio, contrato de stream intacto, seminario local en cero). El caveat que T6 dejó
+    escrito —el 503 del tope malformado quedaba tapado por el 503 de precios— queda **desenmascarado
+    y observado en ambos árboles**: producción con tope malformado ahora responde "budget cap
+    misconfigured". Advisory único, pre-existente y a [#319](https://github.com/jab16jy/techcamp-v2/issues/319)
+    (`review-follow-up` de la ronda): los dobles web aún nombran `'deepseek-chat'` como cadena de
+    display. Sondas duras de la ronda promovidas a regresiones (`2fcc695`, `Refs #319`).
+
 ## Next step
 
 **T1, T2, T4, T5, T6 y T7 están cerrados.** T6 entró completo en la rama del épico (`e40f634`) con su
 verificación independiente y sus cuatro commits de corrección. T7 se cierra aquí: recibo propio
 (`review-45c3ada4ce1f77c4`), la ruta `mas/asistente` que le faltaba (`f41e320`) y la copia del
-asistente en `components/` (`e69d405`). Lo que queda del épico es **T8** —que no espera código sino
-dos decisiones del dueño: el umbral de la evaluación y la licencia del corpus— y **T9**, el cierre con
-`just gate-full` una sola vez, los issues de seguimiento y los PRs en rebanadas a `main`.
+asistente en `components/` (`e69d405`). **T8 está aterrizada en la lane** (2026-10-23): U1, el arnés,
+verificado sin bloqueadores, y U2, los docs, con las decisiones delegadas del dueño en
+[ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md). Lo que
+queda de T8 es del dueño: correr y calificar las 30 preguntas contra el umbral de ADR-0028 con el
+embedding y el corpus reales, y firmar la lista de documentos del corpus — T3 carga el corpus real en
+cuanto la lista exista. Después, **T9**, el cierre con `just gate-full` una sola vez, los issues de
+seguimiento y los PRs en rebanadas a `main`.
 
 **Lo que T5 deja abierto, en orden de quien lo tiene que resolver:**
 
@@ -1225,8 +1344,9 @@ dos decisiones del dueño: el umbral de la evaluación y la licencia del corpus�
    El 0 del seminario no es un placeholder: ADR-0021 corre todo localmente, así que un modelo dentro
    del proceso no tiene factura, y D-T12.1 acepta `cost_cop = 0` para una llamada que sí ocurrió y no
    costó nada. El cliente DeepSeek y sus claves ya están (`22e3738`: la clave se lee por llamada, no
-   se enlaza al cliente, y un stream sin `usage` termina en conteos cero). Lo que falta es la tarjeta
-   real, y esa es de T8, no una decisión.
+   se enlaza al cliente, y un stream sin `usage` termina en conteos cero). La tarjeta real quedó
+   cableada el 2026-10-23 (`75d7fb4`, ADR-0028): `deepseek-flash` a 955,50 / 3.822,01 COP por millón,
+   conservadora (peak, cache miss).
 
 Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
 
@@ -1235,17 +1355,20 @@ Lo demás que queda es decisión del dueño, y ninguna bloquea a T6:
    quedan alineadas (`ADR-0007:5` y `ADR-0021:30`: lo que cambia por perfil es el **tope** de
    presupuesto, no el límite diario). Si algún día se revierte a solo-`production`, esa fila y esas
    dos ADR cambian otra vez.
-2. **Open question 1: el umbral de la evaluación de T8.** Ningún documento dice qué puntaje promueve un
-   proveedor; hay que fijarlo **antes** de correr las 30 preguntas. T8 cierra `docs/README.md:68` y
-   escribe los precios reales en `docs/02:78`.
-3. **Open question 2: la revisión de licencia del corpus** ([ADR-0008:32](../docs/adr/0008-rag-pgvector.md)).
-   T3 carga solo fixtures hasta que responda.
+2. **Open question 1: el umbral de la evaluación de T8 — DECIDIDA (delegada por el dueño, 2026-10-23).**
+   [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md) fija el
+   umbral antes de la corrida (≥ 27/30, tres descalificadores) y `docs/README.md:68` y `docs/02:78`
+   quedaron actualizados.
+3. **Open question 2: la revisión de licencia del corpus — DECIDIDA (delegada por el dueño, 2026-10-23).**
+   La política está en [ADR-0028](../docs/adr/0028-proveedor-asistente-deepseek-flash-y-umbral-de-evaluacion.md)
+   (CC-BY 4.0 o más permisiva; fuera NC/ND/sin licencia); T3 carga el corpus real cuando el dueño
+   firme la lista de documentos.
 4. **Los 315 líneas del corte 3 (`349ac8a..7a81758`) siguen `under_budget`:** sin revisión debida y
    sin recibo. Cerrarlo con recibo exige una decisión explícita del dueño (revisión independiente de
    ese rango); no se reinicia por cuenta propia ni se fabrica un recibo.
 
-En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5, T6 y T7** hechos; **T8** pendiente de
-las decisiones del dueño; **T9** al final.
+En el orden de [Lanes](#tasks): **T1 → T2 ‖ T4** hechos; **T5, T6 y T7** hechos; **T8** aterrizada
+(U1 verificado, U2 con ADR-0028; queda la corrida graduada y la firma del dueño); **T9** al final.
 Nada en este épico necesita un cambio de código antes de eso: `techcamp.assistant` ya está en la lista
 blanca de `import-linter`, CI ya vigila `server/**` y `web/**`, la imagen del seminario ya tiene
 `vector`, y ningún otro módulo se tiene que mover para que E12 arranque.

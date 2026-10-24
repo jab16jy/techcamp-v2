@@ -6,13 +6,13 @@ so they are built **inside** the route's own short-lived one (D-T12.4). What is
 left for FastAPI to resolve are the three things that do not: the `LLMClient`,
 the `Embedder` and the price table.
 
-**Nothing here talks to a provider, and that is deliberate.** ADR-0026 pins
-`deepseek-chat` as the provisional provider and says its real prices are T8's to
-write into docs/02:78; the API keys belong to `shared/config.py`, which is T6's
-surface (the feature doc's T6 row). So this task wires the *seam*: the seminar
-profile gets deterministic local stand-ins, exactly as `telemetry/adapters/jobs.py`
-already does with `SeminarHashEmbedder` for the corpus, and the production
-profile answers `503` with a title that says the provider is not configured.
+**Nothing here talks to a provider, and that is deliberate.** ADR-0026 pinned
+`deepseek-chat` provisionally and left the real prices to T8; ADR-0028 confirmed
+the provider as `deepseek-flash`, wired the production rate card into
+`get_prices`, and left the API keys to `shared/config.py` (T6's surface, the
+feature doc's T6 row). The seminar profile still gets deterministic local
+stand-ins, exactly as `telemetry/adapters/jobs.py` already does with
+`SeminarHashEmbedder` for the corpus.
 
 `SeminarHashEmbedder` is **reused**, not re-implemented: the corpus vectors were
 built with it, so a question embedded by a different embedder would be compared
@@ -99,6 +99,11 @@ class HttpChatCompletionTransport:
                 {"role": message.role.value, "content": message.content} for message in messages
             ],
             "stream": True,
+            # ADR-0028: the assistant's one call explains facts the system already
+            # computed and decides nothing (ADR-0007), so the request turns off the
+            # thinking mode DeepSeek defaults to — reasoning here would cost four
+            # times the output tokens to answer a question nobody asked.
+            "thinking": {"type": "disabled"},
             # DeepSeek bills prompt and completion separately (docs/02:78's
             # formula) and puts both counts on the last chunk; this option is what
             # makes it send that chunk at all.
@@ -137,7 +142,7 @@ def _httpx_transport() -> HttpChatCompletionTransport:
 SEMINAR_MODEL = "seminar-local"
 """The stand-in's model name, deliberately **not** a provider's: an answer in the
 transcript has to say which model produced it (D-T12.1), and a name a deployment
-could be mistaken for `deepseek-chat` would be a false record."""
+could be mistaken for `deepseek-flash` would be a false record."""
 
 SEMINAR_ANSWER = (
     "En el perfil seminario el asistente no llama a ningún proveedor: esta respuesta la "
@@ -246,17 +251,22 @@ def get_prices() -> PriceTable:
     """The rate card of the profile (D-T12.3; `adapters.api.pricing`).
 
     The seminar stand-in bills nothing, and a local model genuinely costs zero
-    pesos — which D-T12.1 accepts for a call that came free. The production card is
-    T8's to fill with ADR-0026's real prices and to confirm in docs/02, which is why
-    T6 wires the seam and not the figures.
+    pesos — which D-T12.1 accepts for a call that came free. The production card
+    is the one ADR-0028 owes the seam: `deepseek-flash` at the conservative rates
+    — peak, cache miss — converted at the decision day's TRM, so a recorded
+    `cost_cop` never undercuts the invoice. An operator who points
+    `TECHCAMP_LLM_MODEL` somewhere else gets `UnknownModelPriceError`, which is
+    the fail-closed rule: prices travel with the model they were read for.
     """
     if is_seminar_profile():
         return {SEMINAR_MODEL: ModelPrice.local(SEMINAR_MODEL)}
-    raise ProblemError(
-        status=503,
-        title="Assistant prices not configured",
-        detail="The production rate card is wired in E12 T8 with the provider's real prices.",
-    )
+    return {
+        "deepseek-flash": ModelPrice(
+            model="deepseek-flash",
+            input_cop_per_million=Decimal("955.50"),
+            output_cop_per_million=Decimal("3822.01"),
+        )
+    }
 
 
 def get_budget_cap() -> Decimal | None:

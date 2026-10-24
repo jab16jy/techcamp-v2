@@ -42,11 +42,14 @@ LLM_BASE_URL_ENV = "TECHCAMP_LLM_BASE_URL"
 LLM_MODEL_ENV = "TECHCAMP_LLM_MODEL"
 
 LLM_BASE_URL_DEFAULT = "https://api.deepseek.com"
-"""ADR-0026's provisional provider: DeepSeek's OpenAI-compatible endpoint, pinned
-for the cost formula and the streaming shape. The real prices of `deepseek-chat`
-are T8's, which is why the model name is the only other thing configured here."""
+"""DeepSeek's OpenAI-compatible endpoint, pinned by ADR-0026 for the cost formula
+and the streaming shape and confirmed by ADR-0028, whose rate card is the one
+`get_prices` serves. The model name is the only other thing configured here."""
 
-LLM_MODEL_DEFAULT = "deepseek-chat"
+LLM_MODEL_DEFAULT = "deepseek-flash"
+"""ADR-0028: the confirmed model, DeepSeek-V4.1-Flash, called without thinking.
+The retired `deepseek-chat` alias pointed here in non-thinking mode until the API
+removed it on 2026-07-24, so the name, not the provider, is what changed."""
 
 
 def llm_api_key() -> str | None:
