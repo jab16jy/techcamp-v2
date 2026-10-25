@@ -6,3 +6,4 @@
 # channel name the generic-api-key rule misreads as a credential; introduced by
 # the already-pushed 159ab5e, so a fingerprint, not a `# gitleaks:allow`.
 159ab5e020a2faa68cc29a1ec8d6754ff218e1d6:server/tests/simulator/test_scenario_load.py:generic-api-key:125
+31d006c8b6a2e576e5168259c5a1c2f4009b7044:server/tests/simulator/test_scenario_load.py:generic-api-key:148
