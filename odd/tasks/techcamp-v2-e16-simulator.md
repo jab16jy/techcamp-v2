@@ -206,11 +206,12 @@ shrink a diff to fit one*).
   wirings + e2e assertions, floor ~400. **Route: delegated** (trigger:
   writer; scenario assembly). **Depends T2, T3, T5.** Implemented 2026-10-25
   on `e16-t6` (evidence below).
-- [ ] **T7 — Scenario D (PWA offline) e2e.** Offline logbook + sync without
+- [x] **T7 — Scenario D (PWA offline) e2e.** Offline logbook + sync without
   duplicates on top of E8 (C5: assert, do not rebuild); airplane-mode flow
   through the harness. Forecast: 1 e2e + fixtures, floor ~250. **Route:
   delegated** (trigger: writer; web-adjacent e2e). **Depends T5, T6.**
   Parallel with nothing (shares the harness with T6's tail — sequential).
+  Implemented 2026-10-25 on `e16-t7` (evidence below).
 - [ ] **T8 — Close.** `just gate-full` **once** on a clean database,
   follow-up issues for every non-blocking RDD finding, delivery plan
   (chained-to-main PRs, one per work unit, `size:exception`), epic close.
@@ -629,6 +630,58 @@ commit is a passive doc-only candidate (C6).
   the real silence out before deferring the health sweep. The node row now
   carries the scenario's own `interval_s` in BOTH provisioning paths (the
   loader hardcoded 900).
+- 2026-10-25: **T7 implemented** on branch `e16-t7` (base `e16-t6` @
+  `180ab21`), three work units: `e1aec01` (the wiring fix the documented flow
+  needed — D-T16.14 below, with its routes test), `8f83779` (the harness
+  reads the server's sync surface: `pullSyncPage` over `GET /sync/pull` and
+  `liveLogbookEntries`, the count un-deduplicated so a real duplicate fails
+  it — the pure half unit-tested), `ec894ce` (`offline-farmer.spec.ts` —
+  signIn → Bitácora → airplane mode via `context.setOffline` → the Nueva
+  entrada sheet saves an Observación offline → back online the UI says
+  "Sincronizado" and `GET /sync/pull` holds exactly one live row for the
+  plot, marked `created_offline`; a second sync run leaves the count at one;
+  plus `plotName` for the sheet's Parcela select, and the docs/06 rule
+  amendment in the same unit). No CI edit: D-T16.4's split runs A+E per PR
+  and every scenario nightly, and D is neither, so the spec carries no
+  `@pr` tag. Verified per unit — `just gate web/src/app/routes.test.tsx`
+  (15 passed), the harness units (11 passed), `just gate` statics green on
+  every commit — and the scenario gate LIVE: `offline-farmer` passed in
+  8.4 s on its first run; in the same run E, normal and B passed and C was
+  correctly skipped outside the nightly. **A failed (3/3 across two clean
+  stack restacks) — T7 finding below, it belongs to T6's lane.**
+- T7 decisions (2026-10-25, same work unit as the docs/06 amendment):
+  **D-T16.14** — the checker applies to D as-is (the empty `expected` judged
+  both ways; nothing new for the grammar), and the no-duplicates assertion
+  rides ADJACENT to the oracle, against the API and not the phone:
+  `GET /sync/pull` counts exactly one live row of the plot, marked
+  `created_offline`, and a second sync run leaves the count at one (C5: the
+  sync is E8's, the e2e only asserts it). **The lane finding that forced a
+  code fix:** the documented flow (docs/07:125, Bitácora → Nueva entrada)
+  could not save — `BitacoraTab` mounted `LogbookScreen` without the
+  `plots` prop, so the sheet's Parcela select was empty and `validate()`
+  died in "Selecciona una parcela." (E8's own tests pass `plots={PLOTS}`
+  directly, so only the unit tests could see the sheet work). Per
+  AGENTS.md's docs-win rule the tab now fetches the org's farms and plots
+  and feeds the screen — the same `app/` composition the visits sheet gets
+  in PlotsTab (E8 D14) — no `features/logbook` or `lib/sync` file touched.
+- T7 findings (non-blocking, round issue): **the el-nino e2e's outbox step
+  is unwinnable as wired — 3/3 failures across two clean stack restacks
+  (fresh api/worker/ingestor/mosquitto, `just scenario-clean` before each,
+  one ingestor the third time).** With seed 0, the ±0.8 noise pops above
+  θ_estrés ≈ 15.3 % keep the 6 h sustained run from completing until
+  trajectory day ≈ 12.8-13.0 (DB forensics: the truth export crosses at
+  day 10.42 and never comes back, but the noisy series has 76/48/11 samples
+  above threshold on days 9/10/11; the first clean 24-sample window ends
+  2026-10-23 12:39 and the alert opens 10-23 22:09 — day 12.92, one run at
+  23:42 — day 13.0), so D5's 48 h upgrade needs day ≈ 14.9 > the 14-day
+  window, no critical ever exists, and the escalation pages nothing — the
+  outbox poll starves. This contradicts T6's recorded live green (A 2.2 m,
+  twice) and touches no file T7 owns (`git diff e16-t6..e16-t7` is
+  web-only); the fix belongs to a T6 follow-up. Ops note for the next
+  runner: `pkill -f "techcamp.ingestor"` kills the `uv` wrapper and
+  orphans the python child — two ingestors then share the `$share` group
+  and write one log through both offsets (the sparse-file symptom). Kill
+  the python PID (or the process group) and count survivors before a run.
 - T5 verification (2026-10-24, independent, default subagent — the
   `gentle-ai-verify` provider was blocked again, as in T4): **PASS-WITH-
   FINDINGS, 0 blocking**, all 8 claims PASS (scope, named timing, glue-only
