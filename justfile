@@ -201,6 +201,14 @@ gate *paths: gate-fast
           echo "--- pytest $path"
           (cd "$_worktree" && uv run --locked --project ml pytest "$path")
           ;;
+        web/e2e/*)
+          # The scenario harness (E16 T5): Playwright runs the spec you name —
+          # e.g. `just gate web/e2e/scenarios`. It needs the seminar stack up
+          # (api + worker + this worktree's database) and the browsers
+          # installed once (`npx playwright install chromium` in web/).
+          echo "--- playwright $path"
+          (cd "$_worktree/web" && npx playwright test "${path#web/}")
+          ;;
         web/*)
           echo "--- vitest $path"
           (cd "$_worktree/web" && npm test -- --run "${path#web/}")
