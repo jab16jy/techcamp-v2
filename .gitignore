@@ -36,3 +36,6 @@ web/dist/
 .claude/*
 !.claude/skills/
 .codegraph/
+# `sim run`'s noiseless-truth exports (D-T16.7) default to the cwd: every
+# scenario e2e run regenerates them, so they are run artifacts, never source.
+server/*-truth.json
