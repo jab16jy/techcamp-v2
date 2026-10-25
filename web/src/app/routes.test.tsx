@@ -1,4 +1,5 @@
-import { fireEvent, render, waitFor } from '@testing-library/react'
+import 'fake-indexeddb/auto'
+import { fireEvent, render, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -525,5 +526,99 @@ describe('shell wiring (ADR-0005, synchronizer lifecycle)', () => {
     )
 
     expect(triggers.startSynchronizer).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * D-T16.14: docs/07:125 hangs "Nueva entrada" off the Bitácora screen, and the
+ * sheet's Parcela select is the screen's own `plots` prop — the tab has to be
+ * the one that feeds it, the way the visits sheet is composed into
+ * PlotsScreen (E8 D14). Without it the select is empty and every save dies in
+ * "Selecciona una parcela.", which the scenario D e2e (E16 T7) would assert
+ * as the documented airplane-mode flow.
+ */
+describe('the Bitácora tab feeds the Nueva entrada sheet its plots (D-T16.14)', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof Request ? input.url : String(input)
+        if (url.includes('/api/v1/me/tray')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (/\/api\/v1\/farms\/[0-9a-f-]+\/plots/.test(url)) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: '018f0c2a-0000-7000-8000-00000000d001',
+                org_id: 'org-1',
+                farm_id: '018f0c2a-0000-7000-8000-00000000f001',
+                name: 'Lote El Ceibal',
+                area_ha: 1.5,
+              },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        if (url.includes('/api/v1/farms')) {
+          return new Response(
+            JSON.stringify({
+              items: [
+                {
+                  id: '018f0c2a-0000-7000-8000-00000000f001',
+                  org_id: 'org-1',
+                  name: 'Finca El Ceibal',
+                  municipality_code: '05001',
+                  location: 'POINT(-75.0 10.4)',
+                  technician_id: null,
+                },
+              ],
+              next_cursor: null,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+  })
+
+  afterEach(() => {
+    clearSession()
+    localStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  it('offers the org’s plots in the Nueva entrada sheet (docs/07:125)', async () => {
+    setSession('token-prod', 'org-1')
+    saveMeSeed('token-prod', {
+      id: 'prod-1',
+      phone: '+573001234568',
+      email: null,
+      full_name: 'Productor',
+      memberships: [{ org_id: 'org-1', role: 'producer' }],
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const router = createMemoryRouter(buildRoutes(null), { initialEntries: ['/bitacora'] })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    // Empty logbook: the header button and the empty-state CTA share the name.
+    const newButtons = await screen.findAllByRole('button', { name: 'Nueva entrada' })
+    fireEvent.click(newButtons[0] as HTMLButtonElement)
+
+    const plotSelect = await screen.findByLabelText('Parcela')
+    expect(within(plotSelect).getByRole('option', { name: 'Lote El Ceibal' })).toBeInTheDocument()
   })
 })

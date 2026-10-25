@@ -10,6 +10,8 @@ import { buttonVariants } from '../design-system/ui/button'
 import { ChevronDownIcon } from '../design-system/ui/icons'
 import { cn } from '../design-system/ui/utils'
 import { useActiveOrgRole, useMe } from '../lib/api/me'
+import { useFarms, usePlotsByFarm } from '../lib/api/farms'
+import { useOrgId } from '../lib/api/session'
 import { PlaceholderPage } from './PlaceholderPage'
 
 // React.lazy keeps Dexie and logbook/visits out of the initial bundle (RNF-02 ≤ 200 kB).
@@ -104,9 +106,20 @@ function EstadoRoute() {
 
 // eslint-disable-next-line react-refresh/only-export-components -- route tab wrapper lives with routes
 function BitacoraTab() {
+  // The Nueva entrada sheet reads the screen's `plots` prop (D-T16.14): the
+  // tab fetches the org's farms and plots here — the same composition the
+  // visits sheet gets in PlotsTab (E8 D14) — so the Parcela select has the
+  // plots docs/07:125 promises before the producer saves offline.
+  const orgId = useOrgId()
+  const farmsQuery = useFarms(orgId)
+  const farmIds = farmsQuery.data?.farms.map((farm) => farm.id) ?? []
+  const plotsQueries = usePlotsByFarm(farmIds)
+  const plots = plotsQueries.flatMap((query) =>
+    (query.data ?? []).map((plot) => ({ id: plot.id, name: plot.name })),
+  )
   return (
     <Suspense fallback={null}>
-      <LogbookScreen />
+      <LogbookScreen plots={plots} />
     </Suspense>
   )
 }
