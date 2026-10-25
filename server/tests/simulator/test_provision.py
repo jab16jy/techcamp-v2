@@ -9,6 +9,7 @@ the DB session, rather than inventing a new HTTP endpoint."""
 
 from __future__ import annotations
 
+import asyncio
 import re
 import subprocess
 import sys
@@ -44,14 +45,22 @@ asyncio.run(main())
 """
 
 
-def test_provision_works_in_a_plain_process_and_not_only_under_pytest() -> None:
+async def test_provision_works_in_a_plain_process_and_not_only_under_pytest(
+    db_session: AsyncSession,
+) -> None:
     """D4: `--provision` raised `NoReferencedTableError` outside pytest, because
     only Alembic's `migrations/env.py` imported the farms/identity ORM modules
     that register the foreign-key targets. The test suite migrated the schema
     before every test body, so that import had always happened for it. A
     subprocess is the only honest reproduction: in-process, Alembic's metadata
-    is already loaded no matter what `provision` imports."""
-    result = subprocess.run(
+    is already loaded no matter what `provision` imports.
+
+    `db_session` is never used in the body: its teardown is the cleanup. The
+    subprocess commits its own org, farm, plot and an unclaimed node with its
+    own engine, and the whole-table assertion of the next test counts them
+    unless the fixture truncates after this one."""
+    result = await asyncio.to_thread(
+        subprocess.run,
         [sys.executable, "-c", _PROVISION_IN_A_PLAIN_PROCESS],
         capture_output=True,
         text=True,
