@@ -212,10 +212,11 @@ shrink a diff to fit one*).
   delegated** (trigger: writer; web-adjacent e2e). **Depends T5, T6.**
   Parallel with nothing (shares the harness with T6's tail — sequential).
   Implemented 2026-10-25 on `e16-t7` (evidence below).
-- [ ] **T8 — Close.** `just gate-full` **once** on a clean database,
+- [x] **T8 — Close.** `just gate-full` **once** on a clean database,
   follow-up issues for every non-blocking RDD finding, delivery plan
   (chained-to-main PRs, one per work unit, `size:exception`), epic close.
   Forecast: docs + evidence. **Route: parent.** **Depends T1–T7.**
+  Closed 2026-10-25 (evidence below).
 
 **Lanes.** Wave 1: T0 (parent). Wave 2: T1. Wave 3: T2 ‖ T3 (disjoint: CLI
 vs `/dev` route). Wave 4: T4. Wave 5: T5. Wave 6: T6. Wave 7: T7. Wave 8: T8.
@@ -695,3 +696,33 @@ commit is a passive doc-only candidate (C6).
   revision. The two that touch this task's own files are fixed in the
   correction commit (`2476815`, `Refs #339`); the other two stand as recorded
   in the round issue **#339**.
+- T7 verification (2026-10-25, independent, default subagent — live runs):
+  **PASS-WITH-FINDINGS, 0 blocking**, all 9 claims PASS: scope clean
+  (exactly the four web-only commits on `e16-t6` @ `180ab21`), nightly-only
+  lane with no CI/config edit, D-T16.14 in docs/06 and the spec, the
+  composition fix touching no `features/logbook` or `lib/sync` file, 26
+  vitest units green, the `offline-farmer` gate LIVE green (9.1 s after
+  `scenario-clean`, one worker and one ingestor verified by pgrep), the
+  full scenario gate consistent with the A finding (#342: 4 passed +
+  C skipped + A failing exactly as recorded), the evidence block and the
+  round issue linked, Conventional Commits without AI attribution. The
+  verification's own findings: the findings block now names the issue
+  literally (fixed in `ec4462e`, `Refs #342`), and a scenario-gate rerun
+  without `just scenario-clean` answers a misleading 404 from the loader's
+  global plot-name lookup (`load_scenario.py:432`) — recorded on #342 for
+  the loader's own follow-up.
+- 2026-10-25: **T8 closed** on `docs/e16-09-t8-close` (this commit). The
+  owner waived `gate-full` for THIS epic (2026-10-25, live decision): every
+  task's own gates ran per unit, each lane's deliverable was verified live
+  (T6's scenario gate, T7's spec + full scenario gate), and the waiver is
+  recorded here rather than silently assumed. The non-blocking findings
+  all have their round issues (#303, #333–#339, #341, #342). The delivery
+  is nine chained-to-main PRs, one per lane plus the close, cut at the
+  task-close commits so no receipt sha moves (E12's lesson): 
+  `docs/e16-01-t0-assessment` (T0), `feat/e16-02-t1-scenario-library` (T1),
+  `feat/e16-03-t2-simulator-run` (T2), `feat/e16-04-t3-dev-routes` (T3),
+  `feat/e16-05-t4-expected-checker` (T4), `feat/e16-06-t5-harness` (T5),
+  `feat/e16-07-t6-scenarios` (T6), `feat/e16-08-t7-offline-farmer` (T7),
+  `docs/e16-09-t8-close` (this). Merge order is mandatory. With the chain
+  merged, E16 is done: docs/10-dag's dependencies (E4, E5, E7) are
+  satisfied by the merged tree and E15's demo can run the scenarios.
