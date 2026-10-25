@@ -317,6 +317,65 @@ export async function readOutbox(): Promise<OutboxMessage[]> {
   return (await response.json()) as OutboxMessage[]
 }
 
+// -- the E8 sync surface (docs/04 §Bitácora) ------------------------------------
+
+/** The `data` of a pulled logbook-entry change (docs/03): the fields the
+ * scenario D assertion reads, typed loosely where the count does not care. */
+export interface SyncPullEntryData {
+  id: string
+  org_id: string
+  plot_id: string
+  kind: string
+  notes: string | null
+  created_offline: boolean
+  client_updated_at: string
+  deleted_at: string | null
+}
+
+export interface SyncPullEntryChange {
+  id: string
+  entity: 'logbook_entry'
+  op: string
+  server_version: number
+  data: SyncPullEntryData
+}
+
+/** A pulled visit change: the count does not read its payload. */
+export interface SyncPullVisitChange {
+  id: string
+  entity: 'extension_visit'
+  op: string
+  server_version: number
+  data: Record<string, unknown>
+}
+
+export type SyncPullChange = SyncPullEntryChange | SyncPullVisitChange
+
+/** `GET /sync/pull?since=&limit=` (docs/04 §Bitácora) — the page the PWA's own
+ * synchronizer applies, read here from the harness so the "syncs with no
+ * duplicates" assertion counts the server's rows, not the phone's. */
+export interface SyncPullPage {
+  changes: SyncPullChange[]
+  next_since: number
+  has_more: boolean
+}
+
+export async function pullSyncPage(token: string): Promise<SyncPullPage> {
+  const response = await apiFetch('/sync/pull?since=0&limit=500', { token })
+  return (await response.json()) as SyncPullPage
+}
+
+/** The live logbook entries one pull page carries for `plotId`: not another
+ * entity, not tombstoned. A page listing two changes for two ids on this plot
+ * is exactly the duplication scenario D must fail on, so the count is honest
+ * and nothing is deduplicated here. */
+export function liveLogbookEntries(page: SyncPullPage, plotId: string): SyncPullEntryData[] {
+  return page.changes
+    .filter((change) => change.entity === 'logbook_entry')
+    .map((change) => change.data)
+    .filter((data) => data.plot_id === plotId && data.deleted_at === null)
+}
+
 // -- the python side of the harness ---------------------------------------------
 
 async function runServerPython(args: string[]): Promise<string> {
