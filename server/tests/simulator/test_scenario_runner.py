@@ -13,7 +13,7 @@ gap completeness observes (D-T16.8, docs/06:488)."""
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -22,7 +22,7 @@ from uuid import UUID
 import pytest
 
 from techcamp.simulator.runner import NodePlan, publish_scenario_backfill, publish_scenario_live
-from techcamp.simulator.scenario_schema import Scenario, load_scenario
+from techcamp.simulator.scenario_schema import Scenario, ScenarioFault, load_scenario
 from techcamp.simulator.trajectory import (
     invert_two_point,
     ramp_value,
@@ -272,8 +272,16 @@ async def test_offline_fault_pauses_publishing_and_seq_jumps_on_resume() -> None
     `hours`; on resume `seq` jumps over the skipped ticks and the time gap —
     8 h of a 900 s interval, 32 missing readings — is what completeness
     observes. The past is never rewritten: the paused node's own `ts` series
-    stays strictly increasing, with no late fill-in of the paused window."""
-    scenario = load_scenario("node-failure")  # fault: day 4, node 2, 8 h
+    stays strictly increasing, with no late fill-in of the paused window.
+
+    The fault is the runner mechanic's own 8 h blip, re-narrowed over the
+    library's C: since the node-down scenario must still be silent when the
+    window is verified (#340's T6 follow-up), its fault covers the rest of the
+    window and never resumes inside a backfill — the resume lives here."""
+    scenario = replace(
+        load_scenario("node-failure"),
+        faults=(ScenarioFault(at_day=4, node=2, type="offline", hours=8),),
+    )
     plans = _plans(scenario)
 
     ticks = await publish_scenario_backfill(plans, scenario=scenario, days=6.0, seed=0, now=_NOW)

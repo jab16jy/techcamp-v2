@@ -17,7 +17,10 @@ trajectories:
   air_temp: { daily_min: 25, daily_max: 33, noise: 0.5 }   # bajo 35 °C: aquí no hay heat_stress
   air_rh: { daily_min: 52, daily_max: 82, noise: 0.6 }     # bajo 85 %: aquí no hay fungal_risk
 faults:
-  - { at_day: 4, node: 2, type: offline, hours: 8 }
+  # The node goes down on day 4 and stays down for the rest of the window: the
+  # story is a FAILURE, not a blip — the technician's alert is open and the
+  # completeness gap is observable when the window is verified (docs/06:477).
+  - { at_day: 4, node: 2, type: offline, hours: 240 }
 expected:
   alerts: [node_offline]
   irrigation: not_needed      # el balance sigue con el nodo 1: Dr bajo RAW

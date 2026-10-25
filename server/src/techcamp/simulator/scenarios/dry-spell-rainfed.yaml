@@ -1,9 +1,13 @@
 # Scenario E of docs/06-diseno-detallado.md:473-480: a rainfed plot with no node,
 # so the balance runs on weather alone with K = 0. The arithmetic is
 # docs/06:465-471 and test_scenario_library.py asserts it against these numbers.
+# Owner decision #340 (2026-10-25): the sowing age places the window (ages
+# 55-75) inside the catalog's mid stage (45-76), so Kc = 1.20 and the
+# docs/06:465-471 arithmetic holds; the catalog's stage lengths themselves stay
+# pending agronomic validation.
 name: dry-spell-rainfed
 description: Veranillo durante la floración en maíz de secano (escenario E)
-plot: { crop: maize, sown_days_ago: 60, area_ha: 2, soil: sandy_loam, irrigation_system: none }   # etapa mid (floración); duración de etapas pendiente de validación agronómica
+plot: { crop: maize, sown_days_ago: 55, area_ha: 2, soil: sandy_loam, irrigation_system: none }   # etapa mid (floración)
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 0 }        # parcela sin sensor: el balance corre solo con clima
 interval_s: 900

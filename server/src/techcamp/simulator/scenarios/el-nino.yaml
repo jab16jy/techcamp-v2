@@ -1,9 +1,12 @@
 # Scenario A of docs/06-diseno-detallado.md:473-480: water stress, a critical
 # alert and a "water X mm" recommendation. The arithmetic is docs/06:442-448 and
 # test_scenario_library.py asserts it against these numbers.
+# Owner decision #340 (2026-10-25): the sowing age places the window (ages
+# 48-62) inside the catalog's mid stage (45-76), so Kc = 1.20 and the
+# docs/06:442-448 arithmetic holds without touching the catalog.
 name: el-nino
 description: Estrés hídrico por El Niño en maíz (escenario A)
-plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, irrigation_system: drip }
+plot: { crop: maize, sown_days_ago: 48, area_ha: 1.5, soil: sandy_loam, irrigation_system: drip }
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900            # intervalo simulado entre lecturas del backfill
@@ -14,7 +17,11 @@ trajectories:
   air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }   # daily_max > 35 °C abre heat_stress
   air_rh: { daily_min: 38, daily_max: 70, noise: 0.4 }     # bajo 85 %, así que no fungal_risk
 faults:
-  - { at_day: 10, node: 2, type: offline, hours: 8 }       # dispara el escenario C
+  # The node goes silent on day 10 and never comes back inside the window:
+  # node health decides at the sweep's own `now` over `last_seen_at`, so a
+  # fault that resumed mid-window would leave the node healthy at the end and
+  # the alert the scenario pins could not be open (docs/06:436).
+  - { at_day: 10, node: 2, type: offline, hours: 96 }
 expected:
   alerts: [water_stress, heat_stress, node_offline]
   irrigation: irrigate

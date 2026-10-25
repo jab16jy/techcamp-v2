@@ -536,6 +536,34 @@ commit is a passive doc-only candidate (C6).
   change); the YAML itself flags stage durations as "pendiente de
   validación agronómica". Until it lands, the pilot asserts the checker's
   named findings instead of `passed`, so CI stays green without lying.
+- T6 decisions (2026-10-25, same work unit as the doc and YAML changes):
+  **#340 resolved by the owner — option (b), the scenarios' sowing ages.**
+  E sows 55 days before its anchor (window ages 55-75) and A 48 (48-62), both
+  inside the catalog's mid stage (45-76), so Kc = 1,20 and p = 0,55 hold and
+  every number docs/06:442-471 and T4 pinned stands; the catalog's stage
+  lengths themselves stay "pendiente de validación agronómica" (docs/06:455,465
+  amended; the frozen catalog migration untouched). **D-T16.11 (found in T6)**
+  — the `sim run` / loader composition gap: `sim run` provisions and publishes
+  ITS org ("Simulador X", D-T16.5) while the loader prepares the plot
+  "Escenario X <ancla>" with its own already-claimed nodes, credentials in the
+  202 and no calibrations. The harness runs `sim run` as the one documented
+  command (its dev-OTP prompt fed through stdin) and a support runner wires
+  the LOADER's nodes: `ensure_calibrations` over HTTP with the member token
+  (`valid_from` covering the retroactive window on the whole second, the R3
+  rule) and `publish_scenario_backfill` over one MQTT connection per node
+  (docs/04:294). T2's CLI is untouched. **D-T16.12 (found in T6)** — the
+  oracle's alert semantics: plot-scoped alerts are judged on what the run
+  OPENED (any state), because a daily-cycle rule like `heat_stress` opens each
+  afternoon and auto-resolves each night inside one window — non-resolved-only
+  made scenario A's verdict depend on the wall clock (a nightly run at 00:30
+  Bogotá would fail ~4 nights in 5); node-scoped alerts stay non-resolved,
+  because the scenarios pin a node that is still silent at verification
+  (repositioned faults: A's node silent from day 10 through the window end, C's
+  node down from day 4 and staying down — node health decides at the sweep's
+  own `now` over `last_seen_at`, so a fault that resumed mid-window would leave
+  the node healthy and the pinned alert unopenable). The run's organization is
+  fresh, so what exists for the plot is what that run opened. docs/06:485
+  amended.
 - T5 verification (2026-10-24, independent, default subagent — the
   `gentle-ai-verify` provider was blocked again, as in T4): **PASS-WITH-
   FINDINGS, 0 blocking**, all 8 claims PASS (scope, named timing, glue-only
