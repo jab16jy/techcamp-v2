@@ -5,6 +5,11 @@ name: CI
 on:
   pull_request:
 
+# Checkout is the workflow's only GITHUB_TOKEN use, so contents: read is the
+# whole grant — same class as the e2e-scenarios fix of the T6 review (#353).
+permissions:
+  contents: read
+
 # One in-flight run per PR: a second push to the same PR cancels the first. `github.workflow`
 # scopes the group to this workflow, the PR number to one PR (D-T5b.1).
 concurrency:
