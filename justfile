@@ -219,6 +219,26 @@ gate *paths: gate-fast
       esac
     done
 
+# The scenario e2e's clean slate (web/e2e/scenarios/support/scenario_clean.py):
+# the loader's plot identity is global ("Escenario <scenario> <ancla>"), so a
+# rerun of a scenario answers 404 in-another-org unless the last run's
+# organizations are gone. CI is always fresh; a worktree runs this first. It
+# wipes EVERY organization in this worktree's database (the runs' own "Simulador
+# X" orgs are what a scenario run creates) and re-seeds the factory alert rules
+# the cascade wipes — this database exists for the seminar stack, not for data
+# anyone keeps.
+[group: 'scenario e2e']
+scenario-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
+    if [ -z "$({{_runtime}} ps -q --filter "name=^$container$")" ]; then
+      echo "this worktree's database ($container) is not running: run 'just db-up' first" >&2
+      exit 1
+    fi
+    echo "--- scenario-clean (database $container)"
+    (cd "$_worktree/server" && DATABASE_URL="$url" uv run python ../web/e2e/scenarios/support/scenario_clean.py)
+
 # The run the owner does once per epic, on a database this worktree just recreated, so
 # no leaked table from an earlier run can be mistaken for a passing suite (#89).
 
