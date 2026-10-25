@@ -134,7 +134,7 @@ async def _calibrate_like_the_simulator(
     never edited). `valid_from` opens on the earliest backfilled second, the
     `R3-calibration-valid-from-after-backfill` rule in the simulator CLI."""
     valid_from = (NOW - timedelta(days=DAYS)).replace(microsecond=0)
-    payload = _calibration_payload({"unit": "%"}, valid_from=valid_from)
+    payload = _calibration_payload({"metric": "soil_moisture", "unit": "%"}, valid_from=valid_from)
     created = await SqlAlchemyCalibrationRepository(session).add_version(
         org_id=org_id,
         sensor_id=sensor_id,
