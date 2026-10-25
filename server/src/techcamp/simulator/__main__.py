@@ -1,13 +1,22 @@
-"""`python -m techcamp.simulator`: the single-node MQTT publish path for the
-seminar profile (docs/06-diseno-detallado.md §10; ADR-0021). Scenario YAML,
-weather fixtures, faults, `/dev/scenarios`/`/dev/jobs` calls and multi-node
-runs are E16 — out of scope here."""
+"""`python -m techcamp.simulator`: the seminar-profile node simulator
+(docs/06-diseno-detallado.md §10; ADR-0021).
+
+Two entry shapes share this module. The E4 single-node path keeps its flat
+flags (`--phone/--plot-id/--claim-code/--provision`). E16 T2 adds the `run`
+subcommand (docs/06:408: `sim run --scenario el-nino --backfill 14d --live`),
+which provisions everything the scenario declares (D-T16.5) and publishes
+multi-node trajectories with faults, seed and truth export. Weather fixtures
+are NOT loaded here: T3's `/dev/scenarios/{name}:load` route owns
+`weather_daily`."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import re
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 import aiomqtt
@@ -16,26 +25,54 @@ import httpx
 from techcamp.shared.config import is_seminar_profile
 from techcamp.shared.db import async_session_factory
 from techcamp.simulator.node_client import claim_node, ensure_calibrations, request_otp, verify_otp
-from techcamp.simulator.provision import provision_unclaimed_node
+from techcamp.simulator.provision import provision_scenario, provision_unclaimed_node
 from techcamp.simulator.publisher import MqttUplinkPublisher
-from techcamp.simulator.runner import LIVE_INTERVAL_S, publish_backfill, publish_live
+from techcamp.simulator.runner import (
+    LIVE_INTERVAL_S,
+    NodePlan,
+    publish_backfill,
+    publish_live,
+    publish_scenario_backfill,
+    publish_scenario_live,
+)
+from techcamp.simulator.scenario_library import SCENARIO_NAMES
+from techcamp.simulator.scenario_schema import ScenarioSchemaError, load_scenario
+from techcamp.simulator.trajectory import soil_two_point_params
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="python -m techcamp.simulator",
-        description="TechCamp node simulator: single-node MQTT publish path (docs/06 §10).",
-    )
+def _duration_days(value: str) -> float:
+    """`--backfill <days>d` (docs/06:408,450 write `14d` and `21d`): a plain
+    positive number of days, nothing else — an ambiguous duration is a CLI
+    error, not a guess."""
+    if not re.fullmatch(r"\d+(\.\d+)?d", value):
+        raise argparse.ArgumentTypeError(f"{value!r} must be a duration like 14d")
+    days = float(value.removesuffix("d"))
+    if days <= 0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be greater than 0")
+    return days
+
+
+def _common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--api", default="http://localhost:8000/api/v1", help="Base URL of the running api process."
     )
     parser.add_argument("--broker-host", default="localhost")
     parser.add_argument("--broker-port", type=int, default=1883)
-    parser.add_argument("--phone", required=True, help="Phone of an existing org member (dev OTP).")
     parser.add_argument(
         "--otp-code", default=None, help="Skip the interactive prompt (scripted runs)."
     )
-    parser.add_argument("--plot-id", required=True, type=UUID)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="python -m techcamp.simulator",
+        description="TechCamp node simulator (docs/06 §10): single node, or `run` for a scenario.",
+    )
+    _common_arguments(parser)
+    parser.add_argument(
+        "--phone", default=None, help="Phone of an existing org member (dev OTP, single-node path)."
+    )
+    parser.add_argument("--plot-id", default=None, type=UUID)
     parser.add_argument("--claim-code", default=None, help="Claim an existing unclaimed node.")
     parser.add_argument(
         "--provision",
@@ -48,13 +85,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--live", action="store_true", help="Keep publishing every 5s after backfill."
     )
     parser.add_argument("--seed", type=int, default=0)
+
+    subcommands = parser.add_subparsers(dest="command")
+    run_parser = subcommands.add_parser(
+        "run", help="Run a scenario from the library (docs/06 §10, E16)."
+    )
+    _common_arguments(run_parser)
+    run_parser.add_argument("--scenario", required=True, choices=None, help="Scenario name.")
+    run_parser.add_argument(
+        "--backfill",
+        required=True,
+        dest="backfill_days",
+        type=_duration_days,
+        help="Backfill duration, e.g. 14d or 21d.",
+    )
+    run_parser.add_argument("--live", action="store_true", help="Keep publishing every 5s.")
+    run_parser.add_argument(
+        "--seed", type=int, default=0, help="Deterministic seed (D-T16.7; default 0)."
+    )
+    run_parser.add_argument(
+        "--truth-export",
+        default=None,
+        metavar="PATH",
+        help="Noiseless-truth export path (default: <scenario>-truth.json in the cwd).",
+    )
+
     args = parser.parse_args(argv)
-    if args.claim_code is None and not args.provision:
-        parser.error("either --claim-code or --provision is required")
-    if args.backfill_days <= 0:
-        parser.error("--backfill-days must be greater than 0")
-    if args.interval_s <= 0:
-        parser.error("--interval-s must be greater than 0")
+    if args.command is None:
+        # Single-node path: its required flags are checked here, not on the
+        # parser, so the `run` subcommand does not have to carry them too.
+        if args.phone is None:
+            parser.error("--phone is required")
+        if args.plot_id is None:
+            parser.error("--plot-id is required")
+        if args.claim_code is None and not args.provision:
+            parser.error("either --claim-code or --provision is required")
+        if args.backfill_days <= 0:
+            parser.error("--backfill-days must be greater than 0")
+        if args.interval_s <= 0:
+            parser.error("--interval-s must be greater than 0")
     return args
 
 
@@ -74,9 +143,96 @@ async def _login(client: httpx.AsyncClient, *, phone: str, otp_code: str | None)
     return await verify_otp(client, phone, otp_code)
 
 
+async def _run_scenario(args: argparse.Namespace) -> None:
+    """The `run` subcommand (docs/06:408-419): load the scenario, provision
+    org/farm/plot/cycle/nodes (D-T16.5), claim every node over HTTP with its
+    own calibration, then backfill (and optionally go live) publishing through
+    one MQTT connection per node. The runner never touches `weather_daily`;
+    T3's `/dev/scenarios/{name}:load` loads the fixture."""
+    try:
+        scenario = load_scenario(args.scenario)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"unknown scenario {args.scenario!r}; available: {', '.join(SCENARIO_NAMES)}"
+        ) from None
+    except ScenarioSchemaError as error:
+        raise SystemExit(f"invalid scenario {args.scenario!r}: {error}") from error
+
+    now = datetime.now(UTC)
+    async with async_session_factory() as session:
+        provision = await provision_scenario(session, scenario, now=now)
+    print(f"[sim] scenario {scenario.name}: member {provision.phone}, plot {provision.plot_id}")
+    if not scenario.nodes.reads_soil:
+        print("[sim] node-less scenario: plot and cycle provisioned, nothing to publish")
+        return
+
+    async with httpx.AsyncClient(base_url=args.api) as client:
+        token = await _login(client, phone=provision.phone, otp_code=args.otp_code)
+        # R3-calibration-valid-from-after-backfill, as in the single-node path:
+        # the window opens on the earliest backfilled uplink's whole second.
+        earliest_backfill_at = (now - timedelta(days=args.backfill_days)).replace(microsecond=0)
+        claimed = []
+        for provisioned in provision.nodes:
+            node = await claim_node(
+                client, token=token, claim_code=provisioned.claim_code, plot_id=provision.plot_id
+            )
+            await ensure_calibrations(
+                client,
+                token=token,
+                node=node,
+                valid_from=earliest_backfill_at,
+                soil_params=soil_two_point_params(provisioned.ordinal),
+            )
+            claimed.append((provisioned.ordinal, node))
+            print(f"[sim] claimed node {node.node_id} (node {provisioned.ordinal})")
+
+    truth_path = (
+        Path(args.truth_export) if args.truth_export else Path(f"{scenario.name}-truth.json")
+    )
+    # One connection per node: the broker ACL authenticates each node as its
+    # own user, allowed only its own topics (docs/04:294) — the same contract
+    # a real node gets (H2).
+    async with AsyncExitStack() as stack:
+        plans = []
+        for ordinal, node in claimed:
+            mqtt_client = await stack.enter_async_context(
+                aiomqtt.Client(
+                    args.broker_host,
+                    args.broker_port,
+                    username=node.mqtt_username,
+                    password=node.mqtt_password,
+                )
+            )
+            plans.append(
+                NodePlan(
+                    node_id=node.node_id,
+                    ordinal=ordinal,
+                    sensors=node.sensors,
+                    publisher=MqttUplinkPublisher(mqtt_client),
+                )
+            )
+        ticks = await publish_scenario_backfill(
+            plans,
+            scenario=scenario,
+            days=args.backfill_days,
+            seed=args.seed,
+            now=now,
+            truth_path=truth_path,
+        )
+        print(f"[sim] backfilled {ticks} tick(s) per node for {len(plans)} node(s)")
+        print(f"[sim] noiseless truth exported to {truth_path}")
+        if args.live:
+            print(f"[sim] live: publishing every {LIVE_INTERVAL_S}s (Ctrl+C to stop)")
+            await publish_scenario_live(plans, scenario=scenario, seed=args.seed, after=ticks)
+
+
 async def run(args: argparse.Namespace) -> None:
     if not is_seminar_profile():
         raise SystemExit("the simulator is a seminar-profile-only dev tool (ADR-0021)")
+
+    if args.command == "run":
+        await _run_scenario(args)
+        return
 
     claim_code = args.claim_code
     if args.provision:

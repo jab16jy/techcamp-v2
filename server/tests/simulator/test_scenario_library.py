@@ -32,8 +32,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from .scenario_library import SCENARIO_NAMES, SCENARIOS_DIR, load_fixture
-from .scenario_schema import Scenario, load_all_scenarios, load_scenario
+from techcamp.simulator.scenario_library import SCENARIO_NAMES, SCENARIOS_DIR, load_fixture
+from techcamp.simulator.scenario_schema import Scenario, load_all_scenarios, load_scenario
 
 MAIZE_P = 0.55
 """maize's depletion fraction `p` from the crop catalog (FAO-56 Table 22)."""

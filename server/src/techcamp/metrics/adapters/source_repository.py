@@ -250,7 +250,9 @@ class SqlAlchemyMetricsSourceRepository:
         self, org_id: UUID, plot_id: UUID, *, from_day: date, to_day: date
     ) -> list[PlotAlertAction]:
         """The plot alerts opened in `[from_day, to_day]` and whether each had a
-        timely action (D-T0.6), oldest first.
+        timely action (D-T0.6), oldest first, ties broken by `alert_id`: the
+        alerts of a plot can share `opened_at`, and Postgres leaves their order
+        undefined without an explicit tiebreaker.
 
         The window is the logbook's grain: `occurred_on` is a date, so "timely"
         runs from the local day of `opened_at` to the local day of
@@ -274,7 +276,7 @@ class SqlAlchemyMetricsSourceRepository:
                 PlotAlertActionView.c.opened_day >= from_day,
                 PlotAlertActionView.c.opened_day <= to_day,
             )
-            .order_by(PlotAlertActionView.c.opened_at)
+            .order_by(PlotAlertActionView.c.opened_at, PlotAlertActionView.c.alert_id)
         )
         result = await self._session.execute(stmt)
         return [
