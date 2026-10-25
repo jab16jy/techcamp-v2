@@ -145,11 +145,7 @@ async def test_the_node_carries_the_sensors_the_scenario_publishes(
         "air_temp",
         "air_rh",
     }
-    soil = next(
-        sensor
-        for sensor in sensors
-        if sensor.channel_key == "soil_moisture_30cm"  # gitleaks:allow
-    )
+    soil = next(sensor for sensor in sensors if sensor.channel_key == "soil_moisture_30cm")
     assert soil.metric == "soil_moisture"
     assert soil.depth_cm == 30
 
