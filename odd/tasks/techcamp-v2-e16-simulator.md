@@ -343,6 +343,10 @@ non-blocking ones to one GitHub issue per review round (`review-follow-up`,
 `epic:e16`, `area:*`, `type:*`) linked from here with `Refs #N`. T0's own
 commit is a passive doc-only candidate (C6).
 
+- T5 (2026-10-24): round findings in #339 — the two touching this task's own
+  files fixed with `Refs #339` in `2476815`; the catalog-vs-FAO-56 owner
+  decision that stops T6's E wiring is its own issue, #340.
+
 ## Progress / evidence
 
 - 2026-10-07: pre-implementation assessment landed as
@@ -514,7 +518,8 @@ commit is a passive doc-only candidate (C6).
   runs per PR and nightly now and T6's wirings land in both. The harness
   reads each run's OTP only from bytes appended after its own request, so
   stacked login rounds never hand out a stale code.
-- **T5 finding (BLOCKED ON THE OWNER; stops T6's E wiring):** the crop
+- **T5 finding (BLOCKED ON THE OWNER, tracked in **#340**; stops T6's E
+  wiring):** the crop
   catalog's maize stages (initial 18 / development 27 / mid 31 / late 14,
   total 90 days) do not reproduce docs/06:465-471's arithmetic, which cites
   FAO-56 Tables 12/22 (mid = 40, total 130). With `sown_days_ago: 60` the
@@ -542,4 +547,5 @@ commit is a passive doc-only candidate (C6).
   deliberate tripwire — sequence the owner's catalog decision with T6's E
   wiring), and the regenerated `ml/uv.lock` carries the older lockfile
   revision. The two that touch this task's own files are fixed in the
-  correction commit; the other two stand as recorded.
+  correction commit (`2476815`, `Refs #339`); the other two stand as recorded
+  in the round issue **#339**.
