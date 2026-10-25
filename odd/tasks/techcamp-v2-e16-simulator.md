@@ -518,7 +518,8 @@ commit is a passive doc-only candidate (C6).
   catalog's maize stages (initial 18 / development 27 / mid 31 / late 14,
   total 90 days) do not reproduce docs/06:465-471's arithmetic, which cites
   FAO-56 Tables 12/22 (mid = 40, total 130). With `sown_days_ago: 60` the
-  21-day window covers ages 60-81, so the catalog enters `late` (Kc 0.35)
+  21-day window covers ages 61-81 (sowing day = age 0), so the catalog
+  enters `late` (Kc 0.35)
   on window day 16, ETc collapses, RAW's own p-adjustment rises to ~95 mm,
   and the day-16 crossing never sustains — the recorded pipeline answers
   rainfed + `no_action` with no `water_stress`, and the checker names
@@ -530,3 +531,15 @@ commit is a passive doc-only candidate (C6).
   change); the YAML itself flags stage durations as "pendiente de
   validación agronómica". Until it lands, the pilot asserts the checker's
   named findings instead of `passed`, so CI stays green without lying.
+- T5 verification (2026-10-24, independent, default subagent — the
+  `gentle-ai-verify` provider was blocked again, as in T4): **PASS-WITH-
+  FINDINGS, 0 blocking**, all 8 claims PASS (scope, named timing, glue-only
+  runners, the documented loop, the catalog finding DB-confirmed, the CI
+  workflow, the vitest/Playwright split, and a live `just gate
+  web/e2e/scenarios`). Non-blocking: the harness's timeout message named
+  `/healthz` while polling `/health`, the doc's age-window prose was off by
+  one, the pinned finding is a scheduled CI break until T6 flips it (the
+  deliberate tripwire — sequence the owner's catalog decision with T6's E
+  wiring), and the regenerated `ml/uv.lock` carries the older lockfile
+  revision. The two that touch this task's own files are fixed in the
+  correction commit; the other two stand as recorded.

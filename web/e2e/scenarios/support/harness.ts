@@ -121,7 +121,7 @@ export async function waitForApi(): Promise<void> {
       // the api is not listening yet: poll again
     }
     if (Date.now() > deadline) {
-      throw new Error(`the api did not answer /healthz within ${E2E_TIMING.apiReadyTimeoutMs}ms`)
+      throw new Error(`the api did not answer ${healthUrl} within ${E2E_TIMING.apiReadyTimeoutMs}ms`)
     }
     await new Promise((resolveSleep) => setTimeout(resolveSleep, E2E_TIMING.apiReadyIntervalMs))
   }
