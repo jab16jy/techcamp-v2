@@ -2,3 +2,7 @@
 # assignment verbatim in prose to document the false positive, re-arming the rule.
 65b273eb000c790dad5701fc998aaf2235317cb1:odd/tasks/techcamp-v2-dev-tooling.md:generic-api-key:376
 65b273eb000c790dad5701fc998aaf2235317cb1:.github/workflows/ci.yml:generic-api-key:118
+# The scenario loader test asserts on the channel key `soil_moisture_30cm`, a
+# channel name the generic-api-key rule misreads as a credential; introduced by
+# the already-pushed 159ab5e, so a fingerprint, not a `# gitleaks:allow`.
+159ab5e020a2faa68cc29a1ec8d6754ff218e1d6:server/tests/simulator/test_scenario_load.py:generic-api-key:125
