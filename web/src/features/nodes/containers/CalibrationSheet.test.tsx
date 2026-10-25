@@ -62,6 +62,7 @@ describe('CalibrationSheet', () => {
 
   it('sends a linear calibration with the docs/03 params', async () => {
     mockFetch({ calibrations: () => jsonResponse(CREATED, 201) })
+    const mountedAt = Date.now()
     const onCreated = renderSheet()
 
     fireEvent.change(screen.getByLabelText(/Escala/), { target: { value: '0.5' } })
@@ -77,8 +78,11 @@ describe('CalibrationSheet', () => {
     expect(body.kind).toBe('lab')
     expect(body.params).toEqual({ scale: 0.5, offset: -2 })
     expect(body.rmse_pct).toBe(1.5)
-    // Default: the calibration is valid from now, not from a stale date.
-    expect(Math.abs(Date.parse(body.valid_from) - Date.now())).toBeLessThan(60_000)
+    // Default: the calibration is valid from now, not from a stale date. The input
+    // truncates to the minute, so allow one minute before the mount; a loaded runner
+    // can take longer than that between mount and assertion, so no symmetric window.
+    expect(Date.parse(body.valid_from)).toBeGreaterThanOrEqual(mountedAt - 60_000)
+    expect(Date.parse(body.valid_from)).toBeLessThanOrEqual(Date.now())
   })
 
   it('keeps rmse_pct null when it is left empty', async () => {
