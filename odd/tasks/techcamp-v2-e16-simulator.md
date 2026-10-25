@@ -190,12 +190,12 @@ shrink a diff to fit one*).
   critical, docs/06:465-471) as cases. Forecast: checker + domain tests,
   floor ~350. **Route: delegated** (trigger: writer; pure + checker).
   **Depends T1, T2.** Implemented 2026-10-24 on `e16-t4` (evidence below).
-- [ ] **T5 — Playwright harness + CI job.** `web/e2e/scenarios/` harness per
+- [x] **T5 — Playwright harness + CI job.** `web/e2e/scenarios/` harness per
   D-T16.4 (Playwright API verified via `find-docs`), CI job running
   `expected` e2e (docs/06:485), offline (fixtures only). Forecast: harness +
   config + CI workflow, floor ~400. **Route: delegated + `impeccable`** only
   where PWA assertions need screen paths (trigger: writer, e2e). **Depends
-  T4.**
+  T4.** Implemented 2026-10-24 on `e16-t5` (evidence below).
 - [ ] **T6 — Scenarios A / B / C / E / normal wired.** Each scenario runs
   one-command with its per-scenario `expected`: A (`water_stress`,
   `heat_stress`, `node_offline` → `irrigate`, outbox push per D-T16.6), B
@@ -343,6 +343,10 @@ non-blocking ones to one GitHub issue per review round (`review-follow-up`,
 `epic:e16`, `area:*`, `type:*`) linked from here with `Refs #N`. T0's own
 commit is a passive doc-only candidate (C6).
 
+- T5 (2026-10-24): round findings in #339 — the two touching this task's own
+  files fixed with `Refs #339` in `2476815`; the catalog-vs-FAO-56 owner
+  decision that stops T6's E wiring is its own issue, #340.
+
 ## Progress / evidence
 
 - 2026-10-07: pre-implementation assessment landed as
@@ -481,3 +485,67 @@ commit is a passive doc-only candidate (C6).
   one-off `test_provision` flake outside T4's scope (passes in isolation,
   fixed order and later runs), and the rule × node read count noted for
   T5/T6 (#338). No push, no PR — delivery stays owner-owned.
+- 2026-10-24: **T5 implemented** on branch `e16-t5` (base `7c3574b`), four
+  work units: `e806819` (the scenario harness — the orchestration module with
+  its own parser units, `web/playwright.config.ts` carrying D-T16.4's named
+  timeouts and poll intervals, the e2e tsconfig under `tsc -b`, the vitest
+  split (`*.test.ts` vitest / `*.spec.ts` Playwright), `@playwright/test`
+  1.64 with the API verified via `find-docs`/ctx7), `b3aff34` (the scenario E
+  pilot + the two python runners the harness spawns: the checker runner
+  printing T4's `ExpectedVerdict.as_dict()` — the seam its own docstring
+  named — and the balance-sweep deferral, because the 04:50 task has no HTTP
+  trigger), `fd7e256` (the CI workflow: per PR behind the fail-closed changes
+  filter, nightly and dispatch without it, per D-T16.4's "A+E por PR y todos
+  en nightly" — A arrives with T6 —, plus the `just gate web/e2e/scenarios`
+  case the Checks table already promised), `43a17d5` (`ml/uv.lock`
+  regenerated: the T1 revert had left it without the server's `pyyaml`,
+  which broke every gate's `ml ruff check` on a current uv). Verified: `just
+  gate web/e2e/scenarios` green end to end against this worktree's own stack
+  (the pilot: `sim run` provisioning → dev-OTP login →
+  `/dev/scenarios:load` → the 21-day irrigation replay → rainfed
+  recommendation polled → the sweep through the real worker → the checker
+  verdict → the PWA's rainfed decision card on a phone viewport); vitest 596
+  passed (8 new), tsc, eslint, ruff, mypy, lint-imports, ast-grep green. No
+  push, no PR — delivery stays owner-owned.
+- T5 decisions: **D-T16.9 (found in T5)** — the harness orchestrates through
+  the seams that exist: HTTP for the `/dev` routes, the CLI for
+  provisioning and backfill, two runner scripts under
+  `web/e2e/scenarios/support/` for what has no HTTP surface (the T4
+  checker's repository composition; the balance sweep's procrastinate task,
+  docs/06 §3), and the api log file for the dev OTP (docs/04:173 prints it;
+  no endpoint returns it). **D-T16.10 (found in T5)** — scenario E is T5's
+  pilot, the only one the merged stack runs without a broker; the CI job
+  runs per PR and nightly now and T6's wirings land in both. The harness
+  reads each run's OTP only from bytes appended after its own request, so
+  stacked login rounds never hand out a stale code.
+- **T5 finding (BLOCKED ON THE OWNER, tracked in **#340**; stops T6's E
+  wiring):** the crop
+  catalog's maize stages (initial 18 / development 27 / mid 31 / late 14,
+  total 90 days) do not reproduce docs/06:465-471's arithmetic, which cites
+  FAO-56 Tables 12/22 (mid = 40, total 130). With `sown_days_ago: 60` the
+  21-day window covers ages 61-81 (sowing day = age 0), so the catalog
+  enters `late` (Kc 0.35)
+  on window day 16, ETc collapses, RAW's own p-adjustment rises to ~95 mm,
+  and the day-16 crossing never sustains — the recorded pipeline answers
+  rainfed + `no_action` with no `water_stress`, and the checker names
+  exactly the three findings the pilot pins. The same edge touches scenario
+  A (ages 42-56 straddle the development/mid boundary; A's day 42 starts in
+  `development`, Kc 0.75, not the mid Kc the docs' ETc ≈ 5 assumes). Owner
+  decision: FAO-56 durations in the catalog (a farms-seed change, outside
+  E16's authorized lanes) or the scenarios' sowing ages (a docs/06 + YAML
+  change); the YAML itself flags stage durations as "pendiente de
+  validación agronómica". Until it lands, the pilot asserts the checker's
+  named findings instead of `passed`, so CI stays green without lying.
+- T5 verification (2026-10-24, independent, default subagent — the
+  `gentle-ai-verify` provider was blocked again, as in T4): **PASS-WITH-
+  FINDINGS, 0 blocking**, all 8 claims PASS (scope, named timing, glue-only
+  runners, the documented loop, the catalog finding DB-confirmed, the CI
+  workflow, the vitest/Playwright split, and a live `just gate
+  web/e2e/scenarios`). Non-blocking: the harness's timeout message named
+  `/healthz` while polling `/health`, the doc's age-window prose was off by
+  one, the pinned finding is a scheduled CI break until T6 flips it (the
+  deliberate tripwire — sequence the owner's catalog decision with T6's E
+  wiring), and the regenerated `ml/uv.lock` carries the older lockfile
+  revision. The two that touch this task's own files are fixed in the
+  correction commit (`2476815`, `Refs #339`); the other two stand as recorded
+  in the round issue **#339**.

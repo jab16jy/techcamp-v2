@@ -1,6 +1,6 @@
-/// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import { configDefaults } from 'vitest/config'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
@@ -68,6 +68,11 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // Playwright owns `e2e/**/*.spec.ts` (E16 T5's scenario harness): vitest's
+    // default include would import them into jsdom and fail on the node-only
+    // APIs the harness spawns with. The harness's own `*.test.ts` parsers
+    // stay here — they are pure.
+    exclude: [...configDefaults.exclude, 'e2e/**/*.spec.ts'],
     // Node's native `fetch`/`Request` (unlike a real browser's) require an
     // absolute URL — a bare page origin never exists under Vitest — so
     // `openapi-fetch`'s internal `new Request(path)` throws for the app's

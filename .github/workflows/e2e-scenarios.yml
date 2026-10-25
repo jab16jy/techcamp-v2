@@ -1,0 +1,137 @@
+name: e2e scenarios
+
+# The scenario `expected` blocks run as end-to-end tests against the real
+# seminar stack (docs/06-diseno-detallado.md:485, D-T16.4): recorded weather
+# fixtures only, never the provider network (D-T16.3).
+#
+# - Per PR: whatever is wired, when the PR touches a side the harness drives —
+#   the server it exercises or the web/e2e harness itself. One `changes` job
+#   classifies once, the same way `ci.yml` does (D-T5b.2), and the job never
+#   skips itself on a workflow-file change (`^\.github/workflows/` is in the
+#   filter for the same fail-closed reason, D-T5b.4).
+# - Nightly + manual dispatch: the same job with no change filter — this is
+#   where T6's full scenario set (A, B, C, E, normal) and T7's offline flow
+#   run whole, per D-T16.4's "todos en nightly".
+#
+# Separate from ci.yml because the schedule needs no `changes` job: gating the
+# nightly on a diff that does not exist would leave it permanently skipped.
+on:
+  pull_request:
+  schedule:
+    # 05:30 UTC = 00:30 America/Bogota: after the evening, before the workday.
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # A range over history: the merge base is what makes the diff the PR's own (D-T5b.2).
+          fetch-depth: 0
+      - id: filter
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merge_base=$(git merge-base "$PR_BASE" "$PR_HEAD")
+          # The paths this job reads, nothing wider; the workflow file itself is
+          # in both, because the change that can break a job's own steps must
+          # never skip it (D-T5b.2, D-T5b.4).
+          server_paths='^(server|infra|rules|rule-tests)/|^justfile$|^sgconfig\.yml$|^\.github/workflows/'
+          web_paths='^web/|^\.github/workflows/'
+          changed=$(git -c core.quotePath=false diff --name-only "$merge_base" "$PR_HEAD")
+          echo "merge base: $merge_base"
+          echo "changed files:"
+          printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -Eq "$server_paths"; then
+            echo "server=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "server=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$changed" | grep -Eq "$web_paths"; then
+            echo "web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "web=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  scenarios:
+    # Fail-closed: on a schedule or a dispatch there is no filter and the job
+    # runs; on a PR, only a successful `changes` saying "no" skips it, because
+    # a skipped job reports "Success" (D-T5b.3).
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.server == 'true' || needs.changes.outputs.web == 'true') }}
+    needs: changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    services:
+      postgres:
+        image: docker.io/timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: techcamp
+          POSTGRES_PASSWORD: techcamp
+          POSTGRES_DB: techcamp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U techcamp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mosquitto:
+        image: docker.io/eclipse-mosquitto:2
+        ports:
+          - 1883:1883
+    env:
+      DATABASE_URL: postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp
+      TECHCAMP_PROFILE: seminar
+      E2E_API_LOG: ${{ runner.temp }}/techcamp-e2e-api.log
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+      - name: migrate the database
+        working-directory: server
+        run: uv run alembic upgrade head
+      - name: start the api
+        working-directory: server
+        # PYTHONUNBUFFERED: the dev OTP reaches the log the moment it is
+        # printed (docs/04-api.md:173) — the harness parses that line, and a
+        # block-buffered stdout would hold it past the poll deadline.
+        run: |
+          PYTHONUNBUFFERED=1 nohup uv run uvicorn techcamp.main:app --host 127.0.0.1 --port 8000 > "$E2E_API_LOG" 2>&1 &
+      - name: start the worker
+        working-directory: server
+        run: |
+          nohup uv run python -m techcamp.worker > "${RUNNER_TEMP}/techcamp-e2e-worker.log" 2>&1 &
+      - name: wait for the api
+        # `/health`, the unversioned liveness probe (main.py) — not the
+        # readiness probe, which needs a broker this job's E scenarios do not.
+        run: curl --retry 60 --retry-delay 2 --retry-all-errors --fail --silent http://localhost:8000/health
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+      - name: upload the playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 7
