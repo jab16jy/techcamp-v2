@@ -283,6 +283,22 @@ export async function plotStatus(token: string, plotId: string): Promise<PlotSta
   }
 }
 
+/** The scenario plot's own name — the loader's "Escenario <name> <ancla>"
+ * identity (docs/04:263) — read the way the PWA reads it (farms, then each
+ * farm's plots), because the Nueva entrada sheet's Parcela select takes the
+ * option's label, not its id. */
+export async function plotName(token: string, orgId: string, plotId: string): Promise<string> {
+  const farmsResponse = await apiFetch(`/farms?org_id=${orgId}`, { token })
+  const farms = (await farmsResponse.json()) as { items: Array<{ id: string }> }
+  for (const farm of farms.items) {
+    const plotsResponse = await apiFetch(`/farms/${farm.id}/plots`, { token })
+    const plots = (await plotsResponse.json()) as Array<{ id: string; name: string }>
+    const plot = plots.find((candidate) => candidate.id === plotId)
+    if (plot !== undefined) return plot.name
+  }
+  throw new Error(`plot ${plotId} is not in any farm of org ${orgId}`)
+}
+
 /** `GET /nodes/{node_id}/health` (docs/04-api.md:100): the node's arrival
  * silence and its 24 h completeness — the surface scenario C's e2e observes
  * the gap on, and the poll that waits a real silence out (D-T16.13). */
