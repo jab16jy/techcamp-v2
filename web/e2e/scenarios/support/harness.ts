@@ -12,7 +12,7 @@
  * everything here is plain Node the specs call.
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,6 +30,8 @@ export const E2E_TIMING = {
   jobPollIntervalMs: 2_000,
   otpLogTimeoutMs: 30_000,
   otpLogIntervalMs: 500,
+  silencePollTimeoutMs: 1_200_000,
+  silencePollIntervalMs: 15_000,
 } as const
 
 export interface E2eConfig {
@@ -281,6 +283,40 @@ export async function plotStatus(token: string, plotId: string): Promise<PlotSta
   }
 }
 
+/** `GET /nodes/{node_id}/health` (docs/04-api.md:100): the node's arrival
+ * silence and its 24 h completeness — the surface scenario C's e2e observes
+ * the gap on, and the poll that waits a real silence out (D-T16.13). */
+export interface NodeHealthView {
+  node_id: string
+  last_seen_at: string | null
+  completeness_24h: number | null
+}
+
+export async function nodeHealth(token: string, nodeId: string): Promise<NodeHealthView> {
+  const response = await apiFetch(`/nodes/${nodeId}/health`, { token })
+  return (await response.json()) as NodeHealthView
+}
+
+/** `GET /dev/outbox` (docs/04-api.md:264): the seminar tray of simulated
+ * SMS/WhatsApp rows — one room, no session, no org filter. Scenario A's push
+ * is asserted here (D-T16.6): the escalation's row names the rule and the
+ * severity that produced it. */
+export interface OutboxMessage {
+  id: string
+  alert_id: string
+  org_id: string
+  channel: string
+  status: string
+  rule_code: string
+  severity: string
+  created_at: string
+}
+
+export async function readOutbox(): Promise<OutboxMessage[]> {
+  const response = await apiFetch('/dev/outbox')
+  return (await response.json()) as OutboxMessage[]
+}
+
 // -- the python side of the harness ---------------------------------------------
 
 async function runServerPython(args: string[]): Promise<string> {
@@ -319,25 +355,173 @@ export interface ExpectedVerdictDto {
 }
 
 /** `sim run --scenario <name> --backfill <dur>` (docs/06:408): the one-command
- * provisioning the acceptance criterion names. A node-less scenario prints its
- * member phone and exits; a node scenario goes on to claim and publish. */
+ * provisioning the acceptance criterion names, driven as the command itself.
+ * The process provisions (D-T16.5), prints its provisioning line, requests the
+ * dev OTP for the member it created and blocks on stdin for the code — no
+ * endpoint returns it (docs/04-api.md:173) — so the harness feeds it: it polls
+ * the api log for the code of the phone the provisioning line names and writes
+ * it to the process's stdin, reading only bytes appended after its own start.
+ * A node-less scenario exits before the login and never asks. */
 export async function runSimScenario(name: string, backfill: string): Promise<SimRunProvision> {
-  const stdout = await runServerPython([
-    '-m',
-    'techcamp.simulator',
-    'run',
-    '--scenario',
-    name,
-    '--backfill',
-    backfill,
+  const { serverDir } = e2eConfig()
+  const fromOffset = await apiLogOffset()
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(
+      'uv',
+      [
+        'run',
+        'python',
+        '-m',
+        'techcamp.simulator',
+        'run',
+        '--scenario',
+        name,
+        '--backfill',
+        backfill,
+        '--seed',
+        '0',
+      ],
+      { cwd: serverDir, env: process.env, stdio: ['pipe', 'pipe', 'pipe'] },
+    )
+    let stdout = ''
+    let stderr = ''
+    let provision: SimRunProvision | null = null
+    let fed = false
+    const killTimer = setTimeout(() => child.kill('SIGKILL'), E2E_TIMING.scenarioCommandTimeoutMs)
+    const fail = (message: string) => {
+      clearTimeout(killTimer)
+      rejectRun(
+        new Error(
+          `${message}. Output was:\n${(stdout + '\n' + stderr).slice(-1_000)}`,
+        ),
+      )
+    }
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+      provision = provision ?? parseSimRunOutput(stdout)
+      if (provision !== null && !fed) {
+        // sim run prints the provisioning line before it requests the code and
+        // blocks on stdin; feeding once, on the code the api printed after this
+        // run started, is the whole handshake.
+        fed = true
+        readOtpCodeAfter(provision.phone, fromOffset)
+          .then((code) => {
+            child.stdin?.write(`${code}\n`)
+          })
+          .catch((error: unknown) => fail(String(error)))
+      }
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    child.on('error', (error) => fail(`sim run could not start: ${String(error)}`))
+    child.on('close', (exitCode) => {
+      clearTimeout(killTimer)
+      const parsed = parseSimRunOutput(stdout)
+      if (parsed === null) {
+        fail(`sim run printed no provisioning line (exit ${exitCode})`)
+        return
+      }
+      resolveRun(parsed)
+    })
+  })
+}
+
+/** D-T16.11: the loader's nodes get their calibrations and the scenario's
+ * backfill through the support runner — `valid_from` covering the retroactive
+ * window and one MQTT connection per node, inside the runner. The 202 travels
+ * as an argument: it is a handful of ids and credentials. `liveSeconds` keeps
+ * the runner publishing live after the backfill (docs/06:408's `--live`,
+ * bounded) — the caller runs it in the background with `startBackfill` while
+ * it waits on state. */
+export interface BackfillArgs {
+  token: string
+  load: ScenarioLoad202
+  days: number
+  seed?: number
+  liveSeconds?: number
+  /** Delay per published uplink (ms): the pacing that keeps the ingestor's
+   * flush boundaries fine-grained against the trajectory — the D5 upgrade
+   * measures 48 h of it (the compression repair the A spec needs). */
+  tickDelayMs?: number
+}
+
+function backfillRunnerArgs(args: BackfillArgs): string[] {
+  const base = [
+    supportScript('publish_backfill.py'),
+    '--token',
+    args.token,
+    '--load-json',
+    JSON.stringify(args.load),
+    '--days',
+    String(args.days),
     '--seed',
-    '0',
+    String(args.seed ?? 0),
+  ]
+  if (args.liveSeconds !== undefined) base.push('--live-seconds', String(args.liveSeconds))
+  if (args.tickDelayMs !== undefined) base.push('--tick-delay-ms', String(args.tickDelayMs))
+  return base
+}
+
+export interface BackfillRun {
+  finished: Promise<{ ticks: number; nodes: number }>
+  /** Stop the runner (SIGKILL after the graceful timeout): a background live
+   * tail the caller is done with ends here, not at its own deadline. */
+  stop: () => void
+}
+
+export function startBackfill(args: BackfillArgs): BackfillRun {
+  const { serverDir } = e2eConfig()
+  // No execFile timeout: a live tail outlives `scenarioCommandTimeoutMs` by
+  // design (D-T16.13's real silence), and the caller's await on `finished` —
+  // inside the spec's own Playwright timeout — is what bounds it.
+  const child = execFile(
+    'uv',
+    ['run', 'python', ...backfillRunnerArgs(args)],
+    { cwd: serverDir, maxBuffer: 16 * 1024 * 1024 },
+  )
+  let stdout = ''
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString()
+  })
+  const finished = new Promise<{ ticks: number; nodes: number }>((resolve, reject) => {
+    child.on('close', (code, signal) => {
+      if (code !== 0) {
+        reject(new Error(`publish_backfill.py exited ${code} (${signal}): ${stdout.slice(-500)}`))
+        return
+      }
+      try {
+        resolve(JSON.parse(stdout.trim().split('\n').at(-1) as string) as {
+          ticks: number
+          nodes: number
+        })
+      } catch (error) {
+        reject(error as Error)
+      }
+    })
+    child.on('error', reject)
+  })
+  return { finished, stop: () => child.kill() }
+}
+
+export async function publishBackfill(args: BackfillArgs): Promise<{ ticks: number; nodes: number }> {
+  const stdout = await runServerPython(backfillRunnerArgs(args))
+  return JSON.parse(stdout.trim().split('\n').at(-1) as string) as { ticks: number; nodes: number }
+}
+
+/** The three per-org alerts jobs no HTTP route triggers (D-T16.11's runner):
+ * `alerts.evaluate_org_node_health` (node_offline), `alerts.evaluate_org_fungal_risk`
+ * (its own 04:45 periodic) and `alerts.escalate_org_alerts` (a critical's 2 h
+ * clock). The running worker — not the harness — executes them. */
+export async function deferAlertsJob(task: string, orgId: string): Promise<number> {
+  const stdout = await runServerPython([
+    supportScript('defer_alerts_job.py'),
+    '--task',
+    task,
+    '--org-id',
+    orgId,
   ])
-  const provision = parseSimRunOutput(stdout)
-  if (provision === null) {
-    throw new Error(`sim run printed no provisioning line. Output was:\n${stdout}`)
-  }
-  return provision
+  return JSON.parse(stdout.trim().split('\n').at(-1) as string).job_id as number
 }
 
 /** The T4 checker, judged against live state: its own docstring names this

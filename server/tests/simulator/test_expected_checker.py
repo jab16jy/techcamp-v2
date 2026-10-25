@@ -33,7 +33,7 @@ def test_a_state_that_matches_the_block_passes() -> None:
     scenario = load_scenario("el-nino")
     verdict = check_expected(
         scenario,
-        _observed(alerts=("water_stress", "heat_stress", "node_offline"), kind="irrigate"),
+        _observed(alerts=("water_stress", "heat_stress"), kind="irrigate"),
     )
 
     assert verdict.scenario == "el-nino"
@@ -53,11 +53,11 @@ def test_a_missing_alert_fails_and_names_the_code() -> None:
 
     verdict = check_expected(
         scenario,
-        _observed(alerts=("water_stress", "heat_stress"), kind="irrigate"),
+        _observed(alerts=("water_stress",), kind="irrigate"),
     )
 
     assert not verdict.passed
-    assert [(f.kind, f.expected) for f in verdict.findings] == [("missing_alert", "node_offline")]
+    assert [(f.kind, f.expected) for f in verdict.findings] == [("missing_alert", "heat_stress")]
 
 
 def test_an_unexpected_alert_fails_and_names_the_code() -> None:
@@ -80,7 +80,7 @@ def test_missing_and_unexpected_alerts_are_reported_together() -> None:
     )
 
     kinds = sorted(f.kind for f in verdict.findings)
-    assert kinds == ["missing_alert", "missing_alert", "unexpected_alert"]
+    assert kinds == ["missing_alert", "unexpected_alert"]
 
 
 def test_a_kind_mismatch_fails() -> None:
@@ -131,7 +131,7 @@ def test_an_unexpected_advice_code_fails() -> None:
     verdict = check_expected(
         scenario,
         _observed(
-            alerts=("water_stress", "heat_stress", "node_offline"),
+            alerts=("water_stress", "heat_stress"),
             kind="irrigate",
             advice=("no_action",),
         ),

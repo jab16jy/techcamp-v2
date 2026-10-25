@@ -17,10 +17,10 @@ rules shape it:
   domain, because the oracle may only name what exists (scenario_schema's own
   rule, docs/06:485).
 
-Node-scoped alerts (`node_offline`, docs/06:477) live on the node, and the plot
-listing never returns them, so the adapter asks each of the plot's own nodes per
-rule with the same per-target read the evaluators decide on — the node ids are
-the scenario's own, which the loader's `202` already answers.
+Node-scoped alerts (`node_offline`, docs/06:477) live on the node, and the
+plot-scoped read never returns them, so the adapter asks each of the plot's own
+nodes per rule with the same per-target read the evaluators decide on — the node
+ids are the scenario's own, which the loader's `202` already answers.
 """
 
 from __future__ import annotations
@@ -46,8 +46,9 @@ class ObservedScenarioState:
     """What the stack serves for one scenario plot, as the checker judges it.
 
     `irrigation_kind` is `None` when the asked day has no stored recommendation;
-    `alert_codes` is already unique and non-resolved only, so a resolved alert
-    is no longer part of what a scenario asserts.
+    `alert_codes` is already unique: plot-scoped codes are what the run OPENED
+    (any state — D-T16.12), node-scoped ones are the still-open alerts of the
+    plot's own nodes.
     """
 
     alert_codes: tuple[str, ...]
@@ -163,15 +164,20 @@ async def collect_observed_state(
 ) -> ObservedScenarioState:
     """Gather the live state one scenario plot serves, org-scoped throughout.
 
-    The plot listing answers the plot-scoped alerts (critical first, then
-    newest); the node-scoped ones never pass its `plot_id` filter, so each of
-    the plot's own nodes is asked per rule with `get_non_resolved_for_target` —
-    the same read `open_alert` idempotence and every evaluator's resume path
-    use. A day without a stored recommendation is `None`, and the caller — not
-    this function — decides which day that is (the scenario's own anchor, T5/T6).
+    D-T16.12: the plot-scoped alerts are read in ANY state — what the run opened
+    — because a daily-cycle rule like `heat_stress` opens each afternoon and
+    auto-resolves each night inside one window, and judging only non-resolved
+    rows would make a scenario's verdict depend on the wall clock; the run's
+    fresh organization is what scopes "this run". The node-scoped ones never
+    pass that `plot_id` filter, so each of the plot's own nodes is asked per
+    rule with `get_non_resolved_for_target` — the same read `open_alert`
+    idempotence and every evaluator's resume path use; a node alert the node's
+    own return resolved is no longer part of what the scenario pins. A day
+    without a stored recommendation is `None`, and the caller — not this
+    function — decides which day that is (the scenario's own anchor, T5/T6).
     """
-    open_alerts = await alerts.list_open_for_plots((plot_id,), (org_id,))
-    codes = [alert.rule_code for alert in open_alerts]
+    plot_alerts = await alerts.list_for_orgs((org_id,), plot_id=plot_id, limit=50)
+    codes = [alert.rule_code for alert in plot_alerts]
 
     for rule in await rules.list_for_org(org_id):
         for node_id in node_ids:

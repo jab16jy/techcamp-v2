@@ -423,7 +423,8 @@ sequenceDiagram
 ```yaml
 name: el-nino
 description: Estrés hídrico por El Niño en maíz (escenario A)
-plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, irrigation_system: drip }
+plot: { crop: maize, sown_days_ago: 48, area_ha: 1.5, soil: sandy_loam, irrigation_system: drip }
+# ^ #340 (owner 2026-10-25): edades 48-62, dentro de mid (45-76) del catálogo, Kc 1,20
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900            # intervalo simulado entre lecturas del backfill
@@ -433,16 +434,17 @@ trajectories:
   air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }
   air_rh: { daily_min: 38, daily_max: 70 }
 faults:
-  - { at_day: 10, node: 2, type: offline, hours: 8 }       # dispara el escenario C
+faults:
+  - { at_day: 10, node: 2, type: offline, hours: 96 }      # calla hasta pasada la ventana: hueco de completitud y salto de seq (D-T16.13: el alerta no abre en una corrida comprimida)
 expected:
-  alerts: [water_stress, heat_stress, node_offline]
+  alerts: [water_stress, heat_stress]   # node_offline fuera del oracle: se decide sobre la llegada real (D-T16.13)
   irrigation: irrigate
 ```
 
 **Aritmética del escenario A** (brecha G02 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)). Franco arenoso con θFC = 0,23 y θWP = 0,09; maíz con p_tabla = 0,55; el fixture da ETc ≈ 5 mm/día, así que p = 0,55 + 0,04 × (5 − 5) = 0,55.
 
 - θ_estrés = 0,23 − 0,55 × (0,23 − 0,09) = 0,23 − 0,077 = 0,153 → **15,3 %**.
-- Con Zr ≈ 0,6 m el día 42 (supuesto del escenario, pendiente de validación agronómica): TAW = 1000 × 0,14 × 0,6 = 84 mm y RAW = 0,55 × 84 = 46,2 mm. Zr/2 = 30 cm: por eso el sensor está a 30 cm.
+- Con Zr ≈ 0,6 m el día 48 (supuesto del escenario, pendiente de validación agronómica): TAW = 1000 × 0,14 × 0,6 = 84 mm y RAW = 0,55 × 84 = 46,2 mm. Zr/2 = 30 cm: por eso el sensor está a 30 cm.
 - La humedad baja linealmente de 22 % a 13 % en los 14 días del backfill. Cruza 15,3 % en t = 14 × (22 − 15,3) / (22 − 13) ≈ 10,4 días, y `water_stress` abre 6 h después (día ≈ 10,7).
 - Al final, θobs = 13 % → Dr_obs = 1000 × (0,23 − 0,13) × 0,6 = 60 mm > RAW = 46,2 mm → `irrigate`.
 - El umbral fijo anterior (20 %) se habría cruzado el día 3,1, una semana antes de que hubiera estrés según FAO-56.
@@ -452,7 +454,7 @@ expected:
 ```yaml
 name: dry-spell-rainfed
 description: Veranillo durante la floración en maíz de secano (escenario E)
-plot: { crop: maize, sown_days_ago: 60, area_ha: 2, soil: sandy_loam, irrigation_system: none }   # etapa mid (floración); duración de etapas pendiente de validación agronómica
+plot: { crop: maize, sown_days_ago: 55, area_ha: 2, soil: sandy_loam, irrigation_system: none }   # etapa mid (floración): edades 55-75 dentro de mid (45-76) del catálogo (#340); duración de etapas pendiente de validación agronómica
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 0 }        # parcela sin sensor: el balance corre solo con clima
 weather_fixture: veranillo-caribe.json   # ET0 ≈ 4,2 mm/día y ninguna lluvia > 5 mm en los 21 días ni en los 7 de pronóstico
@@ -462,7 +464,7 @@ expected:
   advice: [conserve_moisture]
 ```
 
-**Aritmética del escenario E.** Franco arenoso con θFC = 0,23 y θWP = 0,09; maíz en etapa media con Kc = 1,20 y p_tabla = 0,55 (FAO-56, Tablas 12 y 22).
+**Aritmética del escenario E.** Franco arenoso con θFC = 0,23 y θWP = 0,09; maíz en etapa media con Kc = 1,20 y p_tabla = 0,55 (FAO-56, Tablas 12 y 22). #340 (owner 2026-10-25): las duraciones del catálogo del producto (18/27/31/14, total 90) no son las de FAO-56 (mid = 40, total 130) — la decisión coloca las **edades de siembra de los escenarios** dentro de la etapa media del catálogo (45-76): E siembra 55 días antes (edades 55-75) y A 48 (48-62), así que Kc = 1,20 y p = 0,55 se sostienen; la calibración de las duraciones contra FAO-56 sigue pendiente de validación agronómica.
 
 - ETc = 1,20 × 4,2 ≈ 5 mm/día, así que p = 0,55 + 0,04 × (5 − 5) = 0,55 y θ_estrés = 15,3 %, como en el escenario A.
 - Con Zr = 1,0 m en floración (extremo inferior de 1,0–1,7 m de FAO-56; supuesto pendiente de validación agronómica): TAW = 1000 × 0,14 × 1,0 = 140 mm y RAW = 0,55 × 140 = 77 mm.
@@ -482,7 +484,7 @@ expected:
 **Reglas:**
 
 - El simulador envía lecturas en **ADC crudo** y cada nodo simulado tiene su calibración, así que también se demuestra la calibración.
-- `expected` convierte cada escenario en una **prueba end-to-end** (D-T16.4): gramática `alerts[] + irrigation kind + advice[]` por escenario (`docs/06:437-440,459-462`), con timeouts e intervalos de poll nombrados; harness en `web/e2e/scenarios/`; CI corre A+E por PR y todos en nightly. CI corre el escenario y verifica las alertas y la recomendación esperadas.
+- `expected` convierte cada escenario en una **prueba end-to-end** (D-T16.4): gramática `alerts[] + irrigation kind + advice[]` por escenario (`docs/06:437-440,459-462`), con timeouts e intervalos de poll nombrados; harness en `web/e2e/scenarios/`; CI corre A+E por PR y todos en nightly. CI corre el escenario y verifica las alertas y la recomendación esperadas. D-T16.12 (hallado en T6): `alerts[]` se juzga sobre lo que la corrida **abrió** — las alertas de parcela se leen en cualquier estado, porque una regla de ciclo diario como `heat_stress` abre cada tarde y se resuelve sola de noche dentro de una misma ventana (juzgarlas solo no resueltas haría el resultado depender de la hora del reloj); las node-scoped se leen no resueltas, porque los escenarios fijan un nodo que sigue callado al verificar. La organización de cada corrida es fresca, así que lo que existe para la parcela es lo que esa corrida abrió. D-T16.13 (hallado en T6): `node_offline` se decide sobre la **llegada real** al broker (`last_seen_at`) con margen 3 × `interval_s`, y un backfill comprimido hace llegar 14 días en segundos — el silencio nunca se acumula, ni siquiera en la fase `--live` de la demo (la falla ya pasó dentro del backfill). Por eso A saca `node_offline` de su `expected` (su falla queda para el hueco de completitud y el salto de seq) y C lo paga **real**: C declara `interval_s: 300` (margen de 15 min), el nodo sano sigue publicando en vivo mientras el caído calla, y su e2e espera el silencio real antes de diferir el sweep — en la nightly, con el resto en las lanes rápidas. El `interval_s` del nodo es el que declara el escenario (el loader y `sim run` ya no fijan 900 a mano). D-T16.11 (hallado en T6): `sim run` provisiona y publica SU organización ("Simulador X") y el loader prepara la parcela "Escenario X <ancla>" con nodos propios y credenciales en el 202, sin calibraciones ni lecturas — el harness corre `sim run` como el comando único de docs/06:408 (alimentando su prompt de OTP por stdin) y publica el backfill de la parcela del loader con un runner propio que garantiza las calibraciones por HTTP (`valid_from` cubriendo la ventana retroactiva, en el segundo entero) y publica con una conexión MQTT por nodo (docs/04:294), reusando el `publish_scenario_backfill` del simulador. La publicación va **pacerada** (un respiro de ~50 ms por uplink): el ingestor decide por flush (500 uplinks o 1 s) y la apertura y el upgrade de 48 h de `water_stress` (D5) se miden en fronteras de flush sobre el reloj de la trayectoria — el backfill comprimido a fondo perdería las fronteras a 2,6 días de trayectoria entre sí y el upgrade no cabría en la ventana; el respiro las deja a ~0,1 días, la cadencia que un nodo real de 15 minutos tiene.
 - Un test de dominio verifica, con los parámetros de suelo y cultivo de cada escenario, que `water_stress` abre cuando `Dr > RAW` y no antes.
 - La trayectoria sin ruido de cada escenario es la **verdad de referencia** para medir el error del balance hídrico ([11 §3](11-metricas.md#3-calidad-de-decisión)) (D-T16.7: seed determinista por defecto con flag `--seed`; el runner exporta la verdad sin ruido separada de los valores ruidosos publicados).
 - El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con la bandera 2 de `quality`, huecos de `seq`) (D-T16.8: una falla `offline` es pausa de publicación; al resumir `seq` salta y el hueco lo observa completitud, sin reescribir pasado).

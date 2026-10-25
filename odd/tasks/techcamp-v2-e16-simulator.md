@@ -196,14 +196,16 @@ shrink a diff to fit one*).
   config + CI workflow, floor ~400. **Route: delegated + `impeccable`** only
   where PWA assertions need screen paths (trigger: writer, e2e). **Depends
   T4.** Implemented 2026-10-24 on `e16-t5` (evidence below).
-- [ ] **T6 — Scenarios A / B / C / E / normal wired.** Each scenario runs
+- [x] **T6 — Scenarios A / B / C / E / normal wired.** Each scenario runs
   one-command with its per-scenario `expected`: A (`water_stress`,
-  `heat_stress`, `node_offline` → `irrigate`, outbox push per D-T16.6), B
-  (`fungal_risk` → no-irrigation advice), C (node down → technician alert +
-  completeness gap), E (`water_stress` critical day 18 → `rainfed` +
-  `conserve_moisture`, `K = 0` path), normal (stable, contrast). Forecast: 5
+  `heat_stress` → `irrigate`, outbox push per D-T16.6; `node_offline` left
+  the oracle per D-T16.13), B (`fungal_risk` → no-irrigation advice), C (node
+  down → technician alert + completeness gap, paid with real silence), E
+  (`water_stress` critical day 18 → `rainfed` + `conserve_moisture`, `K = 0`
+  path), normal (stable, contrast). Forecast: 5
   wirings + e2e assertions, floor ~400. **Route: delegated** (trigger:
-  writer; scenario assembly). **Depends T2, T3, T5.**
+  writer; scenario assembly). **Depends T2, T3, T5.** Implemented 2026-10-25
+  on `e16-t6` (evidence below).
 - [ ] **T7 — Scenario D (PWA offline) e2e.** Offline logbook + sync without
   duplicates on top of E8 (C5: assert, do not rebuild); airplane-mode flow
   through the harness. Forecast: 1 e2e + fixtures, floor ~250. **Route:
@@ -346,6 +348,13 @@ commit is a passive doc-only candidate (C6).
 - T5 (2026-10-24): round findings in #339 — the two touching this task's own
   files fixed with `Refs #339` in `2476815`; the catalog-vs-FAO-56 owner
   decision that stops T6's E wiring is its own issue, #340.
+- T6 (2026-10-25): independent verification PASS-WITH-FINDINGS, 0 blocking,
+  all 10 claims PASS (scope, #340, D-T16.11/12/13, the specs' shapes, CI,
+  the doc, 256/27 pure tests, and a live `just gate web/e2e/scenarios`
+  re-run green). Non-blocking in #341: the server test gate's session-end
+  downgrade poisons the shared seminar database behind the scenario gate
+  (root fix outside E16's lanes), plus the scenario-clean scope note.
+  Nothing touched this task's own code.
 
 ## Progress / evidence
 
@@ -536,6 +545,90 @@ commit is a passive doc-only candidate (C6).
   change); the YAML itself flags stage durations as "pendiente de
   validación agronómica". Until it lands, the pilot asserts the checker's
   named findings instead of `passed`, so CI stays green without lying.
+- 2026-10-25: **T6 implemented** on branch `e16-t6` (base `e16-t5` @
+  `5a302d6`), six work units: `8b873f2` (#340 resolved as the scenarios'
+  sowing ages — E 55, A 48 — plus D-T16.11 and D-T16.12 into docs/06 and the
+  YAMLs), `2356cef` (the oracle reads what the run opened, through the alerts
+  port's own org listing — no foreign edit), `425852a` (the support runners:
+  `publish_backfill.py` — calibrations over HTTP with the member token and
+  the backfill through `publish_scenario_backfill`, one MQTT connection per
+  node; `defer_alerts_job.py` — the three per-org alerts jobs no `/dev/jobs`
+  reaches; `scenario_clean.py` + `just scenario-clean`, T5's /tmp SQL made
+  durable), `43fbb5f` (the harness drives `sim run` as the documented
+  command — its dev-OTP stdin prompt fed from the api log — plus
+  `publishBackfill`, `deferAlertsJob`, `readOutbox`, `nodeHealth`,
+  `startBackfill`), `789cb96` (D-T16.13: `node_offline` decided on REAL
+  arrival silence; A's oracle drops it, C pays it real at `interval_s: 300`
+  with the loader no longer hardcoding 900), `b3279bf` (the four specs, E's
+  tripwire flipped, the CI ingestor + `@pr` split), `b4a3d60` (this
+  evidence); the owner's `661f41f` (`.gitignore` for the truth exports the
+  runs regenerate) closes the lane at eight commits. Verified: `just gate
+  server/tests/simulator` 256 passed / 27 skipped; `just gate
+  web/e2e/scenarios` LIVE green — 4 passed in 2.6 m (E 10 s, A 2.2 m, normal
+  8 s, B 9 s) with C correctly skipped outside the nightly, twice (the
+  author's run and the independent verification's). RDD review pending,
+  owner-owned.
+- T6 findings (all recorded in the decisions above): **(1)** the oracle's
+  non-resolved-only semantics made A's verdict depend on the wall clock
+  (`heat_stress` resolves nightly) — D-T16.12. **(2)** `node_offline` cannot
+  open in a compressed run at all: the health rule measures ARRIVAL silence
+  (`last_seen_at`) and a backfill compresses arrivals into seconds — the T5
+  handoff's "opened and resolved inside the window" framing was wrong;
+  neither repositioning the fault nor a live phase can open it — D-T16.13,
+  owner decision. **(3)** the ingestor decides per flush (500 uplinks / 1 s):
+  a full-speed backfill lands its flush boundaries 2.6 trajectory-days apart,
+  which opened A's `water_stress` too late for D5's 48 h upgrade — the 50 ms
+  per-uplink pacing restores a real stream's decision granularity
+  (docs/06:485). **(4)** the #340 fix changed E's PWA advice from
+  `no_action` to `conserve_moisture` (the pilot's old assertion watched the
+  broken pipeline) — the spec now asserts the restored advice. Operational:
+  the scenario runs need api + worker + ingestor + mosquitto against the
+  worktree database, and a migration or `just scenario-clean` under a live
+  worker kills it (restart the stack after) — CI starts all four. One more
+  trap the verification round hit (#341): the server test gate ITSELF
+  downgrades the schema to base at session end against this same database,
+  so a `just gate server/tests/simulator` followed by the scenario gate
+  needs `alembic upgrade head` and a worker restart in between.
+- T6 decisions (2026-10-25, same work unit as the doc and YAML changes):
+  **#340 resolved by the owner — option (b), the scenarios' sowing ages.**
+  E sows 55 days before its anchor (window ages 55-75) and A 48 (48-62), both
+  inside the catalog's mid stage (45-76), so Kc = 1,20 and p = 0,55 hold and
+  every number docs/06:442-471 and T4 pinned stands; the catalog's stage
+  lengths themselves stay "pendiente de validación agronómica" (docs/06:455,465
+  amended; the frozen catalog migration untouched). **D-T16.11 (found in T6)**
+  — the `sim run` / loader composition gap: `sim run` provisions and publishes
+  ITS org ("Simulador X", D-T16.5) while the loader prepares the plot
+  "Escenario X <ancla>" with its own already-claimed nodes, credentials in the
+  202 and no calibrations. The harness runs `sim run` as the one documented
+  command (its dev-OTP prompt fed through stdin) and a support runner wires
+  the LOADER's nodes: `ensure_calibrations` over HTTP with the member token
+  (`valid_from` covering the retroactive window on the whole second, the R3
+  rule) and `publish_scenario_backfill` over one MQTT connection per node
+  (docs/04:294). T2's CLI is untouched. **D-T16.12 (found in T6)** — the
+  oracle's alert semantics: plot-scoped alerts are judged on what the run
+  OPENED (any state), because a daily-cycle rule like `heat_stress` opens each
+  afternoon and auto-resolves each night inside one window — non-resolved-only
+  made scenario A's verdict depend on the wall clock (a nightly run at 00:30
+  Bogotá would fail ~4 nights in 5); node-scoped alerts stay non-resolved,
+  because the scenarios pin a node that is still silent at verification
+  (repositioned faults: A's node silent from day 10 through the window end, C's
+  node down from day 4 and staying down — node health decides at the sweep's
+  own `now` over `last_seen_at`, so a fault that resumed mid-window would leave
+  the node healthy and the pinned alert unopenable). The run's organization is
+  fresh, so what exists for the plot is what that run opened. docs/06:485
+  amended. **D-T16.13 (found in T6, owner decision 2026-10-25)** —
+  `node_offline` is decided on REAL arrival silence (`last_seen_at`, margin
+  3 × `interval_s`), and a compressed backfill makes 14 days arrive in
+  seconds — the silence never accumulates, and even the demo's `--live` phase
+  cannot show it (the fault already elapsed inside the backfill). The owner
+  chose: A drops `node_offline` from its `expected` (docs/06:438 amended; the
+  fault stays for the completeness gap and the seq jump) and C pays the
+  silence REAL — C declares `interval_s: 300` (margin 15 min), its fault
+  extends into the live phase (480 h) so the healthy node keeps publishing
+  live while the failed one stays silent, and C's e2e (nightly only) waits
+  the real silence out before deferring the health sweep. The node row now
+  carries the scenario's own `interval_s` in BOTH provisioning paths (the
+  loader hardcoded 900).
 - T5 verification (2026-10-24, independent, default subagent — the
   `gentle-ai-verify` provider was blocked again, as in T4): **PASS-WITH-
   FINDINGS, 0 blocking**, all 8 claims PASS (scope, named timing, glue-only

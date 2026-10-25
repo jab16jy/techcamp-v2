@@ -149,8 +149,12 @@ class ScenarioNodeProvisioner(Protocol):
     directly and then claims the node through the real use case.
     """
 
-    async def provision(self, *, sensors: Sequence[ScenarioSensor]) -> str:
-        """Insert one unclaimed node carrying `sensors`; return its claim code."""
+    async def provision(self, *, sensors: Sequence[ScenarioSensor], interval_s: int) -> str:
+        """Insert one unclaimed node carrying `sensors` at the cadence the
+        scenario reports at; return its claim code. The interval is the node
+        row's own: node health's silence margin is 3 x it (D-T16.13), so a node
+        written down at another cadence than its trajectory would wait the
+        wrong silence out."""
         ...
 
 
@@ -375,7 +379,7 @@ async def _nodes_for(
         )
     sensors = scenario_sensors(scenario)
     while len(claimed) < scenario.nodes.count:
-        claim_code = await provisioner.provision(sensors=sensors)
+        claim_code = await provisioner.provision(sensors=sensors, interval_s=scenario.interval_s)
         node, password = await claim_node(
             user_id=user_id,
             claim_code=claim_code,

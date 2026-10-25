@@ -13,7 +13,7 @@ gap completeness observes (D-T16.8, docs/06:488)."""
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -22,7 +22,7 @@ from uuid import UUID
 import pytest
 
 from techcamp.simulator.runner import NodePlan, publish_scenario_backfill, publish_scenario_live
-from techcamp.simulator.scenario_schema import Scenario, load_scenario
+from techcamp.simulator.scenario_schema import Scenario, ScenarioFault, load_scenario
 from techcamp.simulator.trajectory import (
     invert_two_point,
     ramp_value,
@@ -267,13 +267,26 @@ async def test_a_different_seed_changes_the_noise_but_not_the_truth(tmp_path: Pa
     )
 
 
+def _blip_scenario() -> Scenario:
+    """The library's C re-narrowed to the runner mechanics' own 8 h blip on the
+    900 s grid: since the node-down scenario must still be silent when the
+    window is verified (D-T16.13), its fault covers the rest of the window and
+    into the live phase, and its interval is 300 s — the resume and the tick
+    arithmetic these tests prove live on a synthetic grid, not on C's."""
+    return replace(
+        load_scenario("node-failure"),
+        faults=(ScenarioFault(at_day=4, node=2, type="offline", hours=8),),
+        interval_s=900,
+    )
+
+
 async def test_offline_fault_pauses_publishing_and_seq_jumps_on_resume() -> None:
     """D-T16.8 (docs/06:488): an `offline` fault publishes nothing for its
     `hours`; on resume `seq` jumps over the skipped ticks and the time gap —
     8 h of a 900 s interval, 32 missing readings — is what completeness
     observes. The past is never rewritten: the paused node's own `ts` series
     stays strictly increasing, with no late fill-in of the paused window."""
-    scenario = load_scenario("node-failure")  # fault: day 4, node 2, 8 h
+    scenario = _blip_scenario()
     plans = _plans(scenario)
 
     ticks = await publish_scenario_backfill(plans, scenario=scenario, days=6.0, seed=0, now=_NOW)
@@ -307,7 +320,7 @@ async def test_truth_keeps_ticking_through_the_pause(tmp_path: Path) -> None:
     node published: the export covers every tick, pause included (docs/06:487),
     which is exactly what makes it a reference the balance can be measured
     against even while the sensor was down."""
-    scenario = load_scenario("node-failure")
+    scenario = _blip_scenario()
     plans = _plans(scenario)
     truth_path = tmp_path / "truth.json"
 

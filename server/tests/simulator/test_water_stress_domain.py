@@ -234,7 +234,7 @@ def test_scenario_e_parameters_reproduce_the_documented_thresholds() -> None:
 
     day_of_cycle = _SCENARIO_E.plot.sown_days_ago + 1
     assert stage_for_cycle_day(_MAIZE_STAGES, day_of_cycle) == "mid", (
-        "sown 60 days ago is flowering, the mid stage (docs/06:455)"
+        "sown 55 days ago is flowering, the mid stage (docs/06:455, #340)"
     )
     kc = compute_kc_for_cycle_day(_MAIZE_STAGES, day_of_cycle)
     assert kc == pytest.approx(1.20), "mid-stage Kc (docs/06:465)"

@@ -31,9 +31,6 @@ from techcamp.telemetry.adapters.orm import NodeRow, SensorRow
 
 from ..application.load_scenario import ScenarioPlotRef, ScenarioSensor
 
-DEFAULT_INTERVAL_S = 900
-"""docs/06 §10's scenario yaml example: `interval_s: 900`."""
-
 
 class SqlAlchemyScenarioNodeProvisioner:
     """Inserts one unclaimed node carrying the scenario's sensors."""
@@ -41,10 +38,11 @@ class SqlAlchemyScenarioNodeProvisioner:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def provision(self, *, sensors: Sequence[ScenarioSensor]) -> str:
+    async def provision(self, *, sensors: Sequence[ScenarioSensor], interval_s: int) -> str:
         """One transaction for the node and its sensors: a node with no sensor
         is claimable but can never publish a reading, which reads as a broken
-        node in the seminar instead of a failed provisioning."""
+        node in the seminar instead of a failed provisioning. The interval is
+        the scenario's own — node health's margin is 3 x it (D-T16.13)."""
         node_id = uuid7()
         claim_code = f"SIM-{secrets.token_hex(4).upper()}"
         self._session.add(
@@ -57,7 +55,7 @@ class SqlAlchemyScenarioNodeProvisioner:
                 claim_code=claim_code,
                 credential_hash="unclaimed",
                 firmware=None,
-                interval_s=DEFAULT_INTERVAL_S,
+                interval_s=interval_s,
                 claimed_at=None,
                 last_seen_at=None,
                 status="provisioned",

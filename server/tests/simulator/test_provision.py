@@ -180,7 +180,9 @@ async def test_provision_scenario_creates_the_full_org_farm_plot_cycle_soil_and_
         await db_session.execute(select(CropRow).where(CropRow.id == cycle.crop_id))
     ).scalar_one()
     assert crop.code == "maize"
-    assert cycle.sown_on == local_today(now) - timedelta(days=42)
+    assert cycle.sown_on == local_today(now) - timedelta(days=48), (
+        "#340: scenario A sows 48 days before its anchor"
+    )
 
     soil = (await db_session.execute(select(SoilProfileRow))).scalar_one()
     assert soil.plot_id == plot.id

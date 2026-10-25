@@ -33,7 +33,12 @@ from collections.abc import Iterator
 import pytest
 
 from techcamp.simulator.scenario_library import SCENARIO_NAMES, SCENARIOS_DIR, load_fixture
-from techcamp.simulator.scenario_schema import Scenario, load_all_scenarios, load_scenario
+from techcamp.simulator.scenario_schema import (
+    MIN_INTERVAL_S,
+    Scenario,
+    load_all_scenarios,
+    load_scenario,
+)
 
 MAIZE_P = 0.55
 """maize's depletion fraction `p` from the crop catalog (FAO-56 Table 22)."""
@@ -133,10 +138,10 @@ def test_every_scenario_declares_the_interval_completeness_counts_against(
     scenario: Scenario,
 ) -> None:
     """docs/03-modelo-datos.md:145 makes `interval_s` the base of expected readings,
-    so a scenario that omits it or states a nonsense one cannot be judged complete."""
-    assert scenario.interval_s == 900, (
-        "the simulator's default interval (simulator/provision.py DEFAULT_INTERVAL_S)"
-    )
+    so a scenario that omits it or states a nonsense one cannot be judged complete.
+    The schema refuses anything under a minute; C's 300 s is deliberate
+    (D-T16.13: its node-offline e2e waits the 3 x interval real silence out)."""
+    assert scenario.interval_s >= MIN_INTERVAL_S
 
 
 def test_a_rainfed_plot_takes_a_rainfed_recommendation(scenario: Scenario) -> None:
@@ -237,14 +242,18 @@ def test_scenario_a_crosses_stress_on_the_documented_day(scenario: Scenario) -> 
     crossing = BACKFILL_DAYS * (ramp["start"] - threshold) / (ramp["start"] - ramp["end"])
     depletion_mm = 1000 * (scenario.soil.field_capacity_pct / 100.0 - ramp["end"] / 100.0) * 0.6
 
-    assert scenario.plot.sown_days_ago == 42
+    assert scenario.plot.sown_days_ago == 48, (
+        "#340: ages 48-62 sit inside the catalog's mid stage (45-76), Kc 1,20"
+    )
     assert scenario.nodes.soil_moisture_depth_cm == 30, "Zr/2 = 30 cm (docs/06:445)"
     assert ramp["start"] == 22.0 and ramp["end"] == 13.0
     assert crossing == pytest.approx(SCENARIO_A_CROSSING_DAY, abs=0.1)
     assert depletion_mm == pytest.approx(60.0, abs=0.6), "Dr_obs = 60 mm (docs/06:447)"
     assert depletion_mm > RAW_A_MM, "60 mm > RAW 46,2 mm, so the advice is to irrigate"
     assert scenario.expected.irrigation == "irrigate"
-    assert scenario.alerts == ("water_stress", "heat_stress", "node_offline")
+    # D-T16.13: node_offline is decided on real arrival silence, which a
+    # compressed backfill never accumulates, so it is not A's oracle's business.
+    assert scenario.alerts == ("water_stress", "heat_stress")
 
 
 def test_scenario_a_trajectory_can_reach_the_heat_threshold(scenario: Scenario) -> None:
@@ -295,16 +304,20 @@ def test_scenario_e_passes_raw_on_the_documented_day(scenario: Scenario) -> None
 
 
 def test_scenario_c_faults_a_node_for_the_documented_hours(scenario: Scenario) -> None:
-    """docs/06-diseno-detallado.md:436, :477: scenario C is a node down for 8 h, which
-    opens `node_offline` and leaves a gap for completeness to observe. D-T16.8: the
-    fault is a publish pause, so nothing about the readings already sent changes."""
+    """docs/06-diseno-detallado.md:477: scenario C is a node DOWN — the alert to
+    the technician and a completeness gap are both observable when the window is
+    verified, so the fault covers the rest of the window instead of resuming
+    (node health decides at the sweep's own `now` over `last_seen_at`). D-T16.8:
+    the fault is a publish pause, so nothing about the readings already sent
+    changes."""
     if scenario.name != "node-failure":
         pytest.skip("scenario C's fault")
 
     assert len(scenario.faults) == 1
     fault = scenario.faults[0]
     assert fault.type == "offline"
-    assert fault.hours == 8
+    assert fault.hours == 480, "the node stays down past the window, into the live phase"
+    assert fault.at_day + fault.hours / 24 >= 14, "the silence covers the window's end"
     assert 1 <= fault.node <= scenario.nodes.count
     assert fault.at_day >= 1, "a fault on day 0 has no backfill before it to interrupt"
     assert "node_offline" in scenario.alerts
