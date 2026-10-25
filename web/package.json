@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest",
+    "e2e": "playwright test",
     "size": "size-limit",
     "gen:api": "tmp=$(mktemp) && cd ../server && TECHCAMP_PROFILE=seminar uv run python -c \"import json; from techcamp.main import app; print(json.dumps(app.openapi()))\" > \"$tmp\" && cd ../web && openapi-typescript \"$tmp\" -o src/lib/api/schema.d.ts && rm \"$tmp\""
   },
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
     "@size-limit/file": "^14.0.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
