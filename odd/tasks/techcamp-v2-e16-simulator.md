@@ -348,6 +348,13 @@ commit is a passive doc-only candidate (C6).
 - T5 (2026-10-24): round findings in #339 — the two touching this task's own
   files fixed with `Refs #339` in `2476815`; the catalog-vs-FAO-56 owner
   decision that stops T6's E wiring is its own issue, #340.
+- T6 (2026-10-25): independent verification PASS-WITH-FINDINGS, 0 blocking,
+  all 10 claims PASS (scope, #340, D-T16.11/12/13, the specs' shapes, CI,
+  the doc, 256/27 pure tests, and a live `just gate web/e2e/scenarios`
+  re-run green). Non-blocking in #341: the server test gate's session-end
+  downgrade poisons the shared seminar database behind the scenario gate
+  (root fix outside E16's lanes), plus the scenario-clean scope note.
+  Nothing touched this task's own code.
 
 ## Progress / evidence
 
@@ -553,11 +560,14 @@ commit is a passive doc-only candidate (C6).
   `startBackfill`), `789cb96` (D-T16.13: `node_offline` decided on REAL
   arrival silence; A's oracle drops it, C pays it real at `interval_s: 300`
   with the loader no longer hardcoding 900), `b3279bf` (the four specs, E's
-  tripwire flipped, the CI ingestor + `@pr` split). Verified: `just gate
+  tripwire flipped, the CI ingestor + `@pr` split), `b4a3d60` (this
+  evidence); the owner's `661f41f` (`.gitignore` for the truth exports the
+  runs regenerate) closes the lane at eight commits. Verified: `just gate
   server/tests/simulator` 256 passed / 27 skipped; `just gate
   web/e2e/scenarios` LIVE green — 4 passed in 2.6 m (E 10 s, A 2.2 m, normal
-  8 s, B 9 s) with C correctly skipped outside the nightly. RDD review
-  pending, owner-owned.
+  8 s, B 9 s) with C correctly skipped outside the nightly, twice (the
+  author's run and the independent verification's). RDD review pending,
+  owner-owned.
 - T6 findings (all recorded in the decisions above): **(1)** the oracle's
   non-resolved-only semantics made A's verdict depend on the wall clock
   (`heat_stress` resolves nightly) — D-T16.12. **(2)** `node_offline` cannot
@@ -574,7 +584,11 @@ commit is a passive doc-only candidate (C6).
   broken pipeline) — the spec now asserts the restored advice. Operational:
   the scenario runs need api + worker + ingestor + mosquitto against the
   worktree database, and a migration or `just scenario-clean` under a live
-  worker kills it (restart the stack after) — CI starts all four.
+  worker kills it (restart the stack after) — CI starts all four. One more
+  trap the verification round hit (#341): the server test gate ITSELF
+  downgrades the schema to base at session end against this same database,
+  so a `just gate server/tests/simulator` followed by the scenario gate
+  needs `alembic upgrade head` and a worker restart in between.
 - T6 decisions (2026-10-25, same work unit as the doc and YAML changes):
   **#340 resolved by the owner — option (b), the scenarios' sowing ages.**
   E sows 55 days before its anchor (window ages 55-75) and A 48 (48-62), both
