@@ -161,9 +161,22 @@ def _require(condition: bool, message: str) -> None:
         raise FixtureSchemaError(message)
 
 
-def _require_keys(raw: dict[str, Any], expected: frozenset[str], where: str) -> None:
+def _require_keys(
+    raw: dict[str, Any],
+    expected: frozenset[str],
+    where: str,
+    *,
+    optional: frozenset[str] = frozenset(),
+) -> None:
+    """Every expected key is there, and nothing else is.
+
+    `optional` names the keys the shape allows but does not demand: the
+    envelope's `synthetic_reason`, which only a synthetic capture carries
+    (D-T16.3, and the rule below that demands it exactly when `synthetic` is
+    true).
+    """
     missing = expected - raw.keys()
-    unknown = raw.keys() - expected
+    unknown = raw.keys() - (expected | optional)
     _require(not missing, f"{where}: missing key(s) {sorted(missing)}")
     _require(not unknown, f"{where}: unknown key(s) {sorted(unknown)}")
 
@@ -203,7 +216,7 @@ def _parse_day(index: int, row: Any, where: str) -> FixtureDay:
 
 def _parse_envelope(name: str, raw: Any, where: str) -> dict[str, Any]:
     assert isinstance(raw, dict)
-    _require_keys(raw, REQUIRED_ENVELOPE_KEYS, where)
+    _require_keys(raw, REQUIRED_ENVELOPE_KEYS, where, optional=frozenset({"synthetic_reason"}))
     _require(raw["name"] == name.removesuffix(".json"), f"{where}: name must match the filename")
     _require(raw["scenario"] in SCENARIO_NAMES, f"{where}: unknown scenario {raw['scenario']!r}")
     _require(raw["version"] == 1, f"{where}: unsupported version {raw['version']!r}")
