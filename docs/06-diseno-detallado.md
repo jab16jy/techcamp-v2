@@ -406,7 +406,7 @@ sequenceDiagram
   participant W as worker
 
   D->>S: sim run --scenario el-nino --backfill 14d --live
-  S->>API: crear org, finca, parcela, ciclo y nodos (claim) si no existen
+  S->>API: crear org, finca, parcela, ciclo y nodos (claim) si no existen (D-T16.5: `sim run` absorbe la creación vía claim; prerequisito stack sano con `just db-up`; el stall de `minio-init` de #214 sigue pre-step fileado)
   S->>API: cargar fixtures de clima del escenario en weather_daily
   S->>B: backfill: 14 días de lecturas con ts en el pasado
   B->>I: ingesta normal (dedupe, calibración, reglas)
@@ -418,7 +418,7 @@ sequenceDiagram
   Note over D,W: la PWA muestra la recomendación, las alertas y los gráficos en tiempo real
 ```
 
-**Formato de un escenario** (`firmware/simulator/scenarios/<nombre>.yaml`):
+**Formato de un escenario** (`server/src/techcamp/simulator/scenarios/<nombre>.yaml`, D-T16.1: la librería vive junto al simulador; `docs/05:187` queda como reserva del firmware ESP32, no del escenario):
 
 ```yaml
 name: el-nino
@@ -482,9 +482,10 @@ expected:
 **Reglas:**
 
 - El simulador envía lecturas en **ADC crudo** y cada nodo simulado tiene su calibración, así que también se demuestra la calibración.
-- `expected` convierte cada escenario en una **prueba end-to-end**: CI corre el escenario y verifica las alertas y la recomendación esperadas.
+- `expected` convierte cada escenario en una **prueba end-to-end** (D-T16.4): gramática `alerts[] + irrigation kind + advice[]` por escenario (`docs/06:437-440,459-462`), con timeouts e intervalos de poll nombrados; harness en `web/e2e/scenarios/`; CI corre A+E por PR y todos en nightly. CI corre el escenario y verifica las alertas y la recomendación esperadas.
 - Un test de dominio verifica, con los parámetros de suelo y cultivo de cada escenario, que `water_stress` abre cuando `Dr > RAW` y no antes.
-- La trayectoria sin ruido de cada escenario es la **verdad de referencia** para medir el error del balance hídrico ([11 §3](11-metricas.md#3-calidad-de-decisión)).
-- El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con la bandera 2 de `quality`, huecos de `seq`).
-- Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather`) y quedan versionados: la demo funciona sin internet, salvo el asistente.
+- La trayectoria sin ruido de cada escenario es la **verdad de referencia** para medir el error del balance hídrico ([11 §3](11-metricas.md#3-calidad-de-decisión)) (D-T16.7: seed determinista por defecto con flag `--seed`; el runner exporta la verdad sin ruido separada de los valores ruidosos publicados).
+- El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con la bandera 2 de `quality`, huecos de `seq`) (D-T16.8: una falla `offline` es pausa de publicación; al resumir `seq` salta y el hueco lo observa completitud, sin reescribir pasado).
+- El push del escenario A se afirma vía `GET /dev/outbox`, nunca con push real de navegador; #146 sigue abierto (D-T16.6).
+- Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather --scenario X --from YYYY-MM-DD --days N`, D-T16.3: filas diarias por día-offset del escenario con las variables que el balance necesita, más `source_url`, `recorded_at` y hash; record-first, sintético solo con flag explícito cuando la grabación no reproduce la aritmética ETc≈5/ET0≈4,2) y quedan versionados: la demo funciona sin internet, salvo el asistente.
 
