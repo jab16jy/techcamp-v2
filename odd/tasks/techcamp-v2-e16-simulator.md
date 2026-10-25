@@ -664,7 +664,7 @@ commit is a passive doc-only candidate (C6).
   AGENTS.md's docs-win rule the tab now fetches the org's farms and plots
   and feeds the screen — the same `app/` composition the visits sheet gets
   in PlotsTab (E8 D14) — no `features/logbook` or `lib/sync` file touched.
-- T7 findings (non-blocking, round issue): **the el-nino e2e's outbox step
+- T7 findings (non-blocking, round issue #342): **the el-nino e2e's outbox step
   is unwinnable as wired — 3/3 failures across two clean stack restacks
   (fresh api/worker/ingestor/mosquitto, `just scenario-clean` before each,
   one ingestor the third time).** With seed 0, the ±0.8 noise pops above
