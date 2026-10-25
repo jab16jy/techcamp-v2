@@ -150,6 +150,22 @@ async def test_the_node_carries_the_sensors_the_scenario_publishes(
     assert soil.depth_cm == 30
 
 
+async def test_the_node_carries_the_interval_the_scenario_declares(
+    db_session: AsyncSession,
+) -> None:
+    """D-T16.13: node health's silence margin is 3 x the node's interval_s, so
+    the node row must carry the cadence the scenario actually reports at — a
+    node written down as 900 s while its trajectory runs at 300 s would wait a
+    45-minute margin for a 15-minute silence."""
+    org = await _org(db_session, phone="+573000000003")
+
+    response = _client().post("/dev/scenarios/node-failure:load", json={}, headers=_auth(org))
+    node_id = UUID(response.json()["node_ids"][0])
+
+    node = (await db_session.execute(select(NodeRow).where(NodeRow.id == node_id))).scalar_one()
+    assert node.interval_s == 300, "node-failure declares interval_s: 300 (D-T16.13)"
+
+
 async def test_the_soil_carries_the_scenario_water_limits(
     db_session: AsyncSession,
 ) -> None:

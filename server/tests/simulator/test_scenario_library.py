@@ -33,7 +33,12 @@ from collections.abc import Iterator
 import pytest
 
 from techcamp.simulator.scenario_library import SCENARIO_NAMES, SCENARIOS_DIR, load_fixture
-from techcamp.simulator.scenario_schema import Scenario, load_all_scenarios, load_scenario
+from techcamp.simulator.scenario_schema import (
+    MIN_INTERVAL_S,
+    Scenario,
+    load_all_scenarios,
+    load_scenario,
+)
 
 MAIZE_P = 0.55
 """maize's depletion fraction `p` from the crop catalog (FAO-56 Table 22)."""
@@ -133,10 +138,10 @@ def test_every_scenario_declares_the_interval_completeness_counts_against(
     scenario: Scenario,
 ) -> None:
     """docs/03-modelo-datos.md:145 makes `interval_s` the base of expected readings,
-    so a scenario that omits it or states a nonsense one cannot be judged complete."""
-    assert scenario.interval_s == 900, (
-        "the simulator's default interval (simulator/provision.py DEFAULT_INTERVAL_S)"
-    )
+    so a scenario that omits it or states a nonsense one cannot be judged complete.
+    The schema refuses anything under a minute; C's 300 s is deliberate
+    (D-T16.13: its node-offline e2e waits the 3 x interval real silence out)."""
+    assert scenario.interval_s >= MIN_INTERVAL_S
 
 
 def test_a_rainfed_plot_takes_a_rainfed_recommendation(scenario: Scenario) -> None:
@@ -246,7 +251,9 @@ def test_scenario_a_crosses_stress_on_the_documented_day(scenario: Scenario) -> 
     assert depletion_mm == pytest.approx(60.0, abs=0.6), "Dr_obs = 60 mm (docs/06:447)"
     assert depletion_mm > RAW_A_MM, "60 mm > RAW 46,2 mm, so the advice is to irrigate"
     assert scenario.expected.irrigation == "irrigate"
-    assert scenario.alerts == ("water_stress", "heat_stress", "node_offline")
+    # D-T16.13: node_offline is decided on real arrival silence, which a
+    # compressed backfill never accumulates, so it is not A's oracle's business.
+    assert scenario.alerts == ("water_stress", "heat_stress")
 
 
 def test_scenario_a_trajectory_can_reach_the_heat_threshold(scenario: Scenario) -> None:
@@ -309,7 +316,7 @@ def test_scenario_c_faults_a_node_for_the_documented_hours(scenario: Scenario) -
     assert len(scenario.faults) == 1
     fault = scenario.faults[0]
     assert fault.type == "offline"
-    assert fault.hours == 240, "the node stays down for the rest of the 14-day window"
+    assert fault.hours == 480, "the node stays down past the window, into the live phase"
     assert fault.at_day + fault.hours / 24 >= 14, "the silence covers the window's end"
     assert 1 <= fault.node <= scenario.nodes.count
     assert fault.at_day >= 1, "a fault on day 0 has no backfill before it to interrupt"

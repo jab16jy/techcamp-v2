@@ -563,7 +563,19 @@ commit is a passive doc-only candidate (C6).
   own `now` over `last_seen_at`, so a fault that resumed mid-window would leave
   the node healthy and the pinned alert unopenable). The run's organization is
   fresh, so what exists for the plot is what that run opened. docs/06:485
-  amended.
+  amended. **D-T16.13 (found in T6, owner decision 2026-10-25)** —
+  `node_offline` is decided on REAL arrival silence (`last_seen_at`, margin
+  3 × `interval_s`), and a compressed backfill makes 14 days arrive in
+  seconds — the silence never accumulates, and even the demo's `--live` phase
+  cannot show it (the fault already elapsed inside the backfill). The owner
+  chose: A drops `node_offline` from its `expected` (docs/06:438 amended; the
+  fault stays for the completeness gap and the seq jump) and C pays the
+  silence REAL — C declares `interval_s: 300` (margin 15 min), its fault
+  extends into the live phase (480 h) so the healthy node keeps publishing
+  live while the failed one stays silent, and C's e2e (nightly only) waits
+  the real silence out before deferring the health sweep. The node row now
+  carries the scenario's own `interval_s` in BOTH provisioning paths (the
+  loader hardcoded 900).
 - T5 verification (2026-10-24, independent, default subagent — the
   `gentle-ai-verify` provider was blocked again, as in T4): **PASS-WITH-
   FINDINGS, 0 blocking**, all 8 claims PASS (scope, named timing, glue-only

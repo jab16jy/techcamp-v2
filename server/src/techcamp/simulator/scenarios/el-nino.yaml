@@ -17,11 +17,12 @@ trajectories:
   air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }   # daily_max > 35 °C abre heat_stress
   air_rh: { daily_min: 38, daily_max: 70, noise: 0.4 }     # bajo 85 %, así que no fungal_risk
 faults:
-  # The node goes silent on day 10 and never comes back inside the window:
-  # node health decides at the sweep's own `now` over `last_seen_at`, so a
-  # fault that resumed mid-window would leave the node healthy at the end and
-  # the alert the scenario pins could not be open (docs/06:436).
+  # The node goes silent on day 10 and never comes back inside the window: the
+  # completeness gap and the seq jump on a live resume are what this fault
+  # demonstrates (D-T16.8). D-T16.13: node_offline is decided on REAL arrival
+  # silence (last_seen_at, margin 3 x interval_s), which a compressed backfill
+  # never accumulates, so the alert is not part of this scenario's oracle.
   - { at_day: 10, node: 2, type: offline, hours: 96 }
 expected:
-  alerts: [water_stress, heat_stress, node_offline]
+  alerts: [water_stress, heat_stress]
   irrigation: irrigate
