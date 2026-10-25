@@ -23,6 +23,12 @@ on:
     - cron: "30 5 * * *"
   workflow_dispatch:
 
+# Checkout is the workflow's only GITHUB_TOKEN use — the report upload rides
+# the runner's runtime token, not the token's scopes — so contents: read is
+# the whole grant (CodeQL, T6 review).
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
