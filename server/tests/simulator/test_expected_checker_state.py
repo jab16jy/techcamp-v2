@@ -1,10 +1,13 @@
 """E16 T4: the observed-state adapter over the real repositories.
 
 `collect_observed_state` gathers what the stack actually serves for one scenario
-plot: the non-resolved alerts (plot-scoped ones through the plot listing, and the
-node-scoped ones — `node_offline` lives on the node, docs/06:477 — through the
-same per-target read the evaluators use), and the stored recommendation for one
-day. Everything is org-scoped; another org's state never comes back (docs/09).
+plot: the alerts the run OPENED (D-T16.12: plot-scoped ones in any state — a
+daily-cycle rule like `heat_stress` opens each afternoon and auto-resolves each
+night inside one window, so non-resolved-only would make a scenario's verdict
+depend on the wall clock — and the node-scoped ones non-resolved, because the
+scenarios pin a node that is still silent at verification), and the stored
+recommendation for one day. Everything is org-scoped; another org's state never
+comes back (docs/09).
 """
 
 from __future__ import annotations
@@ -146,13 +149,19 @@ async def test_plot_scoped_and_node_scoped_alerts_both_come_back(
     assert observed.alert_codes == ("water_stress", "node_offline")
 
 
-async def test_resolved_alerts_are_not_observed(db_session: AsyncSession) -> None:
+async def test_a_resolved_plot_alert_is_still_what_the_run_opened(
+    db_session: AsyncSession,
+) -> None:
+    """D-T16.12: a daily-cycle rule (heat_stress) opens each afternoon and
+    auto-resolves each night inside one window, so the plot-scoped half of the
+    oracle reads every alert the run opened, any state — the run's fresh
+    organization is what scopes "this run"."""
     org_id, _phone = await member(db_session)
     plot_id = await make_plot(db_session, org_id)
     await _open_alert(
         db_session,
         org_id=org_id,
-        code="water_stress",
+        code="heat_stress",
         plot_id=plot_id,
         node_id=None,
         state="resolved",
@@ -162,6 +171,36 @@ async def test_resolved_alerts_are_not_observed(db_session: AsyncSession) -> Non
     observed = await collect_observed_state(
         org_id=org_id,
         plot_id=plot_id,
+        day=_DAY,
+        alerts=alerts,
+        rules=rules,
+        recommendations=recommendations,
+    )
+
+    assert observed.alert_codes == ("heat_stress",)
+
+
+async def test_a_resolved_node_alert_is_not_observed(db_session: AsyncSession) -> None:
+    """The node-scoped half stays non-resolved: the scenarios pin a node that is
+    still silent when the window is verified, so an alert the node's return
+    resolved is no longer part of what the scenario asserts."""
+    org_id, _phone = await member(db_session)
+    plot_id = await make_plot(db_session, org_id)
+    node_id = await _claimed_node(db_session, org_id, plot_id)
+    await _open_alert(
+        db_session,
+        org_id=org_id,
+        code="node_offline",
+        plot_id=None,
+        node_id=node_id,
+        state="resolved",
+    )
+
+    alerts, rules, recommendations = _repos(db_session)
+    observed = await collect_observed_state(
+        org_id=org_id,
+        plot_id=plot_id,
+        node_ids=(node_id,),
         day=_DAY,
         alerts=alerts,
         rules=rules,
