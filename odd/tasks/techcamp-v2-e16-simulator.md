@@ -196,14 +196,16 @@ shrink a diff to fit one*).
   config + CI workflow, floor ~400. **Route: delegated + `impeccable`** only
   where PWA assertions need screen paths (trigger: writer, e2e). **Depends
   T4.** Implemented 2026-10-24 on `e16-t5` (evidence below).
-- [ ] **T6 — Scenarios A / B / C / E / normal wired.** Each scenario runs
+- [x] **T6 — Scenarios A / B / C / E / normal wired.** Each scenario runs
   one-command with its per-scenario `expected`: A (`water_stress`,
-  `heat_stress`, `node_offline` → `irrigate`, outbox push per D-T16.6), B
-  (`fungal_risk` → no-irrigation advice), C (node down → technician alert +
-  completeness gap), E (`water_stress` critical day 18 → `rainfed` +
-  `conserve_moisture`, `K = 0` path), normal (stable, contrast). Forecast: 5
+  `heat_stress` → `irrigate`, outbox push per D-T16.6; `node_offline` left
+  the oracle per D-T16.13), B (`fungal_risk` → no-irrigation advice), C (node
+  down → technician alert + completeness gap, paid with real silence), E
+  (`water_stress` critical day 18 → `rainfed` + `conserve_moisture`, `K = 0`
+  path), normal (stable, contrast). Forecast: 5
   wirings + e2e assertions, floor ~400. **Route: delegated** (trigger:
-  writer; scenario assembly). **Depends T2, T3, T5.**
+  writer; scenario assembly). **Depends T2, T3, T5.** Implemented 2026-10-25
+  on `e16-t6` (evidence below).
 - [ ] **T7 — Scenario D (PWA offline) e2e.** Offline logbook + sync without
   duplicates on top of E8 (C5: assert, do not rebuild); airplane-mode flow
   through the harness. Forecast: 1 e2e + fixtures, floor ~250. **Route:
@@ -536,6 +538,43 @@ commit is a passive doc-only candidate (C6).
   change); the YAML itself flags stage durations as "pendiente de
   validación agronómica". Until it lands, the pilot asserts the checker's
   named findings instead of `passed`, so CI stays green without lying.
+- 2026-10-25: **T6 implemented** on branch `e16-t6` (base `e16-t5` @
+  `5a302d6`), six work units: `8b873f2` (#340 resolved as the scenarios'
+  sowing ages — E 55, A 48 — plus D-T16.11 and D-T16.12 into docs/06 and the
+  YAMLs), `2356cef` (the oracle reads what the run opened, through the alerts
+  port's own org listing — no foreign edit), `425852a` (the support runners:
+  `publish_backfill.py` — calibrations over HTTP with the member token and
+  the backfill through `publish_scenario_backfill`, one MQTT connection per
+  node; `defer_alerts_job.py` — the three per-org alerts jobs no `/dev/jobs`
+  reaches; `scenario_clean.py` + `just scenario-clean`, T5's /tmp SQL made
+  durable), `43fbb5f` (the harness drives `sim run` as the documented
+  command — its dev-OTP stdin prompt fed from the api log — plus
+  `publishBackfill`, `deferAlertsJob`, `readOutbox`, `nodeHealth`,
+  `startBackfill`), `789cb96` (D-T16.13: `node_offline` decided on REAL
+  arrival silence; A's oracle drops it, C pays it real at `interval_s: 300`
+  with the loader no longer hardcoding 900), `b3279bf` (the four specs, E's
+  tripwire flipped, the CI ingestor + `@pr` split). Verified: `just gate
+  server/tests/simulator` 256 passed / 27 skipped; `just gate
+  web/e2e/scenarios` LIVE green — 4 passed in 2.6 m (E 10 s, A 2.2 m, normal
+  8 s, B 9 s) with C correctly skipped outside the nightly. RDD review
+  pending, owner-owned.
+- T6 findings (all recorded in the decisions above): **(1)** the oracle's
+  non-resolved-only semantics made A's verdict depend on the wall clock
+  (`heat_stress` resolves nightly) — D-T16.12. **(2)** `node_offline` cannot
+  open in a compressed run at all: the health rule measures ARRIVAL silence
+  (`last_seen_at`) and a backfill compresses arrivals into seconds — the T5
+  handoff's "opened and resolved inside the window" framing was wrong;
+  neither repositioning the fault nor a live phase can open it — D-T16.13,
+  owner decision. **(3)** the ingestor decides per flush (500 uplinks / 1 s):
+  a full-speed backfill lands its flush boundaries 2.6 trajectory-days apart,
+  which opened A's `water_stress` too late for D5's 48 h upgrade — the 50 ms
+  per-uplink pacing restores a real stream's decision granularity
+  (docs/06:485). **(4)** the #340 fix changed E's PWA advice from
+  `no_action` to `conserve_moisture` (the pilot's old assertion watched the
+  broken pipeline) — the spec now asserts the restored advice. Operational:
+  the scenario runs need api + worker + ingestor + mosquitto against the
+  worktree database, and a migration or `just scenario-clean` under a live
+  worker kills it (restart the stack after) — CI starts all four.
 - T6 decisions (2026-10-25, same work unit as the doc and YAML changes):
   **#340 resolved by the owner — option (b), the scenarios' sowing ages.**
   E sows 55 days before its anchor (window ages 55-75) and A 48 (48-62), both
