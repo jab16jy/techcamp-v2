@@ -30,6 +30,8 @@ export const E2E_TIMING = {
   jobPollIntervalMs: 2_000,
   otpLogTimeoutMs: 30_000,
   otpLogIntervalMs: 500,
+  silencePollTimeoutMs: 1_200_000,
+  silencePollIntervalMs: 15_000,
 } as const
 
 export interface E2eConfig {
@@ -281,6 +283,20 @@ export async function plotStatus(token: string, plotId: string): Promise<PlotSta
   }
 }
 
+/** `GET /nodes/{node_id}/health` (docs/04-api.md:100): the node's arrival
+ * silence and its 24 h completeness — the surface scenario C's e2e observes
+ * the gap on, and the poll that waits a real silence out (D-T16.13). */
+export interface NodeHealthView {
+  node_id: string
+  last_seen_at: string | null
+  completeness_24h: number | null
+}
+
+export async function nodeHealth(token: string, nodeId: string): Promise<NodeHealthView> {
+  const response = await apiFetch(`/nodes/${nodeId}/health`, { token })
+  return (await response.json()) as NodeHealthView
+}
+
 /** `GET /dev/outbox` (docs/04-api.md:264): the seminar tray of simulated
  * SMS/WhatsApp rows — one room, no session, no org filter. Scenario A's push
  * is asserted here (D-T16.6): the escalation's row names the rule and the
@@ -414,14 +430,24 @@ export async function runSimScenario(name: string, backfill: string): Promise<Si
 /** D-T16.11: the loader's nodes get their calibrations and the scenario's
  * backfill through the support runner — `valid_from` covering the retroactive
  * window and one MQTT connection per node, inside the runner. The 202 travels
- * as an argument: it is a handful of ids and credentials. */
-export async function publishBackfill(args: {
+ * as an argument: it is a handful of ids and credentials. `liveSeconds` keeps
+ * the runner publishing live after the backfill (docs/06:408's `--live`,
+ * bounded) — the caller runs it in the background with `startBackfill` while
+ * it waits on state. */
+export interface BackfillArgs {
   token: string
   load: ScenarioLoad202
   days: number
   seed?: number
-}): Promise<{ ticks: number; nodes: number }> {
-  const stdout = await runServerPython([
+  liveSeconds?: number
+  /** Delay per published uplink (ms): the pacing that keeps the ingestor's
+   * flush boundaries fine-grained against the trajectory — the D5 upgrade
+   * measures 48 h of it (the compression repair the A spec needs). */
+  tickDelayMs?: number
+}
+
+function backfillRunnerArgs(args: BackfillArgs): string[] {
+  const base = [
     supportScript('publish_backfill.py'),
     '--token',
     args.token,
@@ -431,7 +457,55 @@ export async function publishBackfill(args: {
     String(args.days),
     '--seed',
     String(args.seed ?? 0),
-  ])
+  ]
+  if (args.liveSeconds !== undefined) base.push('--live-seconds', String(args.liveSeconds))
+  if (args.tickDelayMs !== undefined) base.push('--tick-delay-ms', String(args.tickDelayMs))
+  return base
+}
+
+export interface BackfillRun {
+  finished: Promise<{ ticks: number; nodes: number }>
+  /** Stop the runner (SIGKILL after the graceful timeout): a background live
+   * tail the caller is done with ends here, not at its own deadline. */
+  stop: () => void
+}
+
+export function startBackfill(args: BackfillArgs): BackfillRun {
+  const { serverDir } = e2eConfig()
+  // No execFile timeout: a live tail outlives `scenarioCommandTimeoutMs` by
+  // design (D-T16.13's real silence), and the caller's await on `finished` —
+  // inside the spec's own Playwright timeout — is what bounds it.
+  const child = execFile(
+    'uv',
+    ['run', 'python', ...backfillRunnerArgs(args)],
+    { cwd: serverDir, maxBuffer: 16 * 1024 * 1024 },
+  )
+  let stdout = ''
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString()
+  })
+  const finished = new Promise<{ ticks: number; nodes: number }>((resolve, reject) => {
+    child.on('close', (code, signal) => {
+      if (code !== 0) {
+        reject(new Error(`publish_backfill.py exited ${code} (${signal}): ${stdout.slice(-500)}`))
+        return
+      }
+      try {
+        resolve(JSON.parse(stdout.trim().split('\n').at(-1) as string) as {
+          ticks: number
+          nodes: number
+        })
+      } catch (error) {
+        reject(error as Error)
+      }
+    })
+    child.on('error', reject)
+  })
+  return { finished, stop: () => child.kill() }
+}
+
+export async function publishBackfill(args: BackfillArgs): Promise<{ ticks: number; nodes: number }> {
+  const stdout = await runServerPython(backfillRunnerArgs(args))
   return JSON.parse(stdout.trim().split('\n').at(-1) as string) as { ticks: number; nodes: number }
 }
 

@@ -4,14 +4,15 @@ name: e2e scenarios
 # seminar stack (docs/06-diseno-detallado.md:485, D-T16.4): recorded weather
 # fixtures only, never the provider network (D-T16.3).
 #
-# - Per PR: whatever is wired, when the PR touches a side the harness drives —
-#   the server it exercises or the web/e2e harness itself. One `changes` job
-#   classifies once, the same way `ci.yml` does (D-T5b.2), and the job never
-#   skips itself on a workflow-file change (`^\.github/workflows/` is in the
-#   filter for the same fail-closed reason, D-T5b.4).
-# - Nightly + manual dispatch: the same job with no change filter — this is
-#   where T6's full scenario set (A, B, C, E, normal) and T7's offline flow
-#   run whole, per D-T16.4's "todos en nightly".
+# - Per PR: A + E, the two scenarios the fast lanes can honestly run (D-T16.4's
+#   split, tagged `@pr` in their titles and selected with `--grep`): E is
+#   node-less and A's alerts all open at ingest. One `changes` job classifies
+#   once, the same way `ci.yml` does (D-T5b.2), and the job never skips itself
+#   on a workflow-file change (`^\.github/workflows/` is in the filter for the
+#   same fail-closed reason, D-T5b.4).
+# - Nightly + manual dispatch: every scenario, with the silence wait enabled —
+#   C pays its real 15-minute arrival silence there (D-T16.13), and B, normal
+#   run whole.
 #
 # Separate from ci.yml because the schedule needs no `changes` job: gating the
 # nightly on a diff that does not exist would leave it permanently skipped.
@@ -116,6 +117,15 @@ jobs:
         working-directory: server
         run: |
           nohup uv run python -m techcamp.worker > "${RUNNER_TEMP}/techcamp-e2e-worker.log" 2>&1 &
+      - name: start the ingestor
+        working-directory: server
+        # The MQTT scenarios (A, B, C, normal) publish through the broker this
+        # job already runs; the ingestor is the process that turns those
+        # uplinks into readings and opens the reading-threshold alerts.
+        env:
+          MQTT_HOST: localhost
+        run: |
+          nohup uv run python -m techcamp.ingestor > "${RUNNER_TEMP}/techcamp-e2e-ingestor.log" 2>&1 &
       - name: wait for the api
         # `/health`, the unversioned liveness probe (main.py) — not the
         # readiness probe, which needs a broker this job's E scenarios do not.
@@ -127,7 +137,16 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npx playwright test
+      # The nightly and the dispatch run every scenario with the silence wait
+      # enabled (C's real 15-minute margin, D-T16.13); a PR runs the @pr tag.
+      - name: run every scenario (nightly)
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          E2E_SCENARIO_SILENCE_WAIT: "1"
+        run: npx playwright test
+      - name: run the per-PR scenarios (A + E)
+        if: ${{ github.event_name == 'pull_request' }}
+        run: npx playwright test --grep @pr
       - name: upload the playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

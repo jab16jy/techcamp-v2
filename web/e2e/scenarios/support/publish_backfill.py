@@ -37,9 +37,39 @@ import httpx
 
 from techcamp.simulator.node_client import ClaimedNode, ensure_calibrations
 from techcamp.simulator.publisher import MqttUplinkPublisher
-from techcamp.simulator.runner import NodePlan, publish_scenario_backfill
+from techcamp.simulator.runner import (
+    LIVE_INTERVAL_S,
+    NodePlan,
+    publish_scenario_backfill,
+    publish_scenario_live,
+)
 from techcamp.simulator.scenario_schema import load_scenario
 from techcamp.simulator.trajectory import soil_two_point_params
+
+
+class PacedPublisher:
+    """A publisher that breathes: one small delay per uplink.
+
+    The ingestor decides per FLUSH (500 uplinks or 1 s), and the reading branch
+    of `water_stress` opens and upgrades (D5's 48 h) at flush boundaries
+    measured on the trajectory's own clock. A backfill pumped as fast as the
+    broker takes it lands its boundaries 2.6 trajectory-days apart, which
+    pushed the opening past the upgrade's reach on the recorded pipeline. A
+    50 ms breath per uplink gives the ingestor ~1 s flushes — about 0.1
+    trajectory-days — the granularity a real 15-minute node stream has, so the
+    alert opens at the documented crossing and the 48 h upgrade fits inside
+    the window. Pure compression repair: the same uplinks, the same order, a
+    realistic arrival cadence.
+    """
+
+    def __init__(self, inner: MqttUplinkPublisher, delay_s: float) -> None:
+        self._inner = inner
+        self._delay_s = delay_s
+
+    async def publish_uplink(self, node_id: UUID, payload: dict[str, Any]) -> None:
+        if self._delay_s > 0:
+            await asyncio.sleep(self._delay_s)
+        await self._inner.publish_uplink(node_id, payload)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -57,6 +87,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--days", type=float, required=True, help="Backfill duration, in days.")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--tick-delay-ms",
+        type=float,
+        default=0,
+        help="Delay per published uplink, in milliseconds: the pacing that keeps "
+        "the ingestor's flush boundaries fine-grained against the trajectory "
+        "(the D5 upgrade measures 48 h of it).",
+    )
+    parser.add_argument(
+        "--live-seconds",
+        type=int,
+        default=0,
+        help="Keep publishing every 5 s for this long after the backfill "
+        "(docs/06:408's --live, bounded): the healthy node keeps reporting while "
+        "a fault keeps a failed one silent (D-T16.13).",
+    )
     return parser.parse_args(argv)
 
 
@@ -69,8 +115,10 @@ async def publish(token: str, args: argparse.Namespace) -> dict[str, int]:
 
     now = datetime.now(UTC)
     earliest_backfill_at = (now - timedelta(days=args.days)).replace(microsecond=0)
+    delay_s = args.tick_delay_ms / 1000.0
 
     plans: list[NodePlan] = []
+    ticks = 0
     async with AsyncExitStack() as stack:
         client = await stack.enter_async_context(httpx.AsyncClient(base_url=args.api))
         for ordinal, credential in enumerate(credentials, start=1):
@@ -107,12 +155,24 @@ async def publish(token: str, args: argparse.Namespace) -> dict[str, int]:
                     node_id=UUID(str(credential["node_id"])),
                     ordinal=ordinal,
                     sensors=sensors,
-                    publisher=MqttUplinkPublisher(mqtt_client),
+                    publisher=PacedPublisher(MqttUplinkPublisher(mqtt_client), delay_s),
                 )
             )
         ticks = await publish_scenario_backfill(
             plans, scenario=scenario, days=args.days, seed=args.seed, now=now
         )
+        if args.live_seconds > 0:
+            # Bounded live (docs/06:408's --live): the trajectory and every seq
+            # continue from the backfill's tick count, the faults pausing the
+            # nodes they name — the failed node stays silent in real time while
+            # the healthy one keeps reporting.
+            await publish_scenario_live(
+                plans,
+                scenario=scenario,
+                seed=args.seed,
+                after=ticks,
+                iterations=args.live_seconds // LIVE_INTERVAL_S,
+            )
     return {"ticks": ticks, "nodes": len(plans)}
 
 
