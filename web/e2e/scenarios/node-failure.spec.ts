@@ -96,7 +96,12 @@ test('node-failure: the down node pages the technician and completeness observes
       .poll(
         async () => {
           const health = await nodeHealth(token, failedNodeId)
-          if (health.last_seen_at === null) return Number.POSITIVE_INFINITY
+          // A node that has not been seen yet has not gone silent yet: the
+          // silence starts when its last reading lands, and the backfill is
+          // still arriving. A node that never publishes at all is a different
+          // scenario (a retired one), not this one — so "not seen yet" is zero
+          // silence, not an infinite one.
+          if (health.last_seen_at === null) return 0
           return Date.now() - Date.parse(health.last_seen_at)
         },
         {
@@ -109,10 +114,23 @@ test('node-failure: the down node pages the technician and completeness observes
   })
 
   await test.step('completeness observes the gap, not a reconstruction', async () => {
+    // The healthy node's completeness counts the readings of the last 24 h of
+    // the clock (docs/11), and the backfill ends just before now — so the
+    // number only exists once the ingestor has flushed the node's own day.
+    // The wait is on that state, never on the clock (D-T16.4): the same rule
+    // D-DH.15 applied to the escalation.
+    await expect
+      .poll(
+        async () => (await nodeHealth(token, nodeIds[0] as string)).completeness_24h ?? 0,
+        {
+          timeout: E2E_TIMING.jobPollTimeoutMs,
+          intervals: [E2E_TIMING.jobPollIntervalMs],
+          message: "the healthy node's completeness never reached the backfilled day",
+        },
+      )
+      .toBeGreaterThan(0.9)
     const failed = await nodeHealth(token, nodeIds[1] as string)
-    const healthy = await nodeHealth(token, nodeIds[0] as string)
     expect(failed.completeness_24h).toBe(0)
-    expect(healthy.completeness_24h ?? 0).toBeGreaterThan(0.9)
   })
 
   await test.step('the health sweep runs through the real worker', async () => {

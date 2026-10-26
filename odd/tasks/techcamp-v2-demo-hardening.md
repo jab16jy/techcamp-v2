@@ -61,6 +61,7 @@ redescubre: decide.
 | U9 | #339 | `justfile`, `README` | Higiene entre corridas |
 | U10 | #277 | `web/src/features/risk` | La pantalla de riesgo climático existe |
 | U11 | #258 | `web/src/features/metrics` | `relative_yield` null pero honesto |
+| U12 | #371 | `.github/workflows`, `web/e2e` | El CI de los escenarios corre de verdad |
 
 **Fuera (no se tocan):**
 
@@ -115,7 +116,7 @@ Verificado sobre `main` (worktree `../techcamp-v2-demo-hardening`, commit
 | #277 | `web/src/lib/api/schema.d.ts` **ya tiene** `RiskPredictionView` (línea 2650) y la ruta `GET /plots/{plot_id}/risk` (línea 863). Falta toda la capa de UI (`web/src/features/risk/` no existe). |
 | #258 | Vigente: `relative_yield` solo existe en `web/src/lib/api/schema.d.ts:1357`; la UI de métricas no lo lee. |
 
-## Decisions — `D-DH.1` … `D-DH.14`
+## Decisions — `D-DH.1` … `D-DH.17`
 
 ### `D-DH.1` — El gate tiene su propia base de tests (U1, #341)
 
@@ -386,6 +387,44 @@ Lo que NO se hizo, y por qué:
   en producción el barrido corre cada 5 min y la escalada llega dentro de esa
   ventana. Lo que estaba mal era el *disparador* del e2e.
 
+### `D-DH.16` — El CI de los escenarios tiene que ser un archivo que GitHub acepte (U12, #371)
+
+El workflow `e2e-scenarios.yml` usaba `${{ runner.temp }}` en el `env:` del job. Ese
+contexto no existe a nivel de job —el contexto `runner` arranca en el paso—, así que
+GitHub rechazaba el archivo entero y el job `scenarios` no se creaba: **65 corridas
+del workflow, ninguna con un solo job**, en todas las ramas, `main` incluida.
+
+Un workflow que GitHub rechaza no sale en rojo: es la **ausencia** de la validación,
+que es peor que una validación que falla — nadie lo veía en la pestaña de checks, y
+`docs/06 §10` afirmaba «CI corre A+E por PR y todos en nightly» como si fuera cierto.
+Toda la cadena se validó con corridas locales.
+
+El log de la api vive ahora en `/tmp`, que es donde el harness lo busca cuando la
+variable no está puesta. Con el archivo arreglado, el job aparece: A + E verdes en
+CI (A en 2,2 min) y cinco de los seis escenarios verdes en una corrida de modo
+nightly.
+
+### `D-DH.17` — El escenario C espera el estado, no el instante (U12, #371)
+
+`completeness_24h` cuenta las lecturas de las últimas **24 h de reloj**
+(`ReadingRow.time >= now - 24h`) contra las esperadas (`86400 / interval_s` = 288 con
+`interval_s: 300`). El backfill publica 14 días de lecturas que terminan *justo antes
+de ahora* (`backfill_timestamps`), así que el día propio del nodo sano sí está en la
+ventana: su completitud puede ser ~1,0. Pero el spec la afirmaba **en el instante**,
+a los ~5 s de empezar, cuando el ingestor todavía no había flushed el backfill: la
+lectura contaba 0.
+
+El paso anterior, el que espera el silencio real, pasaba **en vacío**: mientras el nodo
+caído no tenía `last_seen_at` devolvía un silencio infinito, así que se cumplía sin
+haber observado nada. `last_seen_at` es la hora de **llegada** de la última lectura,
+no el `ts` de la lectura — el silencio de un nodo es de reloj, no de la línea de
+tiempo.
+
+El spec espera ahora al **estado**: el nodo caído ya visto y su silencio pasado el
+margen, y la completitud del nodo sano leída cuando el ingestor ya flushed el
+backfill. Es la misma regla que D-DH.15 aplicó a la escalada del escenario A — la
+espera es sobre el estado que se observa, nunca sobre el reloj (D-T16.4).
+
 ## Acceptance criteria
 
 - **U1 (#341)**: con el stack de seminario vivo, `just gate server/tests/simulator`
@@ -415,6 +454,23 @@ Lo que NO se hizo, y por qué:
   severidad/probabilidad/horizonte/factores, y la línea base se declara.
 - **U11 (#258)**: la UI de métricas muestra `—` y la razón cuando
   `relative_yield` es `null`.
+- **U12 (#371)**: el workflow de e2e es un archivo que GitHub acepta, el job
+  `scenarios` existe en cada corrida de PR, y la nightly corre los seis escenarios
+  en verde.
+
+### U12 — #371 (el CI de los escenarios corre de verdad)
+
+- **El workflow rechazado**: 65 corridas del workflow, ninguna con un solo job, en
+  todas las ramas, `main` incluida. El job `scenarios` no existía; la pestaña de
+  checks no mostraba nada, así que la ausencia se confundía con la validación.
+- **Con el archivo arreglado**: la corrida de PR crea el job (`changes` ✓,
+  `scenarios` ✓) y A + E pasan — `dry-spell-rainfed` ✓ (10,2 s), `el-nino` ✓ (2,2 min).
+- **Los seis escenarios** (modo nightly): `el-nino` ✓ (2,2 min), `dry-spell-rainfed`
+  ✓ (10,2 s), `normal` ✓ (11,5 s), `offline-farmer` ✓ (11,6 s), `rainy-season`
+  ✓ (12,5 s), `node-failure` ✓ tras D-DH.17.
+- **El escenario C en vivo**: con el backfill a medio_flush el nodo sano tenía 227 de
+  288 lecturas en la ventana de 24 h y el caído 0 — la cifra que el spec afirmaba en
+  el instante, antes de que el ingestor terminara.
 
 ## Checks
 
