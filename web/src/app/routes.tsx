@@ -50,6 +50,13 @@ const AssistantScreen = lazy(() =>
   })),
 )
 
+// eslint-disable-next-line react-refresh/only-export-components -- lazy component lives with routes
+const RiskScreen = lazy(() =>
+  import('../features/risk/containers/RiskScreen').then((module) => ({
+    default: module.RiskScreen,
+  })),
+)
+
 /**
  * Inicio tab wrapper: renders TrayScreen when the caller has the technician role
  * in the active organization, and PlotStatusScreen for any other role (D-T0.9, docs/07).
@@ -222,6 +229,31 @@ function AsistenteRoute() {
   )
 }
 
+/**
+ * Riesgo child route (docs/07 §Mapa de pantallas: `home → risk`): the risk the
+ * model predicts for the active plot, with a link back to Inicio.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- route wrapper lives with routes
+function RiesgoRoute() {
+  return (
+    <Suspense fallback={null}>
+      <div className="px-4 pt-4">
+        <Link
+          to="/"
+          className={cn(
+            buttonVariants({ variant: 'ghost' }),
+            'gap-1 px-2 text-text-muted hover:text-text',
+          )}
+        >
+          <ChevronDownIcon className="size-5 rotate-90" aria-hidden="true" />
+          Volver a la bandeja
+        </Link>
+      </div>
+      <RiskScreen />
+    </Suspense>
+  )
+}
+
 const tabRoutes: RouteObject[] = [
   { index: true, element: <InicioTab /> },
   { path: 'estado', element: <EstadoRoute /> },
@@ -231,6 +263,7 @@ const tabRoutes: RouteObject[] = [
   { path: 'mas', element: <MasTab /> },
   { path: 'mas/indicadores', element: <IndicatorsRoute /> },
   { path: 'mas/asistente', element: <AsistenteRoute /> },
+  { path: 'riesgo', element: <RiesgoRoute /> },
 ]
 
 /**

@@ -25,7 +25,7 @@ describe('buildRoutes', () => {
     expect(routes[0].children?.some((route) => route.path === 'dev/ui')).toBe(true)
   })
 
-  it('includes the five tabs, the estado route and the indicators screen at the root', () => {
+  it('includes the five tabs, the estado route, the indicators screen and the risk screen at the root', () => {
     const routes = buildRoutes(null)
 
     expect(routes[0].path).toBe('/')
@@ -39,7 +39,9 @@ describe('buildRoutes', () => {
     expect(routes[0].children?.some((route) => route.path === 'mas/indicadores')).toBe(true)
     // docs/07:129: `more --> assist[Asistente]`.
     expect(routes[0].children?.some((route) => route.path === 'mas/asistente')).toBe(true)
-    expect(routes[0].children?.length).toBe(8)
+    // docs/07:121: `home --> risk[Riesgo climático]`.
+    expect(routes[0].children?.some((route) => route.path === 'riesgo')).toBe(true)
+    expect(routes[0].children?.length).toBe(9)
   })
 
   /**

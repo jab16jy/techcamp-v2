@@ -139,8 +139,15 @@ flowchart TB
 3. Alertas abiertas.
 4. Humedad de suelo actual con su hora y el pronóstico de 3 días.
 5. Estado de sincronización y de los nodos.
+6. Riesgo climático: una fila grouped ("Predicciones de esta parcela") que abre la pantalla del riesgo de la parcela activa.
 
 **Bandeja del técnico.** Con el rol `technician`, el inicio abre su bandeja: las fincas asignadas (`farm.technician_id`) ordenadas por alertas abiertas, las críticas primero, con la fecha de la última visita. El orden lo da `GET /me/tray` ([04](04-api.md#visitas-de-extensión-y-bandeja-del-técnico)). El estado de cualquier parcela de sus fincas queda a un toque: al tocar una parcela, su organización pasa a ser la activa (la bandeja reúne fincas de todas sus organizaciones), la parcela queda como parcela activa y se abre su estado, con vuelta a la bandeja. Desde una finca registra la visita de extensión (temas según la Ley 1876, recomendaciones, compromisos y fotos), también sin conexión (brecha G15 de la [investigación](investigacion/tecnificacion-campo.md#4-matriz-de-brechas)).
+
+**Riesgo climático** (Inicio, E10; RF-12). Las predicciones que el modelo calcula para la celda de la parcela activa: una tarjeta por evento, con el evento, su probabilidad, el horizonte que cubre, **por qué** dice eso (los `top_factors`, con el nombre de la variable en palabras del productor y su valor con su unidad) y **de dónde sale el número**.
+
+La severidad **no se declara** cuando la versión que respondió no tiene cortes calibrados. La línea base (`climatology_month`) se registra con `thresholds={}`, así que su severidad es siempre `low` y no dice nada del riesgo (D-T9.2). La tarjeta nombra el origen —"climatology_month v1 · línea base · sin cortes calibrados"— en vez de mostrar una severidad que nadie midió (D-DH.12, decisión del owner). Una versión calibrada sí muestra la suya ("Riesgo alto").
+
+Un evento que esta build no conoce no se muestra: la tarjeta se deja fuera entera en vez de rotularla con una suposición. Una parcela sin predicciones lo dice en palabras ("Sin predicciones de riesgo"), no con una pantalla vacía.
 
 **Indicadores de tecnificación** (Más, E11 D-T0.13; RF-13). Una sola pantalla con dos partes:
 
