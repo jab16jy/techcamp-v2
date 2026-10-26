@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { bogotaDateAt, liveLogbookEntries, parseOtpLine, parseSimRunOutput } from './harness'
+import {
+  bogotaDateAt,
+  hasAlertAtSeverity,
+  liveLogbookEntries,
+  parseOtpLine,
+  parseSimRunOutput,
+} from './harness'
 import type { SyncPullChange } from './harness'
 
 describe('bogotaDateAt', () => {
@@ -64,6 +70,34 @@ describe('parseSimRunOutput', () => {
 
 const PLOT_ID = '019337d2-7c1a-7cc2-9f0e-8d3f21a4b5c6'
 const OTHER_PLOT_ID = '019337d2-7c1a-7cc2-9f0e-8d3f21a4b5c7'
+
+describe('hasAlertAtSeverity', () => {
+  it('answers true only for the rule at that exact severity', () => {
+    // The water_stress alert opens as a warning and is upgraded to critical
+    // when the trajectory reaches 48 h (WATER_STRESS_UPGRADE_AFTER). The
+    // escalation sweep acts on criticals only, so a deferral fired while the
+    // alert is still a warning finds nothing to escalate (D-DH.15).
+    const warnings = [
+      { rule_code: 'heat_stress', severity: 'warning' },
+      { rule_code: 'water_stress', severity: 'warning' },
+    ]
+    expect(hasAlertAtSeverity(warnings, 'water_stress', 'critical')).toBe(false)
+    expect(hasAlertAtSeverity(warnings, 'water_stress', 'warning')).toBe(true)
+    expect(hasAlertAtSeverity(warnings, 'heat_stress', 'critical')).toBe(false)
+  })
+
+  it('answers true once the rule reached the critical severity', () => {
+    const alerts = [
+      { rule_code: 'heat_stress', severity: 'warning' },
+      { rule_code: 'water_stress', severity: 'critical' },
+    ]
+    expect(hasAlertAtSeverity(alerts, 'water_stress', 'critical')).toBe(true)
+  })
+
+  it('answers false when the plot has no alerts at all', () => {
+    expect(hasAlertAtSeverity([], 'water_stress', 'critical')).toBe(false)
+  })
+})
 
 function entryChange(overrides: Partial<SyncPullChange['data']> = {}): SyncPullChange {
   return {

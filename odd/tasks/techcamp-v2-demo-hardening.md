@@ -357,6 +357,35 @@ Descartadas, y por qué:
 El criterio de aceptación se reescribe con lo que el spec realmente hace: el
 spec de A es **un** test con pasos nombrados, no tres tests.
 
+### `D-DH.15` — El diferimiento espera el critical que va a escalar (U8, #342)
+
+El harness espera a que la alerta `water_stress` esté abierta en severidad
+`critical` antes de diferir `alerts.escalate_org_alerts`.
+
+Razón (verificada sobre la base, no supuesta): el barrido de escalación solo
+escala un critical **que ya existe** —`lock_escalation_candidate` filtra por
+`severity == 'critical'` (docs/06 §3, D12)— y el ingestor sube la alerta a
+critical en su **último flush**, que cae un instante después de que el
+publicador termine. Un diferimiento disparado antes de ese commit es un job
+que no tiene nada que escalar: el worker lo ejecuta en 0,8 s, con
+`succeeded`, y el SMS espera al siguiente barrido periódico (cada 5 minutos)
+mientras el poll del e2e espera 180 s.
+
+Es la regla de D-T16.4 aplicada al disparador: **la espera es sobre el estado
+que el job actúa** —la alerta en `critical`—, nunca sobre el reloj. El read
+es el que la app ya usa (`GET /plots/{plot_id}/status`, `open_alerts[]` con
+`severity`), así que el arreglo no abre ninguna superficie de API nueva.
+
+Lo que NO se hizo, y por qué:
+
+- **Alargar el poll a 5 min**: taparía la carrera con una espera más larga y
+  haría que la demo tarde 4 min en mostrar el SMS. El arreglo quita la
+  carrera; el SMS llega en segundos.
+- **Tocar el producto** (`escalate_org_alerts` que se re-difiera a sí mismo,
+  o el `alert` que se actualiza antes de tiempo): el producto está bien —
+  en producción el barrido corre cada 5 min y la escalada llega dentro de esa
+  ventana. Lo que estaba mal era el *disparador* del e2e.
+
 ## Acceptance criteria
 
 - **U1 (#341)**: con el stack de seminario vivo, `just gate server/tests/simulator`
@@ -615,10 +644,10 @@ dentro de la ventana de 14 días (D-DH.14).
   (8010), así que la primera corrida de la sesión murió con `ConnectError`
   antes de llegar al paso del outbox. El harness ahora le pasa `--api`
   (`web/e2e/scenarios/support/harness.ts`).
-- **PENDIENTE — la segunda corrida limpia falló en el mismo paso (2026-10-25
-  21:05)**: el ruido era el problema **original**, pero no el único. El forense
-  sobre la base dice que esta vez el critical **sí** existió y **sí** se
-  escalonó:
+- **PENDIENTE (cerrado más abajo) — la segunda corrida limpia falló en el mismo
+  paso (2026-10-25 21:05)**: el ruido era el problema **original**, pero no el
+  único. El forense sobre la base dice que esta vez el critical **sí** existió
+  y **sí** se escalonó:
 
   | Hecho | Valor |
   |---|---|
@@ -629,18 +658,51 @@ dentro de la ventana de 14 días (D-DH.14).
   O sea: el cruce y el critical están donde deben (D-DH.14 fulfilled), pero el
   **SMS llegó ~4 minutos después** de que el harness pidiera el diferimiento
   del job, y el poll del e2e (`E2E_TIMING.jobPollTimeoutMs` = 180 s) se rindió
-  **un minuto antes** de que el SMS existiera. La primera corrida pasó porque
-  el barrido de escalación fue rápido; la segunda, no. **La corrida es
-  intermitente, y la intermitencia es del barrido, no del escenario.**
-- **Lo que falta para cerrar #342**: (1) saber qué retrasó el job de escalación
-  esos ~4 minutos —candidatos: la contención de la cola `alerts` (el backfill
-  abrió 13 alertas de `heat_stress` con sus 13 `push`, más los barridos de
-  balance) o el `refresh_cell` del worker, que pega a Open-Meteo y tarda
-  segundos por celda—; (2) decidir el arreglo: que el poll del e2e cubra la
-  latencia real (y entonces la demo tarda ~5 min en mostrar el SMS) o que el
-  diferimiento del perfil de seminario sea inmediato; (3) repetir el escenario
-  A **dos veces sobre stack limpio** para poder decir que el criterio se
-  sostiene.
+  **un minuto antes** de que el SMS existiera.
+- **La causa real (forense sobre `procrastinate_events`, 2026-10-26)**: el
+  diferimiento **no se delayó** —el worker lo ejecutó en 0,8 s— sino que **se
+  disparó demasiado pronto**:
+
+  | Momento (UTC) | Qué pasó |
+  |---|---|
+  | 02:00:25,85 | el ingestor abre `water_stress` en `warning` (su `push`) |
+  | 02:00:40,23 | el harness difiere `alerts.escalate_org_alerts` (job 553) |
+  | 02:00:40,70 | el worker lo ejecuta: `succeeded` en 0,8 s, **sin escalar nada** |
+  | 02:00:41,75 | el ingestor sube la alerta a `critical` (su `push`) |
+  | 02:03:40 | el poll del e2e se rinde (180 s) |
+  | 02:05:00,75 | el barrido periódico (`*/5`) escala: `escalated_at` + SMS |
+
+  El job diferido encontró la alerta en `warning`: `lock_escalation_candidate`
+  filtra por `severity == 'critical'` (docs/06 §3, D12), así que no había nada
+  que escalar y el job terminó con `succeeded`. La única oportunidad siguiente
+  era el barrido periódico, hasta 5 minutos lejos — y el poll espera 180 s.
+- **La intermitencia, probada con las dos corridas**: el SMS de la corrida
+  **verde** salió a las **01:57:08** —no en una frontera `*/5`—, o sea lo
+  produjo el job que el harness difirió; el de la corrida **roja** salió a las
+  **02:05:00** —exactamente en la frontera `*/5`—, o sea lo produjo el barrido
+  periódico. Mismo escenario, dos productores distintos: la carrera es de
+  **≈ 1 s** entre el commit del ingestor y el diferimiento del harness. La
+  latencia del worker no tiene nada que ver (0,5–0,8 s en todos los jobs de
+  la corrida).
+- **Qué cambió** (`D-DH.15`): el harness espera el estado que el job actúa —la
+  alerta `water_stress` abierta en `critical` (`GET /plots/{id}/status`,
+  `open_alerts[].severity`)— antes de diferir la escalada. La función pura
+  `hasAlertAtSeverity` (harness) decide, y su test cubre el caso que rompía:
+  una alerta en `warning` no es el critical que el barrido escala.
+- **Lo que queda para cerrar #342**: nada. **Cerrado con dos corridas limpias**
+  (2026-10-26, stack local de este worktree: base 60621, api 8010, worker,
+  ingestor, web 5175; `just scenario-clean` antes de cada corrida):
+
+  | Corrida | Resultado | Quién escaló | Latencia |
+  |---|---|---|---|
+  | 1 | `✓ 1 passed (2.1m)` | el job diferido del harness (job 639, sin lock) | 126 ms |
+  | 2 | `✓ 1 passed (2.1m)` | el job diferido del harness (job 710, sin lock) | 91 ms |
+
+  En las dos, el SMS salió **fuera** de una frontera `*/5` —es el job del harness
+  el que escaló, no el barrido periódico— y el `escalated_at` quedó pegado al
+  diferimiento (05:04:15,94 / 05:06:34,12). La carrera de ~1 s contra el
+  último flush del ingestor ya no existe: el diferimiento espera al critical
+  (D-DH.15).
 
 ### U9 — #339 (higiene entre corridas)
 
