@@ -25,6 +25,7 @@ import {
   checkExpected,
   deferAlertsJob,
   firstOrgId,
+  hasAlertAtSeverity,
   loadScenario,
   login,
   plotStatus,
@@ -118,6 +119,28 @@ test('@pr el-nino: water stress ends critical, the advice is to irrigate, the ou
         },
       )
       .toBe('irrigate')
+  })
+
+  await test.step('the water_stress alert is critical (named poll)', async () => {
+    // D-DH.15: the escalation sweep only escalates a critical that already
+    // exists, and the ingestor's last flush upgrades it a beat after the
+    // publisher stops. So the deferral waits for the state it acts on — the
+    // alert at critical severity — instead of firing into a warning.
+    await expect
+      .poll(
+        async () =>
+          hasAlertAtSeverity(
+            (await plotStatus(token, scenarioPlotId)).open_alerts,
+            'water_stress',
+            'critical',
+          ),
+        {
+          timeout: E2E_TIMING.jobPollTimeoutMs,
+          intervals: [E2E_TIMING.jobPollIntervalMs],
+          message: 'the water_stress alert never reached the critical severity',
+        },
+      )
+      .toBe(true)
   })
 
   await test.step('the escalation runs through the real worker (D-T16.6)', async () => {

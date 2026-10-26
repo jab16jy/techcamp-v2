@@ -273,7 +273,15 @@ export async function replayIrrigationDays(token: string, days: number): Promise
 
 export interface PlotStatusSummary {
   recommendation: { kind: string } | null
-  open_alerts: Array<{ rule_code: string }>
+  open_alerts: OpenAlertSummary[]
+}
+
+/** One open alert of the plot, as `/plots/{plot_id}/status` reports it: the
+ * rule that opened it and the severity it is at right now (docs/04:86, the
+ * critical ones first). */
+export interface OpenAlertSummary {
+  rule_code: string
+  severity: string
 }
 
 /** `GET /plots/{plot_id}/status` — the same payload the PWA's home renders. */
@@ -282,8 +290,26 @@ export async function plotStatus(token: string, plotId: string): Promise<PlotSta
   const body = (await response.json()) as PlotStatusSummary
   return {
     recommendation: body.recommendation === null ? null : { kind: body.recommendation.kind },
-    open_alerts: body.open_alerts.map((alert) => ({ rule_code: alert.rule_code })),
+    open_alerts: body.open_alerts.map((alert) => ({
+      rule_code: alert.rule_code,
+      severity: alert.severity,
+    })),
   }
+}
+
+/** True when the rule has an open alert at exactly `severity`.
+ *
+ * The escalation sweep only acts on a critical that already exists
+ * (D-DH.15): a deferral fired while the alert is still a warning finds
+ * nothing to escalate, and the technician's SMS then waits for the next
+ * 5-minute sweep instead of arriving with the scenario.
+ */
+export function hasAlertAtSeverity(
+  openAlerts: ReadonlyArray<OpenAlertSummary>,
+  ruleCode: string,
+  severity: string,
+): boolean {
+  return openAlerts.some((alert) => alert.rule_code === ruleCode && alert.severity === severity)
 }
 
 /** The scenario plot's own name — the loader's "Escenario <name> <ancla>"
