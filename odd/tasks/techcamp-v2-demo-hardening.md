@@ -421,3 +421,60 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
   `test_fanout_rerun_same_day_does_not_duplicate_jobs` (con ciclo activo).
   `irrigation` + `simulator`: 398 en verde, 27 omitidos.
 
+### U9 — #339 (higiene entre corridas)
+
+Los cuatro hallazgos de la ronda, verificados uno por uno:
+
+| Hallazgo | Estado verificado |
+|---|---|
+| El mensaje de timeout del harness decía `/healthz` | **Corregido**: el harness consulta `/health` (`harness.ts:116`) |
+| El tripwire del piloto E | **Volteado**: `expect(verdict.passed).toBe(true)` (`dry-spell-rainfed.spec.ts:100`) |
+| `ml/uv.lock` con revisión de lockfile vieja | **Consistente**: `uv lock --check` en `ml/` resuelve sin quejarse |
+| El e2e deja su organización en la base | **Cubierto**: `just scenario-clean` existe, y ahora el README y `docs/06 §10` lo dicen |
+
+- **Commit**: este commit (enmienda de `docs/06 §10`).
+
+### U2 — #214 (el stack de seminario levanta y opera sin trucos)
+
+Dos unidades: el servidor que responde la verdad, y la infraestructura que
+levanta.
+
+#### U2a — el servidor responde la verdad
+
+- **Qué cambió**:
+  - `POST /dev/jobs/irrigation:run` responde `status: "skipped"` con el motivo
+    cuando el día de balance (D−1) no tiene clima observado, y **no** encola un
+    job que no escribiría nada. Con clima, responde `status: "queued"` y el
+    `job_id`.
+  - `POST /plots/{id}/soil:autofill` responde con `warnings`: qué le falta al
+    perfil para que el balance corra (la profundidad de raíz no sale de
+    SoilGrids: es una decisión del cultivo).
+  - `web/src/lib/api/schema.d.ts` regenerado contra el router (venía
+    desactualizado: le faltaba la ruta de escenarios).
+- **Pruebas**: `test_dev_route_says_skipped_when_the_balance_day_has_no_observed_weather`
+  y `test_autofilling_soil_says_the_root_depth_is_missing`. `irrigation` +
+  `farms`: 329 en verde.
+
+#### U2b — la infraestructura levanta
+
+- **Qué cambió**:
+  - `minio-init` se construye desde el contexto local del server y crea los
+    buckets con `boto3` (`server/src/techcamp/init_buckets.py`): la imagen
+    `quay.io/minio/mc` deniega pulls anónimos y un init que no puede arrancar es
+    un stack que no levanta. El init es *best-effort*: si el almacén no
+    contesta, el stack levanta igual y el log lo dice; si el almacén contesta y
+    la creación falla, es una mala configuración y para con código 1.
+  - `just stack-rebuild` automatiza el `podman rm -f` que el presentador
+    olvidaba tras reconstruir una imagen (el contenedor viejo se queda con la
+    imagen vieja), y espera a que la API conteste `/health`.
+  - El README trae el runbook de la demo: `uvx podman-compose` (el binario no
+    está instalado en la máquina de la demo), la recreación de contenedores,
+    la carga de escenarios, `just scenario-clean` entre corridas y la nota
+    operativa del ingestor (matarlo por PID de python, no con `pkill -f`, que
+    deja huérfano el hijo).
+- **Verificado**: `podman-compose config` resuelve los nueve servicios con el
+  `minio-init` construyendo desde el server. La imagen de MinIO no se puede
+  descargar en este entorno (`quay.io` deniega todo el registro, también
+  `docker.io/minio/mc` y `docker.io/minio/minio`), así que el arranque completo
+  del stack con MinIO no se pudo correr aquí; el resto del stack sí.
+

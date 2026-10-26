@@ -402,11 +402,11 @@ sequenceDiagram
   participant W as worker
 
   D->>S: sim run --scenario el-nino --backfill 14d --live
-  S->>API: crear org, finca, parcela, ciclo y nodos (claim) si no existen (D-T16.5: `sim run` absorbe la creación vía claim; prerequisito stack sano con `just db-up`; el stall de `minio-init` de #214 sigue pre-step fileado)
+  S->>API: crear org, finca, parcela, ciclo y nodos (claim) si no existen (D-T16.5: `sim run` absorbe la creación vía claim; prerequisito stack sano con `just db-up`; el init de buckets ya no depende de una imagen que un registro deniega, #214)
   S->>API: cargar fixtures de clima del escenario en weather_daily
   S->>B: backfill: 14 días de lecturas con ts en el pasado
   B->>I: ingesta normal (dedupe, calibración, reglas)
-  S->>API: POST /dev/jobs/water-balance:run y /dev/jobs/irrigation:run
+  S->>API: POST /dev/jobs/irrigation:run (responde `skipped` si el día de balance no tiene clima observado: `weather:run` va primero, #214)
   API->>W: encolar jobs con la fecha del escenario
   loop en vivo cada 5 s
     S->>B: lectura siguiente de la trayectoria
@@ -486,5 +486,6 @@ expected:
 - El ruido y las fallas son configurables para mostrar la robustez (lecturas fuera de rango con la bandera 2 de `quality`, huecos de `seq`) (D-T16.8: una falla `offline` es pausa de publicación; al resumir `seq` salta y el hueco lo observa completitud, sin reescribir pasado).
 - El push del escenario A se afirma vía `GET /dev/outbox`, nunca con push real de navegador; #146 sigue abierto (D-T16.6).
 - El escenario D (D-T16.14, hallado en T7) corre en la PWA en modo avión (`setOffline` del contexto de Playwright) por el flujo documentado de docs/07 (Bitácora → Nueva entrada). Su e2e afirma dos cosas: el `expected` vacío lo juzga el checker tal cual (vacío en ambos sentidos), y la **sincronización sin duplicados** se afirma contra la API, no contra el teléfono — `GET /sync/pull` cuenta exactamente una fila viva de la parcela, marcada `created_offline`, y una segunda corrida de sync no la duplica (C5: la sync es la de E8, el e2e no la reconstruye). La pestaña Bitácora alimenta el `FormSheet` de nueva entrada con las parcelas de la organización — la misma composición que la hoja de visitas recibe en `app/` (E8 D14) — porque el flujo documentado no puede guardarse sin ellas.
+- **Entre corridas, la base se limpia:** la identidad de la parcela es global ("Escenario X <ancla>"), así que una segunda carga del mismo escenario sin limpiar responde "en otra organización" (#339). `just scenario-clean` borra las organizaciones de la base del worktree y vuelve a sembrar las reglas de alerta de fábrica. CI siempre arranca con una base nueva; el rerun local necesita la receta.
 - Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather --scenario X --from YYYY-MM-DD --days N`, D-T16.3: filas diarias por día-offset del escenario con las variables que el balance necesita, más `source_url`, `recorded_at` y hash; record-first, sintético solo con flag explícito cuando la grabación no reproduce la aritmética ETc≈5/ET0≈4,2) y quedan versionados: la demo funciona sin internet, salvo el asistente.
 

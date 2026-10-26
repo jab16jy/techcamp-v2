@@ -226,14 +226,17 @@ export async function loadScenario(
 
 /** `POST /dev/jobs/irrigation:run` — the 04:30 balance and recommendation,
  * for the day the caller names (docs/04-api.md:181); no day is the server's
- * own local today. */
-export async function runIrrigationJob(token: string, day?: string): Promise<number> {
+ * own local today.
+ *
+ * The job id is null when the server says it skipped the run: the balance day
+ * has no observed weather, so the balance would store nothing (#214). */
+export async function runIrrigationJob(token: string, day?: string): Promise<number | null> {
   const response = await apiFetch('/dev/jobs/irrigation:run', {
     method: 'POST',
     token,
     body: JSON.stringify(day === undefined ? {} : { day }),
   })
-  const body = (await response.json()) as { job_id: number }
+  const body = (await response.json()) as { job_id: number | null; status: string }
   return body.job_id
 }
 

@@ -22,9 +22,60 @@ Sucesor de TechCamp v1 (AgroCaribe AI). Ver [ADR-0001](docs/adr/0001-nuevo-repos
 
 ## Estado
 
-**Proyecto de seminario.** Se ejecuta en local (`docker compose --profile seminar up`) con un simulador de nodos IoT y escenarios reproducibles (sequía de El Niño, lluvias con riesgo de hongos, nodo caído, productor sin señal, veranillo en una parcela de secano). La arquitectura queda lista para pasar a producción si el proyecto crece, cambiando adaptadores y no el dominio ([ADR-0021](docs/adr/0021-perfil-seminario-local.md)).
+**Proyecto de seminario.** Se ejecuta en local con un simulador de nodos IoT y escenarios reproducibles (sequía de El Niño, lluvias con riesgo de hongos, nodo caído, productor sin señal, veranillo en una parcela de secano). La arquitectura queda lista para pasar a producción si el proyecto crece, cambiando adaptadores y no el dominio ([ADR-0021](docs/adr/0021-perfil-seminario-local.md)).
 
-Fase actual: diseño. Todavía no hay código.
+## Correr la demo
+
+El stack del seminario son la base de datos, el broker, el almacén de objetos, la API, el worker, el ingestor y la PWA ([ADR-0021](docs/adr/0021-perfil-seminario-local.md)). Todo se levanta con una receta:
+
+```bash
+just stack-rebuild
+```
+
+`just stack-rebuild` quita los contenedores del proyecto y los vuelve a levantar con las imágenes de este commit, y espera a que la API conteste `/health`. Detrás hace lo mismo que:
+
+```bash
+uvx podman-compose -f infra/compose.yaml --profile seminar down --remove-orphans
+uvx podman-compose -f infra/compose.yaml --profile seminar up -d --build
+```
+
+Dos cosas que el comando de arriba no hace por ti:
+
+- **`podman-compose` no está instalado** en la máquina de la demo; `uvx podman-compose` corre la misma herramienta desde PyPI. Los docs que digan `docker compose` (docs/05, docs/10) también funcionan si hay Docker.
+- **`podman-compose up -d` no recreationa un contenedor sobre una imagen reconstruida**: el contenedor viejo se queda con la imagen vieja y el stack contesta con el código de antes (un `/status` en 500, un ingestor en crash-loop). Por eso la receta borra los contenedores primero; si los levantas a mano, `podman rm -f` antes.
+
+### Los escenarios
+
+Cada escenario se carga con el simulador, que deja la parcela, el ciclo, los nodos y el clima grabado:
+
+```bash
+cd server
+uv run python -m techcamp.simulator run --scenario dry-spell-rainfed --backfill 21d --live
+```
+
+`--live` deja el nodo publicando cada 5 s; sin él, el simulador solo publica el backfill y termina. La lista de escenarios está en [docs/06 §10](docs/06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario).
+
+### Entre corridas
+
+El simulador crea una organización por corrida y la parcela se llama igual en todas: una segunda carga del mismo escenario sin limpiar responde "en otra organización". La receta de limpieza:
+
+```bash
+just scenario-clean
+```
+
+Borra las organizaciones de la base de este worktree y vuelve a sembrar las reglas de alerta de fábrica. **Borra datos**: esa base es la del stack del seminario, no un archivo de alguien.
+
+### Notas operativas
+
+- **El ingestor se mata por PID, no con `pkill -f "techcamp.ingestor"`**: `pkill` deja huérfano el proceso hijo que el ingestor lanza, y ese hijo sigue publicando. Búscalo y mátalo a mano:
+
+  ```bash
+  pgrep -af "techcamp.ingestor"     # el PID del padre
+  kill <PID>                          # y el hijo que aparezca en la lista
+  ```
+
+- **El balance hídrico necesita el clima observado del día anterior**: `POST /dev/jobs/irrigation:run` responde `skipped` y lo dice cuando ese día todavía no está consolidado. Corre `POST /dev/jobs/weather:run` primero.
+- **La profundidad de raíz no sale de SoilGrids**: `POST /plots/{id}/soil:autofill` deja `root_depth_cm` vacío y lo avisa. Es la profundidad del cultivo, y el balance no corre sin ella: `PUT /plots/{id}/soil`.
 
 ## Empezar por aquí
 

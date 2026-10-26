@@ -44,6 +44,7 @@ from techcamp.telemetry.adapters.repositories import (
     SqlAlchemyReadingRepository,
     SqlAlchemySensorRepository,
 )
+from techcamp.weather.adapters.orm import WeatherDailyRow
 from techcamp.weather.adapters.repositories import SqlAlchemyWeatherRepository
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,38 @@ async def eligible_plot_ids(session: AsyncSession) -> list[UUID]:
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def balance_day_has_observed_weather(session: AsyncSession, *, day: datetime.date) -> bool:
+    """Whether the balance day (D−1) has an observed weather row for a parcel the
+    daily balance would judge.
+
+    The balance stores no row for a day whose observed weather is missing, so a
+    trigger that queues the fan-out anyway reports a job that writes nothing,
+    and a presenter reads the empty result as a failure of the product. This is
+    the answer the route gives before it queues: `weather:run` comes first
+    (#214).
+
+    Only the observed rows count: a forecast is what the recommendation looks
+    ahead with, not what the balance of the day before was computed from.
+    """
+    balance_day = day - datetime.timedelta(days=1)
+    stmt = (
+        select(WeatherDailyRow.cell_id)
+        .join(PlotRow, PlotRow.weather_cell_id == WeatherDailyRow.cell_id)
+        .where(
+            PlotRow.id.in_(
+                select(CropCycleRow.plot_id).where(
+                    CropCycleRow.status == CropCycleStatus.ACTIVE.value
+                )
+            ),
+            WeatherDailyRow.day == balance_day,
+            WeatherDailyRow.is_forecast.is_(False),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.first() is not None
 
 
 async def _defer_plot_job(

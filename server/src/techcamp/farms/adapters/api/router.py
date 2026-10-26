@@ -372,6 +372,17 @@ class SoilProfilePutRequest(BaseModel):
 
 
 class SoilProfileView(BaseModel):
+    """The soil profile of a plot.
+
+    `warnings` says what the profile still lacks, because a profile with a
+    hole in it is not a profile the water balance can use: it stores no row
+    for a plot whose θFC, θWP or root depth are missing (docs/06 §5, "Datos
+    de suelo incompletos"). A profile filled by `soil:autofill` has no root
+    depth - SoilGrids has no such property, and the depth is the crop's
+    rooting choice - so the answer says so instead of leaving the gap
+    silent (#214).
+    """
+
     plot_id: UUID
     source: str | None
     ph: float | None
@@ -380,6 +391,27 @@ class SoilProfileView(BaseModel):
     field_capacity_pct: float | None
     wilting_point_pct: float | None
     root_depth_cm: float | None
+    warnings: list[str] = Field(default_factory=list)
+
+
+def _soil_warnings(profile: SoilProfile) -> list[str]:
+    """What the profile still lacks for the water balance to run on the plot."""
+    missing = [
+        name
+        for name, value in (
+            ("field_capacity_pct", profile.field_capacity_pct),
+            ("wilting_point_pct", profile.wilting_point_pct),
+            ("root_depth_cm", profile.root_depth_cm),
+        )
+        if value is None
+    ]
+    if not missing:
+        return []
+    return [
+        f"{', '.join(missing)} not set: the water balance stores no row for a plot whose soil "
+        "profile is incomplete (docs/06 §5). The root depth is the crop's rooting choice "
+        "and no soil service knows it: register it with PUT /plots/{plot_id}/soil."
+    ]
 
 
 def _soil_profile_view(profile: SoilProfile) -> SoilProfileView:
@@ -392,6 +424,7 @@ def _soil_profile_view(profile: SoilProfile) -> SoilProfileView:
         field_capacity_pct=profile.field_capacity_pct,
         wilting_point_pct=profile.wilting_point_pct,
         root_depth_cm=profile.root_depth_cm,
+        warnings=_soil_warnings(profile),
     )
 
 
