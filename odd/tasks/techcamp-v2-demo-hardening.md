@@ -115,7 +115,7 @@ Verificado sobre `main` (worktree `../techcamp-v2-demo-hardening`, commit
 | #277 | `web/src/lib/api/schema.d.ts` **ya tiene** `RiskPredictionView` (línea 2650) y la ruta `GET /plots/{plot_id}/risk` (línea 863). Falta toda la capa de UI (`web/src/features/risk/` no existe). |
 | #258 | Vigente: `relative_yield` solo existe en `web/src/lib/api/schema.d.ts:1357`; la UI de métricas no lo lee. |
 
-## Decisions — `D-DH.1` … `D-DH.12`
+## Decisions — `D-DH.1` … `D-DH.14`
 
 ### `D-DH.1` — El gate tiene su propia base de tests (U1, #341)
 
@@ -327,6 +327,36 @@ Razón (la misma que da el issue): el riesgo que se sirve hoy es la línea base
 en `low`. Mostrar "bajo" sin decir de dónde viene es la trampa que el issue
 describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
 
+### `D-DH.14` — El ruido del canal de suelo del escenario A baja a 0,1 (U8, #342)
+
+El ruido de la rampa de humedad de suelo de A pasa de **±0,8** a **±0,1**
+puntos de porcentaje. La apertura de la alerta sigue siendo la documentada
+(≈ 10,7) y la lectura sigue siendo imperfecta; lo que cambia es que el
+critical cae **dentro** de la ventana de 14 días.
+
+Por qué 0,1: la rampa cae 9 puntos en 14 días, o sea **0,64 %/día**. Un ruido
+de ±0,8 es **1,24 días de la propia pendiente de la rampa**: la serie con
+ruido se dispara por encima de θ_estrés los días 9, 10 y 11 (76/48/11 muestras
+por encima del umbral), y `sustained_run` es estricto, así que cada disparo
+rompe la corrida de 6 h. La primera ventana limpia de 24 muestras terminaba en
+el día ≈ 12,8, la alerta abría en el día ≈ 12,9 y el critical (48 h después,
+≈ 14,9) **nunca existía** dentro de la ventana: el paso del outbox no podía
+ganarse nunca. Con 0,1 la alerta abre en el ≈ 10,7 documentado y el critical
+cae en el ≈ 13, dentro de la ventana.
+
+Descartadas, y por qué:
+
+- **Acortar `min_duration`**: cambia la semántica de la regla (6 h es lo que
+  la regla dice), no la aritmética de la demo.
+- **Extender el backfill** a más de 14 días: mueve el cruce documentado y
+  rompe el pin del test del servidor (`sample 1025`).
+- **Cambiar la semilla**: es suerte, no un arreglo.
+- **Relajar el oráculo**: debilita el criterio del escenario, que es justo lo
+  que #342 vino a demostrar.
+
+El criterio de aceptación se reescribe con lo que el spec realmente hace: el
+spec de A es **un** test con pasos nombrados, no tres tests.
+
 ## Acceptance criteria
 
 - **U1 (#341)**: con el stack de seminario vivo, `just gate server/tests/simulator`
@@ -347,8 +377,9 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
   otro; cada fixture tiene su propia celda y su pin actualizado.
 - **U7 (#340)**: el pipeline grabado de E responde `water_stress` con el cruce
   en el día documentado y el tripwire del e2e queda en `verdict.passed === true`.
-- **U8 (#342)**: `el-nino.spec.ts` verde 3/3 con el paso del outbox (SMS de
-  escalación en `/dev/outbox`), en dos stacks limpios.
+- **U8 (#342)**: `el-nino.spec.ts` termina en verde con el paso del outbox (el
+  SMS de escalación `critical` de `water_stress` en `/dev/outbox`), en dos
+  corridas sobre stack limpio.
 - **U9 (#339)**: `just scenario-clean` deja el stack sin estado residual del e2e
   y el runbook lo dice.
 - **U10 (#277)**: `GET /plots/{plot_id}/risk` se ve en la interfaz con
@@ -544,6 +575,46 @@ que esa decisión manda sobre la opción (a) del brief.
   `water_stress` que la aritmética de `docs/06 §10` promete.
 
 - **Lo que falta**: cerrar el issue con esta evidencia (`Fixes #340`).
+
+### U8 — #342 (el paso del outbox del escenario A es ganable)
+
+El issue reportaba que `el-nino.spec.ts` fallaba 3/3 en el paso *the outbox
+carries the critical page*: el SMS de escalación nunca llegaba. La causa raíz
+estaba en la aritmética del ruido, no en el paso: el critical **nunca existía**
+dentro de la ventana de 14 días (D-DH.14).
+
+- **Diagnóstico** (forense sobre la base del worktree): las alertas salían en
+  `warning`, los jobs en `succeeded` y las notificaciones en `push` — sin SMS.
+  La serie de suelo con ruido se disparaba por encima de θ_estrés los días 9,
+  10 y 11; `sustained_run` es estricto, así que la corrida de 6 h no se
+  completaba hasta el día ≈ 12; el critical (48 h después) caía en el ≈ 14,9,
+  fuera de la ventana.
+- **Qué cambió**: el ruido de la rampa de suelo de A pasa de 0,8 a 0,1
+  (`server/src/techcamp/simulator/scenarios/el-nino.yaml`, con el porqué
+  escrito en el propio YAML). La apertura documentada (≈ 10,7) se conserva y
+  el critical cae en el ≈ 13, dentro de la ventana.
+- **Verificación en vivo** (stack del worktree: base 60621, api 8010, worker,
+  ingestor, web 5175; `just scenario-clean` antes de cada corrida):
+
+  ```
+  ✓  [scenarios] › e2e/scenarios/el-nino.spec.ts:52 › @pr el-nino: water
+     stress ends critical, the advice is to irrigate, the outbox carries the
+     page (2.1m)
+  1 passed (2.1m)
+  ```
+
+  Y el outbox, con el SMS que el paso espera:
+
+  ```json
+  [{"channel":"sms","status":"sent","rule_code":"water_stress",
+    "severity":"critical","sent_at":"2026-10-26T01:57:08Z"}]
+  ```
+
+- **Lo que además se encontró**: el runner de backfill publicaba contra
+  `http://localhost:8000` —el default del script— en vez del API del stack
+  (8010), así que la primera corrida de la sesión murió con `ConnectError`
+  antes de llegar al paso del outbox. El harness ahora le pasa `--api`
+  (`web/e2e/scenarios/support/harness.ts`).
 
 ### U9 — #339 (higiene entre corridas)
 
