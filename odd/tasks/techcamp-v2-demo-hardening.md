@@ -662,6 +662,49 @@ no tenía ningún módulo de riesgo y el tipo generado ni siquiera estaba en
 - **Docs**: `docs/07` enmendado — el ítem 6 del Inicio y la sección "**Riesgo
   climático** (Inicio, E10; RF-12)" con las reglas de la tarjeta.
 - **Por la skill `impeccable`**, como toda UI del repo.
+- **Hueco declarado, no arreglado**: la base viva **no tiene** filas en
+  `risk_prediction` ni una `model_version` registrada — el registro de la línea
+  base `climatology_month` es trabajo de la lane de E10, fuera de este alcance.
+  En la demo, la pantalla abre con "Sin predicciones de riesgo", que es la
+  respuesta honesta; la tarjeta con datos se verifica por pruebas, no en vivo.
+
+### U11 — #258 (`relative_yield` null, pero honesto)
+
+El campo `relative_yield` ya estaba en el esquema, con su hueco declarado
+(`nullable=True`, `CHECK (relative_yield is null or relative_yield >= 0)`), pero
+**nadie lo leía**: la UI de métricas no lo mostraba (#258).
+
+- **Lo que la UI hace ahora**: la sección "Ciclo actual" de la pantalla de
+  Indicadores muestra el rendimiento relativo municipal. Cuando el valor es
+  `null` muestra **`—`** y la razón en palabras ("Todavía no hay datos del
+  municipio para comparar: el dato de campo municipal no existe aún.").
+  **Nunca `0`**: un cero afirmaría que la parcela rinde cero frente a su
+  municipio, que nadie midió (D-T0.3).
+- **El habilitador del servidor (D-DH.13)**: el web no puede nombrar un ciclo
+  —`ActiveCycleView` no lleva el id del ciclo y no hay listado de ciclos
+  (D-T9.1)— así que el servidor resuelve el ciclo activo en la lectura:
+  `GET /plots/{plot_id}/cycles/active/summary`. La ruta se declara **antes**
+  de la que lleva un UUID de ciclo, para que `active` no se lea como un
+  `crop_cycle_id`. Una parcela sin ciclo activo responde `404`
+  (`NoActiveCropCycleError`), y la sección simplemente no aparece.
+  **Desvío de lo que D-T9.1 nombraba**: D-T9.1 era una nota del lane de E11
+  ("naming a cycle is a separate server task"); la ruta elegida es la que
+  resuelve el ciclo activo, no expone el id en `ActiveCycleView`. Evita tocar
+  el read model del módulo `home` y deja al web en una sola petición.
+- **La épica del denominador (D-DH.11)**: `field_record` **no** se construye
+  aquí. El trabajo grande —la tabla, la ingesta de EVA/AGROSAVIA y
+  `mediana_EVA(cultivo, municipio, 3 años)`— queda como épica **E17** con su
+  propio feature doc (`odd/tasks/techcamp-v2-field-record.md`, decisiones
+  `D-FR.1` … `D-FR.8`) y su issue **#355**, y `docs/10` la nombra como
+  dependencia de E11 que **no está en la ruta crítica de la demo**: la demo se
+  entrega con `relative_yield` en `null`.
+- **Decisión de producto que queda ABIERTA** (escrita, no resuelta): si
+  `field_record` es tabla de referencia sin `org_id`, la regla de aislamiento de
+  `docs/09 §Seguridad` no aplica igual que al resto de `metrics`. Hay que
+  decidirlo **antes** de escribir la migración.
+- **Pruebas**: 4 nuevas en `server/tests/metrics/test_metrics_read_api.py`
+  (265 en verde en `tests/metrics/`) y 4 en la web para la sección
+  (`RelativeYieldSection.test.tsx`; 53 en verde en las pruebas de métricas).
 
 ### U2 — #214 (el stack de seminario levanta y opera sin trucos)
 

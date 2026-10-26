@@ -13,7 +13,9 @@ import {
   useOrgIndicators,
   usePlotIndicators,
 } from '../api/indicatorsApi'
+import { useActiveCycleSummary } from '../api/cycleSummaryApi'
 import { OrgIndicatorsSection, PlotIndicatorsSection } from '../components/IndicatorsSection'
+import { RelativeYieldSection } from '../components/RelativeYieldSection'
 
 /** D-T0.10: the organization's indicators are `403` for any other member. */
 const SEES_ORG_INDICATORS = new Set(['owner', 'technician'])
@@ -49,6 +51,14 @@ export function IndicatorsScreen() {
   const canSeeOrg = role !== null && SEES_ORG_INDICATORS.has(role)
   const orgQuery = useOrgIndicators(canSeeOrg ? orgId : null, month)
   const plotQuery = usePlotIndicators(orgId, plotId, month)
+  /**
+   * The active cycle's impact, for the relative yield the section shows (D-DH.11).
+   * A plot with no active cycle answers `404`, and that is its own absent state
+   * rather than a failure to report: the section stays out and the monthly
+   * figures are untouched.
+   */
+  const cycleQuery = useActiveCycleSummary(orgId, plotId)
+  const cycleSummary = cycleQuery.data ?? null
 
   /**
    * The data, not the success flag (D-T0.10): a refetch that fails with no
@@ -115,7 +125,10 @@ export function IndicatorsScreen() {
       )}
 
       {plotId !== null && !plotPending && !plotFailed && (
-        <PlotIndicatorsSection month={month} indicators={plotIndicators} />
+        <>
+          <PlotIndicatorsSection month={month} indicators={plotIndicators} />
+          <RelativeYieldSection summary={cycleSummary} />
+        </>
       )}
 
       {canSeeOrg && orgQuery.isPending && (
