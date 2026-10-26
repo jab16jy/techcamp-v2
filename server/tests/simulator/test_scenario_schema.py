@@ -14,11 +14,13 @@ docs/06-diseno-detallado.md:442-471 promises.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
+from techcamp.simulator import scenario_schema
 from techcamp.simulator.scenario_library import SCENARIOS_DIR, WEATHER_DIR, file_sha256
 from techcamp.simulator.scenario_schema import MAX_NODES, ScenarioSchemaError, parse_scenario
 
@@ -280,3 +282,19 @@ def test_the_library_files_are_not_yaml_with_a_second_document() -> None:
     for path in sorted(SCENARIOS_DIR.glob("*.yaml")) if SCENARIOS_DIR.exists() else []:
         documents = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
         assert len(documents) == 1, f"{path.name} carries more than one YAML document"
+
+
+def test_a_yaml_that_does_not_parse_is_a_broken_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that does not parse is a broken contract, not a crash (#337).
+
+    `yaml.YAMLError` is neither an `OSError` nor a `ValueError`, so before this
+    the error escaped the route's handlers as a raw traceback instead of the
+    `problem+json` that the other broken contracts answer with.
+    """
+    (tmp_path / "broken.yaml").write_text("name: broken\n  scenario: [unclosed\n", encoding="utf-8")
+    monkeypatch.setattr(scenario_schema, "SCENARIOS_DIR", tmp_path)
+
+    with pytest.raises(ScenarioSchemaError, match="broken.yaml: is not valid YAML"):
+        scenario_schema.load_scenario("broken")

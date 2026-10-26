@@ -485,9 +485,18 @@ def load_scenario(name: str) -> Scenario:
     `yaml.safe_load` resolves only basic tags, which is all a scenario file in the
     repository needs: nothing here constructs a Python object out of the bytes
     (PyYAML documents `safe_load` as its loader for untrusted input).
+
+    A file that does not parse is a broken contract, not a crash: `yaml.YAMLError`
+    is neither an `OSError` nor a `ValueError`, so it would escape the route's
+    handlers as a raw traceback instead of the `problem+json` that the other
+    broken contracts answer with (#337).
     """
     path = SCENARIOS_DIR / f"{name}.yaml"
-    return parse_scenario(name, yaml.safe_load(path.read_text(encoding="utf-8")))
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise ScenarioSchemaError(f"{path.name}: is not valid YAML ({error})") from error
+    return parse_scenario(name, raw)
 
 
 def load_all_scenarios() -> tuple[Scenario, ...]:

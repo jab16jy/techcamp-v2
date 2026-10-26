@@ -380,3 +380,14 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
 
   El stack sobrevive en los dos casos; la garantía de #89 sigue en el gate.
 
+### U3 — #337 (un YAML que no parsea responde problem+json)
+
+- **Commit**: este commit.
+- **Qué cambió**: `load_scenario` envuelve `yaml.safe_load` y re-lanza como
+  `ScenarioSchemaError`, el tipo que la ruta ya traduce a 500 + `problem+json`
+  (`server/src/techcamp/simulator/adapters/api/dev_scenarios.py:157`).
+- **Prueba**: `test_a_yaml_that_does_not_parse_is_a_broken_contract` — un YAML
+  inválido en un directorio temporal (el repositorio no se toca) es un contrato
+  roto, no una traza. RED verificado: sin el arreglo la prueba falla con
+  `YAMLError`; con él, 24 de 24 en verde.
+
