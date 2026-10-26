@@ -209,11 +209,7 @@ Método de **coeficiente de cultivo único** de FAO-56 (capítulos 6 y 8) ([ADR-
 
 ```mermaid
 flowchart TD
-  start([Job diario 04:30 America/Bogota]) --> cyc{¿Parcela con ciclo activo?}
-  cyc -- no --> pre{¿Parcela de secano?<br/>irrigation_system = none}
-  pre -- no --> fin([fin])
-  pre -- sí --> sow[Consejo de siembra: lluvia frente a ET0<br/>pronosticadas en 7 días]
-  cyc -- sí --> kc{¿Kc validado?<br/>kc_source ≠ none}
+  start([Job diario 04:30 America/Bogota<br/>solo las parcelas con ciclo activo]) --> kc{¿Kc validado?<br/>kc_source ≠ none}
   kc -- no --> nokc[Sin lámina: falta Kc validado<br/>remitir al técnico]
   kc -- sí --> et[Obtener ET0, lluvia y pronóstico de la celda]
   et --> bal[Dr_modelo = balance del día anterior + ETc − Pe − riego registrado<br/>p ajustado, RAW y θ_estrés del día]
@@ -236,10 +232,10 @@ flowchart TD
   wait --> save
   nokc --> save
   rf --> save
-  sow --> save
   save --> notif[Push informativo: Hoy riegue 12 mm, unos 40 min]
 ```
 
+- **Alcance del job diario:** el balance corre solo sobre las parcelas con **ciclo activo** (#333). Una parcela de secano sin ciclo queda fuera del alcance: el consejo de siembra (`delay_sowing`) sigue siendo una regla del balance —la tabla de arriba lo describe y el caso de uso lo devuelve cuando se le pregunta por una parcela así—, pero el job diario no la pregunta. La razón no es el consejo: una parcela sin ciclo puede ser la de una carga reemplazada del simulador, que conserva la parcela pero cierra su ciclo y retira sus nodos, y esa parcela no vuelve a sembrarse. Antes recibía una recomendación `delay_sowing` todos los días, y la demo mostraba un consejo que nadie había pedido.
 - **Eficiencia del sistema:** `plot.irrigation_efficiency`, que al crear la parcela toma el valor por defecto de su `irrigation_system`: goteo 0,90, aspersión 0,75, gravedad 0,60.
 - **`kind`** de la recomendación según la rama: `irrigate` (lámina), `postpone` (va a llover), `not_needed` (ok o watch), `no_kc` o `rainfed` ([03](03-modelo-datos.md#plot-e-irrigation_recommendation-parcelas-con-riego-y-de-secano)).
 - **`rationale`** guarda los números usados (ET0, Kc y su `kc_source`, p, RAW, Dr modelado y asimilado, `K`, pronóstico). Lo muestra la interfaz y lo usa el asistente para explicar la recomendación. Un Kc `approximate` se muestra como tal.

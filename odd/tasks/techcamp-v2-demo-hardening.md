@@ -401,3 +401,23 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
   `test_an_active_node_that_never_published_opens_the_alert`. RED verificado:
   sin el arreglo la primera falla; con él, 9 de 9 en verde.
 
+### U5 — #333 (`replace=true` no deja parcelas de secano fantasma)
+
+- **Commit**: este commit.
+- **Qué cambió**: el alcance del balance diario son las parcelas con **ciclo
+  activo** (`irrigation/adapters/jobs.py::eligible_plot_ids`). La parcela de una
+  carga reemplazada conserva su fila, pero su ciclo quedó cerrado, así que
+  sale del alcance y deja de recibir una recomendación `delay_sowing` cada día.
+  `docs/06 §5` se amendó: el flujo del job y el alcance.
+- **Consecuencia de producto que el owner acepta con `D-DH.7`**: el job diario
+  ya no pide consejo de siembra a una parcela de secano sin ciclo. La regla
+  `delay_sowing` sigue viva en el dominio (`decide_recommendation` la sigue
+  devolviendo) y el caso de uso la sigue dando cuando se le pregunta
+  directamente; lo que cambió es a quién pregunta el job.
+- **Pruebas**: `test_a_rainfed_replace_leaves_one_parcel_in_the_balance_scope`
+  (dos cargas con `replace=true` → una sola parcela en el alcance),
+  `test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_without_cycle`
+  (la parcela de secano sin ciclo ya no se encola) y
+  `test_fanout_rerun_same_day_does_not_duplicate_jobs` (con ciclo activo).
+  `irrigation` + `simulator`: 398 en verde, 27 omitidos.
+
