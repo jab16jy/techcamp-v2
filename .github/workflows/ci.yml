@@ -91,6 +91,11 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp
+      # This job's database is its own: nothing else uses it, so the test session
+      # may drop the schema it migrated when it ends (#341). The local gate points
+      # the tests at a second database for the same reason — the seminar stack
+      # runs on `techcamp` and has to survive the gate.
+      TECHCAMP_TEST_DB: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0

@@ -41,6 +41,39 @@ db-env:
     slug=$(basename "$_worktree" | tr "[:upper:]" "[:lower:]" | sed "s/[^a-z0-9-]/-/g")
     echo "$port techcamp-db-$slug-$crc postgresql+asyncpg://techcamp:techcamp@127.0.0.1:$port/techcamp"
 
+# The gate's own database: the same container, a second database. The seminar stack
+# runs on `techcamp`; the server tests drop their schema when the session ends, so
+# they need a database nobody else uses (#341). Read as
+# `test_url=$(just --justfile "$_worktree/justfile" db-test-env)`.
+[private]
+[no-exit-message]
+db-test-env:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
+    echo "${url%/*}/techcamp_test"
+
+# The gate's test database, created if it is not there yet. A worktree whose
+# container started before this recipe existed does not have it, so the gate
+# creates it instead of failing with a confusing "relation does not exist".
+[group: 'database']
+db-test-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
+    if [ -z "$({{_runtime}} ps -q --filter "name=^$container$")" ]; then
+      echo "this worktree's database ($container) is not running: run 'just db-up' first" >&2
+      exit 1
+    fi
+    user=${url#*://}
+    user=${user%%:*}
+    if {{_runtime}} exec "$container" psql -U "$user" -lqt 2>/dev/null \
+      | cut -d'|' -f1 | tr -d '[:space:]' | grep -qx techcamp_test; then
+      exit 0
+    fi
+    echo "creating the gate's test database (techcamp_test) in $container"
+    {{_runtime}} exec "$container" createdb -U "$user" -O "$user" techcamp_test
+
 # Listing the recipes is the default. Without this, the first recipe in the file would
 # run on a bare `just`, and that one starts a database.
 
@@ -92,6 +125,7 @@ db-up:
       # the database ready before postgis, timescaledb and vector exist.
       if {{_runtime}} exec "$container" pg_isready -h 127.0.0.1 -U techcamp >/dev/null 2>&1; then
         echo "$container is ready on port $port"
+        just --justfile "$_worktree/justfile" db-test-up
         exit 0
       fi
       sleep 2
@@ -194,14 +228,31 @@ gate *paths: gate-fast
             echo "this worktree's database ($container) is not running: run 'just db-up' first" >&2
             exit 1
           fi
-          echo "--- pytest $path"
-          (cd "$_worktree/server" && uv run pytest "${path#server/}")
+          # The server tests drop their schema when the session ends, so they run
+          # against a database of their own: the seminar stack runs on `techcamp`
+          # and has to survive the gate (#341). `TECHCAMP_TEST_DB` is the marker
+          # that says the session owns the database it is dropping.
+          just --justfile "$_worktree/justfile" db-test-up
+          test_url=$(just --justfile "$_worktree/justfile" db-test-env)
+          echo "--- pytest $path (database techcamp_test)"
+          (cd "$_worktree/server" && DATABASE_URL="$test_url" TECHCAMP_TEST_DB=1 uv run pytest "${path#server/}")
           ;;
         ml/*)
           echo "--- pytest $path"
           (cd "$_worktree" && uv run --locked --project ml pytest "$path")
           ;;
         web/e2e/*)
+          # The scenario gate runs against the seminar database, the one the stack
+          # itself uses, and that schema has to be at head: a database left at base
+          # fails the scenario for a reason that has nothing to do with the
+          # scenario. The pre-flight says which it was and repairs it (#341).
+          revision=$(cd "$_worktree/server" && DATABASE_URL="$url" uv run alembic current 2>/dev/null | tr -d '[:space:]')
+          if [ -z "$revision" ]; then
+            echo "--- the seminar database was at base; migrating it to head"
+            (cd "$_worktree/server" && DATABASE_URL="$url" uv run alembic upgrade head)
+          else
+            echo "--- the seminar database is at $revision"
+          fi
           # The scenario harness (E16 T5): Playwright runs the spec you name —
           # e.g. `just gate web/e2e/scenarios`. It needs the seminar stack up
           # (api + worker + this worktree's database) and the browsers
@@ -249,8 +300,11 @@ gate-full: db-reset gate-fast
     set -euo pipefail
     read -r port container url <<<"$(just --justfile "$_worktree/justfile" db-env)"
     export DATABASE_URL="$url"
+    # The server suite drops its schema when the session ends, so it runs against
+    # the gate's own database and not the seminar one (#341).
+    test_url=$(just --justfile "$_worktree/justfile" db-test-env)
     cd "$_worktree/server"
-    echo "--- pytest (full)"; uv run pytest
+    echo "--- pytest (full)"; DATABASE_URL="$test_url" TECHCAMP_TEST_DB=1 uv run pytest
     cd "$_worktree/ml"
     echo "--- pytest ml (full)"; uv run --locked pytest
     cd "$_worktree/web"
@@ -393,6 +447,10 @@ gate-release base="origin/main" extra_seeds="2":
     db_env=$(just --justfile "$_worktree/justfile" db-env)
     read -r port container url <<<"$db_env"
     export DATABASE_URL="$url"
+    # The extra seeds run the server suite, which drops its schema when the
+    # session ends: they run against the gate's own database, not the seminar
+    # one (#341).
+    test_url=$(just --justfile "$_worktree/justfile" db-test-env)
 
     # Every part runs: a first failure is a fact to read next to the others, not a reason
     # to spend another 8 minutes not learning whether the rest is green.
@@ -412,7 +470,7 @@ gate-release base="origin/main" extra_seeds="2":
       seed=$(( (RANDOM * 1000 + RANDOM + now) % 1000000 ))
       echo "=== full server suite, extra run $i of $extra_seeds, seed $seed"
       rc=0
-      (cd "$_worktree/server" && uv run pytest --randomly-seed="$seed") || rc=$?
+      (cd "$_worktree/server" && DATABASE_URL="$test_url" TECHCAMP_TEST_DB=1 uv run pytest --randomly-seed="$seed") || rc=$?
       seeds+=("$seed")
       seed_rcs+=("$rc")
     done
