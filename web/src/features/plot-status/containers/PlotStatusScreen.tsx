@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { minutesSince } from '../../../design-system/components/format'
 import { EmptyState } from '../../../design-system/patterns/EmptyState'
-import { MapIcon } from '../../../design-system/ui/icons'
+import { MapIcon, ChevronDownIcon } from '../../../design-system/ui/icons'
 import { Button, buttonVariants } from '../../../design-system/ui/button'
 import { useFarmEvents, type FarmEvent } from '../../../lib/api/useFarmEvents'
 import { describeApiError } from '../../../lib/api/errorCopy'
@@ -165,6 +165,24 @@ export function PlotStatusScreen() {
                 waterBalance={status.water_balance}
                 weather={status.weather_next_3d}
               />
+              {/* docs/07's screen map: "Riesgo climático" hangs off `Inicio`. */}
+              <div className="mt-6">
+                <h2 className="px-4 text-lg font-semibold">Riesgo climático</h2>
+                <ul className="mx-4 mt-2 divide-y divide-text/10 rounded-lg bg-surface-raised">
+                  <li>
+                    <Link
+                      to="/riesgo"
+                      className="flex min-h-12 items-center justify-between gap-3 px-4 py-3"
+                    >
+                      <span className="text-base text-text">Predicciones de esta parcela</span>
+                      <ChevronDownIcon
+                        className="size-5 shrink-0 -rotate-90 text-text-muted"
+                        aria-hidden="true"
+                      />
+                    </Link>
+                  </li>
+                </ul>
+              </div>
               <SyncAndNodes
                 nodes={status.nodes}
                 lastDataMinutesAgo={lastDataMinutesAgo}

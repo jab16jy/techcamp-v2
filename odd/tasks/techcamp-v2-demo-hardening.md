@@ -629,6 +629,40 @@ Los cuatro hallazgos de la ronda, verificados uno por uno:
 
 - **Commit**: este commit (enmienda de `docs/06 §10`).
 
+### U10 — #277 (la pantalla de riesgo climático existe)
+
+La pantalla no existía: el backend de E10 estaba completo y probado
+(`GET /plots/{plot_id}/risk` → `RiskPredictionView`), pero `web/src/features/`
+no tenía ningún módulo de riesgo y el tipo generado ni siquiera estaba en
+`web/src/lib/api/schema.d.ts`.
+
+- **Qué cambió** (`web/src/features/risk/`, nuevo):
+  - `api/usePlotRisk.ts` — la llamada tipada a `GET /plots/{plot_id}/risk`, con
+    la query persistida (`meta: { persist: true }`): la pantalla abre sin
+    conexión con la última respuesta que el teléfono vio.
+  - `api/riskCopy.ts` — la traducción del contrato a palabras: el evento, la
+    probabilidad, el horizonte, los `top_factors` con su unidad y **de dónde
+    sale el número**.
+  - `components/RiskCard.tsx` — la tarjeta de un evento.
+  - `containers/RiskScreen.tsx` — la pantalla, con sus tres estados (cargando,
+    error, "sin predicciones de riesgo" en palabras, no una pantalla vacía).
+- **La decisión del owner (D-DH.12)**: la versión que sirve hoy es la línea
+  base `climatology_month`, registrada con `thresholds={}`, así que su
+  severidad es **siempre** `low` — no porque el riesgo sea bajo, sino porque no
+  hay corte con el que comparar la probabilidad (D-T9.2). La tarjeta **no**
+  muestra esa severidad: nombra el origen —"climatology_month v1 · línea base ·
+  sin cortes calibrados"— en vez de un "Riesgo bajo" que nadie midió. Una
+  versión calibrada sí muestra la suya.
+- **Un evento que esta build no conoce se omite entero**: una tarjeta con el
+  nombre inventado afirmaría un riesgo que el servidor nunca dijo.
+- **Ruta**: `app/routes.tsx` declara `riesgo` con `RiesgoRoute`, y el estado de
+  la parcela (Inicio) pone la fila "Predicciones de esta parcela" que la abre.
+- **Pruebas**: 25 nuevas en tres archivos (`riskCopy.test.ts`, `RiskCard.test.tsx`,
+  `RiskScreen.test.tsx`), más la ruta en `app/routes.test.tsx`.
+- **Docs**: `docs/07` enmendado — el ítem 6 del Inicio y la sección "**Riesgo
+  climático** (Inicio, E10; RF-12)" con las reglas de la tarjeta.
+- **Por la skill `impeccable`**, como toda UI del repo.
+
 ### U2 — #214 (el stack de seminario levanta y opera sin trucos)
 
 Dos unidades: el servidor que responde la verdad, y la infraestructura que
