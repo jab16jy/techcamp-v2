@@ -1021,6 +1021,31 @@ async def test_autofilling_soil_uses_the_seminar_recorded_fixture(
     assert body["wilting_point_pct"] == pytest.approx(12.0)
 
 
+async def test_autofilling_soil_says_the_root_depth_is_missing(
+    db_session: AsyncSession,
+) -> None:
+    """The autofill fills what SoilGrids knows, and the root depth is not it.
+
+    A profile with a hole in it is not a profile the water balance can use:
+    it stores no row for a plot whose θFC, θWP or root depth are missing
+    (docs/06 §5). The answer says which one is missing instead of leaving the
+    gap silent (#214).
+    """
+    org_id, _user_id, token = await _member(db_session, role="owner")
+    client = TestClient(app, base_url="http://testserver/api/v1")
+    farm_id = await _create_farm(client, org_id, token)
+    plot_id = await _create_plot(client, farm_id, token)
+
+    response = client.post(f"/plots/{plot_id}/soil:autofill", headers=_auth(token))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["root_depth_cm"] is None
+    assert len(body["warnings"]) == 1
+    assert "root_depth_cm" in body["warnings"][0]
+    assert "PUT /plots/" in body["warnings"][0]
+
+
 async def test_technician_can_autofill_soil(db_session: AsyncSession) -> None:
     org_id, _user_id, owner_token = await _member(db_session, role="owner")
     _org2, tech_id, _tech_token = await _member(db_session, role="technician", org_name="Other")

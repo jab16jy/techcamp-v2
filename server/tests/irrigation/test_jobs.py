@@ -6,6 +6,7 @@ ADR-0012, ADR-0021. Tests against real Postgres with TDD:
 - Per-plot task persists balance and recommendation and commits
 - Skipped plot logs and stores nothing
 - Dev route returns job_id, defaults day to local today, rejects future days with 422
+- Dev route says "skipped" when the balance day has no observed weather (#214)
 - Dev route is absent in production profile
 """
 
@@ -15,6 +16,7 @@ import datetime
 import importlib
 import logging
 from collections.abc import Container
+from datetime import UTC
 from decimal import Decimal
 from uuid import UUID
 
@@ -562,6 +564,40 @@ async def _queued_fanout_jobs(db_session: AsyncSession) -> dict[int, dict[str, o
     }
 
 
+async def _plot_with_observed_weather(
+    db_session: AsyncSession, *, balance_day: datetime.date
+) -> None:
+    """A plot with an active cycle and the observed weather of its balance day.
+
+    The route answers "skipped" when the balance day has no observed weather,
+    so a test that expects a queued fan-out has to give it one.
+    """
+    org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
+    await _create_plot(
+        db_session,
+        org_id=org_id,
+        farm_id=farm_id,
+        cell_id=cell_id,
+        name="Plot with weather",
+        irrigation_system="drip",
+        has_active_cycle=True,
+    )
+    db_session.add(
+        WeatherDailyRow(
+            cell_id=cell_id,
+            day=balance_day,
+            is_forecast=False,
+            et0_mm=Decimal("4.0"),
+            rain_mm=Decimal("0"),
+            tmin_c=Decimal("20"),
+            tmax_c=Decimal("30"),
+            rh_mean_pct=Decimal("70"),
+            fetched_at=datetime.datetime.now(UTC),
+        )
+    )
+    await db_session.commit()
+
+
 async def test_dev_route_returns_job_id_and_defaults_day_to_today(
     db_session: AsyncSession,
 ) -> None:
@@ -569,6 +605,9 @@ async def test_dev_route_returns_job_id_and_defaults_day_to_today(
 
     defaulting to local today (docs/04-api.md:181).
     """
+    await _plot_with_observed_weather(
+        db_session, balance_day=local_today() - datetime.timedelta(days=1)
+    )
     response = _client().post(_ROUTE, json={})
     assert response.request.url.path == _REGISTERED_PATH
     assert response.status_code == 200
@@ -585,11 +624,44 @@ async def test_dev_route_returns_job_id_and_defaults_day_to_today(
 async def test_dev_route_accepts_specific_day(db_session: AsyncSession) -> None:
     """The route accepts a specific past day."""
     day = local_today() - datetime.timedelta(days=2)
+    await _plot_with_observed_weather(db_session, balance_day=day - datetime.timedelta(days=1))
     response = _client().post(_ROUTE, json={"day": day.isoformat()})
     assert response.status_code == 200
     body = response.json()
     queued = await _queued_fanout_jobs(db_session)
     assert queued[body["job_id"]]["args"]["day"] == day.isoformat()
+
+
+async def test_dev_route_says_skipped_when_the_balance_day_has_no_observed_weather(
+    db_session: AsyncSession,
+) -> None:
+    """The balance day has no observed weather: the balance stores nothing, and
+    the route says so instead of reporting a job that writes nothing (#214).
+
+    A presenter who does not know that `weather:run` comes first reads the
+    empty result as a failure of the product.
+    """
+    day = local_today()
+    org_id, farm_id, cell_id = await _make_org_and_farm(db_session)
+    await _create_plot(
+        db_session,
+        org_id=org_id,
+        farm_id=farm_id,
+        cell_id=cell_id,
+        name="Plot without weather",
+        irrigation_system="drip",
+        has_active_cycle=True,
+    )
+
+    response = _client().post(_ROUTE, json={"day": day.isoformat()})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "skipped"
+    assert body["job_id"] is None
+    assert "weather:run" in body["detail"]
+    assert (day - datetime.timedelta(days=1)).isoformat() in body["detail"]
+    assert await _queued_fanout_jobs(db_session) == {}
 
 
 async def test_dev_route_rejects_future_day_with_422(db_session: AsyncSession) -> None:

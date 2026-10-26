@@ -899,9 +899,10 @@ export interface paths {
          * @description One question, answered as a stream of tokens with its cited sources.
          *
          *     The status code is decided before the first token: everything that can answer
-         *     `404` (a conversation of another user, a plot of another organization)
-         *     happens inside the short session below, and everything that can fail a
-         *     provider call is resolved before the response exists.
+         *     `404` (a conversation of another user, a plot of another organization) and
+         *     everything the quota decides happens inside the short session below, and
+         *     everything that can fail a provider call is resolved before the response
+         *     exists.
          */
         post: operations["ask_api_v1_assistant_messages_post"];
         delete?: never;
@@ -1070,6 +1071,26 @@ export interface paths {
         put?: never;
         /** Run Kb Ingest */
         post: operations["run_kb_ingest_api_v1_dev_jobs_kb_ingest_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dev/scenarios/{name}:load": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Load Scenario Route
+         * @description Prepare the base data one scenario needs, idempotently.
+         */
+        post: operations["load_scenario_route_api_v1_dev_scenarios__name__load_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1737,11 +1758,24 @@ export interface components {
         };
         /**
          * IrrigationJobsRunResponse
-         * @description The queued fan-out job.
+         * @description The queued fan-out job, and what it will compute.
+         *
+         *     `status` is "skipped" when the balance day has no observed weather: the
+         *     balance stores no row for a day without it, so the trigger would queue a
+         *     job that writes nothing and a presenter would read the empty result as a
+         *     failure of the product. The weather route answers the same way for the day
+         *     it cannot consolidate (#214).
          */
         IrrigationJobsRunResponse: {
             /** Job Id */
-            job_id: number;
+            job_id: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "skipped";
+            /** Detail */
+            detail?: string | null;
         };
         /**
          * IrrigationPractice
@@ -2084,6 +2118,26 @@ export interface components {
             last_seen_at: string | null;
             status: components["schemas"]["NodeStatus"];
             mqtt: components["schemas"]["MqttCredentials"];
+        };
+        /**
+         * NodeCredential
+         * @description One node's MQTT credential.
+         *
+         *     The claim returns the password once and only its hash is stored
+         *     (docs/06-diseno-detallado.md §2), so the load is the only place the
+         *     simulator can read it: it hands the credential back, the way the claim
+         *     endpoint does.
+         */
+        NodeCredential: {
+            /**
+             * Node Id
+             * Format: uuid
+             */
+            node_id: string;
+            /** Mqtt Username */
+            mqtt_username: string;
+            /** Mqtt Password */
+            mqtt_password: string;
         };
         /** NodeHealthView */
         NodeHealthView: {
@@ -2669,6 +2723,43 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * ScenarioLoadRequest
+         * @description `{ day?, replace? }`: the scenario's day 0, and whether to recreate what
+         *     a previous load left (docs/04-api.md:263). A `date` field, so a malformed
+         *     value is FastAPI's 422 rather than a failure inside the loader.
+         */
+        ScenarioLoadRequest: {
+            /** Day */
+            day?: string | null;
+            /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
+        };
+        /**
+         * ScenarioLoadResponse
+         * @description What the load prepared: the ids the simulator publishes to.
+         *
+         *     `cycle_ids` and `node_credentials` are additions to the contract's
+         *     `{ scenario, plot_ids, node_ids }` (docs/04-api.md:263): fields are only
+         *     added to a versioned route (docs/04-api.md's "Versionado"), and both are
+         *     needed — the first to see the cycle a `replace` recreated, the second to
+         *     publish over MQTT.
+         */
+        ScenarioLoadResponse: {
+            /** Scenario */
+            scenario: string;
+            /** Plot Ids */
+            plot_ids: string[];
+            /** Node Ids */
+            node_ids: string[];
+            /** Cycle Ids */
+            cycle_ids: string[];
+            /** Node Credentials */
+            node_credentials: components["schemas"]["NodeCredential"][];
         };
         /** SensorView */
         SensorView: {
@@ -4798,6 +4889,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KbJobsRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    load_scenario_route_api_v1_dev_scenarios__name__load_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioLoadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioLoadResponse"];
                 };
             };
             /** @description Validation Error */
