@@ -29,6 +29,7 @@ from techcamp.alerts.domain import (
     node_silence_window,
 )
 from techcamp.telemetry.application.ports import NodeRepository, ReadingRepository, SensorRepository
+from techcamp.telemetry.domain.models import NodeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,18 @@ async def evaluate_node_health(
             _MAX_NODES_PER_ORG,
         )
     for node in page:
+        if node.status is NodeStatus.RETIRED:
+            # A retired node is not going to publish again: its silence is the
+            # expected silence, not a fault, so the rule does not judge it at
+            # all (#334). The scenario loader retires the nodes of a replaced
+            # load on purpose, and the rule would page someone about them
+            # 3 × `interval_s` later.
+            #
+            # Only `retired` is excluded. The rule is not a "the node is online"
+            # rule: a node that was online and went down is exactly the one this
+            # rule exists for, and a filter that kept only the online nodes
+            # would make it impossible to ever fire.
+            continue
         await _evaluate_node(node, rule, at=at, sensors=sensors, readings=readings, alerts=alerts)
 
 

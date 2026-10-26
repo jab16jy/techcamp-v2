@@ -74,6 +74,7 @@ async def _make_node(
     last_seen_at: datetime | None,
     interval_s: int = _INTERVAL_S,
     with_technician: bool = True,
+    status: str | None = None,
 ) -> Node:
     """One organization with a farm, a plot, a claimed node and its sensor, plus
     the two people D4 chooses between: the farm's technician and an org owner."""
@@ -128,7 +129,7 @@ async def _make_node(
             interval_s=interval_s,
             claimed_at=_AT - timedelta(days=1),
             last_seen_at=last_seen_at,
-            status="online" if last_seen_at else "provisioned",
+            status=status or ("online" if last_seen_at else "provisioned"),
         )
     )
     sensor = SensorRow(node_id=node_id, channel_key="sm_0", metric="soil_moisture", unit="pct")
@@ -358,3 +359,33 @@ async def test_an_open_alert_resolves_only_after_sixty_minutes_of_being_heard_fr
     assert resolved.id == opened.id
     assert resolved.state == AlertState.RESOLVED.value
     assert resolved.resolved_at.replace(tzinfo=UTC) == later
+
+
+async def test_a_retired_node_that_never_published_opens_no_alert(
+    db_session: AsyncSession,
+) -> None:
+    """A retired node is not going to publish again, so its silence is the
+    expected silence and not a fault (#334).
+
+    The scenario loader retires the nodes of a replaced load on purpose - its
+    own docstring says the node-offline rule reads the plot's nodes - and the
+    rule paged someone about them 3 x `interval_s` later.
+    """
+    node = await _make_node(db_session, last_seen_at=None, status="retired")
+
+    await _evaluate(db_session, org_id=node.org_id, at=_AT)
+
+    assert await _alerts(db_session, node) == []
+
+
+async def test_an_active_node_that_never_published_opens_the_alert(
+    db_session: AsyncSession,
+) -> None:
+    """The counterpart of the retired one: a node that never published and is
+    still active is judged by its claim, and opens the alert past 3 x
+    `interval_s`. The rule is not a "the node is online" rule (#334)."""
+    node = await _make_node(db_session, last_seen_at=None)
+
+    await _evaluate(db_session, org_id=node.org_id, at=_AT)
+
+    assert [code for code, _ in await _alerts(db_session, node)] == ["node_offline"]
