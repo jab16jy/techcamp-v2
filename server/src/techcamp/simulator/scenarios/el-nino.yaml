@@ -13,7 +13,15 @@ interval_s: 900            # intervalo simulado entre lecturas del backfill
 weather_fixture: el-nino-caribe.json   # ETc ≈ 5 mm/día → p = 0,55; celda propia 11,2 N / 74,2 W
 weather_fixture_sha256: 66ccced8c330eae8b73f5153d2ae1e09f6cf615d14415339ed3a0301c4e4b883
 trajectories:
-  soil_moisture_30cm: { start: 22, end: 13, noise: 0.8 }   # % volumétrico; cruza θ_estrés = 15,3 % el día 10,4
+  # The soil ramp's noise is 0.1, not 0.8 (#342): the ramp falls 9 points over 14
+  # days, 0.64 %/day, so a noise of ±0.8 is 1.24 days of the ramp's own slope and
+  # smeared the crossing over ±1.2 days. The noisy series then popped above
+  # θ_estrés through days 9-11, the 6 h sustained run only completed at day ~12,
+  # and the critical (48 h later, ~14.9) fell outside the 14-day window: the SMS
+  # the outbox step waits for never existed. With 0.1 the alert opens at the
+  # documented ~10.7 and the critical lands at ~13, inside the window, and the
+  # reading is still imperfect (D-DH.14).
+  soil_moisture_30cm: { start: 22, end: 13, noise: 0.1 }   # % volumétrico; cruza θ_estrés = 15,3 % el día 10,4
   air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }   # daily_max > 35 °C abre heat_stress
   air_rh: { daily_min: 38, daily_max: 70, noise: 0.4 }     # bajo 85 %, así que no fungal_risk
 faults:

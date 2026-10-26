@@ -527,6 +527,11 @@ export interface BackfillArgs {
 function backfillRunnerArgs(args: BackfillArgs): string[] {
   const base = [
     supportScript('publish_backfill.py'),
+    // The api this run is talking to, named and not guessed: the runner's own
+    // default is `localhost:8000`, and a stack that answers on another port
+    // would leave the runner publishing to whatever sits there (or to nothing).
+    '--api',
+    e2eConfig().apiUrl,
     '--token',
     args.token,
     '--load-json',
