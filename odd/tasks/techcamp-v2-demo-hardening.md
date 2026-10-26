@@ -489,6 +489,40 @@ propio punto dentro de Santa Marta, y cada YAML actualizó su pin
   aritmética de A (`ETc ≈ 5`, `p = 0,55`, `θ_estrés = 15,3 %`) y la de E
   (`ETc ≈ 5`, `RAW = 77`, el cruce del día 16) **no se mueven**.
 
+#### El hallazgo de la corrida de los seis escenarios (2026-10-26)
+
+La regrabación de B **rompió el escenario `rainy-season`**, y nada en el repo lo
+decía. `evaluate_org_fungal_risk` decide sobre el cell-day **anterior** al día
+del job (D10, D19), y el loader ancla los días observados antes de hoy: el día
+que la regla lee es el **último día observado** del fixture. En la captura de B
+ese día quedó en **84 %** de humedad relativa, y la regla es `air_rh > 85`: la
+alerta no abría y el e2e contestaba `missing_alert: fungal_risk — no alert
+open`.
+
+| Fixture de B | Último día observado | ¿Abre `fungal_risk`? |
+|---|---|---|
+| antes de la regrabación de #335 | 87,0 % | sí |
+| tras la regrabación de #335 | 84,0 % | **no** |
+| ahora (este commit) | 90,0 % | sí |
+
+- **Qué cambió** (`Refs #335`): B se regrabó en **la misma celda** (11,2 N /
+  74,1 O — la propiedad de #335 no se toca) con la ventana del archivo
+  desplazada al **2017-11-08**. El día que la regla lee queda en **90 %** y
+  24,4 °C de media (dentro de 20-30 °C); 10 de los 14 días observados están
+  sobre 85 % («humedad alta sostenida», `docs/06 §10`); el ET0 medio sigue en
+  3,03 mm/día y la lluvia observada en 130,4 mm — el mismo carácter del
+  fixture. El pronóstico tampoco cambia de carácter: 9,7 mm de lluvia máxima,
+  muy por debajo del umbral de `heavy_rain_forecast` (> 50 mm), así que B sigue
+  abriendo **solo** la alerta que su oráculo espera.
+- **La regresión que faltaba**
+  (`server/tests/simulator/test_scenario_weather.py`):
+  `test_the_fixture_can_open_the_fungal_alert_its_scenario_expects` — el
+  fixture cuyo escenario espera la alerta tiene un día que la abre, y los tres
+  que no la esperan no tienen uno. RED verificado: con el fixture de la
+  regrabación el test falla; con el de ahora, 5 de 5 en verde.
+- **Verificación en vivo**: `rainy-season` verde (7,6 s) contra el stack del
+  worktree (base 60621, api 8010, worker, ingestor, web 5175).
+
 ### U7 — #340 (el catálogo reproduce la aritmética FAO-56)
 
 **El trabajo ya estaba hecho en `main`** por la decisión del owner (opción (b)):

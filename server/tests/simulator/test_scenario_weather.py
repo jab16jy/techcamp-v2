@@ -25,7 +25,7 @@ from techcamp.identity.adapters.security.token_issuer import issue_token
 from techcamp.main import app
 from techcamp.shared.dates import local_today
 from techcamp.shared.ids import uuid7
-from techcamp.simulator.scenario_library import load_fixture
+from techcamp.simulator.scenario_library import WeatherFixture, load_fixture
 from techcamp.weather.adapters.orm import WeatherCellRow, WeatherDailyRow
 
 pytestmark = pytest.mark.anyio
@@ -195,3 +195,49 @@ async def test_two_scenarios_never_write_over_each_other(db_session: AsyncSessio
     assert sorted(float(row.et0_mm) for row in second_rows) == sorted(
         day.et0_mm for day in load_fixture("veranillo-caribe").days
     )
+
+
+def _opens_fungal(fixture: WeatherFixture) -> bool:
+    """Whether the cell-day the fungal rule reads opens the alert.
+
+    The rule is decided on the cell-day BEFORE the job's own day (D10, D19),
+    and the loader anchors the fixture's observed rows before today and its
+    seven forecast rows on today and the six days after
+    (docs/06-diseno-detallado.md:246). So the day the rule reads is the
+    fixture's LAST observed row — not its first, and not a forecast row.
+    """
+    observed = [day for day in fixture.days if not day.is_forecast]
+    return observed[-1].meets_fungal_risk_conditions
+
+
+def test_the_fixture_can_open_the_fungal_alert_its_scenario_expects() -> None:
+    """The scenario that expects a `fungal_risk` alert must be able to open it.
+
+    #335 re-recorded the four fixtures to give each one its own cell, and the
+    capture it chose for B left the day the rule reads at 84 % — one point
+    under the threshold of `air_rh > 85`. The scenario could not open its
+    alert, the e2e answered `missing_alert`, and nothing in the repo said so
+    before the fixture was recorded: the cell was distinct, the pin matched,
+    and the arithmetic of the balance was still right.
+
+    A recording is a promise about the day it is judged on, so the promise is
+    tested: the fixture whose scenario expects the alert carries a day that
+    opens it, and the three that do not expect it carry a day that does not
+    (an alert they do not expect is a finding of their own).
+    """
+    opens = {
+        name: _opens_fungal(load_fixture(name))
+        for name in (
+            "el-nino-caribe",
+            "normal-caribe",
+            "rainy-season-caribe",
+            "veranillo-caribe",
+        )
+    }
+
+    assert opens == {
+        "el-nino-caribe": False,
+        "normal-caribe": False,
+        "rainy-season-caribe": True,
+        "veranillo-caribe": False,
+    }
