@@ -45,43 +45,32 @@ services:
     # API emits needs the first to exist, and docs/08-ml.md puts datasets and
     # model artifacts under `datasets/<name>/<hash>/` and `models/<name>/<version>/`
     # in their own bucket, separate from photos).
-    # `--ignore-existing` makes it a repair rather than a race, so restarting
-    # the stack over a kept volume is a no-op.
-    # Floating on purpose: no `minio/mc` release tag could be verified from the
-    # environment this was written in (both quay.io and Docker Hub deny
-    # anonymous pulls of the repo there, `:latest` included), and an
-    # init container pinned to a tag that does not exist is a stack that will
-    # not start. `mc alias set` and `mc mb --ignore-existing` are a stable CLI;
-    # pin a release here once one can be pulled and confirmed.
-    image: quay.io/minio/mc:latest
+    #
+    # It builds from the same local context as the rest of the server services
+    # and creates the buckets with the `boto3` the API signs with. It used to be
+    # `quay.io/minio/mc`, which denies anonymous pulls: an init container whose
+    # image cannot be pulled is a stack that does not come up (#214). Nothing is
+    # downloaded from a registry to run it now.
+    #
+    # The module is best-effort: the store may still be booting, and a store
+    # that never answers must not keep the stack down - the photo upload is the
+    # only feature that needs the buckets. It exits zero when the store never
+    # answered (the stack comes up without them) and one when the store
+    # answered and the creation failed, which is a misconfiguration worth
+    # stopping for.
+    build:
+      context: ../server
     profiles: [seminar]
     restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
-    # `depends_on` below only waits for MinIO's container to START, not to be
-    # ready to serve, so `mc` can reach a server that is not listening yet and
-    # fail. A failure here is not a warning: `api` waits for
-    # `service_completed_successfully`, so the whole stack would stay down. The
-    # retry is what covers readiness; it is bounded so a genuinely broken MinIO
-    # still fails loudly instead of hanging the stack forever.
-    command:
-      - |
-        for attempt in 1 2 3 4 5 6 7 8 9 10; do
-          if mc alias set seminar http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" \
-            && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_BUCKET}" \
-            && mc mb --ignore-existing "seminar/$${TECHCAMP_S3_ML_BUCKET}"; then
-            echo "buckets $${TECHCAMP_S3_BUCKET} and $${TECHCAMP_S3_ML_BUCKET} are ready"
-            exit 0
-          fi
-          echo "minio not ready yet (attempt $${attempt}/10)"
-          sleep 2
-        done
-        echo "minio never became ready; the photo and ML buckets were not created" >&2
-        exit 1
+    command: ["python", "-m", "techcamp.init_buckets"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-techcamp}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-techcamp123}
+      TECHCAMP_PROFILE: ${TECHCAMP_PROFILE:-seminar}
+      TECHCAMP_S3_INTERNAL_URL: ${TECHCAMP_S3_INTERNAL_URL:-http://minio:9000}
       TECHCAMP_S3_BUCKET: ${TECHCAMP_S3_BUCKET:-logbook-photos}
       TECHCAMP_S3_ML_BUCKET: ${TECHCAMP_S3_ML_BUCKET:-ml-artifacts}
+      TECHCAMP_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-techcamp}
+      TECHCAMP_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-techcamp123}
+      TECHCAMP_S3_REGION: ${TECHCAMP_S3_REGION:-us-east-1}
     depends_on:
       - minio
 

@@ -56,6 +56,8 @@ db-test-env:
 # The gate's test database, created if it is not there yet. A worktree whose
 # container started before this recipe existed does not have it, so the gate
 # creates it instead of failing with a confusing "relation does not exist".
+#
+# Create the gate's test database (techcamp_test) in this worktree's container.
 [group: 'database']
 db-test-up:
     #!/usr/bin/env bash
@@ -155,6 +157,42 @@ db-down:
 # A clean database for this worktree: down, then up.
 [group: 'database']
 db-reset: db-down db-up
+
+# The seminar stack, rebuilt: this project's containers go away and come back
+# with the images of this commit.
+#
+# The step a presenter forgets after a rebuild of an image is `podman rm -f`:
+# the old container keeps the old image, so the stack answers with the code
+# from before (#214). This recipe does that step, and it waits for the api to
+# answer before it says the stack is up.
+#
+# `uvx podman-compose`: the `podman-compose` binary is not installed on the
+# demo machine, and `uvx` runs the same tool from PyPI (#214).
+#
+# The volumes are kept: the database and the object store survive a rebuild.
+#
+# Rebuild the seminar stack from this commit and wait for the api.
+[group: 'stack']
+stack-rebuild:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$_worktree"
+    uvx podman-compose -f infra/compose.yaml --profile seminar down --remove-orphans || true
+    uvx podman-compose -f infra/compose.yaml --profile seminar up -d --build
+    # The bucket init is best-effort: its own log says whether the object store
+    # answered. The photo upload is the only feature that needs the buckets.
+    echo "--- the buckets:"
+    uvx podman-compose -f infra/compose.yaml --profile seminar logs --tail 5 minio-init || true
+    for _ in $(seq 1 60); do
+      if curl -fsS "http://localhost:${API_PORT:-8000}/health" >/dev/null 2>&1; then
+        echo "the stack is up"
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "the api did not answer /health in two minutes" >&2
+    uvx podman-compose -f infra/compose.yaml --profile seminar logs --tail 30 api >&2
+    exit 1
 
 # No database and no tests, so this is what a lane can run on any commit. Everything
 # `gate` and `gate-full` do starts here.
