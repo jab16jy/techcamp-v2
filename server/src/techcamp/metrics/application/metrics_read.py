@@ -30,7 +30,7 @@ from uuid import UUID
 from techcamp.farms.application.manage_plots import resolve_plot_access
 from techcamp.farms.application.ports import CropCycleRepository, PlotRepository
 from techcamp.farms.domain.errors import CropCycleNotFoundError
-from techcamp.farms.domain.models import CropCycleStatus
+from techcamp.farms.domain.models import CropCycle, CropCycleStatus, Plot
 from techcamp.identity.application.ports import MembershipRepository
 from techcamp.identity.application.resolve_org_access import resolve_org_membership
 from techcamp.identity.domain.models import Role
@@ -48,6 +48,7 @@ from techcamp.metrics.application.ports import (
 )
 from techcamp.metrics.domain.adoption import PlotMonthlyMetric
 from techcamp.metrics.domain.cycle_summary import CycleSummary
+from techcamp.metrics.domain.errors import NoActiveCropCycleError
 
 ORG_METRICS_ROLES: frozenset[Role] = frozenset({Role.OWNER, Role.TECHNICIAN})
 """Who reads the organization's indicators (D-T0.10): the two roles that also
@@ -329,6 +330,70 @@ async def get_cycle_summary(
     if cycle is None or cycle.plot_id != plot.id:
         raise CropCycleNotFoundError(crop_cycle_id)
 
+    return await _cycle_summary_read(
+        plot=plot,
+        cycle=cycle,
+        cycles=cycles,
+        plots=plots,
+        baselines=baselines,
+        sources=sources,
+        summaries=summaries,
+    )
+
+
+async def get_active_cycle_summary(
+    *,
+    user_id: UUID,
+    plot_id: UUID,
+    cycles: CropCycleRepository,
+    plots: PlotRepository,
+    baselines: BaselineRepository,
+    sources: MetricsSourceRepository,
+    summaries: CycleSummaryRepository,
+    memberships: MembershipRepository,
+) -> CycleSummaryRead | None:
+    """The impact of the plot's **active** cycle, the one the dashboard shows.
+
+    The web cannot name a cycle: `ActiveCycleView` does not carry the cycle's
+    id and there is no cycle listing (D-T9.1), so the read that names it lives
+    here, where the module that owns the summary resolves it (D-DH.13).
+
+    A plot with no active cycle is `404` (`NoActiveCropCycleError`): the
+    dashboard then says it has no cycle to report, instead of reporting the
+    last one it never asked for.
+    """
+    plot, _role = await resolve_plot_access(
+        user_id=user_id, plot_id=plot_id, plots=plots, memberships=memberships
+    )
+    cycle = await cycles.get_active_for_plot(plot.id)
+    if cycle is None:
+        raise NoActiveCropCycleError(plot.id)
+
+    return await _cycle_summary_read(
+        plot=plot,
+        cycle=cycle,
+        cycles=cycles,
+        plots=plots,
+        baselines=baselines,
+        sources=sources,
+        summaries=summaries,
+    )
+
+
+async def _cycle_summary_read(
+    *,
+    plot: Plot,
+    cycle: CropCycle,
+    cycles: CropCycleRepository,
+    plots: PlotRepository,
+    baselines: BaselineRepository,
+    sources: MetricsSourceRepository,
+    summaries: CycleSummaryRepository,
+) -> CycleSummaryRead | None:
+    """The impact of a cycle that belongs to `plot`, on the same two branches
+    D-T0.8 describes: a finished cycle answers its stored row and an active one
+    is computed on read."""
+    crop_cycle_id = cycle.id
     if cycle.status in PERSISTED_STATUSES:
         stored = await summaries.get_for_org(crop_cycle_id, plot.org_id)
         if stored is None:

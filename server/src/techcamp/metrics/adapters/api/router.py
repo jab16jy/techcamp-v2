@@ -44,11 +44,15 @@ from techcamp.metrics.application.metrics_read import (
     OrgMetricsForbiddenError,
     get_plot_month,
 )
+from techcamp.metrics.application.metrics_read import (
+    get_active_cycle_summary as read_active_cycle_summary,
+)
 from techcamp.metrics.application.metrics_read import get_cycle_summary as read_cycle_summary
 from techcamp.metrics.application.metrics_read import get_org_metrics as read_org_metrics
 from techcamp.metrics.domain.adoption import PlotMonthlyMetric
 from techcamp.metrics.domain.errors import (
     InsufficientRoleError,
+    NoActiveCropCycleError,
     PlotBaselineNotFoundError,
     UnknownCropError,
 )
@@ -388,6 +392,46 @@ async def get_organization_metrics(
             status=403, title="Role cannot read the organization's indicators"
         ) from exc
     return _org_metrics_view(org_metrics)
+
+
+@router.get("/plots/{plot_id}/cycles/active/summary", response_model=CropCycleSummaryView)
+async def get_active_cycle_summary(
+    plot_id: UUID,
+    user_id: CurrentUserId,
+    plots: PlotRepoDep,
+    cycles: CropCycleRepoDep,
+    baselines: BaselineRepoDep,
+    sources: MetricsSourceRepoDep,
+    summaries: CycleSummaryRepoDep,
+    memberships: MembershipRepoDep,
+) -> CropCycleSummaryView:
+    """The plot's **active** cycle's impact, the one the dashboard reads.
+
+    The web cannot name a cycle: `ActiveCycleView` does not carry the cycle's
+    id and there is no cycle listing (D-T9.1), so the read that resolves the
+    active cycle lives here, in the module that owns the summary (D-DH.13).
+
+    Declared before the route that takes a cycle id, so `active` is read as
+    this route and not as a `crop_cycle_id` that is not a UUID.
+    """
+    try:
+        read = await read_active_cycle_summary(
+            user_id=user_id,
+            plot_id=plot_id,
+            cycles=cycles,
+            plots=plots,
+            baselines=baselines,
+            sources=sources,
+            summaries=summaries,
+            memberships=memberships,
+        )
+    except PlotNotFoundError as exc:
+        raise ProblemError(status=404, title="Plot not found") from exc
+    except NoActiveCropCycleError as exc:
+        raise ProblemError(status=404, title="Plot has no active crop cycle") from exc
+    if read is None:
+        raise ProblemError(status=404, title="Cycle has no stored summary yet")
+    return _summary_view(read)
 
 
 @router.get("/plots/{plot_id}/cycles/{crop_cycle_id}/summary", response_model=CropCycleSummaryView)

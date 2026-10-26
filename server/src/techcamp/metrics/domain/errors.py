@@ -47,3 +47,17 @@ class UnknownCropError(Exception):
     def __init__(self, crop_id: int) -> None:
         self.crop_id = crop_id
         super().__init__(f"Crop {crop_id} not found")
+
+
+class NoActiveCropCycleError(Exception):
+    """Raised when the plot has no active cycle to summarize.
+
+    Its own type rather than `farms`' `CropCycleNotFoundError`: that one names
+    a cycle that does not exist, and here no cycle was named at all — the
+    adapter answers `404` with its own title, so the caller can tell "this
+    plot has no cycle running" from "that cycle is not yours".
+    """
+
+    def __init__(self, plot_id: UUID) -> None:
+        self.plot_id = plot_id
+        super().__init__(f"Plot {plot_id} has no active crop cycle")

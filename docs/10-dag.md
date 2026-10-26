@@ -24,6 +24,7 @@ flowchart LR
   E13[E13 LoRaWAN<br/>ChirpStack]
   E14[E14 Operación<br/>backups, monitoreo, DR]
   E16[E16 Simulador de escenarios<br/>A–E + fixtures de clima]
+  E17[E17 Referencia municipal<br/>EVA/AGROSAVIA + field_record]
   E15((Demo del<br/>seminario))
 
   E0 --> E1
@@ -51,11 +52,12 @@ flowchart LR
   E10 -.-> E12
   E12 --> E15
   E4 -.-> E13
+  E11 -.-> E17
 
   classDef critical fill:#fde2e1,stroke:#c0392b,stroke-width:2px,color:#000
   class E0,E2,E3,E4,E6,E9,E15 critical
   classDef future fill:#eeeeee,stroke:#999999,stroke-dasharray:4 3,color:#555
-  class E13,E14 future
+  class E13,E14,E17 future
 ```
 
 | Épica | Resultado verificable | Depende de |
@@ -76,8 +78,9 @@ flowchart LR
 | E16 | Los escenarios A–E corren con un comando, con fixtures de clima grabados, y su bloque `expected` pasa como prueba end-to-end en CI ([06 §10](06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario)) | E4, E5, E7 |
 | E13 *(producción futura)* | Un nodo LoRa real llega por ChirpStack con el mismo mensaje interno | E4 |
 | E14 *(producción futura)* | Backup y restauración ensayados; tableros de SLO | E0 |
+| E17 *(producción futura)* | La tabla `field_record` con los datos EVA/AGROSAVIA, su ingesta y `mediana_EVA(cultivo, municipio, 3 años)`, para que `relative_yield` deje de ser `null` — **el dueño de este trabajo es esta épica, no E11** ([feature doc](../odd/tasks/techcamp-v2-field-record.md), issue #355). **No está en la ruta crítica de la demo**: la demo se entrega con `relative_yield` en `null`, que es un hueco declarado (D-T0.9, D-T7.1) | E11 |
 
-**Paralelismo:** después de E3 se pueden trabajar en paralelo E4, E5 y E8. E1 corre en paralelo a E2 y E3 desde el inicio. E10 (reconstrucción del modelo) no bloquea la ruta crítica: la demo puede mostrar alertas de umbral y pronóstico, y sumar las de riesgo si el modelo pasa la compuerta a tiempo. E12 usa las predicciones de riesgo si existen, pero no depende de ellas.
+**Paralelismo:** después de E3 se pueden trabajar en paralelo E4, E5 y E8. E1 corre en paralelo a E2 y E3 desde el inicio. E10 (reconstrucción del modelo) no bloquea la ruta crítica: la demo puede mostrar alertas de umbral y pronóstico, y sumar las de riesgo si el modelo pasa la compuerta a tiempo. E12 usa las predicciones de riesgo si existen, pero no depende de ellas. E17 (referencia municipal EVA/AGROSAVIA) cuelga de E11 y tampoco está en la ruta crítica: `relative_yield` se entrega en `null` y la demo no depende de que la tabla exista.
 
 ## 2. DAG de datos en ejecución
 

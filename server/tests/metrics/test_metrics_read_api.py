@@ -392,3 +392,71 @@ async def test_an_unknown_cycle_is_404(db_session: AsyncSession) -> None:
     )
 
     assert response.status_code == 404
+
+
+async def test_the_active_cycle_summary_names_the_plot_s_active_cycle(
+    db_session: AsyncSession,
+) -> None:
+    """D-DH.13: the dashboard cannot name a cycle (`ActiveCycleView` carries no
+    id and there is no cycle listing, D-T9.1), so the endpoint that resolves
+    the active cycle is the one the web reads."""
+    env = await make_env(db_session)
+    cycle_id = await add_cycle(db_session, env, status="active", **_CYCLE)
+    client = _client()
+
+    response = client.get(
+        f"/plots/{env.plot_id}/cycles/active/summary",
+        headers=_auth(issue_token(str(env.user_id))),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["crop_cycle_id"] == str(cycle_id)
+    assert body["plot_id"] == str(env.plot_id)
+    assert body["cycle_status"] == "active"
+    # D-T0.9: the relative yield is null until `field_record` exists, and the
+    # web shows that hole as a hole (D-DH.11).
+    assert body["relative_yield"] is None
+
+
+async def test_a_plot_without_an_active_cycle_is_404(db_session: AsyncSession) -> None:
+    """No cycle running is a missing resource, not an empty summary."""
+    env = await make_env(db_session)
+    client = _client()
+
+    response = client.get(
+        f"/plots/{env.plot_id}/cycles/active/summary",
+        headers=_auth(issue_token(str(env.user_id))),
+    )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+
+
+async def test_the_active_cycle_summary_of_another_plot_is_404(
+    db_session: AsyncSession,
+) -> None:
+    """A plot outside the caller's organizations is not found, active cycle or
+    not (docs/09-cuellos-de-botella.md#seguridad)."""
+    env_a = await make_env(db_session)
+    env_b = await make_env(db_session)
+    await add_cycle(db_session, env_b, status="active", **_CYCLE)
+    client = _client()
+
+    response = client.get(
+        f"/plots/{env_b.plot_id}/cycles/active/summary",
+        headers=_auth(issue_token(str(env_a.user_id))),
+    )
+
+    assert response.status_code == 404
+
+
+async def test_the_active_cycle_summary_without_a_token_is_401(db_session: AsyncSession) -> None:
+    """#244 WARNING 006, third route of this surface."""
+    env = await make_env(db_session)
+    await add_cycle(db_session, env, status="active", **_CYCLE)
+    client = _client()
+
+    response = client.get(f"/plots/{env.plot_id}/cycles/active/summary")
+
+    assert response.status_code == 401

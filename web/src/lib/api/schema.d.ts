@@ -835,6 +835,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plots/{plot_id}/cycles/active/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Active Cycle Summary
+         * @description The plot's **active** cycle's impact, the one the dashboard reads.
+         *
+         *     The web cannot name a cycle: `ActiveCycleView` does not carry the cycle's
+         *     id and there is no cycle listing (D-T9.1), so the read that resolves the
+         *     active cycle lives here, in the module that owns the summary (D-DH.13).
+         *
+         *     Declared before the route that takes a cycle id, so `active` is read as
+         *     this route and not as a `crop_cycle_id` that is not a UUID.
+         */
+        get: operations["get_active_cycle_summary_api_v1_plots__plot_id__cycles_active_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plots/{plot_id}/cycles/{crop_cycle_id}/summary": {
         parameters: {
             query?: never;
@@ -2800,7 +2827,18 @@ export interface components {
             /** Root Depth Cm */
             root_depth_cm?: number | null;
         };
-        /** SoilProfileView */
+        /**
+         * SoilProfileView
+         * @description The soil profile of a plot.
+         *
+         *     `warnings` says what the profile still lacks, because a profile with a
+         *     hole in it is not a profile the water balance can use: it stores no row
+         *     for a plot whose θFC, θWP or root depth are missing (docs/06 §5, "Datos
+         *     de suelo incompletos"). A profile filled by `soil:autofill` has no root
+         *     depth - SoilGrids has no such property, and the depth is the crop's
+         *     rooting choice - so the answer says so instead of leaving the gap
+         *     silent (#214).
+         */
         SoilProfileView: {
             /**
              * Plot Id
@@ -2821,6 +2859,8 @@ export interface components {
             wilting_point_pct: number | null;
             /** Root Depth Cm */
             root_depth_cm: number | null;
+            /** Warnings */
+            warnings?: string[];
         };
         /**
          * SyncOp
@@ -4503,6 +4543,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrgMetricsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_active_cycle_summary_api_v1_plots__plot_id__cycles_active_summary_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                plot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CropCycleSummaryView"];
                 };
             };
             /** @description Validation Error */
