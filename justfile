@@ -69,8 +69,12 @@ db-test-up:
     fi
     user=${url#*://}
     user=${user%%:*}
+    # `sed` trims the padding of each line and keeps the newline: `tr -d '[:space:]'`
+    # would delete the newlines too and glue every database name into one line, so
+    # the list would never match a single name and the recipe would try to create
+    # a database that is already there.
     if {{_runtime}} exec "$container" psql -U "$user" -lqt 2>/dev/null \
-      | cut -d'|' -f1 | tr -d '[:space:]' | grep -qx techcamp_test; then
+      | cut -d'|' -f1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qx techcamp_test; then
       exit 0
     fi
     echo "creating the gate's test database (techcamp_test) in $container"
