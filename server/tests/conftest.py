@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from alembic import command
-from alembic.config import Config
+from session_teardown import drop_the_schema, schema_config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,17 +26,15 @@ def anyio_backend() -> str:
 @pytest.fixture(scope="session", autouse=True)
 def _migrated_schema() -> None:
     """Apply the real Alembic migration once per test session; drop it after."""
-    config = Config(str(SERVER_DIR / "alembic.ini"))
-    config.set_main_option("script_location", str(SERVER_DIR / "migrations"))
+    config = schema_config()
     command.upgrade(config, "head")
     _set_our_background_jobs(scheduled=False)
     yield
-    # No re-arming before the downgrade (#89): `alter_job(scheduled => true)` keeps
-    # the old `next_start`, so every policy that fell due during the session would
-    # fire the moment the launcher saw it, racing the `DROP INDEX` and
-    # `DROP MATERIALIZED VIEW` below. The downgrade drops the jobs with their
-    # hypertables, so there is nothing to restore.
-    command.downgrade(config, "base")
+    # Only a session that owns its database drops the schema (#341): the gate
+    # points the tests at a database of their own and says so with
+    # `TECHCAMP_TEST_DB`; a session run against the seminar database (a direct
+    # `uv run pytest`) leaves the schema alone, because the live stack runs on it.
+    drop_the_schema(config)
 
 
 def _set_our_background_jobs(*, scheduled: bool) -> None:

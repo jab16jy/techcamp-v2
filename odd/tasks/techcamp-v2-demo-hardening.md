@@ -359,5 +359,24 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
 
 ## Progress / evidence
 
-_(se completa al cerrar cada unidad con el commit, el PR y la evidencia del
-gate)_
+### U1 — #341 (el gate no tumba el stack vivo)
+
+- **Commit**: este commit.
+- **Qué cambió**: `server/tests/session_teardown.py` (nuevo) decide con el
+  marcador `TECHCAMP_TEST_DB` si la sesión dropea el esquema;
+  `server/tests/conftest.py` usa esa decisión; `justfile` crea y usa
+  `techcamp_test` para los tests del server y añade el pre-flight del gate de
+  escenarios; `.github/workflows/ci.yml` marca la base del job (desechable y
+  exclusiva) para que el `downgrade` siga ahí.
+- **Prueba**: `server/tests/test_session_teardown.py` — el marcador decide, el
+  `downgrade` solo ocurre con el marcador, y el esquema de una base ajena
+  sobrevive al teardown. RED verificado: sin el guard fallan 2 de las 3.
+- **Comprobación en vivo** (base del worktree, puerto 60621):
+
+  | Corrida | `techcamp_test` después | `techcamp` (la del stack) después |
+  |---|---|---|
+  | pytest con `TECHCAMP_TEST_DB=1` (lo que hace el gate) | en `base` (dropeada) | `a7d3f1c95b28 (head)` |
+  | pytest sin el marcador (lo que hace un `uv run pytest` directo) | — | `a7d3f1c95b28 (head)` |
+
+  El stack sobrevive en los dos casos; la garantía de #89 sigue en el gate.
+
