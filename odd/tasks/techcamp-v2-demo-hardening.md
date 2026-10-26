@@ -391,3 +391,13 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
   roto, no una traza. RED verificado: sin el arreglo la prueba falla con
   `YAMLError`; con él, 24 de 24 en verde.
 
+### U4 — #334 (un nodo retirado nunca abre `node_offline`)
+
+- **Commit**: este commit.
+- **Qué cambió**: `evaluate_node_health` excluye los nodos `retired` del
+  barrido. Solo `retired`: la regla no se convierte en una regla "el nodo está
+  online", porque un nodo que se cayó es justo el caso para el que existe.
+- **Pruebas**: `test_a_retired_node_that_never_published_opens_no_alert` y
+  `test_an_active_node_that_never_published_opens_the_alert`. RED verificado:
+  sin el arreglo la primera falla; con él, 9 de 9 en verde.
+
