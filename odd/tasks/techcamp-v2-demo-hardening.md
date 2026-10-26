@@ -615,6 +615,32 @@ dentro de la ventana de 14 días (D-DH.14).
   (8010), así que la primera corrida de la sesión murió con `ConnectError`
   antes de llegar al paso del outbox. El harness ahora le pasa `--api`
   (`web/e2e/scenarios/support/harness.ts`).
+- **PENDIENTE — la segunda corrida limpia falló en el mismo paso (2026-10-25
+  21:05)**: el ruido era el problema **original**, pero no el único. El forense
+  sobre la base dice que esta vez el critical **sí** existió y **sí** se
+  escalonó:
+
+  | Hecho | Valor |
+  |---|---|
+  | `water_stress` abierto en `critical` | 2026-10-23 03:28:40 (día ≈ 10,4 de la ventana) |
+  | `escalated_at` | 2026-10-26 02:05:00 |
+  | Notificación `sms` | `sent`, creada 02:05:00, enviada 02:05:00 |
+
+  O sea: el cruce y el critical están donde deben (D-DH.14 fulfilled), pero el
+  **SMS llegó ~4 minutos después** de que el harness pidiera el diferimiento
+  del job, y el poll del e2e (`E2E_TIMING.jobPollTimeoutMs` = 180 s) se rindió
+  **un minuto antes** de que el SMS existiera. La primera corrida pasó porque
+  el barrido de escalación fue rápido; la segunda, no. **La corrida es
+  intermitente, y la intermitencia es del barrido, no del escenario.**
+- **Lo que falta para cerrar #342**: (1) saber qué retrasó el job de escalación
+  esos ~4 minutos —candidatos: la contención de la cola `alerts` (el backfill
+  abrió 13 alertas de `heat_stress` con sus 13 `push`, más los barridos de
+  balance) o el `refresh_cell` del worker, que pega a Open-Meteo y tarda
+  segundos por celda—; (2) decidir el arreglo: que el poll del e2e cubra la
+  latencia real (y entonces la demo tarda ~5 min en mostrar el SMS) o que el
+  diferimiento del perfil de seminario sea inmediato; (3) repetir el escenario
+  A **dos veces sobre stack limpio** para poder decir que el criterio se
+  sostiene.
 
 ### U9 — #339 (higiene entre corridas)
 
