@@ -421,6 +421,28 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
   `test_fanout_rerun_same_day_does_not_duplicate_jobs` (con ciclo activo).
   `irrigation` + `simulator`: 398 en verde, 27 omitidos.
 
+### U7 — #340 (el catálogo reproduce la aritmética FAO-56)
+
+**El trabajo ya estaba hecho en `main`** por la decisión del owner (opción (b)):
+las edades de siembra de los escenarios caen dentro de la etapa `mid` del
+catálogo (`docs/06:427,467`), y el tripwire del piloto E ya estaba en
+`verdict.passed === true` (commits `8b873f2` + `b3279bf`). El owner confirmó
+que esa decisión manda sobre la opción (a) del brief.
+
+- **Verificación en vivo** (stack del worktree: base 60621, api 8010, worker,
+  ingestor, web 5175):
+
+  ```
+  ✓  [scenarios] › dry-spell-rainfed.spec.ts:47 › @pr dry-spell-rainfed:
+     the full loop runs and the oracle passes (10.0s)
+  ```
+
+  El `expect(verdict.passed, ...)` del checker pasó, y con él la aserción de
+  la recomendación `rainfed` con el consejo `conserve_moisture` y el
+  `water_stress` que la aritmética de `docs/06 §10` promete.
+
+- **Lo que falta**: cerrar el issue con esta evidencia (`Fixes #340`).
+
 ### U9 — #339 (higiene entre corridas)
 
 Los cuatro hallazgos de la ronda, verificados uno por uno:
