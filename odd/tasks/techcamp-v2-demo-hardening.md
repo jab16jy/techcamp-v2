@@ -421,6 +421,19 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
   `test_fanout_rerun_same_day_does_not_duplicate_jobs` (con ciclo activo).
   `irrigation` + `simulator`: 398 en verde, 27 omitidos.
 
+### U9 — #339 (higiene entre corridas)
+
+Los cuatro hallazgos de la ronda, verificados uno por uno:
+
+| Hallazgo | Estado verificado |
+|---|---|
+| El mensaje de timeout del harness decía `/healthz` | **Corregido**: el harness consulta `/health` (`harness.ts:116`) |
+| El tripwire del piloto E | **Volteado**: `expect(verdict.passed).toBe(true)` (`dry-spell-rainfed.spec.ts:100`) |
+| `ml/uv.lock` con revisión de lockfile vieja | **Consistente**: `uv lock --check` en `ml/` resuelve sin quejarse |
+| El e2e deja su organización en la base | **Cubierto**: `just scenario-clean` existe, y ahora el README y `docs/06 §10` lo dicen |
+
+- **Commit**: este commit (enmienda de `docs/06 §10`).
+
 ### U2 — #214 (el stack de seminario levanta y opera sin trucos)
 
 Dos unidades: el servidor que responde la verdad, y la infraestructura que
