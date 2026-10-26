@@ -103,7 +103,12 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://techcamp:techcamp@localhost:5432/techcamp
       TECHCAMP_PROFILE: seminar
-      E2E_API_LOG: ${{ runner.temp }}/techcamp-e2e-api.log
+      # The runner's temp dir is not a job-level context: `runner.temp` here makes
+      # GitHub reject the whole file, and a rejected workflow never runs - it fails
+      # with "Invalid workflow file" and no job at all. The `runner` context exists
+      # from the step down, not at the job's `env`. The harness reads this variable
+      # to find the api log, and /tmp is where it looks when the variable is unset.
+      E2E_API_LOG: /tmp/techcamp-e2e-api.log
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
