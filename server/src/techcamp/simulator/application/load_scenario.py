@@ -62,9 +62,11 @@ from ..scenario_schema import load_scenario as load_scenario_definition
 from .load_weather import WeatherFixtureWriter, load_weather_fixture
 
 MUNICIPALITY_CODE = "47001"
-"""Santa Marta's DIVIPOLA code, the municipality the Caribe cell's recorded
-fixtures describe (their own cell is 11,0 N / 74,8 W). The same code the
-repository's test fixtures use, because the scenario states no municipality."""
+"""Santa Marta's DIVIPOLA code, the municipality the recorded fixtures describe.
+Each fixture has its own cell now (#335, D-DH.10) and all four are inside that
+municipality — (11,2 N / 74,2 W), (11,1 N / 74,2 W), (11,1 N / 74,1 W) and
+(11,2 N / 74,1 W) — so the code the loader declares stays true. The same code
+the repository's test fixtures use, because the scenario states no municipality."""
 
 METERS_PER_DEGREE_LAT = 110_574.0
 """One degree of latitude, in meters (the WGS-84 mean)."""

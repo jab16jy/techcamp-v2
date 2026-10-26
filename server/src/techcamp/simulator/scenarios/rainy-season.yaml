@@ -7,8 +7,8 @@ plot: { crop: maize, sown_days_ago: 42, area_ha: 1.5, soil: sandy_loam, irrigati
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900
-weather_fixture: rainy-season-caribe.json   # ET0 más bajo y lluvia efectiva: el suelo no se seca
-weather_fixture_sha256: 66e98a694e86a683a68e57ef60c9e9472b240540d1a8e6573fee4182a9e292d2
+weather_fixture: rainy-season-caribe.json   # ET0 más bajo y lluvia efectiva: el suelo no se seca; celda propia 11,2 N / 74,1 W
+weather_fixture_sha256: d0b5f48cd00b93c77a82b60b02d4db42c2dea21d222cc4b19b1cbc0e1119cc11
 trajectories:
   soil_moisture_30cm: { start: 21.5, end: 19.5, noise: 0.7 }   # se mantiene sobre θ_estrés: nadie tiene sed
   air_temp: { daily_min: 25, daily_max: 32, noise: 0.5 }

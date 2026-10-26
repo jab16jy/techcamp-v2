@@ -50,7 +50,7 @@ Dos **perfiles de ejecución** sobre la misma base de código. Cambian los **ada
 Es la pieza central de la demo. Detalle en [06 §10](../06-diseno-detallado.md#10-simulador-de-escenarios-perfil-seminario).
 
 - **Backfill** de N días de lecturas (con `ts` en el pasado) más **transmisión en vivo** cada pocos segundos.
-- Cada escenario inyecta también sus **fixtures de clima**, para que el riego y las alertas respondan al escenario y no al clima real del día.
+- Cada escenario inyecta también sus **fixtures de clima**, para que el riego y las alertas respondan al escenario y no al clima real del día. Cada fixture se graba en **su propia celda** (D-DH.10, #335: A 11,2 N / 74,2 W, E 11,1 N / 74,2 W, `normal` 11,1 N / 74,1 W, B 11,2 N / 74,1 W, las cuatro dentro de Santa Marta), porque `weather_daily` se indexa por `(cell_id, day, is_forecast)` y los escenarios se anclan a «hoy»: dos fixtures en la misma celda se pisan el mismo día y el último deja el clima del otro.
 - En vez de acelerar el reloj del sistema, los jobs diarios se disparan a demanda. Así no hace falta un reloj virtual en el dominio.
 
 ## Alternativas consideradas
