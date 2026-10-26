@@ -282,6 +282,10 @@ propio dueño.
 
 ### `D-DH.12` — La pantalla de riesgo declara su origen (U10, #277)
 
+**Decidido por el owner (2026-10-25):** la tarjeta nombra la línea base y
+distingue "severidad baja" de "sin cortes calibrados"; con umbrales vacíos la
+severidad **no** se muestra como `bajo`.
+
 La tarjeta de riesgo nombra la línea base (`model_version.is_baseline`) y
 distingue "severidad baja" de "sin cortes calibrados": con umbrales vacíos la
 severidad **no** se muestra como `bajo`, sino como el estado que el modelo sí
