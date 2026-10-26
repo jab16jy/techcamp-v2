@@ -424,7 +424,7 @@ plot: { crop: maize, sown_days_ago: 48, area_ha: 1.5, soil: sandy_loam, irrigati
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900            # intervalo simulado entre lecturas del backfill
-weather_fixture: el-nino-caribe.json   # ETc ≈ 5 mm/día → p = 0,55
+weather_fixture: el-nino-caribe.json   # ETc ≈ 5 mm/día → p = 0,55; celda propia 11,2 N / 74,2 W
 trajectories:
   soil_moisture_30cm: { start: 22, end: 13, noise: 0.8 }   # % volumétrico; cruza θ_estrés = 15,3 % el día 10,4
   air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }
@@ -453,7 +453,7 @@ description: Veranillo durante la floración en maíz de secano (escenario E)
 plot: { crop: maize, sown_days_ago: 55, area_ha: 2, soil: sandy_loam, irrigation_system: none }   # etapa mid (floración): edades 55-75 dentro de mid (45-76) del catálogo (#340); duración de etapas pendiente de validación agronómica
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 0 }        # parcela sin sensor: el balance corre solo con clima
-weather_fixture: veranillo-caribe.json   # ET0 ≈ 4,2 mm/día y ninguna lluvia > 5 mm en los 21 días ni en los 7 de pronóstico
+weather_fixture: veranillo-caribe.json   # ET0 ≈ 4,2 mm/día y ninguna lluvia > 5 mm en los 21 días ni en los 7 de pronóstico; celda propia 11,1 N / 74,2 W
 expected:
   alerts: [water_stress]   # abierta por el balance diario; crítica desde el día 18
   irrigation: rainfed      # kind de irrigation_recommendation: sin lámina ni minutos
@@ -488,4 +488,5 @@ expected:
 - El escenario D (D-T16.14, hallado en T7) corre en la PWA en modo avión (`setOffline` del contexto de Playwright) por el flujo documentado de docs/07 (Bitácora → Nueva entrada). Su e2e afirma dos cosas: el `expected` vacío lo juzga el checker tal cual (vacío en ambos sentidos), y la **sincronización sin duplicados** se afirma contra la API, no contra el teléfono — `GET /sync/pull` cuenta exactamente una fila viva de la parcela, marcada `created_offline`, y una segunda corrida de sync no la duplica (C5: la sync es la de E8, el e2e no la reconstruye). La pestaña Bitácora alimenta el `FormSheet` de nueva entrada con las parcelas de la organización — la misma composición que la hoja de visitas recibe en `app/` (E8 D14) — porque el flujo documentado no puede guardarse sin ellas.
 - **Entre corridas, la base se limpia:** la identidad de la parcela es global ("Escenario X <ancla>"), así que una segunda carga del mismo escenario sin limpiar responde "en otra organización" (#339). `just scenario-clean` borra las organizaciones de la base del worktree y vuelve a sembrar las reglas de alerta de fábrica. CI siempre arranca con una base nueva; el rerun local necesita la receta.
 - Los fixtures de clima se graban una vez desde Open-Meteo (`sim record-weather --scenario X --from YYYY-MM-DD --days N`, D-T16.3: filas diarias por día-offset del escenario con las variables que el balance necesita, más `source_url`, `recorded_at` y hash; record-first, sintético solo con flag explícito cuando la grabación no reproduce la aritmética ETc≈5/ET0≈4,2) y quedan versionados: la demo funciona sin internet, salvo el asistente.
+- **Cada fixture vive en su propia celda** (D-DH.10, #335): los cuatro puntos se graban dentro del municipio de Santa Marta (DIVIPOLA 47001) — A en 11,2 N / 74,2 W, E en 11,1 N / 74,2 W, `normal` en 11,1 N / 74,1 W y B en 11,2 N / 74,1 W —. La razón es la clave de `weather_daily`, `(cell_id, day, is_forecast)`: los escenarios se anclan a «hoy», así que dos fixtures en la misma celda se pisan el mismo día y el último deja el clima del otro. La regresión vive en `server/tests/simulator/test_scenario_weather.py`.
 

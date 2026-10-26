@@ -15,7 +15,7 @@ nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 # healthy node keeps publishing live.
 interval_s: 300
 weather_fixture: normal-caribe.json   # ventana benigna: el único problema es el nodo caído
-weather_fixture_sha256: 6a729451fa5f440f486da57f4c58ccf61bdf550f3b0ed4c2fc3eba4a886a89bc
+weather_fixture_sha256: 3ebc91689c2634f758fa403a7f9d29dd81a53fd64532fea79348a12551e17dc4
 trajectories:
   soil_moisture_30cm: { start: 21, end: 19.5, noise: 0.6 }   # el nodo 1 sigue leyendo: el suelo no es el problema
   air_temp: { daily_min: 25, daily_max: 33, noise: 0.5 }   # bajo 35 °C: aquí no hay heat_stress

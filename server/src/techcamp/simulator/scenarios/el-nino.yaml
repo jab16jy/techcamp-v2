@@ -10,8 +10,8 @@ plot: { crop: maize, sown_days_ago: 48, area_ha: 1.5, soil: sandy_loam, irrigati
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 2, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900            # intervalo simulado entre lecturas del backfill
-weather_fixture: el-nino-caribe.json   # ETc ≈ 5 mm/día → p = 0,55
-weather_fixture_sha256: 625b05ccaedf2c9c96ac9e353f2b6fe2a505593037d2050e99f01ed4483c90ee
+weather_fixture: el-nino-caribe.json   # ETc ≈ 5 mm/día → p = 0,55; celda propia 11,2 N / 74,2 W
+weather_fixture_sha256: 66ccced8c330eae8b73f5153d2ae1e09f6cf615d14415339ed3a0301c4e4b883
 trajectories:
   soil_moisture_30cm: { start: 22, end: 13, noise: 0.8 }   # % volumétrico; cruza θ_estrés = 15,3 % el día 10,4
   air_temp: { daily_min: 26, daily_max: 37, noise: 0.5 }   # daily_max > 35 °C abre heat_stress

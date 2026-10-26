@@ -11,8 +11,8 @@ plot: { crop: maize, sown_days_ago: 55, area_ha: 2, soil: sandy_loam, irrigation
 soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-56 Tabla 19
 nodes: { count: 0 }        # parcela sin sensor: el balance corre solo con clima
 interval_s: 900
-weather_fixture: veranillo-caribe.json   # ET0 ≈ 4,2 mm/día y ninguna lluvia > 5 mm en los 21 días ni en los 7 de pronóstico
-weather_fixture_sha256: e6b1dcfd3f8fccdc68dba1cca31a8ea26e91bd37b8d6501e3a777021386f4706
+weather_fixture: veranillo-caribe.json   # ET0 ≈ 4,2 mm/día y ninguna lluvia > 5 mm en los 21 días ni en los 7 de pronóstico; celda propia 11,1 N / 74,2 W
+weather_fixture_sha256: bd7ec3f0a42d84c6b9ce6ad4234317baee260929e79f3f5977eae6b969a03e94
 expected:
   alerts: [water_stress]   # abierta por el balance diario; crítica desde el día 18
   irrigation: rainfed      # kind de irrigation_recommendation: sin lámina ni minutos

@@ -269,6 +269,37 @@ Los cuatro puntos se eligen **dentro del municipio de Santa Marta** (DIVIPOLA
 47001), que es el municipio que el loader declara: así la celda cambia y el
 municipio sigue siendo cierto.
 
+**Los cuatro puntos, y por qué estos** (elegidos barriendo el polígono del
+municipio que publica el DANE —capa 317 de MGN 2024— y pidiendo el archivo de
+Open-Meteo en cada punto, 113 candidatos dentro del municipio):
+
+| Fixture | Punto grabado | Celda (0,1°) | ET0 observado | ETc |
+|---|---|---|---|---|
+| `el-nino-caribe` (A) | 11,22 N / 74,23 O | 11,2 / 74,2 | 4,019 mm/día | 4,822 mm/día |
+| `veranillo-caribe` (E) | 11,12 N / 74,23 O | 11,1 / 74,2 | 4,159 mm/día | 4,990 mm/día |
+| `normal-caribe` | 11,14 N / 74,13 O | 11,1 / 74,1 | 4,164 mm/día | 4,996 mm/día |
+| `rainy-season-caribe` (B) | 11,22 N / 74,09 O | 11,2 / 74,1 | 3,160 mm/día | 3,792 mm/día |
+
+El punto de cada fixture se eligió por dos condiciones que la aritmética de
+`docs/06 §10` impone, no por conveniencia:
+
+1. **La aritmética del escenario sobrevive.** Para E, `ETc` tiene que quedar
+   entre 4,81 y 5,13 mm/día para que `Dr = ETc × día` cruce `RAW = 77 mm` el
+   **día 16** (el día 15 queda en 74,9 mm y el 16 en 79,8 mm: los números que
+   `docs/06:468` ya afirma). Para A, `ETc ≈ 5` mantiene `p = 0,55` y
+   `θ_estrés = 15,3 %`. Ninguno de los cuatro fixtures abre un día de
+   `fungal_risk` (RH > 85 % **y** temperatura media en 20-30 °C), salvo el de B,
+   que es el que debe abrirlo.
+2. **La celda es distinta de la de los otros tres.** La clave de `weather_daily`
+   es `(cell_id, day, is_forecast)`, así que dos fixtures en la misma celda se
+   pisan el mismo día.
+
+Lo que la regrabación **cambia** en los documentos, y solo esto: el fixture de
+`normal` pasó de `ET0 ≈ 4,3` a `ET0 ≈ 4,2 mm/día` (su comentario en el YAML y
+el bloque de `docs/06 §10`). La aritmética de A y de E **no se mueve**: los
+números de `docs/06:440-446` y `docs/06:465-469` siguen siendo los del
+documento, porque `ETc` sigue roundando a 5 y `RAW` a 77.
+
 ### `D-DH.11` — `relative_yield` null se comunica como hueco (U11, #258)
 
 La UI de métricas muestra `—` (y la razón D-T0.9) cuando `relative_yield` es
@@ -424,6 +455,39 @@ describe: dos tarjetas en verde que el lector entiende como "no hay riesgo".
   (la parcela de secano sin ciclo ya no se encola) y
   `test_fanout_rerun_same_day_does_not_duplicate_jobs` (con ciclo activo).
   `irrigation` + `simulator`: 398 en verde, 27 omitidos.
+
+### U6 — #335 (cada fixture climateático en su propia celda)
+
+Los cuatro fixtures se regrabaron desde el archivo de Open-Meteo, cada uno en su
+propio punto dentro de Santa Marta, y cada YAML actualizó su pin
+`weather_fixture_sha256`.
+
+| Fixture | Celda antes | Celda ahora | Punto grabado |
+|---|---|---|---|
+| `el-nino-caribe` | 11,0 / 74,8 | **11,2 / 74,2** | 11,22 N / 74,23 O |
+| `veranillo-caribe` | 11,0 / 74,8 | **11,1 / 74,2** | 11,12 N / 74,23 O |
+| `normal-caribe` | 11,0 / 74,8 | **11,1 / 74,1** | 11,14 N / 74,13 O |
+| `rainy-season-caribe` | 11,0 / 74,8 | **11,2 / 74,1** | 11,22 N / 74,09 O |
+
+- **Los cuatro dentro del municipio**: cada punto se comprobó contra el
+  polígono de la capa 317 de MGN 2024 que publica el DANE (`FeatureServer`, no
+  el `MapServer`, que es el que devuelve `geometry: null`).
+- **La regrabación es real, no sintética**: los cuatro fixtures llevan
+  `synthetic: false` y su `source_url` con el punto y la ventana de cada uno.
+- **Pines**: los seis YAMLs los llevan (los tres que comparten
+  `normal-caribe.json` comparten también su pin, que es el mismo archivo).
+- **Regresión de no-solape** (`server/tests/simulator/test_scenario_weather.py`):
+  - `test_every_fixture_has_its_own_cell` — las cuatro celdas son distintas y
+    todas dentro de Santa Marta.
+  - `test_two_scenarios_never_write_over_each_other` — cargar E después de A
+    deja las filas de A intactas: es el fallo que #335 reportó, afirmado.
+- **Documentos enmendados**: `docs/06 §10` (la regla de grabación y el bloque
+  de los dos YAML de ejemplo), `ADR-0021` (la promesa de que cada escenario
+  responde a su clima, que solo era cierta si las celdas son distintas) y el
+  docstring de `MUNICIPALITY_CODE` en el loader.
+- **Lo que se movió**: el ET0 de `normal` pasó de ≈ 4,3 a ≈ 4,2 mm/día. La
+  aritmética de A (`ETc ≈ 5`, `p = 0,55`, `θ_estrés = 15,3 %`) y la de E
+  (`ETc ≈ 5`, `RAW = 77`, el cruce del día 16) **no se mueven**.
 
 ### U7 — #340 (el catálogo reproduce la aritmética FAO-56)
 

@@ -317,12 +317,16 @@ async def test_a_capture_shorter_than_the_forecast_window_is_refused(tmp_path: P
 
 def test_the_recorder_reads_the_scenario_library_for_its_defaults() -> None:
     """The fixture a scenario pins is the file a re-recording must replace,
-    and its cell is the point the capture asks about."""
+    and its cell is the point the capture asks about.
+
+    #335 gave every fixture its own cell inside Santa Marta, so the el-nino
+    capture asks about (11,2 N / 74,2 W) and not about the shared Caribe cell
+    the fixtures used to share."""
     assert scenario_fixture_name("el-nino") == "el-nino-caribe"
     assert scenario_fixture_name("dry-spell-rainfed") == "veranillo-caribe"
 
     lat, lon = fixture_cell("el-nino-caribe")
-    assert (lat, lon) == (11.0, -74.8)
+    assert (lat, lon) == (11.2, -74.2)
 
 
 def test_the_recording_writes_no_socket(monkeypatch: pytest.MonkeyPatch) -> None:

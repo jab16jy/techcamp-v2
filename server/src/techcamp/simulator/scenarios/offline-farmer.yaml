@@ -10,7 +10,7 @@ soil: { field_capacity_pct: 23, wilting_point_pct: 9 }   # franco arenoso, FAO-5
 nodes: { count: 1, soil_moisture_depth_cm: 30, calibration: field }
 interval_s: 900
 weather_fixture: normal-caribe.json   # ventana benigna: el alcance de D es la PWA sin internet
-weather_fixture_sha256: 6a729451fa5f440f486da57f4c58ccf61bdf550f3b0ed4c2fc3eba4a886a89bc
+weather_fixture_sha256: 3ebc91689c2634f758fa403a7f9d29dd81a53fd64532fea79348a12551e17dc4
 trajectories:
   soil_moisture_30cm: { start: 21.5, end: 20.5, noise: 0.6 }   # sobre θ_estrés: la parcela está bien
   air_temp: { daily_min: 25, daily_max: 32, noise: 0.5 }
