@@ -154,8 +154,11 @@ async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_wi
 ) -> None:
     """The 04:30 daily fan-out queues one per-plot job for eligible plots:
 
-    plots with an active cycle plus rainfed plots without one.
-    An irrigated plot without an active cycle must NOT be queued.
+    the plots with an active cycle. A plot without one is NOT queued, rainfed
+    or irrigated: the rainfed one used to be queued for its `delay_sowing`
+    advice, and that advice landed on the plot of a replaced scenario load -
+    the loader closes its cycle, the plot stays, and the balance judged it
+    every day after that (#333).
     Assertions are scoped to the test's own plots to guarantee isolation
     regardless of rows committed by other tests (R3-fanout-test-isolation).
     """
@@ -201,9 +204,9 @@ async def test_fanout_queues_one_job_per_eligible_plot_and_none_for_irrigated_wi
     queued_plot_ids = {str(job["args"]["plot_id"]) for job in jobs}
 
     assert str(plot_irrigated_with_cycle) in queued_plot_ids
-    assert str(plot_rainfed_no_cycle) in queued_plot_ids
+    assert str(plot_rainfed_no_cycle) not in queued_plot_ids
     assert str(plot_irrigated_no_cycle) not in queued_plot_ids
-    assert len(jobs) == 2
+    assert len(jobs) == 1
 
     today_str = local_today().isoformat()
     for job in jobs:
@@ -231,7 +234,7 @@ async def test_fanout_rerun_same_day_does_not_duplicate_jobs(
         cell_id=cell_id,
         name="Eligible plot",
         irrigation_system="none",
-        has_active_cycle=False,
+        has_active_cycle=True,
     )
 
     # First run queues 1 job

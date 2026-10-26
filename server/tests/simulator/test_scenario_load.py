@@ -364,13 +364,20 @@ async def test_a_reload_rotates_the_node_credential(db_session: AsyncSession) ->
     )
 
 
-async def test_a_rainfed_replace_leaves_the_old_parcel_in_the_balance_scope(
+async def test_a_rainfed_replace_leaves_one_parcel_in_the_balance_scope(
     db_session: AsyncSession,
 ) -> None:
-    """A characterization test for #333: a replaced rainfed parcel stays in the
-    daily balance scope, because the balance takes every rainfed parcel and
-    closing its cycle does not take it out. The fix belongs to the module that
-    owns the balance; until then this test says what happens."""
+    """A replaced rainfed parcel leaves the daily balance's scope (#333).
+
+    The loader closes the old cycle and retires the old nodes, but the plot
+    stays: the scenario is the same, and the parcel is its base data. The
+    balance used to take every rainfed plot, so the replaced one stayed in its
+    scope and received a `delay_sowing` recommendation every day - advice about
+    a parcel nobody farms any more, on the demo's screen.
+
+    The balance takes the plots with an active cycle now, so only the parcel of
+    the current load is in its scope.
+    """
     org = await _org(db_session, phone="+573000000016")
     client = _client()
 
@@ -378,18 +385,26 @@ async def test_a_rainfed_replace_leaves_the_old_parcel_in_the_balance_scope(
     replaced = client.post(
         "/dev/scenarios/dry-spell-rainfed:load", json={"replace": True}, headers=_auth(org)
     )
+    replaced_again = client.post(
+        "/dev/scenarios/dry-spell-rainfed:load", json={"replace": True}, headers=_auth(org)
+    )
 
     assert first.status_code == 202
     assert replaced.status_code == 202
+    assert replaced_again.status_code == 202
     old_plot_id = UUID(first.json()["plot_ids"][0])
+    current_plot_id = UUID(replaced_again.json()["plot_ids"][0])
     still_there = (
         await db_session.execute(select(PlotRow).where(PlotRow.id == old_plot_id))
     ).scalar_one_or_none()
-    assert still_there is not None, "#333: the replaced rainfed parcel is still there"
+    assert still_there is not None, "the replaced rainfed parcel is still in the database"
+
     eligible = await eligible_plot_ids(db_session)
-    assert old_plot_id in eligible, (
-        "#333: the replaced rainfed parcel is still in the balance's scope"
+
+    assert eligible == [current_plot_id], (
+        "#333: only the parcel of the current load is in the balance's scope"
     )
+    assert old_plot_id not in eligible
 
 
 async def test_a_read_only_caller_is_refused_without_writing_anything(

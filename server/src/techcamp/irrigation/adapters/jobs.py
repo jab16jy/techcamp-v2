@@ -2,7 +2,7 @@
 
 Orchestrates the daily water balance and recommendation runs:
 - 04:30 America/Bogota periodic cron fans out one per-plot job for eligible plots
-  (plots with an active cycle plus rainfed plots without one).
+  (the ones with an active cycle).
 - Per-plot task runs `run_daily_balance(plot_id, day, ...)` with all repositories,
   commits the transaction, and logs any skip reason.
 - Lock and queueing_lock prevent duplicate execution and duplicate enqueuing for the
@@ -18,7 +18,7 @@ from uuid import UUID
 
 from asyncpg.exceptions import UniqueViolationError
 from procrastinate import RetryStrategy
-from sqlalchemy import or_, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +29,7 @@ from techcamp.farms.adapters.repositories import (
     SqlAlchemyPlotRepository,
     SqlAlchemySoilProfileRepository,
 )
-from techcamp.farms.domain.models import CropCycleStatus, IrrigationSystem
+from techcamp.farms.domain.models import CropCycleStatus
 from techcamp.irrigation.adapters.repositories import (
     SqlAlchemyIrrigationRecommendationRepository,
     SqlAlchemyWaterBalanceRepository,
@@ -67,21 +67,28 @@ def _is_queueing_lock_violation(exc: IntegrityError) -> bool:
 async def eligible_plot_ids(session: AsyncSession) -> list[UUID]:
     """Retrieve plot IDs eligible for daily water balance and recommendation.
 
-    Eligible plots are:
-    - Plots with an active crop cycle (irrigated or rainfed).
-    - Rainfed plots without an active cycle (they receive delay_sowing advice).
-    Irrigated plots without an active cycle are excluded.
+    Eligible plots are the ones with an active crop cycle, irrigated or rainfed
+    (#333).
+
+    A rainfed plot without an active cycle used to be eligible too, so it
+    received a `delay_sowing` recommendation every day. That included the plot
+    of a replaced scenario load: the loader closes its cycle and retires its
+    nodes, but the plot stays, and the balance kept advising about a parcel
+    nobody farms any more - a recommendation in the demo that no one asked
+    for.
+
+    The sowing advice itself is unchanged: `decide_recommendation` still
+    answers `delay_sowing` for a rainfed plot without a cycle, and the balance
+    use case still returns it when it is asked about one directly. What changed
+    is which plots the daily job asks about.
     """
     stmt = (
         select(PlotRow.id)
         .where(
-            or_(
-                PlotRow.irrigation_system == IrrigationSystem.NONE.value,
-                PlotRow.id.in_(
-                    select(CropCycleRow.plot_id).where(
-                        CropCycleRow.status == CropCycleStatus.ACTIVE.value
-                    )
-                ),
+            PlotRow.id.in_(
+                select(CropCycleRow.plot_id).where(
+                    CropCycleRow.status == CropCycleStatus.ACTIVE.value
+                )
             )
         )
         .order_by(PlotRow.id)
